@@ -33,6 +33,15 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
   "plan.enhance": "chain",
 };
 
+/** One-line description of each hook, for the self-assembling UI. Single source of truth: the
+ *  frontend renders the hook panel from this (served via GET /api/modules), not a hardcoded copy. */
+export const HOOK_BLURBS: Record<HookName, string> = {
+  "motion.backend": "keyframe -> shot clip (GPU or cloud)",
+  finish: "interpolation / upscale / face restore",
+  score: "music / narration / beat-sync",
+  "plan.enhance": "LLM auto-direction",
+};
+
 // --------------------------------------------------------------------------- manifest
 
 /** One configurable knob a module exposes. The UI renders the control from this; the core clamps
@@ -130,9 +139,18 @@ export interface RegisteredModule extends ModuleManifest {
   binding: string; // the env binding that serves it (e.g. "MODULE_FINISH_RIFE")
 }
 
+/** One hook in the catalog the frontend renders the pipeline panel from, so the panel is a
+ *  projection of the contract rather than a hardcoded list. */
+export interface HookCatalogEntry {
+  name: HookName;
+  blurb: string;
+  cardinality: "pick_one" | "chain";
+}
+
 /** GET /api/modules: the merged registry the studio UI renders itself from. */
 export interface ModulesResponse {
   api: typeof MODULE_API;
   modules: RegisteredModule[];
   hooks: Partial<Record<HookName, string[]>>; // hook -> module names serving it
+  catalog: HookCatalogEntry[];                 // every hook (name + blurb + cardinality)
 }

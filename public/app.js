@@ -5,13 +5,6 @@
 // draws whatever came back. Install a module, its section appears; install none, you get a clean,
 // honest, empty studio. Vanilla JS, no framework, no build (house style).
 
-const ALL_HOOKS = [
-  { name: "motion.backend", blurb: "keyframe -> shot clip (GPU or cloud)" },
-  { name: "finish", blurb: "interpolation / upscale / face restore" },
-  { name: "score", blurb: "music / narration / beat-sync" },
-  { name: "plan.enhance", blurb: "LLM auto-direction" },
-];
-
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -41,15 +34,19 @@ function renderModules(modules) {
   }
 }
 
-function renderHooks(hooks) {
+// The pipeline-hook panel is a projection of the contract: the core serves the hook catalog
+// (name + blurb + cardinality) in /api/modules, so adding a hook server-side surfaces it here
+// with no frontend edit.
+function renderHooks(catalog, serving) {
   const root = document.getElementById("hooks");
   root.replaceChildren();
-  for (const h of ALL_HOOKS) {
-    const serving = hooks[h.name] || [];
-    const row = el("div", serving.length ? "hook hook-on" : "hook hook-off");
+  for (const h of catalog) {
+    const fill = serving[h.name] || [];
+    const row = el("div", fill.length ? "hook hook-on" : "hook hook-off");
     row.append(el("span", "hook-name", h.name));
+    row.append(el("span", "hook-card", h.cardinality === "pick_one" ? "pick one" : "chain"));
     row.append(el("span", "hook-blurb", h.blurb));
-    row.append(el("span", "hook-fill", serving.length ? serving.join(", ") : "no module installed"));
+    row.append(el("span", "hook-fill", fill.length ? fill.join(", ") : "no module installed"));
     root.append(row);
   }
 }
@@ -61,7 +58,7 @@ async function boot() {
     if (!res.ok) throw new Error(`/api/modules -> ${res.status}`);
     const data = await res.json();
     renderModules(data.modules || []);
-    renderHooks(data.hooks || {});
+    renderHooks(data.catalog || [], data.hooks || {});
     const n = (data.modules || []).length;
     status.textContent = `${n} module${n === 1 ? "" : "s"} installed · ${data.api}`;
   } catch (e) {
