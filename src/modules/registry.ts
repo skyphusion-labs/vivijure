@@ -17,6 +17,9 @@ import {
   type ConfigSchema,
   type HookCatalogEntry,
   type HookName,
+  type InvokeContext,
+  type InvokeRequest,
+  type InvokeResponse,
   type ModuleManifest,
   type ModulesResponse,
   type RegisteredModule,
@@ -174,4 +177,111 @@ export function resolvePickOne(
   if (serving.length === 0) return null;
   if (choice) return serving.find((m) => m.name === choice) ?? null;
   return serving[0];
+}
+
+// --------------------------------------------------------------------------- dispatch (I/O)
+
+/** The modules serving a hook, in the same `ui.order` then name order `indexByHook` uses, so a
+ *  chain folds in the declared order and a pick_one default is the first. */
+export function servingForHook(modules: RegisteredModule[], hook: HookName): RegisteredModule[] {
+  return [...modules]
+    .filter((m) => m.hooks.includes(hook))
+    .sort((a, b) => (a.ui?.order ?? 100) - (b.ui?.order ?? 100) || a.name.localeCompare(b.name));
+}
+
+function fetcherFor(env: Record<string, unknown>, module: RegisteredModule): FetcherLike | null {
+  const v = env[module.binding];
+  return isFetcher(v) ? v : null;
+}
+
+/** POST one module's `/invoke` and return its typed `InvokeResponse`. A module failure is DATA, never
+ *  an exception: a non-200, a malformed body, or an unreachable binding all become `{ ok: false }`,
+ *  so the core degrades instead of crashing (the contract's whole point). */
+export async function invokeModule<I = unknown, O = unknown>(
+  fetcher: FetcherLike,
+  request: InvokeRequest<I>,
+): Promise<InvokeResponse<O>> {
+  try {
+    const res = await fetcher.fetch("https://module/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!res.ok) return { ok: false, error: `module /invoke -> ${res.status}` };
+    const data = (await res.json()) as InvokeResponse<O>;
+    if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {
+      return data;
+    }
+    return { ok: false, error: "module returned a malformed InvokeResponse" };
+  } catch (e) {
+    return { ok: false, error: `module unreachable: ${(e as Error).message}` };
+  }
+}
+
+/** Dispatch a `pick_one` hook: resolve the single serving module (honoring an optional `choice`),
+ *  clamp the user's config against that module's schema, and invoke it. Returns `{ ok: false }` when
+ *  no module serves the hook or its binding is missing -- the caller decides whether that is fatal. */
+export async function dispatchPickOne<I = unknown, O = unknown>(
+  env: Record<string, unknown>,
+  modules: RegisteredModule[],
+  hook: HookName,
+  input: I,
+  context: InvokeContext,
+  opts: { config?: Record<string, unknown>; choice?: string } = {},
+): Promise<InvokeResponse<O>> {
+  const module = resolvePickOne(modules, hook, opts.choice);
+  if (!module) return { ok: false, error: `no module serves pick_one hook "${hook}"` };
+  const fetcher = fetcherFor(env, module);
+  if (!fetcher) {
+    return { ok: false, error: `module ${module.name} binding ${module.binding} is not bound` };
+  }
+  const config = validateConfig(module.config_schema, opts.config);
+  return invokeModule<I, O>(fetcher, { hook, input, config, context });
+}
+
+/** The result of folding a `chain` hook over its serving modules. `output` is the last module's
+ *  output (null if none ran), `applied` names the modules that succeeded in order, and `errors`
+ *  records the ones that were skipped (a chain degrades past a failed module, it does not abort). */
+export interface ChainResult<O> {
+  output: O | null;
+  applied: string[];
+  errors: string[];
+}
+
+/** Dispatch a `chain` hook: fold every serving module in `ui.order`, each consuming the previous
+ *  module's output as its next input (mapped by `nextInput`, since a hook's output and input shapes
+ *  differ), clamping each module's config against its own schema. A failed module is skipped
+ *  (recorded in `errors`), not fatal -- the chain continues from the last good output. */
+export async function dispatchChain<I = unknown, O = unknown>(
+  env: Record<string, unknown>,
+  modules: RegisteredModule[],
+  hook: HookName,
+  seed: I,
+  context: InvokeContext,
+  opts: {
+    nextInput: (prevOutput: O, seed: I) => I;
+    configFor?: (moduleName: string) => Record<string, unknown> | undefined;
+  },
+): Promise<ChainResult<O>> {
+  const applied: string[] = [];
+  const errors: string[] = [];
+  let current: I = seed;
+  let last: O | null = null;
+  for (const module of servingForHook(modules, hook)) {
+    const fetcher = fetcherFor(env, module);
+    if (!fetcher) {
+      errors.push(`${module.name}: binding ${module.binding} is not bound`);
+      continue;
+    }
+    const config = validateConfig(module.config_schema, opts.configFor?.(module.name));
+    const r = await invokeModule<I, O>(fetcher, { hook, input: current, config, context });
+    if (r.ok) {
+      last = r.output;
+      current = opts.nextInput(r.output, seed);
+      applied.push(module.name);
+    } else {
+      errors.push(`${module.name}: ${r.error}`);
+    }
+  }
+  return { output: last, applied, errors };
 }
