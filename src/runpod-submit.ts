@@ -101,15 +101,15 @@ export interface RenderJobInput {
   process_shot_ids?: string[];
 }
 
-// v0.41.0: per-shot SDXL keyframe regeneration. The Worker derives the
-// parentJobId from the originating renders row so the GPU side (vivijure-
-// serverless 0.4.3+) overwrites the same R2 key the planner UI already
-// has in D1; a cache-bust on the <img> src picks up the new pixels.
+// Per-shot SDXL keyframe regeneration. The backend scopes to the shot via
+// process_shot_ids (the field its orchestrator actually reads) and writes the
+// keyframe to its stable convention key keys.keyframe_key(project, shot_id) --
+// the SAME key as before, so a cache-bust on the <img> src picks up the new
+// pixels with no parent-job tracking needed.
 export interface RegenShotArgs {
   project: string;
   bundleKey: string;
   shotId: string;
-  parentJobId: string;
   userEmail?: string;
 }
 
@@ -117,8 +117,7 @@ export interface RegenShotJobInput {
   action: "regen_shot";
   project: string;
   bundle_key: string;
-  shot_id: string;
-  parent_job_id: string;
+  process_shot_ids: string[];
   user_email?: string;
 }
 
@@ -158,19 +157,15 @@ export interface FinalizeJobInput {
   pretrained_loras?: Record<string, string>;
 }
 
-// v0.57.0: standalone LoRA training. The cast manager UI on /cast
-// submits this via POST /api/cast/:id/train-lora; the GPU
-// (vivijure-serverless 0.4.13+) dispatches on action=="train_lora",
-// pulls the synthesized single-slot bundle, runs orchestrator.train_
-// lora_only, and uploads the .safetensors to lora_dest_key.
+// Standalone LoRA training. The cast manager UI submits this; the backend
+// dispatches on action=="train_lora", pulls the synthesized single-slot bundle,
+// trains, and uploads the .safetensors to its OWN convention key
+// (vivijure-backend keys.lora_key(project, slot)) -- the caller does not pick
+// the destination.
 export interface TrainLoraArgs {
   project: string;
   bundleKey: string;
   userEmail?: string;
-  // R2 key the GPU side should upload the trained .safetensors to.
-  // Must start with "loras/" (the worker validates the prefix so a
-  // misbehaving client cannot redirect writes elsewhere in the bucket).
-  loraDestKey: string;
   // The namespaced override contract (same as the render path). Training
   // hyperparams ride render_overrides.lora (rank / max_steps / learning_rate /
   // ...), parsed by config.py RenderConfig.from_request on the pod. Lets the
@@ -183,7 +178,6 @@ export interface TrainLoraJobInput {
   project: string;
   bundle_key: string;
   user_email?: string;
-  lora_dest_key: string;
   render_overrides?: Record<string, unknown>;
 }
 
@@ -314,7 +308,6 @@ export function buildTrainLoraPayload(args: TrainLoraArgs): { input: TrainLoraJo
     action: "train_lora",
     project: args.project,
     bundle_key: args.bundleKey,
-    lora_dest_key: args.loraDestKey,
   };
   if (typeof args.userEmail === "string" && args.userEmail.length > 0) {
     input.user_email = args.userEmail;
@@ -368,8 +361,7 @@ export function buildRegenShotPayload(args: RegenShotArgs): { input: RegenShotJo
     action: "regen_shot",
     project: args.project,
     bundle_key: args.bundleKey,
-    shot_id: args.shotId,
-    parent_job_id: args.parentJobId,
+    process_shot_ids: [args.shotId],
   };
   if (typeof args.userEmail === "string" && args.userEmail.length > 0) {
     input.user_email = args.userEmail;
