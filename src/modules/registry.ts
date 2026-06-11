@@ -12,7 +12,10 @@
 import {
   MODULE_API,
   HOOK_NAMES,
+  HOOK_BLURBS,
+  HOOK_CARDINALITY,
   type ConfigSchema,
+  type HookCatalogEntry,
   type HookName,
   type ModuleManifest,
   type ModulesResponse,
@@ -109,9 +112,19 @@ export function indexByHook(modules: RegisteredModule[]): Partial<Record<HookNam
   return byHook;
 }
 
+/** The static hook catalog (every hook + its blurb + cardinality), independent of what is
+ *  installed, so the frontend renders the pipeline panel as a projection of the contract. */
+export function hookCatalog(): HookCatalogEntry[] {
+  return HOOK_NAMES.map((name) => ({
+    name,
+    blurb: HOOK_BLURBS[name],
+    cardinality: HOOK_CARDINALITY[name],
+  }));
+}
+
 /** The GET /api/modules payload the frontend renders itself from. */
 export function modulesResponse(modules: RegisteredModule[]): ModulesResponse {
-  return { api: MODULE_API, modules, hooks: indexByHook(modules) };
+  return { api: MODULE_API, modules, hooks: indexByHook(modules), catalog: hookCatalog() };
 }
 
 // --------------------------------------------------------------------------- discovery (I/O)
