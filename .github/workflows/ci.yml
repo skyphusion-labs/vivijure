@@ -19,6 +19,7 @@ concurrency:
 jobs:
   ci:
     runs-on: [self-hosted, fleet]
+    container: node:22-alpine
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
