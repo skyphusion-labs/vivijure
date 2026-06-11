@@ -1,0 +1,22 @@
+{
+  "name": "vivijure-studio",
+  "version": "0.1.0",
+  "description": "Vivijure studio core: a module host for AI film production. A thin Cloudflare Worker that owns project / storyboard / cast / render orchestration and a module registry; every capability beyond that is an opt-in module worker plugged in through a typed hook contract.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "bootstrap": "node -e \"const fs=require('fs');if(fs.existsSync('wrangler.toml')){console.error('wrangler.toml already exists; not overwriting.');process.exit(1)}fs.copyFileSync('wrangler.example.toml','wrangler.toml');console.log('Created wrangler.toml from wrangler.example.toml.')\""
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260606.1",
+    "@types/node": "^25.9.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.98.0"
+  }
+}

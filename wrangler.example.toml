@@ -1,0 +1,38 @@
+# Vivijure studio core -- wrangler template.
+#
+# Copy to wrangler.toml (`npm run bootstrap`) and fill in account-specific values. The real
+# wrangler.toml is gitignored; this committed template is the source of truth for bindings.
+
+name = "vivijure-studio"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The studio frontend (public/) served via Workers Assets.
+assets = { directory = "./public", binding = "ASSETS" }
+
+[observability]
+enabled = true
+
+# --- Phase 1+ (render API migration). Uncomment as the render routes move in from
+# --- skyphusion-llm-public. R2_RENDERS is the existing `vivijure` bucket.
+# [ai]
+# binding = "AI"
+#
+# [[r2_buckets]]
+# binding = "R2_RENDERS"
+# bucket_name = "vivijure"
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "vivijure-studio"
+# database_id = "<fill-in-after-wrangler-d1-create>"
+
+# --- Opt-in MODULE workers. Each is a service binding named MODULE_<NAME>; the registry discovers
+# --- them by the MODULE_ prefix. Install only the ones you want. Example (module #1, finish):
+# [[services]]
+# binding = "MODULE_FINISH_RIFE"
+# service = "vivijure-module-finish-rife"
+
+# [vars]
+# GATEWAY_ID = "<ai-gateway-slug>"   # Phase 1+, for LLM storyboard planning

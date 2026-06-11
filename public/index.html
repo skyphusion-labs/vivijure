@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vivijure Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">VIVIJURE</span>
+        <span class="tag">studio</span>
+      </div>
+      <div class="status" id="status">connecting...</div>
+    </header>
+
+    <main class="shell">
+      <!-- Phase 0: the studio renders ITSELF from the module registry. As modules are installed,
+           their sections appear here; nothing below is hardcoded per-feature. -->
+      <section class="panel">
+        <h1>Module host</h1>
+        <p class="lede">
+          This studio is a <strong>host</strong>. Every capability beyond the core is an opt-in
+          module plugged in through a typed hook. What you see is whatever is installed -- no more,
+          no less.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Installed modules</h2>
+        <div id="modules" class="modules">loading...</div>
+      </section>
+
+      <section class="panel">
+        <h2>Pipeline hooks</h2>
+        <div id="hooks" class="hooks"></div>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

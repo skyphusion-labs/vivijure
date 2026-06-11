@@ -1,0 +1,74 @@
+/* Vivijure studio -- Phase 0 shell. Dark, clean, a little neon. Vanilla CSS, no preprocessor. */
+
+:root {
+  --bg: #0d0f14;
+  --panel: #151922;
+  --panel-2: #1b2130;
+  --line: #28303f;
+  --ink: #e7ecf4;
+  --muted: #8b95a7;
+  --accent: #4fd6c7;
+  --accent-2: #7c8cff;
+  --on: #3ddc97;
+  --off: #4a5366;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 600px at 80% -10%, #1a2030 0%, var(--bg) 55%);
+  color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 22px; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; backdrop-filter: blur(8px); background: rgba(13, 15, 20, 0.7);
+}
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.logo {
+  font-weight: 800; letter-spacing: 0.18em; font-size: 18px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.tag { color: var(--muted); text-transform: uppercase; letter-spacing: 0.22em; font-size: 11px; }
+.status { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.shell { max-width: 880px; margin: 0 auto; padding: 28px 22px 80px; display: grid; gap: 20px; }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px;
+}
+.panel h1 { margin: 0 0 8px; font-size: 20px; }
+.panel h2 { margin: 0 0 14px; font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; }
+.lede { color: var(--muted); margin: 0; }
+.lede strong { color: var(--ink); }
+
+.modules { display: grid; gap: 12px; }
+.empty { color: var(--muted); font-style: italic; margin: 0; }
+.module { border: 1px solid var(--line); border-radius: 11px; padding: 14px 16px; background: var(--panel-2); }
+.module-head { display: flex; align-items: baseline; gap: 10px; }
+.module-name { font-weight: 700; }
+.module-ver { color: var(--muted); font-size: 12px; }
+.module-hooks { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; margin-top: 4px; }
+.provides { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+
+.hooks { display: grid; gap: 8px; }
+.hook {
+  display: grid; grid-template-columns: 140px 1fr auto; align-items: center; gap: 12px;
+  padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+}
+.hook-name { font-weight: 600; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+.hook-blurb { color: var(--muted); font-size: 13px; }
+.hook-fill { font-size: 12px; }
+.hook-on { border-left: 3px solid var(--on); }
+.hook-on .hook-fill { color: var(--on); }
+.hook-off { border-left: 3px solid var(--off); opacity: 0.85; }
+.hook-off .hook-fill { color: var(--off); }
+
+@media (max-width: 560px) {
+  .hook { grid-template-columns: 1fr; gap: 4px; }
+}
