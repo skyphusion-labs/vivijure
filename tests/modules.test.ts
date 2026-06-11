@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   discoverModules,
+  dispatchChain,
+  dispatchPickOne,
   indexByHook,
+  invokeModule,
   moduleBindingNames,
   modulesResponse,
   readManifest,
@@ -187,5 +190,86 @@ describe("readManifest / discoverModules", () => {
     };
     const found = await discoverModules(env);
     expect(found.map((m) => m.name)).toEqual(["good"]);
+  });
+});
+
+// ----------------------------------------------------------------- dispatch (I/O, faked)
+
+const ctx = { project: "p", job_id: "j" };
+
+/** A fake module that answers POST /invoke from the posted InvokeRequest. */
+function invoker(respond: (req: any) => unknown) {
+  return {
+    fetch: async (_url: string, init?: { body?: string }) => {
+      const req = init?.body ? JSON.parse(init.body) : {};
+      return new Response(JSON.stringify(respond(req)), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  };
+}
+
+describe("invokeModule", () => {
+  it("returns the module's InvokeResponse on 200", async () => {
+    const f = invoker((req) => ({ ok: true, output: { gotHook: req.hook } }));
+    const r = await invokeModule<unknown, { gotHook: string }>(f as never, {
+      hook: "finish", input: {}, config: {}, context: ctx,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.output.gotHook).toBe("finish");
+  });
+  it("degrades to ok:false on a non-200, never throws", async () => {
+    const f = { fetch: async () => new Response("nope", { status: 500 }) };
+    const r = await invokeModule(f as never, { hook: "finish", input: {}, config: {}, context: ctx });
+    expect(r.ok).toBe(false);
+  });
+  it("degrades to ok:false when the module is unreachable", async () => {
+    const f = { fetch: async () => { throw new Error("down"); } };
+    const r = await invokeModule(f as never, { hook: "finish", input: {}, config: {}, context: ctx });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/unreachable/);
+  });
+});
+
+describe("dispatchPickOne", () => {
+  const mod = {
+    name: "motion-cloud", binding: "MODULE_MOTION", hooks: ["motion.backend"],
+    config_schema: { steps: { type: "int", min: 1, max: 10, default: 4 } },
+  } as unknown as RegisteredModule;
+
+  it("invokes the resolved module with config clamped to its schema", async () => {
+    const env = { MODULE_MOTION: invoker((req) => ({ ok: true, output: { steps: req.config.steps } })) };
+    const r = await dispatchPickOne<unknown, { steps: number }>(
+      env, [mod], "motion.backend", { keyframe: "k" }, ctx, { config: { steps: 999 } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.output.steps).toBe(10); // 999 clamped to max
+  });
+  it("returns ok:false when no module serves the hook", async () => {
+    expect((await dispatchPickOne({}, [], "motion.backend", {}, ctx)).ok).toBe(false);
+  });
+  it("returns ok:false when the serving module's binding is missing", async () => {
+    const r = await dispatchPickOne({}, [mod], "motion.backend", {}, ctx);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/not bound/);
+  });
+});
+
+describe("dispatchChain", () => {
+  it("folds modules in ui.order, threads output->input, and skips a failed one", async () => {
+    const a = { name: "a", binding: "MODULE_A", hooks: ["finish"], ui: { order: 10 } } as unknown as RegisteredModule;
+    const b = { name: "b", binding: "MODULE_B", hooks: ["finish"], ui: { order: 20 } } as unknown as RegisteredModule;
+    const c = { name: "c", binding: "MODULE_C", hooks: ["finish"], ui: { order: 30 } } as unknown as RegisteredModule;
+    const env = {
+      MODULE_A: invoker((req) => ({ ok: true, output: { n: req.input.n + 1 } })),
+      MODULE_B: { fetch: async () => new Response("err", { status: 500 }) },
+      MODULE_C: invoker((req) => ({ ok: true, output: { n: req.input.n + 100 } })),
+    };
+    // pass out of declaration order to prove the ui.order sort drives the fold
+    const res = await dispatchChain<{ n: number }, { n: number }>(
+      env, [c, a, b], "finish", { n: 0 }, ctx, { nextInput: (prev) => ({ n: prev.n }) });
+    expect(res.applied).toEqual(["a", "c"]); // b skipped (500)
+    expect(res.output).toEqual({ n: 101 });  // a: 0 -> 1, c: 1 -> 101
+    expect(res.errors).toHaveLength(1);
   });
 });
