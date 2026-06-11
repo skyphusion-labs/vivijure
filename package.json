@@ -12,8 +12,7 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "bootstrap": "node -e \"const fs=require('fs');if(fs.existsSync('wrangler.toml')){console.error('wrangler.toml already exists; not overwriting.');process.exit(1)}fs.copyFileSync('wrangler.example.toml','wrangler.toml');console.log('Created wrangler.toml from wrangler.example.toml.')\""
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260606.1",

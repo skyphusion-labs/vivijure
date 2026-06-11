@@ -1,7 +1,7 @@
-# Vivijure studio core -- wrangler template.
+# Vivijure studio core -- wrangler config.
 #
-# Copy to wrangler.toml (`npm run bootstrap`) and fill in account-specific values. The real
-# wrangler.toml is gitignored; this committed template is the source of truth for bindings.
+# account_id is NOT hardcoded here; it is read from the CLOUDFLARE_ACCOUNT_ID env var
+# (set in .dev.vars locally, or injected as a secret in CI).
 
 name = "vivijure-studio"
 main = "src/index.ts"

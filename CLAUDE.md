@@ -34,8 +34,8 @@ npm run deploy      # wrangler deploy
   `config_schema`; the core clamps against it. One declaration, one hop, same words down.
 - **The frontend is a projection of the registry.** Never hardcode a per-feature section in the UI;
   it renders from `GET /api/modules`. If a feature needs the UI to know about it, it is a module.
-- **Mirror every binding** in `wrangler.example.toml` and the hand-authored `Env` (`src/env.ts`).
-  The real `wrangler.toml` is gitignored.
+- **Mirror every binding** in `wrangler.toml` and the hand-authored `Env` (`src/env.ts`).
+  `wrangler.toml` is committed; `account_id` is not hardcoded (injected via `CLOUDFLARE_ACCOUNT_ID`).
 
 ## Module conformance
 
