@@ -47,6 +47,12 @@ export const STORYBOARD_MAX_SCENES = 50;
 // tokens are added.
 export const FULL_PROMPT_MAX_CHARS = 1024;
 export const STYLE_PREFIX_MAX_CHARS = 256;
+// Per-shot and total duration caps. A shot's render cost is ~linear in its seconds
+// (Wan I2V), so an LLM Assist storyboard with a 600s shot, or a huge duration_seconds,
+// becomes real GPU minutes that pass the structural schema. Cap a single shot at 60s
+// (well past any one i2v clip the model makes) and the whole film at scenes x per-shot.
+export const SCENE_MAX_SECONDS = 60;
+export const STORYBOARD_MAX_SECONDS = STORYBOARD_MAX_SCENES * SCENE_MAX_SECONDS;
 // Scene-id format the renderer expects (core.py shot manifest looks up
 // scenes by this id). LLM Assist outputs like "scene_dramatic_sunset"
 // silently break downstream tools that expect the shot_NN pattern.
@@ -342,21 +348,31 @@ export function validateStoryboard(input: unknown): ValidationResult {
         }
       }
 
-      // end / target_seconds: optional positive numbers
-      for (const key of ["end", "target_seconds"] as const) {
-        const v = scene[key];
-        if (v !== undefined) {
-          if (!isPositiveFiniteNumber(v)) {
-            errors.push(
-              `${label} ${key} must be a positive finite number if provided`,
-            );
-          } else {
-            out[key] = v;
-          }
+      // end: optional positive film-time position (absolute, not a duration, so no cap)
+      if (scene.end !== undefined) {
+        if (!isPositiveFiniteNumber(scene.end)) {
+          errors.push(`${label} end must be a positive finite number if provided`);
+        } else {
+          out.end = scene.end;
         }
       }
 
-      // Cross-field: if both start and end are valid, end must be > start.
+      // target_seconds: optional positive per-shot DURATION, capped so one shot cannot
+      // bill an unbounded GPU render.
+      if (scene.target_seconds !== undefined) {
+        if (!isPositiveFiniteNumber(scene.target_seconds)) {
+          errors.push(`${label} target_seconds must be a positive finite number if provided`);
+        } else if (scene.target_seconds > SCENE_MAX_SECONDS) {
+          errors.push(
+            `${label} target_seconds is ${scene.target_seconds}s; cap is ${SCENE_MAX_SECONDS}s per shot`,
+          );
+        } else {
+          out.target_seconds = scene.target_seconds;
+        }
+      }
+
+      // Cross-field: if both start and end are valid, end must be > start, and the
+      // span (a per-shot duration) is capped like target_seconds.
       if (
         typeof out.start === "number" &&
         typeof out.end === "number" &&
@@ -364,6 +380,14 @@ export function validateStoryboard(input: unknown): ValidationResult {
       ) {
         errors.push(
           `${label} end (${out.end}) must be greater than start (${out.start})`,
+        );
+      } else if (
+        typeof out.start === "number" &&
+        typeof out.end === "number" &&
+        out.end - out.start > SCENE_MAX_SECONDS
+      ) {
+        errors.push(
+          `${label} span (end - start = ${Math.round((out.end - out.start) * 100) / 100}s) exceeds the per-shot cap of ${SCENE_MAX_SECONDS}s`,
         );
       }
 
@@ -383,6 +407,25 @@ export function validateStoryboard(input: unknown): ValidationResult {
 
       validatedScenes.push(out);
     });
+  }
+
+  // Duplicate shot ids: coerceShotId renumbers unlabeled scenes by index, which can
+  // collide with an authored id (an explicit "shot_05" plus the 5th unlabeled scene ->
+  // two "shot_05"). core.py looks scenes up by id, so a dup silently drops a shot from
+  // the render. Reject so the collision is visible.
+  {
+    const seenIds = new Set<string>();
+    for (const s of validatedScenes) {
+      const id = s.id;
+      if (!id) continue;
+      if (seenIds.has(id)) {
+        errors.push(
+          `duplicate shot id "${id}" (an authored id collided with an auto-numbered one; rename or renumber the scene)`,
+        );
+      } else {
+        seenIds.add(id);
+      }
+    }
   }
 
   // ---- top-level optional fields ---------------------------------------
@@ -440,6 +483,10 @@ export function validateStoryboard(input: unknown): ValidationResult {
       errors.push(
         "duration_seconds must be a positive finite number if provided",
       );
+    } else if (input.duration_seconds > STORYBOARD_MAX_SECONDS) {
+      errors.push(
+        `duration_seconds is ${input.duration_seconds}s; cap is ${STORYBOARD_MAX_SECONDS}s (${STORYBOARD_MAX_SCENES} shots x ${SCENE_MAX_SECONDS}s)`,
+      );
     } else {
       durationSeconds = input.duration_seconds;
     }
@@ -450,6 +497,10 @@ export function validateStoryboard(input: unknown): ValidationResult {
     if (!isPositiveFiniteNumber(input.clip_seconds)) {
       errors.push(
         "clip_seconds must be a positive finite number if provided",
+      );
+    } else if (input.clip_seconds > SCENE_MAX_SECONDS) {
+      errors.push(
+        `clip_seconds is ${input.clip_seconds}s; cap is ${SCENE_MAX_SECONDS}s per shot`,
       );
     } else {
       clipSeconds = input.clip_seconds;
