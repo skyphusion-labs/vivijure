@@ -75,7 +75,15 @@ export interface ScatterArgs {
 // and writes per-shot clips to R2 without assembling anything.
 export function buildShardJobs(args: ScatterArgs): RenderSubmitArgs[] {
   const shards = splitShots(args.shotIds, args.shardCount);
-  return shards.map((shard) => {
+  // Explicit empty-shard guard: a shard with no shots would submit
+  // processShotIds: [], and the backend reads an empty process_shot_ids as
+  // "render the WHOLE storyboard". One stray empty shard would therefore render
+  // the entire film (N times over the scatter), so never emit a job for one.
+  // splitShots already avoids empty slices for a non-empty input; this is the
+  // load-bearing safety net, not a redundant check.
+  return shards
+    .filter((shard) => shard.length > 0)
+    .map((shard) => {
     const pretrained = scopePretrainedToShard(args.pretrainedLoras, shard, args.shotSlots);
     const job: RenderSubmitArgs = {
       project: args.project,
@@ -124,26 +132,65 @@ export type GatherDecision =
   | { kind: "waiting"; remaining: number }
   | { kind: "failed"; reason: string };
 
+// One shard's last-known RunPod status plus the shots it was assigned
+// (process_shot_ids). The shot ownership is what lets the gather decide whether a
+// specific missing shot is doomed (its shard is dead) or merely slow (a live
+// shard still owns it).
+export interface ShardStatus {
+  status: string;
+  shots: string[];
+}
+
 // Decide what the gather watcher should do, from the clip-presence signal
 // (video-finish.gatherClipPresence) and the shards' last RunPod statuses.
 //
-//   finish  -> every shot has a clip in R2: assemble the MP4.
-//   failed  -> a shard reached a dead terminal state while shots are still
-//              missing: those clips can never arrive, so stop waiting.
-//   waiting -> clips still landing; keep polling.
+//   finish  -> every EXPECTED shot has a clip in R2: assemble the MP4.
+//   failed  -> a missing shot can never arrive (its owning shard is dead, or no
+//              shard owns it): stop waiting.
+//   waiting -> shots still missing but a live shard could still produce them.
 //
-// The presence signal leads (a shard can be COMPLETED yet have re-emitted clips,
-// or a retried shard can fill holes), so we only call "failed" when shots are
-// genuinely missing AND a shard that would have produced them is dead.
+// `expected` is the AUTHORITATIVE full storyboard shot-id set; we compute the
+// missing set here from it rather than trusting a caller-supplied count, so a
+// truncated expected-set can never let the gather "finish" a partial film. Finish
+// requires present to cover expected in full (present superset-of expected).
+//
+// Dead-ness is correlated to the specific missing shots' owning shard, not the
+// whole gather: a single dead shard does NOT fail shots that live shards still
+// own (or that the dead shard already re-emitted into `present`). The presence
+// signal leads -- a shard can be COMPLETED yet have re-emitted clips, or a
+// retried shard can fill holes -- so we only call "failed" for shots that are
+// missing AND unrecoverable.
 export function gatherDecision(
   present: string[],
-  missing: string[],
-  shardStatuses: Array<{ status: string }>,
+  expected: string[],
+  shards: ShardStatus[],
 ): GatherDecision {
-  if (missing.length === 0 && present.length > 0) return { kind: "finish" };
-  const anyDead = shardStatuses.some((s) => SHARD_DEAD_STATUSES.has(s.status));
-  if (missing.length > 0 && anyDead) {
-    return { kind: "failed", reason: `${missing.length} shot(s) missing and a shard failed: ${missing.join(", ")}` };
+  const expectedShots = expected.filter((s) => typeof s === "string" && s.length > 0);
+  // No authoritative shots means there is nothing to assemble; never silently
+  // "finish" an empty film.
+  if (expectedShots.length === 0) {
+    return { kind: "failed", reason: "no expected shots: nothing to gather" };
+  }
+
+  const presentSet = new Set(present);
+  const missing = expectedShots.filter((id) => !presentSet.has(id));
+  if (missing.length === 0) return { kind: "finish" };
+
+  // A missing shot can still arrive only if a NON-dead shard owns it. Missing
+  // shots whose owning shard is dead -- or that no shard owns at all -- can never
+  // land, so the gather is doomed for exactly those shots.
+  const recoverable = new Set<string>();
+  for (const shard of shards) {
+    if (!SHARD_DEAD_STATUSES.has(shard.status)) {
+      for (const shot of shard.shots) recoverable.add(shot);
+    }
+  }
+  const doomed = missing.filter((id) => !recoverable.has(id));
+  if (doomed.length > 0) {
+    return {
+      kind: "failed",
+      reason: `${doomed.length} shot(s) can never arrive (owning shard dead or unassigned): ${doomed.join(", ")}`,
+    };
   }
   return { kind: "waiting", remaining: missing.length };
 }
