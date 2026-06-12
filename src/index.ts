@@ -5,8 +5,11 @@
 //   GET /api/modules   the live registry (what is plugged in) -- the frontend renders itself from this
 //   *                  everything else falls through to ASSETS (the studio frontend in public/)
 //
-// The render API (storyboard / cast / render / scatter-gather) migrates in during Phase 1, behind the
-// module hook contracts. The core never grows a feature it could host as a module instead.
+// The render API (storyboard / cast / render / scatter-gather) is staged in src/ (cast-db, renders-db,
+// runpod-submit, scatter, r2-presign, render-*, storyboard-*, the containers) but is deliberately NOT
+// routed here yet: this entrypoint imports zero of it. Wiring those routes in (and exporting the
+// container DO classes) is the Phase-1 migration, tracked as the #1 epic. The core never grows a
+// feature it could host as a module instead.
 
 import { discoverModules, modulesResponse } from "./modules/registry";
 import type { Env } from "./env";

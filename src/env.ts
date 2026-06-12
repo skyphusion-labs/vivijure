@@ -3,10 +3,14 @@
 // Hand-authored interface mirroring wrangler.example.toml (the committed template; the real
 // wrangler.toml is gitignored). Adding a binding: update wrangler.example.toml, then mirror it here.
 //
-// Phase 1: the render API moved in from skyphusion-llm-public, so the render bindings it leans on
-// are now first-class here. R2_RENDERS is the existing `vivijure` bucket; R2 is the chat-side bucket
-// the render flow cross-bucket-copies a staged audio bed from (so both are bound, same resources as
-// the Playground -- no data migration). RUNPOD_* and R2_S3_* are secrets/vars.
+// Phase 0 (current). The render island has been *staged* into src/ (cast-db, renders-db,
+// runpod-submit, scatter, r2-presign, render-*, storyboard-*, the three containers) but is NOT yet
+// wired: index.ts routes only /health + /api/modules, and nothing imports the island from the
+// entrypoint. These bindings are declared ahead of the Phase-1 migration that will wire those routes
+// in (tracked in #1); until then they are present in the interface but unused at runtime, so a deploy
+// stays a lean module host. R2_RENDERS is the existing `vivijure` bucket; R2 is the chat-side bucket
+// the render flow will cross-bucket-copy a staged audio bed from (both bound, same resources as the
+// Playground, no data migration). RUNPOD_* and R2_S3_* are secrets/vars.
 //
 // MODULE BINDINGS: opt-in module workers attach as service bindings named `MODULE_<NAME>` (Fetcher),
 // discovered by the registry (src/modules/registry.ts). Not statically listed: a deployment installs
