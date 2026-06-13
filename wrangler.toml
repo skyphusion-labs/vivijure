@@ -38,7 +38,7 @@ bucket_name = "skyphusion-llm"
 [[d1_databases]]
 binding = "DB"
 database_name = "vivijure-studio"
-database_id = "<fill-in-after-wrangler-d1-create>"
+database_id = "bb806935-47a7-4524-93dd-251024794a55"
 
 # --- CPU container Durable Objects (off-GPU work). Build contexts live in containers/<name>/
 # --- (migrated from skyphusion-llm-public); the image is each Dockerfile. ---
