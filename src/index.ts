@@ -280,7 +280,7 @@ const hRefine: Handler = async (req, env) => {
   const r = await refineStoryboard(env, a);
   return json(r, r.ok ? 200 : 422);
 };
-const hModels: Handler = async () => json(PLANNING_MODELS);
+const hModels: Handler = async () => json({ models: PLANNING_MODELS });
 const hYaml: Handler = async (req) => {
   const a = await readBody<{ storyboard?: StoryboardValidated }>(req);
   if (!a.storyboard) throw badRequest("storyboard required");
