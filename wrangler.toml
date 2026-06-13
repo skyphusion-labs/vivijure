@@ -1,7 +1,8 @@
 # Vivijure studio core -- wrangler config.
 #
-# account_id is NOT hardcoded here; it is read from the CLOUDFLARE_ACCOUNT_ID env var
-# (set in .dev.vars locally, or injected as a secret in CI).
+# account_id is NOT hardcoded; it is read from CLOUDFLARE_ACCOUNT_ID (set in .dev.vars locally, or
+# injected as a secret in CI). Phase-1 render migration (epic #25): the render API bindings are wired
+# below. Mirror every binding change in src/env.ts (the hand-authored Env interface).
 
 name = "vivijure-studio"
 main = "src/index.ts"
@@ -14,25 +15,79 @@ assets = { directory = "./public", binding = "ASSETS" }
 [observability]
 enabled = true
 
-# --- Phase 1+ (render API migration). Uncomment as the render routes move in from
-# --- skyphusion-llm-public. R2_RENDERS is the existing `vivijure` bucket.
-# [ai]
-# binding = "AI"
-#
-# [[r2_buckets]]
-# binding = "R2_RENDERS"
-# bucket_name = "vivijure"
-#
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "vivijure-studio"
-# database_id = "<fill-in-after-wrangler-d1-create>"
+# AI Gateway (LLM storyboard planning + cloud-animate scoring). GATEWAY_ID is a SECRET, not a var:
+#   echo "<gateway-slug>" | npx wrangler secret put GATEWAY_ID
+[ai]
+binding = "AI"
 
-# --- Opt-in MODULE workers. Each is a service binding named MODULE_<NAME>; the registry discovers
-# --- them by the MODULE_ prefix. Install only the ones you want. Example (module #1, finish):
+# Storage. R2_RENDERS = the `vivijure` bucket (bundles, keyframes, clips, MP4s, project state).
+# R2 = the chat-side `skyphusion-llm` bucket the render flow copies a staged audio bed across from.
+# (Transition coupling: revisit moving the audio bed onto R2_RENDERS for a fully standalone studio.)
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "skyphusion-llm"
+
+# Fresh, dedicated D1 (Conrad: "use a clean db" -- no migration of the old playground data).
+# Provision + apply the schema of record:
+#   npx wrangler d1 create vivijure-studio        # paste the returned id below
+#   npx wrangler d1 migrations apply vivijure-studio   # applies migrations/0001_init.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "vivijure-studio"
+database_id = "<fill-in-after-wrangler-d1-create>"
+
+# --- CPU container Durable Objects (off-GPU work). Build contexts live in containers/<name>/
+# --- (migrated from skyphusion-llm-public); the image is each Dockerfile. ---
+[[durable_objects.bindings]]
+name = "AUDIO_BEAT_SYNC"
+class_name = "AudioBeatSyncContainer"
+
+[[durable_objects.bindings]]
+name = "IMAGE_PREP"
+class_name = "ImagePrepContainer"
+
+[[durable_objects.bindings]]
+name = "VIDEO_FINISH"
+class_name = "VideoFinishContainer"
+
+[[containers]]
+class_name = "AudioBeatSyncContainer"
+image = "./containers/audio-beat-sync/Dockerfile"
+max_instances = 3
+
+[[containers]]
+class_name = "ImagePrepContainer"
+image = "./containers/image-prep/Dockerfile"
+max_instances = 5
+
+[[containers]]
+class_name = "VideoFinishContainer"
+image = "./containers/video-finish/Dockerfile"
+max_instances = 3
+
+# Fresh worker -> one initial migration registering all three container DO classes.
+[[migrations]]
+tag = "v1-render-containers"
+new_sqlite_classes = ["AudioBeatSyncContainer", "ImagePrepContainer", "VideoFinishContainer"]
+
+# --- Secrets (npx wrangler secret put <NAME>): RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID,
+# --- R2_S3_ACCESS_KEY_ID, R2_S3_SECRET_ACCESS_KEY, GATEWAY_ID.
+# --- Presign vars (uncomment + fill on provision):
+# [vars]
+# R2_S3_ENDPOINT = "https://<account>.r2.cloudflarestorage.com"
+# R2_S3_BUCKET = "vivijure"
+
+# --- Transactional mail (render-complete). Wire when render-email lands (PR 2):
+# [[services]]
+# binding = "EMAIL"
+# service = "skyphusion-email"
+# entrypoint = "EmailService"
+
+# --- Opt-in MODULE workers: service bindings named MODULE_<NAME>; the registry discovers them.
 # [[services]]
 # binding = "MODULE_FINISH_RIFE"
 # service = "vivijure-module-finish-rife"
-
-# [vars]
-# GATEWAY_ID = "<ai-gateway-slug>"   # Phase 1+, for LLM storyboard planning
