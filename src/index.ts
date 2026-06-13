@@ -317,13 +317,19 @@ const hAudioUpload: Handler = async (req, env) => {
   return json(plan);
 };
 
+// --- misc planner endpoints ----------------------------------------------
+const hWhoami: Handler = async (req) => json({ email: getUserEmail(req) });
+// user-prefs.ts not migrated yet -- stub so the planner falls back to defaults (follow-up).
+const hGetPrefs: Handler = async () => json({});
+const hPutPrefs: Handler = async () => json({ ok: true });
+
 // --- route table (PR 2a) -------------------------------------------------
 const API_ROUTES: Route[] = [
-  { method: "GET",    pattern: "/api/projects",                        handler: hListProjects },
-  { method: "POST",   pattern: "/api/projects",                        handler: hCreateProject },
-  { method: "GET",    pattern: "/api/projects/:id",                    handler: hGetProject },
-  { method: "PATCH",  pattern: "/api/projects/:id",                    handler: hPatchProject },
-  { method: "DELETE", pattern: "/api/projects/:id",                    handler: hDeleteProject },
+  { method: "GET",    pattern: "/api/storyboard/projects",                        handler: hListProjects },
+  { method: "POST",   pattern: "/api/storyboard/projects",                        handler: hCreateProject },
+  { method: "GET",    pattern: "/api/storyboard/projects/:id",                    handler: hGetProject },
+  { method: "PATCH",  pattern: "/api/storyboard/projects/:id",                    handler: hPatchProject },
+  { method: "DELETE", pattern: "/api/storyboard/projects/:id",                    handler: hDeleteProject },
   { method: "GET",    pattern: "/api/cast",                            handler: hListCast },
   { method: "POST",   pattern: "/api/cast",                            handler: hCreateCast },
   { method: "GET",    pattern: "/api/cast/:id",                        handler: hGetCast },
@@ -343,7 +349,7 @@ const API_ROUTES: Route[] = [
   { method: "POST",   pattern: "/api/storyboard/yaml",                 handler: hYaml },
   { method: "POST",   pattern: "/api/storyboard/markers",              handler: hMarkers },
   { method: "POST",   pattern: "/api/storyboard/bundle",               handler: hBundle },
-  { method: "POST",   pattern: "/api/storyboard/audio-upload",         handler: hAudioUpload },
+  { method: "POST",   pattern: "/api/audio/analyze",                   handler: hAudioUpload },
   { method: "POST",   pattern: "/api/storyboard/render",               handler: hSubmitRender },
   { method: "POST",   pattern: "/api/storyboard/render/scatter",       handler: hScatterRender },
   { method: "POST",   pattern: "/api/storyboard/render-from-keyframes", handler: hFinalizeRender },
@@ -354,6 +360,9 @@ const API_ROUTES: Route[] = [
   { method: "PATCH",  pattern: "/api/storyboard/renders/:id",          handler: hPatchRender },
   { method: "DELETE", pattern: "/api/storyboard/renders/:id",          handler: hDeleteRender },
   { method: "POST",   pattern: "/api/storyboard/renders/adopt",        handler: hTodo },
+  { method: "GET",    pattern: "/api/whoami",                          handler: hWhoami },
+  { method: "GET",    pattern: "/api/prefs",                           handler: hGetPrefs },
+  { method: "PUT",    pattern: "/api/prefs",                           handler: hPutPrefs },
 ];
 
 export default {
