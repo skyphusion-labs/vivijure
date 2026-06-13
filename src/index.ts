@@ -24,10 +24,17 @@ import {
 } from "./renders-db";
 import {
   submitRenderJob, submitFinalizeJob, pollRenderJob, cancelRenderJob,
-  coerceQualityTier, deriveProjectFromBundleKey,
-  type RenderSubmitArgs, type FinalizeArgs,
+  coerceQualityTier, deriveProjectFromBundleKey, parseAudioBeatPlan,
+  type RenderSubmitArgs, type FinalizeArgs, type AudioAnalyzeRequest,
 } from "./runpod-submit";
-import { validateStoryboard } from "./storyboard-validate";
+import { validateStoryboard, type StoryboardValidated } from "./storyboard-validate";
+// authoring (PR 2b)
+import { planStoryboard, refineStoryboard, type PlanStoryboardArgs, type RefineStoryboardArgs } from "./planner";
+import { PLANNING_MODELS } from "./planner-catalog";
+import { serializeStoryboardYaml } from "./planner-yaml";
+import { emitMarkers, type MarkersFormat } from "./markers";
+import { assembleBundle, type AssembleBundleArgs } from "./bundle-assembler";
+import { presignR2Get } from "./r2-presign";
 
 // Container DOs -- exported so the runtime registers them (bound in wrangler.toml).
 export { AudioBeatSyncContainer } from "./containers/audio-beat-sync";
@@ -260,6 +267,56 @@ const hPreflight: Handler = async (req) => {
   return json(result, okFlag === false ? 400 : 200);
 };
 
+// --- authoring: planning / yaml / markers / bundle / audio (PR 2b) -------
+const hPlan: Handler = async (req, env) => {
+  const a = await readBody<PlanStoryboardArgs>(req);
+  if (!a.brief || !a.model) throw badRequest("brief and model required");
+  const r = await planStoryboard(env, a);
+  return json(r, r.ok ? 200 : 422);
+};
+const hRefine: Handler = async (req, env) => {
+  const a = await readBody<RefineStoryboardArgs>(req);
+  if (a.storyboard === undefined || !a.message || !a.model) throw badRequest("storyboard, message, model required");
+  const r = await refineStoryboard(env, a);
+  return json(r, r.ok ? 200 : 422);
+};
+const hModels: Handler = async () => json(PLANNING_MODELS);
+const hYaml: Handler = async (req) => {
+  const a = await readBody<{ storyboard?: StoryboardValidated }>(req);
+  if (!a.storyboard) throw badRequest("storyboard required");
+  return new Response(serializeStoryboardYaml(a.storyboard), {
+    headers: { "content-type": "text/yaml; charset=utf-8", "content-disposition": "attachment; filename=\"storyboard.yaml\"" },
+  });
+};
+const hMarkers: Handler = async (req) => {
+  const a = await readBody<{ storyboard?: unknown; format?: MarkersFormat; fps?: number }>(req);
+  if (!a.storyboard || !a.format) throw badRequest("storyboard and format required");
+  const out = emitMarkers(a.storyboard as Parameters<typeof emitMarkers>[0], a.format, a.fps);
+  return new Response(out.body, {
+    headers: { "content-type": out.contentType, "content-disposition": "attachment; filename=\"" + out.filename + "\"" },
+  });
+};
+const hBundle: Handler = async (req, env) => {
+  const a = await readBody<AssembleBundleArgs>(req);
+  if (!a.storyboard || !a.characterRefs) throw badRequest("storyboard and characterRefs required");
+  const r = await assembleBundle(env, a);
+  return json(r, r.ok ? 201 : 400);
+};
+const hAudioUpload: Handler = async (req, env) => {
+  const a = await readBody<AudioAnalyzeRequest>(req);
+  if (!a.audioKey) throw badRequest("audioKey required");
+  const audioUrl = await presignR2Get(env, a.audioKey, 300);
+  const stub = env.AUDIO_BEAT_SYNC.get(env.AUDIO_BEAT_SYNC.idFromName("singleton"));
+  const resp = await stub.fetch("https://container/analyze", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ audioUrl, clipSeconds: a.clipSeconds, mode: a.mode, minSceneS: a.minSceneS, maxSceneS: a.maxSceneS, forceShots: a.forceShots }),
+  });
+  const plan = parseAudioBeatPlan(await resp.json());
+  if (!plan) return json({ error: "beat-sync container returned an unrecognized plan" }, 502);
+  return json(plan);
+};
+
 // --- route table (PR 2a) -------------------------------------------------
 const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/projects",                        handler: hListProjects },
@@ -280,6 +337,13 @@ const API_ROUTES: Route[] = [
   { method: "DELETE", pattern: "/api/cast/:id/source",                 handler: hRemoveSource },
   { method: "POST",   pattern: "/api/cast/:id/lora",                   handler: hTodo },
   { method: "POST",   pattern: "/api/storyboard/preflight",            handler: hPreflight },
+  { method: "POST",   pattern: "/api/storyboard/plan",                 handler: hPlan },
+  { method: "POST",   pattern: "/api/storyboard/refine",               handler: hRefine },
+  { method: "GET",    pattern: "/api/storyboard/models",               handler: hModels },
+  { method: "POST",   pattern: "/api/storyboard/yaml",                 handler: hYaml },
+  { method: "POST",   pattern: "/api/storyboard/markers",              handler: hMarkers },
+  { method: "POST",   pattern: "/api/storyboard/bundle",               handler: hBundle },
+  { method: "POST",   pattern: "/api/storyboard/audio-upload",         handler: hAudioUpload },
   { method: "POST",   pattern: "/api/storyboard/render",               handler: hSubmitRender },
   { method: "POST",   pattern: "/api/storyboard/render/scatter",       handler: hScatterRender },
   { method: "POST",   pattern: "/api/storyboard/render-from-keyframes", handler: hFinalizeRender },
