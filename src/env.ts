@@ -39,6 +39,9 @@ export interface Env {
   // AI Gateway (LLM storyboard planning + cloud-animate scoring prompts).
   AI: Ai;
   GATEWAY_ID: string;
+  // Planner LLM auth: authenticated AI Gateway token + xAI BYOK (secrets, optional).
+  CF_AIG_TOKEN?: string;
+  XAI_API_KEY?: string;
 
   // Storage. R2_RENDERS = the `vivijure` bucket (bundles, keyframes, clips, MP4s, project state).
   // R2 = the chat-side bucket; the render flow copies a staged audio bed across from it.
