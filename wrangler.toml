@@ -96,6 +96,10 @@ service = "vivijure-module-plan-enhance"
 binding = "MODULE_SEEDANCE"
 service = "vivijure-module-seedance"
 
+[[services]]
+binding = "MODULE_KLING"
+service = "vivijure-module-kling"
+
 # Vanity-domain route: bind the studio to vivijure.skyphusion.org.
 # At deploy: REMOVE the existing transform rule (-> playground /planner.html) and keep the
 # Access app (3377c722 / aud be06bf47) gating this hostname.
