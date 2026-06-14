@@ -129,14 +129,16 @@ export type PollResponse<O = unknown> =
 
 // finish (v1, the reference hook) ----------------------------------------------------------------
 
-/** What the core hands a `finish` module: a rendered clip and what is known about it. */
+/** What the core hands a `finish` module: a rendered clip and what is known about it. The clip is
+ *  self-describing (a finish backend probes it), so the shape hints below are OPTIONAL -- the core
+ *  passes them when it has them, but a finish module must not require them. */
 export interface FinishInput {
   shot_id: string;
-  clip_key: string; // R2 key of the input clip (mp4)
-  src_fps: number;
-  frames: number;
-  width: number;
-  height: number;
+  clip_key: string;  // R2 key of the input clip (mp4)
+  src_fps?: number;  // optional hints; the finish backend probes the clip if absent
+  frames?: number;
+  width?: number;
+  height?: number;
 }
 
 /** What a `finish` module returns: the processed clip plus what it did. Duration is invariant

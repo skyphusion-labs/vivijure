@@ -9,7 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig } from "./modules/registry";
-import type { KeyframeInput, KeyframeOutput } from "./modules/types";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob,
   type ClipShotInput, type ClipJob, type JobSummary,
@@ -17,6 +17,20 @@ import {
 import { presignR2Get } from "./r2-presign";
 
 export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
+
+/** One clip moving through the `finish` chain (post-clips). `chain` is the finish module bindings in
+ *  ui.order; `idx` walks through them, each consuming the previous module's output clip. */
+export interface FinishShot {
+  shot_id: string;
+  clip_key: string;   // current clip key (updated as each finish module completes)
+  chain: string[];    // finish module env-binding names, in ui.order
+  idx: number;
+  status: "pending" | "done" | "failed";
+  poll?: string;
+  applied: string[];
+  error?: string;
+}
+
 export interface FilmJob {
   film_id: string;
   project: string;
@@ -25,9 +39,10 @@ export interface FilmJob {
   motion_backend: string | null;
   motion_config: Record<string, unknown>;
   keyframe_binding: string | null;
-  phase: "keyframe" | "clips" | "done" | "failed";
+  phase: "keyframe" | "clips" | "finish" | "done" | "failed";
   keyframe_poll?: string;
   clip_job_id?: string;
+  finish_shots?: FinishShot[];
   error?: string;
   created_at: number;
 }
@@ -56,14 +71,28 @@ export function joinKeyframesToScenes(
   return { matched, missing };
 }
 
+export interface FinishSummary { total: number; done: number; failed: number; pending: number; }
 export interface FilmSummary {
   film_id: string;
   phase: FilmJob["phase"];
   error?: string;
   clips?: JobSummary;
+  finish?: FinishSummary;
+}
+export function summarizeFinish(shots: FinishShot[]): FinishSummary {
+  return {
+    total: shots.length,
+    done: shots.filter((s) => s.status === "done").length,
+    failed: shots.filter((s) => s.status === "failed").length,
+    pending: shots.filter((s) => s.status === "pending").length,
+  };
 }
 export function summarizeFilm(job: FilmJob, clipJob: ClipJob | null): FilmSummary {
-  return { film_id: job.film_id, phase: job.phase, error: job.error, clips: clipJob ? summarizeJob(clipJob) : undefined };
+  return {
+    film_id: job.film_id, phase: job.phase, error: job.error,
+    clips: clipJob ? summarizeJob(clipJob) : undefined,
+    finish: job.finish_shots ? summarizeFinish(job.finish_shots) : undefined,
+  };
 }
 
 /** Internal: presign each matched keyframe -> start the clip job, advancing the film to phase=clips. */
@@ -90,6 +119,57 @@ async function advanceToClips(env: Env, job: FilmJob, kfOut: KeyframeOutput): Pr
 
 const putFilm = (env: Env, job: FilmJob) =>
   env.R2_RENDERS.put(filmKey(job.film_id), JSON.stringify(job), { httpMetadata: { contentType: "application/json" } });
+
+/** Pure: fold one finish module's output into the shot -- chain its output clip into the next module,
+ *  record what it applied, advance the chain index; status -> done when the chain is exhausted. */
+export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
+  fs.clip_key = out.clip_key;
+  fs.applied.push(...(out.applied || []));
+  fs.idx += 1;
+  fs.poll = undefined;
+  if (fs.idx >= fs.chain.length) fs.status = "done"; // else stays pending; next advance submits chain[idx]
+}
+
+/** Internal: clips done -> set up the finish chain (one FinishShot per done clip). No finish modules
+ *  installed, or no clips to finish -> straight to done. */
+async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob): Promise<void> {
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  const chain = servingForHook(modules, "finish").map((m) => m.binding); // ui.order; the full finish chain
+  const doneClips = clipJob.shots.filter((s) => s.status === "done" && s.clip_key);
+  if (!chain.length || !doneClips.length) { job.phase = "done"; return; }
+  job.finish_shots = doneClips.map((s) => ({
+    shot_id: s.shot_id, clip_key: s.clip_key as string, chain, idx: 0, status: "pending" as const, applied: [],
+  }));
+  job.phase = "finish";
+}
+
+/** Advance the finish chain: per shot, submit its current finish module or poll the in-flight one,
+ *  chaining to the next module on completion. Phase -> done when every shot is terminal. */
+async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
+  const envRec = env as unknown as Record<string, unknown>;
+  for (const fs of job.finish_shots || []) {
+    if (fs.status !== "pending") continue;
+    const fetcher = asFetcher(envRec[fs.chain[fs.idx]]);
+    if (!fetcher) { fs.status = "failed"; fs.error = `finish module ${fs.chain[fs.idx]} not bound`; continue; }
+    const req = {
+      hook: "finish" as const,
+      input: { shot_id: fs.shot_id, clip_key: fs.clip_key } as FinishInput,
+      config: {}, context: { project: job.project, job_id: job.film_id },
+    };
+    if (!fs.poll) {
+      const r = await invokeModule<FinishInput, FinishOutput>(fetcher, req);
+      if (!r.ok) { fs.status = "failed"; fs.error = r.error; }
+      else if ((r as { pending?: boolean }).pending) { fs.poll = (r as { poll: string }).poll; }
+      else if ("output" in r) { applyFinishOutput(fs, r.output as FinishOutput); }
+      else { fs.status = "failed"; fs.error = "finish module returned neither output nor a poll token"; }
+    } else {
+      const p = await pollModule<FinishOutput>(fetcher, { poll: fs.poll });
+      if (!p.ok) { fs.status = "failed"; fs.error = p.error; }
+      else if (!(p as { pending?: boolean }).pending) { applyFinishOutput(fs, (p as { output: FinishOutput }).output); }
+    }
+  }
+  if ((job.finish_shots || []).every((fs) => fs.status !== "pending")) job.phase = "done";
+}
 
 /** Start a film job: resolve the keyframe module, submit the project preview, persist the poll token. */
 export async function startFilmJob(
@@ -151,15 +231,21 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
     await putFilm(env, job);
   }
 
-  // Phase 2: drive the clip orchestrator; mark done when every shot is terminal.
+  // Phase 2: drive the clip orchestrator; when every shot is terminal, hand off to the finish chain.
   let clipJob: ClipJob | null = null;
   if (job.phase === "clips" && job.clip_job_id) {
     clipJob = await advanceClipJob(env, job.clip_job_id);
-    if (clipJob && summarizeJob(clipJob).complete) { job.phase = "done"; }
+    if (clipJob && summarizeJob(clipJob).complete) { await enterFinishPhase(env, job, clipJob); }
     await putFilm(env, job);
   } else if (job.clip_job_id) {
-    const cj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id)); // done/failed: load for the summary
+    const cj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id)); // load for the summary
     if (cj) clipJob = JSON.parse(await cj.text()) as ClipJob;
+  }
+
+  // Phase 3: drive the finish chain per clip (async, across requests), then -> done.
+  if (job.phase === "finish" && job.finish_shots) {
+    await advanceFinishPhase(env, job);
+    await putFilm(env, job);
   }
 
   return { job, clipJob };
