@@ -124,7 +124,7 @@ shape is the canonical output; produce JSON that matches its style:
 
 {
   "title": "morning_walk",
-  "full_prompt": "Three-shot vignette: Kira walks into a hilltop clearing at dawn.",
+  "full_prompt": "Three-shot vignette: Elena walks into a hilltop clearing at dawn.",
   "duration_seconds": 21,
   "clip_seconds": 7,
   "style_prefix": "cinematic 35mm film, soft golden hour light, shallow depth of field",
@@ -138,12 +138,12 @@ shape is the canonical output; produce JSON that matches its style:
       "act": "opening"
     },
     {
-      "prompt": "Kira walks into frame from the left, looks out over the valley, wind in her coat.",
+      "prompt": "Elena walks into frame from the left, looks out over the valley, wind in her coat.",
       "character_slots": ["A"],
       "act": "rising"
     },
     {
-      "prompt": "Close-up on Kira's face, soft side light, expression of quiet resolve, eyes catching the last warm light.",
+      "prompt": "Close-up on Elena's face, soft side light, expression of quiet resolve, eyes catching the last warm light.",
       "character_slots": ["A"],
       "act": "turn"
     }
@@ -153,7 +153,7 @@ shape is the canonical output; produce JSON that matches its style:
 What that example demonstrates concretely:
 - Each scene's prompt is ~15-25 words: subject + action + framing +
   one beat of mood. Well inside the ${SCENE_PROMPT_MAX_WORDS}-word cap.
-- The cast member is referenced by NAME ("Kira"), not by slot id.
+- The cast member is referenced by NAME ("Elena"), not by slot id.
   The slot id only appears in scenes[].character_slots, never in prose.
 - Scene 1 omits character_slots entirely because nothing in the prompt
   references a character. Do NOT send character_slots:[] either; omit
@@ -285,12 +285,12 @@ mirrors the renderer's storyboard.example.yaml):
       "act": "opening"
     },
     {
-      "prompt": "Kira walks into frame from the left, looks out over the valley, wind in her coat.",
+      "prompt": "Elena walks into frame from the left, looks out over the valley, wind in her coat.",
       "character_slots": ["A"],
       "act": "rising"
     },
     {
-      "prompt": "Close-up on Kira's face, soft side light, expression of quiet resolve, eyes catching the last warm light.",
+      "prompt": "Close-up on Elena's face, soft side light, expression of quiet resolve, eyes catching the last warm light.",
       "character_slots": ["A"],
       "act": "turn"
     }
