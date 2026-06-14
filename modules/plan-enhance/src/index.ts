@@ -62,7 +62,7 @@ async function runEnhance(
   }
   const intensity = (req.config?.intensity as Intensity) || "medium";
 
-  let reply: string | undefined;
+  let reply: string | string[] | undefined;
   try {
     const res = await env.AI.run(MODEL, { messages: buildMessages(prompts, intensity) });
     reply = res?.response;
