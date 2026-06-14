@@ -72,7 +72,11 @@ export function checkManifest(raw: unknown): ConformanceCheck[] {
 export function checkInvokeResponse(raw: unknown): ConformanceCheck {
   if (!raw || typeof raw !== "object") return bad("invoke-response", "not an object");
   const r = raw as Record<string, unknown>;
-  if (r.ok === true) return "output" in r ? ok("invoke-response", "ok:true + output") : bad("invoke-response", "ok:true but no output");
+  if (r.ok === true) {
+    if ("output" in r) return ok("invoke-response", "ok:true + output");
+    if (r.pending === true && typeof r.poll === "string") return ok("invoke-response", "ok:true + pending + poll");
+    return bad("invoke-response", "ok:true but neither output nor pending+poll");
+  }
   if (r.ok === false) return typeof r.error === "string" ? ok("invoke-response", "ok:false + error") : bad("invoke-response", "ok:false but error is not a string");
   return bad("invoke-response", "missing boolean `ok`");
 }

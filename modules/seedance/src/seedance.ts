@@ -1,6 +1,5 @@
-// Pure Seedance mapping/parsing: build the RunPod request body from a MotionBackendInput + the
-// module config, and pull the result video URL out of a RunPod /status output. No I/O here, so it
-// unit-tests without the runtime or any spend.
+// Pure Seedance mapping/parsing: build the RunPod request body, parse the result video URL, and
+// encode/decode the async poll token. No I/O here, so it unit-tests without the runtime or spend.
 
 import type { MotionBackendInput } from "./contract";
 
@@ -28,8 +27,7 @@ export function buildSeedanceBody(input: MotionBackendInput, cfg: Record<string,
   };
 }
 
-/** RunPod video workers vary in output shape; find the first plausible video URL in the payload
- *  (prefers an .mp4). Walks strings, objects, and arrays defensively. */
+/** RunPod video workers vary in output shape; find the first plausible video URL (prefers an .mp4). */
 export function extractVideoUrl(output: unknown): string | null {
   let firstHttp: string | null = null;
   const visit = (v: unknown): string | null => {
@@ -39,25 +37,15 @@ export function extractVideoUrl(output: unknown): string | null {
       return null;
     }
     if (Array.isArray(v)) {
-      for (const x of v) {
-        const hit = visit(x);
-        if (hit) return hit;
-      }
+      for (const x of v) { const hit = visit(x); if (hit) return hit; }
       return null;
     }
     if (v && typeof v === "object") {
-      // check the common keys first, then everything
       const o = v as Record<string, unknown>;
       for (const k of ["video_url", "videoUrl", "url", "video", "output", "result", "assets"]) {
-        if (k in o) {
-          const hit = visit(o[k]);
-          if (hit) return hit;
-        }
+        if (k in o) { const hit = visit(o[k]); if (hit) return hit; }
       }
-      for (const x of Object.values(o)) {
-        const hit = visit(x);
-        if (hit) return hit;
-      }
+      for (const x of Object.values(o)) { const hit = visit(x); if (hit) return hit; }
     }
     return null;
   };
@@ -68,4 +56,31 @@ export function extractVideoUrl(output: unknown): string | null {
 export function clipKey(project: string, shotId: string): string {
   const safe = (s: string) => (s || "x").replace(/[^a-zA-Z0-9_-]/g, "_");
   return `renders/${safe(project)}/clips/${safe(shotId)}_seedance.mp4`;
+}
+
+// --- async poll token --------------------------------------------------------------------------
+
+// Everything /poll needs to finalize a job: the RunPod job id + where the clip belongs + its length.
+// The token is opaque (base64 JSON) so the caller just round-trips it from /invoke to /poll.
+export interface PollState {
+  jobId: string;
+  project: string;
+  shotId: string;
+  seconds: number;
+}
+
+export function encodePoll(s: PollState): string {
+  return btoa(JSON.stringify(s));
+}
+
+export function decodePoll(token: string): PollState | null {
+  try {
+    const o = JSON.parse(atob(token)) as PollState;
+    if (o && typeof o.jobId === "string" && typeof o.project === "string" && typeof o.shotId === "string") {
+      return { jobId: o.jobId, project: o.project, shotId: o.shotId, seconds: Number(o.seconds) || 5 };
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
 }

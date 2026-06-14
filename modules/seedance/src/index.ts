@@ -1,19 +1,24 @@
-// seedance: a motion.backend module worker (vivijure-module/1) wrapping ByteDance Seedance V1.5 Pro
-// I2V on RunPod. GET /module.json -> manifest; POST /invoke -> submit a keyframe + motion prompt to
-// the Seedance endpoint, poll to completion, store the clip in R2, return MotionBackendOutput.
+// seedance: a motion.backend module worker (vivijure-module/1), ByteDance Seedance V1.5 Pro I2V on
+// RunPod. ASYNC: cloud i2v takes minutes, longer than a Worker request can hold, so:
+//   GET  /module.json -> manifest
+//   POST /invoke      -> submit the job, return { ok, pending, poll } IMMEDIATELY (no blocking)
+//   POST /poll        -> { poll } -> check the job; finalize (download + store to R2) on completion
+// The caller (the core / an orchestrator) polls /poll until it is no longer pending. Each call is
+// fast (a status check; only the final one downloads), so nothing holds a multi-minute request.
 //
-// Failures are DATA: a bad request, a failed/late job, or a download error all return { ok:false },
-// so the core degrades (this is a pick_one hook -> the core can fall back to its built-in path).
+// Failures are DATA, never an exception across the wire.
 
 import {
   MODULE_API,
   type ModuleManifest,
   type InvokeRequest,
   type InvokeResponse,
+  type PollRequest,
+  type PollResponse,
   type MotionBackendInput,
   type MotionBackendOutput,
 } from "./contract";
-import { buildSeedanceBody, extractVideoUrl, clipKey, clampDuration } from "./seedance";
+import { buildSeedanceBody, extractVideoUrl, clipKey, clampDuration, encodePoll, decodePoll } from "./seedance";
 
 interface Env {
   RUNPOD_API_KEY: string;
@@ -21,13 +26,11 @@ interface Env {
 }
 
 const ENDPOINT = "https://api.runpod.ai/v2/seedance-v1-5-pro-i2v";
-const OUT_FPS = 24; // Seedance output fps (used to estimate frame count)
-const POLL_MS = 4000;
-const POLL_MAX = 45; // ~3 minutes ceiling, then a graceful timeout
+const OUT_FPS = 24;
 
 const MANIFEST: ModuleManifest = {
   name: "seedance",
-  version: "0.1.0",
+  version: "0.2.0",
   api: MODULE_API,
   hooks: ["motion.backend"],
   provides: [{ id: "i2v-cloud", label: "Seedance V1.5 Pro (cloud i2v)" }],
@@ -44,22 +47,15 @@ const MANIFEST: ModuleManifest = {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
-
 const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function runSeedance(
-  env: Env,
-  req: InvokeRequest<MotionBackendInput>,
-): Promise<InvokeResponse<MotionBackendOutput>> {
+/** /invoke: validate, submit to RunPod, return a poll token immediately. No blocking. */
+async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise<InvokeResponse<MotionBackendOutput>> {
   const input = req.input;
   if (!input || !input.keyframe_url || !input.prompt || !input.shot_id) {
     return { ok: false, error: "motion.backend: input needs shot_id, keyframe_url, and prompt" };
   }
   if (!env.RUNPOD_API_KEY) return { ok: false, error: "seedance: RUNPOD_API_KEY not configured" };
-
-  // 1. submit
-  let jobId: string | undefined;
   try {
     const r = await fetch(ENDPOINT + "/run", {
       method: "POST",
@@ -67,34 +63,34 @@ async function runSeedance(
       body: JSON.stringify(buildSeedanceBody(input, req.config)),
     });
     if (!r.ok) return { ok: false, error: "seedance /run -> " + r.status };
-    jobId = ((await r.json()) as { id?: string }).id;
+    const jobId = ((await r.json()) as { id?: string }).id;
     if (!jobId) return { ok: false, error: "seedance /run returned no job id" };
+    return {
+      ok: true,
+      pending: true,
+      poll: encodePoll({ jobId, project: req.context.project, shotId: input.shot_id, seconds: clampDuration(input.seconds) }),
+    };
   } catch (e) {
     return { ok: false, error: "seedance submit failed: " + (e as Error).message };
   }
+}
 
-  // 2. poll to completion
-  let output: unknown;
-  for (let i = 0; i < POLL_MAX; i++) {
-    await sleep(POLL_MS);
-    let s: { status?: string; output?: unknown; error?: unknown };
-    try {
-      s = (await (await fetch(ENDPOINT + "/status/" + jobId, { headers: auth(env) })).json()) as typeof s;
-    } catch {
-      continue; // transient; keep polling
-    }
-    if (s.status === "COMPLETED") {
-      output = s.output;
-      break;
-    }
-    if (s.status === "FAILED") {
-      return { ok: false, error: "seedance job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
-    }
+/** /poll: check the RunPod job; on completion download the clip + store it in R2 and return output. */
+async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBackendOutput>> {
+  const st = decodePoll(body.poll);
+  if (!st) return { ok: false, error: "seedance: bad poll token" };
+  if (!env.RUNPOD_API_KEY) return { ok: false, error: "seedance: RUNPOD_API_KEY not configured" };
+
+  let s: { status?: string; output?: unknown; error?: unknown };
+  try {
+    s = (await (await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(env) })).json()) as typeof s;
+  } catch {
+    return { ok: true, pending: true }; // transient; poll again
   }
-  if (output === undefined) return { ok: false, error: "seedance job did not complete within the poll window" };
+  if (s.status === "FAILED") return { ok: false, error: "seedance job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
+  if (s.status !== "COMPLETED") return { ok: true, pending: true }; // IN_QUEUE / IN_PROGRESS
 
-  // 3. fetch the video + store it in R2
-  const url = extractVideoUrl(output);
+  const url = extractVideoUrl(s.output);
   if (!url) return { ok: false, error: "seedance output had no video url" };
   let bytes: ArrayBuffer;
   try {
@@ -104,23 +100,20 @@ async function runSeedance(
   } catch (e) {
     return { ok: false, error: "download seedance video failed: " + (e as Error).message };
   }
-  const key = clipKey(req.context.project, input.shot_id);
+  const key = clipKey(st.project, st.shotId);
   try {
     await env.R2_RENDERS.put(key, bytes);
   } catch (e) {
     return { ok: false, error: "R2 put failed: " + (e as Error).message };
   }
-
-  return {
-    ok: true,
-    output: { shot_id: input.shot_id, clip_key: key, fps: OUT_FPS, frames: clampDuration(input.seconds) * OUT_FPS },
-  };
+  return { ok: true, output: { shot_id: st.shotId, clip_key: key, fps: OUT_FPS, frames: st.seconds * OUT_FPS } };
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/module.json") return json(MANIFEST);
+
     if (request.method === "POST" && url.pathname === "/invoke") {
       let req: InvokeRequest<MotionBackendInput>;
       try {
@@ -131,8 +124,22 @@ export default {
       if (req.hook !== "motion.backend") {
         return json({ ok: false, error: "unsupported hook " + String(req.hook) } as InvokeResponse);
       }
-      return json(await runSeedance(env, req));
+      return json(await submit(env, req));
     }
+
+    if (request.method === "POST" && url.pathname === "/poll") {
+      let body: PollRequest;
+      try {
+        body = (await request.json()) as PollRequest;
+      } catch {
+        return json({ ok: false, error: "invalid JSON body" } as PollResponse);
+      }
+      if (!body || typeof body.poll !== "string") {
+        return json({ ok: false, error: "poll token required" } as PollResponse);
+      }
+      return json(await poll(env, body));
+    }
+
     return json({ ok: false, error: "not found" }, 404);
   },
 };
