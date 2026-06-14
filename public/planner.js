@@ -353,12 +353,6 @@ const planState = {
   // v0.50.0: refinement chat history. Each entry is {role: "user"|"assistant",
   // content: string, ts: number}. Display-only; not replayed to the model.
   refineHistory: [],
-  // v0.131.0: freeform "ask the model" chat thread, independent of any
-  // storyboard. chatHistory is the display log ({role, content, ts}); the
-  // model's memory is server-side via chatConversationId, which we pass back
-  // to /api/chat each turn so the worker replays prior turns from D1.
-  chatHistory: [],
-  chatConversationId: null,
   // v0.51.0: audio bed + beat timing. audioKey is the R2 key (under
   // audio/ for BYO uploads or out/ for MiniMax-generated tracks
   // copied across buckets via the cast-style {from_chat_artifact}
@@ -459,9 +453,6 @@ function savePersistedState() {
       // is already a plain object (jobId, kfKey, shotId, rowId,
       // startedAt) so JSON.stringify round-trips it cleanly.
       regenJobs: collectRegenJobs(),
-      // v0.131.0: freeform planner chat. Top-level (not under planResult) so it
-      // survives a tab close even when no storyboard has been planned yet.
-      chat: { history: planState.chatHistory, conversationId: planState.chatConversationId },
       savedAt: Math.floor(Date.now() / 1000),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
@@ -618,13 +609,6 @@ function restorePersistedState() {
 
   // Plan form fields. Model picker value is set later (after loadModels).
   if (stash.planForm) restorePlanForm(stash.planForm);
-
-  // v0.131.0: freeform chat thread restores independently of any storyboard
-  // (older stashes that predate the field fall back to an empty log).
-  planState.chatHistory = Array.isArray(stash.chat?.history) ? stash.chat.history : [];
-  planState.chatConversationId =
-    typeof stash.chat?.conversationId === "string" ? stash.chat.conversationId : null;
-  renderChatTurns();
 
   // Plan result panel (storyboard JSON + YAML side-by-side view).
   if (stash.planResult) restorePlanResultPanel(stash.planResult);
@@ -1060,7 +1044,7 @@ function renderCast() {
     const name = document.createElement("input");
     name.type = "text";
     name.className = "planner-cast-name";
-    name.placeholder = "name (e.g. Kira)";
+    name.placeholder = "name (e.g. Elena)";
     name.disabled = true;
 
     const bible = document.createElement("textarea");
@@ -1684,191 +1668,6 @@ async function sendRefine() {
   input.focus();
 }
 
-// ---------- v0.131.0: freeform "ask the model" chat thread ----------
-//
-// Multi-turn freeform chat with the selected planning model, independent of
-// any storyboard. Each turn POSTs {model, user_input, conversation_id} to
-// /api/chat; the worker replays prior turns from that conversation_id, so the
-// model's memory lives server-side and the client keeps only a display log +
-// the id. The planning models are all chat-type, so /api/chat returns
-// synchronously with {output, conversation_id} (the pending shape is for
-// async music/video models only). Reuses the .planner-refine-* styling.
-
-let chatInflight = false;
-
-function setChatStatus(text, kind) {
-  const el = $("#planner-chat-status");
-  if (!el) return;
-  el.textContent = text || "";
-  el.className = "planner-status" + (kind ? " planner-" + kind : "");
-}
-
-function renderChatTurns() {
-  const list = $("#planner-chat-turns");
-  if (!list) return;
-  list.innerHTML = "";
-  for (const turn of planState.chatHistory || []) {
-    const li = document.createElement("li");
-    li.className = "planner-refine-turn planner-refine-turn-" + turn.role;
-    const role = document.createElement("span");
-    role.className = "planner-refine-role";
-    role.textContent = turn.role === "user" ? "you" : "assistant";
-    li.appendChild(role);
-    const body = document.createElement("div");
-    body.className = "planner-refine-body";
-    body.textContent = turn.content || "";
-    li.appendChild(body);
-    list.appendChild(li);
-  }
-  list.scrollTop = list.scrollHeight;
-}
-
-function clearChat() {
-  planState.chatHistory = [];
-  planState.chatConversationId = null;
-  renderChatTurns();
-  setChatStatus("new conversation", "");
-  persistSoon();
-}
-
-async function sendChat() {
-  if (chatInflight) return;
-  const input = $("#planner-chat-input");
-  const message = (input.value || "").trim();
-  if (!message) return;
-  const modelEl = $("#planner-model");
-  const model = modelEl ? modelEl.value : "";
-  if (!model) {
-    setChatStatus("pick a planning model in the brief above", "error");
-    return;
-  }
-
-  chatInflight = true;
-  $("#planner-chat-send").disabled = true;
-  setChatStatus("thinking...", "loading");
-
-  // Optimistically append the user turn so the log shows what was just sent.
-  planState.chatHistory.push({ role: "user", content: message, ts: Date.now() });
-  renderChatTurns();
-  input.value = "";
-  persistSoon();
-
-  let resp;
-  let data;
-  try {
-    resp = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model,
-        user_input: message,
-        // Continue the same server-side conversation when we have one.
-        conversation_id: planState.chatConversationId || undefined,
-      }),
-    });
-    data = await resp.json();
-  } catch (err) {
-    setChatStatus("network error: " + err.message, "error");
-    planState.chatHistory.push({ role: "assistant", content: "(network error: " + err.message + ")", ts: Date.now() });
-    renderChatTurns();
-    persistSoon();
-    chatInflight = false;
-    $("#planner-chat-send").disabled = false;
-    return;
-  }
-
-  if (!resp.ok) {
-    const msg = data && data.error ? data.error : "HTTP " + resp.status;
-    setChatStatus("error (" + resp.status + ")", "error");
-    planState.chatHistory.push({ role: "assistant", content: "(error " + resp.status + ": " + msg + ")", ts: Date.now() });
-    renderChatTurns();
-    persistSoon();
-    chatInflight = false;
-    $("#planner-chat-send").disabled = false;
-    return;
-  }
-
-  const reply = data && typeof data.output === "string" ? data.output : "";
-  if (data && data.conversation_id) planState.chatConversationId = data.conversation_id;
-  planState.chatHistory.push({ role: "assistant", content: reply || "(empty response)", ts: Date.now() });
-  renderChatTurns();
-  setChatStatus("", "");
-  persistSoon();
-
-  chatInflight = false;
-  $("#planner-chat-send").disabled = false;
-  input.focus();
-}
-
-// v0.134.0: "script my plan" -- synthesize the brainstorm chat into a single
-// production brief and drop it in the brief box (which the Plan step then feeds
-// to the storyboard model). Replaces the old v0.132.0 auto-fill that dumped raw
-// per-turn replies into the brief. Summarizes via a one-shot /api/chat on the
-// selected planning model with NO conversation_id (so it does not pollute the
-// chat thread), passing the whole transcript as context.
-async function scriptMyPlan() {
-  if (chatInflight) return;
-  const turns = planState.chatHistory || [];
-  if (!turns.length) {
-    setChatStatus("chat with the model first, then script the plan", "error");
-    return;
-  }
-  const modelEl = $("#planner-model");
-  const model = modelEl ? modelEl.value : "";
-  if (!model) {
-    setChatStatus("pick a planning model above", "error");
-    return;
-  }
-  const transcript = turns
-    .map((t) => (t.role === "user" ? "User: " : "Assistant: ") + (t.content || ""))
-    .join("\n\n");
-  const instruction =
-    "The following is a brainstorming conversation between a user and you about a short film. "
-    + "Synthesize it into a single concise production brief for a storyboard planner: the setting "
-    + "and mood, the approximate length, the key beats in order, and which characters appear and when. "
-    + "Write the brief itself in plain prose with no preamble (do not say 'here is' or address the user).\n\n"
-    + "Conversation:\n\n" + transcript;
-
-  chatInflight = true;
-  const btn = $("#planner-chat-script");
-  if (btn) btn.disabled = true;
-  setChatStatus("scripting your plan...", "loading");
-
-  let resp;
-  let data;
-  try {
-    resp = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, user_input: instruction }),
-    });
-    data = await resp.json();
-  } catch (err) {
-    setChatStatus("network error: " + err.message, "error");
-    chatInflight = false;
-    if (btn) btn.disabled = false;
-    return;
-  }
-
-  if (!resp.ok || !data || typeof data.output !== "string" || !data.output.trim()) {
-    const msg = data && data.error ? data.error : "HTTP " + (resp ? resp.status : "?");
-    setChatStatus("could not script the plan (" + msg + ")", "error");
-    chatInflight = false;
-    if (btn) btn.disabled = false;
-    return;
-  }
-
-  const briefEl = $("#planner-brief");
-  if (briefEl) {
-    briefEl.value = data.output.trim();
-    persistSoon();
-    briefEl.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
-  setChatStatus("plan scripted into the brief; review it, then hit plan", "success");
-  chatInflight = false;
-  if (btn) btn.disabled = false;
-}
-
 // ---------- Audio bed + beat timing (v0.51.0) ----------
 //
 // Two paths to set planState.audioKey: generate via MiniMax Music 2.6
@@ -1990,7 +1789,7 @@ async function uploadAudioFile(file) {
 
 // v0.137.6: suggest an "ideal" MiniMax Music prompt that matches the planned
 // video, so the generated track fits the mood/tempo/energy instead of being a
-// blind guess. One-shot /api/chat (mirrors scriptMyPlan): feeds the storyboard's
+// blind guess. One-shot /api/chat: feeds the storyboard's
 // concept + visual style + shot arc + duration (and the original brief, which
 // often names the genre/BPM) to the selected planning model and asks for a
 // single concise INSTRUMENTAL music prompt. Prefills #planner-music-prompt;
@@ -6836,13 +6635,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // v0.50.0: refinement chat send button + Cmd/Ctrl+Enter in the textarea.
   const refineSend = $("#planner-refine-send");
   if (refineSend) refineSend.addEventListener("click", sendRefine);
-  // v0.131.0: freeform chat send + new-conversation + Cmd/Ctrl+Enter.
-  const chatSend = $("#planner-chat-send");
-  if (chatSend) chatSend.addEventListener("click", sendChat);
-  const chatClear = $("#planner-chat-clear");
-  if (chatClear) chatClear.addEventListener("click", clearChat);
-  const chatScript = $("#planner-chat-script");
-  if (chatScript) chatScript.addEventListener("click", scriptMyPlan);
   // v0.133.3 / v0.161.1: "new / reset" button -- full session reset. Clears
   // the brief, storyboard, audio, bundle, render, and persisted snapshot so
   // the next plan starts with a clean slate and no prior project bleeds in.
@@ -6865,16 +6657,6 @@ document.addEventListener("DOMContentLoaded", () => {
       resetRenderStage();
       savePersistedState();
       if (briefEl) briefEl.focus();
-    });
-  }
-  const chatInput = $("#planner-chat-input");
-  if (chatInput) {
-    // Match the main chat composer: Enter sends, Shift+Enter inserts a newline.
-    chatInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendChat();
-      }
     });
   }
   const refineInput = $("#planner-refine-input");
