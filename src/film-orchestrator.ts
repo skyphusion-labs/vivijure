@@ -271,9 +271,14 @@ async function enterAssemblePhase(
   // Resolution/fps are left to the container default (it normalizes the clips); the motion output
   // does not carry width/height, so matching the source resolution is a later polish, not a gate.
   const resp = await callVideoFinish(env, { clips, outputUrl, outputKey });
-  if (!resp || !resp.ok) {
+  if (!resp) { job.phase = "failed"; job.error = "video-finish container unreachable"; return; }
+  if (!resp.ok) {
+    // Surface the container's own error body (it returns {ok:false,error}); an opaque "returned 500"
+    // is undiagnosable. The container's ffmpeg/assemble failures are the most useful signal here.
+    let detail = "";
+    try { detail = (await resp.text()).slice(0, 400); } catch { /* body unreadable */ }
     job.phase = "failed";
-    job.error = `video-finish container ${resp ? `returned ${resp.status}` : "unreachable"}`;
+    job.error = `video-finish container returned ${resp.status}${detail ? `: ${detail}` : ""}`;
     return;
   }
   let body: FinishContainerResult;
