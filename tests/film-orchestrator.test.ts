@@ -1,5 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, type FilmScene } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+
+const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
+  shot_id: "shot_01", clip_key: "clips/shot_01.mp4", chain: ["MODULE_FINISH_RIFE"], idx: 0,
+  status: "pending", applied: [], ...over,
+});
+
+describe("applyFinishOutput (chain fold)", () => {
+  it("single-module chain: folds the output and marks done", () => {
+    const fs = finishShot();
+    applyFinishOutput(fs, { shot_id: "shot_01", clip_key: "clips/shot_01_finished.mp4", out_fps: 32, frames: 160, applied: ["interpolate:2x"] });
+    expect(fs.clip_key).toBe("clips/shot_01_finished.mp4");
+    expect(fs.applied).toEqual(["interpolate:2x"]);
+    expect(fs.idx).toBe(1);
+    expect(fs.poll).toBeUndefined();
+    expect(fs.status).toBe("done");
+  });
+
+  it("multi-module chain: stays pending until the chain is exhausted, accumulating applied + chaining clips", () => {
+    const fs = finishShot({ chain: ["MODULE_A", "MODULE_B"] });
+    applyFinishOutput(fs, { shot_id: "shot_01", clip_key: "clips/after_a.mp4", out_fps: 32, frames: 160, applied: ["interpolate:2x"] });
+    expect(fs.idx).toBe(1);
+    expect(fs.status).toBe("pending"); // module B still to run
+    expect(fs.clip_key).toBe("clips/after_a.mp4"); // B will finish A's output
+    applyFinishOutput(fs, { shot_id: "shot_01", clip_key: "clips/after_b.mp4", out_fps: 32, frames: 160, applied: ["face_restore:gfpgan"] });
+    expect(fs.idx).toBe(2);
+    expect(fs.status).toBe("done");
+    expect(fs.applied).toEqual(["interpolate:2x", "face_restore:gfpgan"]);
+    expect(fs.clip_key).toBe("clips/after_b.mp4");
+  });
+});
 
 const scenes: FilmScene[] = [
   { shot_id: "shot_01", prompt: "a city at dawn", seconds: 5 },
