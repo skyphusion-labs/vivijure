@@ -1,0 +1,22 @@
+# finish-rife module worker (vivijure-module/1): RIFE frame interpolation + GFPGAN face restore,
+# running on the shared vivijure-backend RunPod endpoint as action="finish_clip".
+# Bound into the core as MODULE_FINISH_RIFE; the registry discovers it from GET /module.json.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-finish-rife"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+# Clips are read and written in the shared render bucket.
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
+
+# Secrets, set AFTER deploy (never committed):
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/finish-rife/wrangler.toml
+#   ! npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/finish-rife/wrangler.toml
