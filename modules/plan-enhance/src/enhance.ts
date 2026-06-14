@@ -37,10 +37,9 @@ export function buildMessages(prompts: string[], intensity: Intensity): ChatMess
   ];
 }
 
-/** Parse the model's reply into exactly `n` rewritten prompts, or null if it is not a clean,
- *  right-length array of non-empty strings. Tolerates a code fence and surrounding prose. */
-export function parseEnhanced(raw: unknown, n: number): string[] | null {
-  if (typeof raw !== "string") return null;
+/** A clean JSON array of exactly `n` non-empty strings, or null. Tolerates a code fence and
+ *  surrounding prose (extracts the first [ to the last ]). */
+function tryJsonArray(raw: string, n: number): string[] | null {
   let s = raw.trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) s = fence[1].trim();
@@ -56,6 +55,26 @@ export function parseEnhanced(raw: unknown, n: number): string[] | null {
   if (!Array.isArray(arr) || arr.length !== n) return null;
   if (!arr.every((x) => typeof x === "string" && (x as string).trim().length > 0)) return null;
   return (arr as string[]).map((x) => x.trim());
+}
+
+/** Fallback for the shape models love when they ignore "JSON only": a numbered or bulleted list
+ *  ("1. ...", "1) ...", "- ...", "* ..."). Returns the N item texts (quotes stripped) iff exactly N
+ *  list items are present, so a stray preamble/postamble line does not corrupt the mapping. */
+function tryNumberedList(raw: string, n: number): string[] | null {
+  const items: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:\d+[.)]|[-*])\s+(.*\S)\s*$/);
+    if (m) items.push(m[1].replace(/^["']|["']$/g, "").trim());
+  }
+  if (items.length !== n || !items.every((x) => x.length > 0)) return null;
+  return items;
+}
+
+/** Parse the model's reply into exactly `n` rewritten prompts, or null. Accepts a clean JSON array
+ *  first, then falls back to a numbered/bulleted list. */
+export function parseEnhanced(raw: unknown, n: number): string[] | null {
+  if (typeof raw !== "string") return null;
+  return tryJsonArray(raw, n) ?? tryNumberedList(raw, n);
 }
 
 /** Merge enhanced prompts back into a storyboard, preserving every other field on the storyboard and
