@@ -88,9 +88,9 @@ new_sqlite_classes = ["AudioBeatSyncContainer", "ImagePrepContainer", "VideoFini
 # entrypoint = "EmailService"
 
 # --- Opt-in MODULE workers: service bindings named MODULE_<NAME>; the registry discovers them.
-# [[services]]
-# binding = "MODULE_FINISH_RIFE"
-# service = "vivijure-module-finish-rife"
+[[services]]
+binding = "MODULE_PLANENHANCE"
+service = "vivijure-module-plan-enhance"
 
 # Vanity-domain route: bind the studio to vivijure.skyphusion.org.
 # At deploy: REMOVE the existing transform rule (-> playground /planner.html) and keep the
