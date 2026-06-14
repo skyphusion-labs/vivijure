@@ -5,7 +5,8 @@
 // here -- their modules are still in the playground (PR 2b / Stage 1.5). A few routes that need
 // scatter.ts's ScatterArgs or train-lora orchestration are marked TODO and return 501 for now.
 
-import { discoverModules, modulesResponse } from "./modules/registry";
+import { discoverModules, modulesResponse, dispatchChain } from "./modules/registry";
+import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
 import { getUserEmail } from "./shared";
 import type { Env } from "./env";
 
@@ -280,6 +281,42 @@ const hRefine: Handler = async (req, env) => {
   const r = await refineStoryboard(env, a);
   return json(r, r.ok ? 200 : 422);
 };
+
+// --- module-host: run the plan.enhance chain over a storyboard (invoke-from-core). The core does
+// not know who answers: it discovers the installed modules and folds the plan.enhance chain. With
+// no module installed the storyboard returns unchanged (applied empty) -- a lean studio still works.
+const hEnhance: Handler = async (req, env) => {
+  const a = await readBody<{
+    storyboard?: PlanEnhanceStoryboard;
+    brief?: string;
+    project?: string;
+    config?: Record<string, unknown>;
+  }>(req);
+  if (!a.storyboard || !Array.isArray(a.storyboard.scenes)) {
+    throw badRequest("storyboard with scenes required");
+  }
+  const envRec = env as unknown as Record<string, unknown>;
+  const modules = await discoverModules(envRec);
+  const seed: PlanEnhanceInput = { storyboard: a.storyboard, brief: a.brief };
+  const result = await dispatchChain<PlanEnhanceInput, PlanEnhanceOutput>(
+    envRec,
+    modules,
+    "plan.enhance",
+    seed,
+    { project: a.project || "enhance", job_id: crypto.randomUUID(), user_email: getUserEmail(req) },
+    {
+      nextInput: (prev) => ({ storyboard: prev.storyboard, brief: a.brief }),
+      configFor: () => a.config,
+    },
+  );
+  return json({
+    ok: true,
+    storyboard: result.output?.storyboard ?? a.storyboard,
+    applied: result.applied,
+    errors: result.errors,
+    notes: result.output?.notes ?? [],
+  });
+};
 const hModels: Handler = async () => json({ models: PLANNING_MODELS });
 const hYaml: Handler = async (req) => {
   const a = await readBody<{ storyboard?: StoryboardValidated }>(req);
@@ -345,6 +382,7 @@ const API_ROUTES: Route[] = [
   { method: "POST",   pattern: "/api/storyboard/preflight",            handler: hPreflight },
   { method: "POST",   pattern: "/api/storyboard/plan",                 handler: hPlan },
   { method: "POST",   pattern: "/api/storyboard/refine",               handler: hRefine },
+  { method: "POST",   pattern: "/api/storyboard/enhance",              handler: hEnhance },
   { method: "GET",    pattern: "/api/storyboard/models",               handler: hModels },
   { method: "POST",   pattern: "/api/storyboard/yaml",                 handler: hYaml },
   { method: "POST",   pattern: "/api/storyboard/markers",              handler: hMarkers },
