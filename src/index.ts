@@ -5,7 +5,10 @@
 // here -- their modules are still in the playground (PR 2b / Stage 1.5). A few routes that need
 // scatter.ts's ScatterArgs or train-lora orchestration are marked TODO and return 501 for now.
 
-import { discoverModules, modulesResponse } from "./modules/registry";
+import { discoverModules, modulesResponse, dispatchChain } from "./modules/registry";
+import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
+import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
+import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
 import { getUserEmail } from "./shared";
 import type { Env } from "./env";
 
@@ -24,10 +27,17 @@ import {
 } from "./renders-db";
 import {
   submitRenderJob, submitFinalizeJob, pollRenderJob, cancelRenderJob,
-  coerceQualityTier, deriveProjectFromBundleKey,
-  type RenderSubmitArgs, type FinalizeArgs,
+  coerceQualityTier, deriveProjectFromBundleKey, parseAudioBeatPlan,
+  type RenderSubmitArgs, type FinalizeArgs, type AudioAnalyzeRequest,
 } from "./runpod-submit";
-import { validateStoryboard } from "./storyboard-validate";
+import { validateStoryboard, type StoryboardValidated } from "./storyboard-validate";
+// authoring (PR 2b)
+import { planStoryboard, refineStoryboard, type PlanStoryboardArgs, type RefineStoryboardArgs } from "./planner";
+import { PLANNING_MODELS } from "./planner-catalog";
+import { serializeStoryboardYaml } from "./planner-yaml";
+import { emitMarkers, type MarkersFormat } from "./markers";
+import { assembleBundle, type AssembleBundleArgs } from "./bundle-assembler";
+import { presignR2Get } from "./r2-presign";
 
 // Container DOs -- exported so the runtime registers them (bound in wrangler.toml).
 export { AudioBeatSyncContainer } from "./containers/audio-beat-sync";
@@ -260,13 +270,134 @@ const hPreflight: Handler = async (req) => {
   return json(result, okFlag === false ? 400 : 200);
 };
 
+// --- authoring: planning / yaml / markers / bundle / audio (PR 2b) -------
+const hPlan: Handler = async (req, env) => {
+  const a = await readBody<PlanStoryboardArgs>(req);
+  if (!a.brief || !a.model) throw badRequest("brief and model required");
+  const r = await planStoryboard(env, a);
+  return json(r, r.ok ? 200 : 422);
+};
+const hRefine: Handler = async (req, env) => {
+  const a = await readBody<RefineStoryboardArgs>(req);
+  if (a.storyboard === undefined || !a.message || !a.model) throw badRequest("storyboard, message, model required");
+  const r = await refineStoryboard(env, a);
+  return json(r, r.ok ? 200 : 422);
+};
+
+// --- module-host: run the plan.enhance chain over a storyboard (invoke-from-core). The core does
+// not know who answers: it discovers the installed modules and folds the plan.enhance chain. With
+// no module installed the storyboard returns unchanged (applied empty) -- a lean studio still works.
+// --- module-host: resolve the render pipeline from the installed registry + the user's selection
+// (render-flow dispatch, core half). Returns which module serves each render hook with its clamped
+// config; EXECUTION of those hooks is the backend's job. Null/empty when nothing is installed.
+const hRenderPlan: Handler = async (req, env) => {
+  const a = await readBody<{ selection?: RenderPipelineSelection }>(req);
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  return json({ ok: true, plan: resolveRenderPipeline(modules, a.selection ?? {}) });
+};
+
+// --- render-execution: orchestrate the motion.backend module per shot (async run/poll, across
+// requests). POST starts the job + submits each shot; GET advances it (polls the pending shots).
+const hStartClips: Handler = async (req, env) => {
+  const a = await readBody<{ project?: string; shots?: ClipShotInput[]; motion_backend?: string; config?: Record<string, unknown> }>(req);
+  if (!Array.isArray(a.shots) || a.shots.length === 0) throw badRequest("shots[] required");
+  const job = await startClipJob(env, { project: a.project ?? "clips", shots: a.shots, motion_backend: a.motion_backend, config: a.config });
+  return json({
+    ok: true, job_id: job.job_id, motion_backend: job.motion_backend, ...summarizeJob(job),
+    shots: job.shots.map((sh) => ({ shot_id: sh.shot_id, status: sh.status, error: sh.error })),
+  });
+};
+const hPollClips: Handler = async (_req, env, _c, p) => {
+  const job = await advanceClipJob(env, p.id);
+  if (!job) throw notFound("clip job");
+  return json({
+    ok: true, job_id: job.job_id, motion_backend: job.motion_backend, ...summarizeJob(job),
+    shots: job.shots.map((sh) => ({ shot_id: sh.shot_id, status: sh.status, clip_key: sh.clip_key, error: sh.error })),
+  });
+};
+
+const hEnhance: Handler = async (req, env) => {
+  const a = await readBody<{
+    storyboard?: PlanEnhanceStoryboard;
+    brief?: string;
+    project?: string;
+    config?: Record<string, unknown>;
+  }>(req);
+  if (!a.storyboard || !Array.isArray(a.storyboard.scenes)) {
+    throw badRequest("storyboard with scenes required");
+  }
+  const envRec = env as unknown as Record<string, unknown>;
+  const modules = await discoverModules(envRec);
+  const seed: PlanEnhanceInput = { storyboard: a.storyboard, brief: a.brief };
+  const result = await dispatchChain<PlanEnhanceInput, PlanEnhanceOutput>(
+    envRec,
+    modules,
+    "plan.enhance",
+    seed,
+    { project: a.project || "enhance", job_id: crypto.randomUUID(), user_email: getUserEmail(req) },
+    {
+      nextInput: (prev) => ({ storyboard: prev.storyboard, brief: a.brief }),
+      configFor: () => a.config,
+    },
+  );
+  return json({
+    ok: true,
+    storyboard: result.output?.storyboard ?? a.storyboard,
+    applied: result.applied,
+    errors: result.errors,
+    notes: result.output?.notes ?? [],
+  });
+};
+const hModels: Handler = async () => json({ models: PLANNING_MODELS });
+const hYaml: Handler = async (req) => {
+  const a = await readBody<{ storyboard?: StoryboardValidated }>(req);
+  if (!a.storyboard) throw badRequest("storyboard required");
+  return new Response(serializeStoryboardYaml(a.storyboard), {
+    headers: { "content-type": "text/yaml; charset=utf-8", "content-disposition": "attachment; filename=\"storyboard.yaml\"" },
+  });
+};
+const hMarkers: Handler = async (req) => {
+  const a = await readBody<{ storyboard?: unknown; format?: MarkersFormat; fps?: number }>(req);
+  if (!a.storyboard || !a.format) throw badRequest("storyboard and format required");
+  const out = emitMarkers(a.storyboard as Parameters<typeof emitMarkers>[0], a.format, a.fps);
+  return new Response(out.body, {
+    headers: { "content-type": out.contentType, "content-disposition": "attachment; filename=\"" + out.filename + "\"" },
+  });
+};
+const hBundle: Handler = async (req, env) => {
+  const a = await readBody<AssembleBundleArgs>(req);
+  if (!a.storyboard || !a.characterRefs) throw badRequest("storyboard and characterRefs required");
+  const r = await assembleBundle(env, a);
+  return json(r, r.ok ? 201 : 400);
+};
+const hAudioUpload: Handler = async (req, env) => {
+  const a = await readBody<AudioAnalyzeRequest>(req);
+  if (!a.audioKey) throw badRequest("audioKey required");
+  const audioUrl = await presignR2Get(env, a.audioKey, 300);
+  const stub = env.AUDIO_BEAT_SYNC.get(env.AUDIO_BEAT_SYNC.idFromName("singleton"));
+  const resp = await stub.fetch("https://container/analyze", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ audioUrl, clipSeconds: a.clipSeconds, mode: a.mode, minSceneS: a.minSceneS, maxSceneS: a.maxSceneS, forceShots: a.forceShots }),
+  });
+  const plan = parseAudioBeatPlan(await resp.json());
+  if (!plan) return json({ error: "beat-sync container returned an unrecognized plan" }, 502);
+  return json(plan);
+};
+
+// --- misc planner endpoints ----------------------------------------------
+const hWhoami: Handler = async (req) => json({ email: getUserEmail(req) });
+// user-prefs.ts not migrated yet -- stub so the planner falls back to defaults (follow-up).
+const hGetPrefs: Handler = async () => json({});
+const hPutPrefs: Handler = async () => json({ ok: true });
+
 // --- route table (PR 2a) -------------------------------------------------
 const API_ROUTES: Route[] = [
-  { method: "GET",    pattern: "/api/projects",                        handler: hListProjects },
-  { method: "POST",   pattern: "/api/projects",                        handler: hCreateProject },
-  { method: "GET",    pattern: "/api/projects/:id",                    handler: hGetProject },
-  { method: "PATCH",  pattern: "/api/projects/:id",                    handler: hPatchProject },
-  { method: "DELETE", pattern: "/api/projects/:id",                    handler: hDeleteProject },
+  { method: "GET",    pattern: "/api/storyboard/projects",                        handler: hListProjects },
+  { method: "POST",   pattern: "/api/storyboard/projects",                        handler: hCreateProject },
+  { method: "GET",    pattern: "/api/storyboard/projects/:id",                    handler: hGetProject },
+  { method: "PATCH",  pattern: "/api/storyboard/projects/:id",                    handler: hPatchProject },
+  { method: "DELETE", pattern: "/api/storyboard/projects/:id",                    handler: hDeleteProject },
   { method: "GET",    pattern: "/api/cast",                            handler: hListCast },
   { method: "POST",   pattern: "/api/cast",                            handler: hCreateCast },
   { method: "GET",    pattern: "/api/cast/:id",                        handler: hGetCast },
@@ -280,7 +411,18 @@ const API_ROUTES: Route[] = [
   { method: "DELETE", pattern: "/api/cast/:id/source",                 handler: hRemoveSource },
   { method: "POST",   pattern: "/api/cast/:id/lora",                   handler: hTodo },
   { method: "POST",   pattern: "/api/storyboard/preflight",            handler: hPreflight },
+  { method: "POST",   pattern: "/api/storyboard/plan",                 handler: hPlan },
+  { method: "POST",   pattern: "/api/storyboard/refine",               handler: hRefine },
+  { method: "POST",   pattern: "/api/storyboard/enhance",              handler: hEnhance },
+  { method: "GET",    pattern: "/api/storyboard/models",               handler: hModels },
+  { method: "POST",   pattern: "/api/storyboard/yaml",                 handler: hYaml },
+  { method: "POST",   pattern: "/api/storyboard/markers",              handler: hMarkers },
+  { method: "POST",   pattern: "/api/storyboard/bundle",               handler: hBundle },
+  { method: "POST",   pattern: "/api/audio/analyze",                   handler: hAudioUpload },
   { method: "POST",   pattern: "/api/storyboard/render",               handler: hSubmitRender },
+  { method: "POST",   pattern: "/api/storyboard/render-plan",          handler: hRenderPlan },
+  { method: "POST",   pattern: "/api/render/clips",                     handler: hStartClips },
+  { method: "GET",    pattern: "/api/render/clips/:id",                 handler: hPollClips },
   { method: "POST",   pattern: "/api/storyboard/render/scatter",       handler: hScatterRender },
   { method: "POST",   pattern: "/api/storyboard/render-from-keyframes", handler: hFinalizeRender },
   { method: "GET",    pattern: "/api/storyboard/render/:jobId",        handler: hPollRender },
@@ -290,6 +432,9 @@ const API_ROUTES: Route[] = [
   { method: "PATCH",  pattern: "/api/storyboard/renders/:id",          handler: hPatchRender },
   { method: "DELETE", pattern: "/api/storyboard/renders/:id",          handler: hDeleteRender },
   { method: "POST",   pattern: "/api/storyboard/renders/adopt",        handler: hTodo },
+  { method: "GET",    pattern: "/api/whoami",                          handler: hWhoami },
+  { method: "GET",    pattern: "/api/prefs",                           handler: hGetPrefs },
+  { method: "PUT",    pattern: "/api/prefs",                           handler: hPutPrefs },
 ];
 
 export default {

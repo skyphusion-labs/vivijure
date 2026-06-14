@@ -1,0 +1,18 @@
+# kling module worker (vivijure-module/1): Kuaishou Kling V2.1 I2V Pro on RunPod, the second
+# motion.backend module. Same async pattern as seedance; bound into the core as MODULE_KLING.
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded.
+
+name = "vivijure-module-kling"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
+
+# Secret, set AFTER deploy with the DEDICATED vivijure RunPod key:
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/kling/wrangler.toml

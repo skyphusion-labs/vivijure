@@ -1,0 +1,20 @@
+# plan-enhance module worker (vivijure-module/1).
+#
+# The first opt-in Vivijure module: an LLM director pass over a storyboard's shot prompts. Bound into
+# the core as the MODULE_PLANENHANCE service binding (see the core wrangler.toml); the registry
+# discovers it from GET /module.json and the studio UI renders the plan.enhance stage from it.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-plan-enhance"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+# Workers AI for the director pass. No BYOK: an open-weight model on the account, so the module is
+# self-contained (a clean first reference module).
+[ai]
+binding = "AI"

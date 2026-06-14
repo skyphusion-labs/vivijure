@@ -13,12 +13,14 @@ export const MODULE_API = "vivijure-module/1" as const;
 /** The pipeline extension points. `pick one` hooks resolve to a single module; `chain` hooks run
  *  every installed module in `ui.order`, each consuming the previous output. */
 export type HookName =
+  | "keyframe"       // storyboard -> start keyframes (SDXL on GPU). Project-level pass, pick one.
   | "motion.backend" // keyframe (+ motion prompt) -> shot clip. GPU or cloud, pick one per shot.
   | "finish"         // post-process a clip: interpolation / upscale / face restore. Chainable.
   | "score"          // add audio to a film: music / narration / beat-sync. Chainable.
   | "plan.enhance";  // expand a storyboard before render: LLM auto-direction. Chainable.
 
 export const HOOK_NAMES: readonly HookName[] = [
+  "keyframe",
   "motion.backend",
   "finish",
   "score",
@@ -27,6 +29,7 @@ export const HOOK_NAMES: readonly HookName[] = [
 
 /** Whether a hook resolves to one module or folds every installed module. */
 export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
+  keyframe: "pick_one",
   "motion.backend": "pick_one",
   finish: "chain",
   score: "chain",
@@ -36,6 +39,7 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
 /** One-line description of each hook, for the self-assembling UI. Single source of truth: the
  *  frontend renders the hook panel from this (served via GET /api/modules), not a hardcoded copy. */
 export const HOOK_BLURBS: Record<HookName, string> = {
+  keyframe: "storyboard -> start keyframes (SDXL)",
   "motion.backend": "keyframe -> shot clip (GPU or cloud)",
   finish: "interpolation / upscale / face restore",
   score: "music / narration / beat-sync",
@@ -105,7 +109,20 @@ export interface InvokeRequest<I = unknown> {
 /** A module failure is data, never an exception across the wire: the core degrades, it does not
  *  crash, when a module returns `ok: false`. */
 export type InvokeResponse<O = unknown> =
-  | { ok: true; output: O }
+  | { ok: true; output: O }                       // synchronous: the work is done
+  | { ok: true; pending: true; poll: string }     // async: accepted; POST /poll with this token
+  | { ok: false; error: string };
+
+/** Body POSTed to a long-running module's `/poll` to check an async job. */
+export interface PollRequest {
+  poll: string;
+}
+
+/** A module's `/poll` response: still running, finished, or failed. The caller polls until it is no
+ *  longer pending, so a Worker never holds one long-running `/invoke` request open. */
+export type PollResponse<O = unknown> =
+  | { ok: true; pending: true }                   // still running, poll again
+  | { ok: true; output: O }                       // finished
   | { ok: false; error: string };
 
 // --------------------------------------------------------------------------- hook payloads
@@ -130,6 +147,89 @@ export interface FinishOutput {
   out_fps: number;
   frames: number;
   applied: string[]; // e.g. ["interpolate:2x", "face_restore:gfpgan"]
+}
+
+// plan.enhance (v1) -----------------------------------------------------------------------------
+
+/** What the core hands a `plan.enhance` module: the storyboard to enrich (its scenes carry the shot
+ *  prompts the module rewrites) plus the original brief for context. Structural passthrough -- a
+ *  module rewrites scenes[].prompt and preserves every other field on the storyboard and scenes. */
+export interface PlanEnhanceScene {
+  prompt: string;
+  [k: string]: unknown;
+}
+export interface PlanEnhanceStoryboard {
+  scenes: PlanEnhanceScene[];
+  [k: string]: unknown;
+}
+export interface PlanEnhanceInput {
+  storyboard: PlanEnhanceStoryboard;
+  brief?: string;
+}
+
+/** What a `plan.enhance` module returns: the enriched storyboard plus optional human-readable notes
+ *  on what it did (or why it passed through unchanged). */
+export interface PlanEnhanceOutput {
+  storyboard: PlanEnhanceStoryboard;
+  notes?: string[];
+}
+
+// keyframe (v1) ---------------------------------------------------------------------------------
+
+/** What the core hands a `keyframe` module: a project bundle to render START keyframes from. This
+ *  is a PROJECT-level pass, not per-shot -- the GPU backend trains/reuses cast LoRAs once and emits
+ *  every shot's keyframe in one job. A per-shot module would re-submit (and risk re-training the
+ *  LoRA) on every shot = GPU waste; the project pass keeps GPU spend to genuinely GPU-bound work.
+ *  The clip orchestrator (motion.backend) then animates each keyframe per shot. */
+export interface KeyframeInput {
+  project: string;     // project id; also the R2 key prefix the keyframes land under
+  bundle_key: string;  // R2 key of the project bundle tarball (storyboard + cast refs / LoRAs)
+  shot_ids?: string[]; // optional subset to (re)generate; omitted = every shot in the bundle
+}
+/** One generated start keyframe, already stored in R2 by the backend. */
+export interface KeyframeShot {
+  shot_id: string;
+  keyframe_key: string; // R2 key of the PNG (renders/<project>/keyframes/<shot>.png)
+}
+/** What a `keyframe` module returns: every keyframe it generated, by shot. The core presigns each
+ *  key into a fetchable keyframe_url when it hands them on to the motion.backend orchestrator. */
+export interface KeyframeOutput {
+  project: string;
+  keyframes: KeyframeShot[];
+}
+
+// motion.backend (v1, forward-declared) ---------------------------------------------------------
+
+/** What the core hands a `motion.backend` module for ONE shot: a start keyframe and the motion
+ *  intent. The module turns it into a clip (on GPU or via a cloud i2v API). */
+export interface MotionBackendInput {
+  shot_id: string;
+  keyframe_url: string;  // presigned, fetchable URL of the start keyframe (the core presigns private R2)
+  keyframe_key?: string; // the underlying R2 key, for reference
+  prompt: string;        // the motion prompt for the shot
+  seconds: number;
+}
+/** What a `motion.backend` module returns: the rendered shot clip. */
+export interface MotionBackendOutput {
+  shot_id: string;
+  clip_key: string;     // R2 key of the rendered clip (mp4)
+  fps: number;
+  frames: number;
+}
+
+// score (v1, forward-declared) ------------------------------------------------------------------
+
+/** What the core hands a `score` module: the assembled (silent) film and its shape, plus optional
+ *  storyboard context for mood/tempo. */
+export interface ScoreInput {
+  film_key: string;     // R2 key of the silent film (mp4)
+  seconds: number;
+  storyboard?: PlanEnhanceStoryboard;
+}
+/** What a `score` module returns: the film with audio applied (or muxed), and what it added. */
+export interface ScoreOutput {
+  film_key: string;     // R2 key of the scored film (mp4)
+  applied: string[];    // e.g. ["music:minimax", "narration:tts"]
 }
 
 // --------------------------------------------------------------------------- registry view

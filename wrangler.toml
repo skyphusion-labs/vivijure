@@ -42,9 +42,9 @@ database_id = "bb806935-47a7-4524-93dd-251024794a55"
 
 # --- CPU container Durable Objects (off-GPU work). Build contexts live in containers/<name>/
 # --- (migrated from skyphusion-llm-public); the image is each Dockerfile. ---
-# --- DISABLED for now: building the container images needs Docker, which the CI deploy job (run
-# --- inside node:22-alpine) cannot launch, and we do not need these up yet. Re-enable the three
-# --- bindings + [[containers]] + the migration together when the render-migration (phase 1) lands.
+# --- DISABLED for now (same as main, PR #44): building these images needs Docker, which the CI
+# --- deploy job (node:22-alpine) cannot launch, and we do not need them up yet. Re-enable the three
+# --- bindings + [[containers]] + the migration together when the phase-1 render-migration lands.
 # [[durable_objects.bindings]]
 # name = "AUDIO_BEAT_SYNC"
 # class_name = "AudioBeatSyncContainer"
@@ -91,6 +91,29 @@ database_id = "bb806935-47a7-4524-93dd-251024794a55"
 # entrypoint = "EmailService"
 
 # --- Opt-in MODULE workers: service bindings named MODULE_<NAME>; the registry discovers them.
-# [[services]]
-# binding = "MODULE_FINISH_RIFE"
-# service = "vivijure-module-finish-rife"
+[[services]]
+binding = "MODULE_PLANENHANCE"
+service = "vivijure-module-plan-enhance"
+
+[[services]]
+binding = "MODULE_SEEDANCE"
+service = "vivijure-module-seedance"
+
+[[services]]
+binding = "MODULE_KLING"
+service = "vivijure-module-kling"
+
+[[services]]
+binding = "MODULE_KEYFRAME"
+service = "vivijure-module-keyframe"
+
+[[services]]
+binding = "MODULE_FINISH_RIFE"
+service = "vivijure-module-finish-rife"
+
+# Vanity-domain route: bind the studio to vivijure.skyphusion.org.
+# At deploy: REMOVE the existing transform rule (-> playground /planner.html) and keep the
+# Access app (3377c722 / aud be06bf47) gating this hostname.
+[[routes]]
+pattern = "vivijure.skyphusion.org/*"
+zone_name = "skyphusion.org"

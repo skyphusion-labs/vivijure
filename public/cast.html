@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Cast -- Vivijure Studio</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="/favicon-16.png" type="image/png" sizes="16x16">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0E1730">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="cast-body">
+  <!-- v0.122.7: shared playground chrome, Vivijure-branded. Sibling-of-main
+       (cast-layout is a CSS Grid with explicit grid-template-areas; an
+       unassigned grid item lands in the implicit row below the named rows,
+       which sent the old topbar to the page bottom). Matches planner.html. -->
+  <header class="topbar">
+    <a class="brand brand-vivijure" href="/planner.html" aria-label="Vivijure studio">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Vivijure</span>
+    </a>
+    <span class="topbar-spacer"></span>
+    <a class="brand brand-home" href="/" aria-label="back to skyphusion" title="back to skyphusion">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">skyphusion</span>
+    </a>
+    <div class="account">
+      <button id="account-toggle" type="button" class="icon-btn" aria-haspopup="true" aria-expanded="false" aria-label="Account &amp; tools">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      </button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <button id="account-user" class="account-row account-user" type="button" role="menuitem" title="user preferences (coming soon)">
+          <span class="account-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg></span>
+          <span class="account-email" id="account-email">loading&#8230;</span>
+        </button>
+        <a class="account-row account-link" href="/planner.html" role="menuitem">
+          <span class="account-name account-name-vivijure">Storyboard planner</span>
+          <span class="account-sub">Plan, bundle, render</span>
+        </a>
+        <a class="account-row account-link" href="/stt.html" role="menuitem">
+          <span class="account-name">Voice</span>
+          <span class="account-sub">Conversational STT</span>
+        </a>
+      </div>
+    </div>
+  </header>
+  <main class="cast-layout">
+    <header class="cast-header">
+      <h1>cast</h1>
+      <!-- v0.133.2: explicit, visible back-nav. The topbar Vivijure brand and the
+           account popover both already link to /planner.html, but neither reads as
+           "go back to the planner", so users got stranded on the cast screen. -->
+      <a class="cast-back-link" href="/planner.html">&#8592; back to storyboard planner</a>
+    </header>
+
+    <section class="cast-list-pane">
+      <header class="cast-list-header">
+        <h2 class="cast-stage-title">your cast</h2>
+        <button id="cast-new-btn" type="button" class="cast-new-btn">+ new character</button>
+      </header>
+      <div id="cast-list-status" class="cast-list-status"></div>
+      <ul id="cast-list" class="cast-list"></ul>
+    </section>
+
+    <section id="cast-editor" class="cast-editor" hidden>
+      <header class="cast-editor-header">
+        <input id="cast-name" type="text" class="cast-name-input" placeholder="character name" />
+        <span id="cast-slug" class="cast-slug" title="stable URL slug; does not change when you rename"></span>
+        <button id="cast-save-btn" type="button" class="cast-save-btn" disabled>save changes</button>
+      </header>
+
+      <label class="cast-field">
+        <span>character bible</span>
+        <textarea id="cast-bible" rows="8" placeholder="describe the character: face, hair, body, wardrobe, signature props, mood. this is fed to SDXL keyframe gen and LoRA training."></textarea>
+      </label>
+
+      <section class="cast-portrait-pane">
+        <header class="cast-section-header">
+          <h3>portrait</h3>
+          <p class="cast-section-hint">the canonical hero image. used as the SDXL start image for keyframes.</p>
+        </header>
+        <div id="cast-portrait-wrap" class="cast-portrait-wrap">
+          <img id="cast-portrait-img" class="cast-portrait-img" alt="" hidden />
+          <div id="cast-portrait-empty" class="cast-portrait-empty">no portrait yet</div>
+        </div>
+        <div class="cast-portrait-actions">
+          <label class="cast-upload-btn">
+            upload image
+            <input id="cast-portrait-file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+          </label>
+          <button id="cast-portrait-clear" type="button" class="cast-secondary-btn cast-danger" disabled>clear</button>
+        </div>
+
+        <!-- v0.90.0: photo-to-character generator. Promoted out of the
+             <details> shell because this is the marquee flow on this
+             page. Upload one or more reference photos (FLUX 2 Dev /
+             Klein accept up to 4 input images per call), write a
+             freeform prompt describing the character you want, the
+             model returns one image. Accept to save as the portrait.
+             Persisted sources sit on the cast row so the user can
+             iterate without re-uploading. -->
+        <section class="cast-gen-section">
+          <header class="cast-section-header">
+            <h3>generate from references</h3>
+            <p class="cast-section-hint">upload up to 4 reference photos (face / outfit / pose / prop), pick an image-gen model, write a prompt describing the character you want. preview the result, accept to save as the portrait.</p>
+          </header>
+
+          <div class="cast-source-pane">
+            <ul id="cast-sources-list" class="cast-sources-list"></ul>
+            <label class="cast-upload-btn">
+              upload reference photo
+              <input id="cast-source-file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+            </label>
+            <p class="cast-section-hint cast-sources-hint">FLUX 2 picks up to 4. extras are ignored. uncheck to skip on the next generate without deleting.</p>
+          </div>
+
+          <div class="cast-gen-grid">
+            <label class="cast-field">
+              <span>model</span>
+              <select id="cast-portrait-gen-model"></select>
+            </label>
+            <label class="cast-field">
+              <span>prompt</span>
+              <textarea id="cast-portrait-gen-prompt" rows="3" placeholder="leave blank to use the bible as the prompt"></textarea>
+            </label>
+          </div>
+          <div class="cast-gen-actions">
+            <button id="cast-portrait-gen-btn" type="button" class="cast-upload-btn">generate</button>
+            <span id="cast-portrait-gen-status" class="cast-gen-status"></span>
+          </div>
+          <div id="cast-portrait-gen-preview" class="cast-gen-preview" hidden>
+            <img id="cast-portrait-gen-img" alt="generated portrait" />
+            <div class="cast-gen-preview-actions">
+              <button id="cast-portrait-gen-accept" type="button" class="cast-save-btn">use as portrait</button>
+              <button id="cast-portrait-gen-discard" type="button" class="cast-secondary-btn cast-danger">discard</button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="cast-refs-pane">
+        <header class="cast-section-header">
+          <h3>training references</h3>
+          <p class="cast-section-hint">multi-image set for LoRA training (4-8 portrait variants is typical).</p>
+        </header>
+        <ul id="cast-refs-list" class="cast-refs-list"></ul>
+        <label class="cast-upload-btn">
+          add reference image
+          <input id="cast-ref-file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+        </label>
+
+        <details id="cast-training-block" class="cast-gen-block">
+          <summary>generate a 10-image training set</summary>
+          <p class="cast-section-hint">uses your reference (saved portrait by default, or the checked sources from "generate from references" above if any are selected) plus 10 diversified pose / framing / lighting prompts. generates one image at a time so we do not rate-limit; each result auto-saves as a ref. takes about 2-5 minutes total.</p>
+          <div id="cast-training-disabled" class="cast-gen-status">save a portrait OR upload at least one reference photo above to enable this.</div>
+          <!-- v0.65.0: model picker. Klein-9b is the default after empirical
+               verification that it identity-conditions on the reference just
+               like Dev does, and the gateway has had better availability for
+               it during heavy load. -->
+          <label class="cast-gen-field">
+            <span>generator model</span>
+            <select id="cast-training-model"></select>
+          </label>
+          <!-- v0.135.13: explicit art-style lead. A "match the reference image"
+               instruction does not hold style on nano-banana-pro (the
+               photographic templates render photoreal); stating the style
+               explicitly does. Blank = use the templates as-is. -->
+          <label class="cast-gen-field">
+            <span>art style (optional; e.g. anime, photorealistic, watercolor)</span>
+            <input id="cast-training-style" type="text" placeholder="blank = match the templates (photographic)" />
+          </label>
+          <div class="cast-gen-actions">
+            <button id="cast-training-btn" type="button" class="cast-upload-btn" disabled>generate 10 training images</button>
+            <span id="cast-training-status" class="cast-gen-status"></span>
+          </div>
+          <ul id="cast-training-progress" class="cast-training-progress"></ul>
+        </details>
+      </section>
+
+      <!-- v0.57.0: standalone LoRA training. Kicks off a vivijure-
+           serverless train_lora job using the portrait + refs above;
+           the resulting .safetensors lands at loras/cast-<id>/<ts>.
+           safetensors and the cast row's lora_status flips to ready.
+           Future renders that pick this cast member at the planner
+           can skip Stage 1 by passing the pre-trained LoRA in the
+           bundle (Phase 3, follow-up PR). -->
+      <section class="cast-lora-pane">
+        <header class="cast-section-header">
+          <h3>LoRA training</h3>
+          <p class="cast-section-hint">train a character LoRA standalone (separate from rendering). takes ~8-15 minutes on the GPU; uses the portrait + training refs above. costs ~$0.50-$2 of GPU time per training run.</p>
+        </header>
+        <div id="cast-lora-status-row" class="cast-lora-status-row">
+          <span id="cast-lora-badge" class="cast-lora-badge cast-lora-badge-idle">idle</span>
+          <span id="cast-lora-meta" class="cast-lora-meta"></span>
+        </div>
+        <div class="cast-lora-actions">
+          <button id="cast-lora-train-btn" type="button" class="cast-save-btn" disabled>train LoRA</button>
+          <a id="cast-lora-download" class="cast-secondary-btn cast-accent-outline" target="_blank" rel="noopener" hidden>download .safetensors</a>
+          <span id="cast-lora-status-text" class="cast-gen-status"></span>
+        </div>
+      </section>
+
+      <footer class="cast-editor-footer">
+        <button id="cast-delete-btn" type="button" class="cast-danger-btn">delete this character</button>
+      </footer>
+    </section>
+
+    <section id="cast-editor-empty" class="cast-editor-empty">
+      <p>pick a character on the left, or create a new one.</p>
+    </section>
+
+    <!-- v0.92.0: multi-character scene preview. Pick two cast members
+         + write a scene prompt; FLUX 2 composes them into a single
+         image using each character's saved portrait as the reference.
+         This is the fast "concept art" path; the storyboard planner
+         handles actual video render via the regional IP-Adapter
+         pipeline. Always visible; lives in its own grid row spanning
+         both columns so it does not feel tied to either the cast list
+         or the per-character editor. -->
+    <section id="cast-multi-scene" class="cast-multi-scene">
+      <header class="cast-multi-scene-header">
+        <h2>multi-character scene preview</h2>
+        <p class="cast-section-hint">pick two cast members and describe a scene. FLUX 2 composes them into a single image using each character's portrait as the reference. great for concept art, marketing previews, or previewing how your cast looks together before kicking off a full render.</p>
+      </header>
+      <div class="cast-multi-scene-grid">
+        <label class="cast-field">
+          <span>character A</span>
+          <select id="cast-multi-a"></select>
+        </label>
+        <label class="cast-field">
+          <span>character B</span>
+          <select id="cast-multi-b"></select>
+        </label>
+        <label class="cast-field cast-multi-scene-prompt">
+          <span>scene prompt</span>
+          <textarea id="cast-multi-prompt" rows="3" placeholder="describe what they're doing, the framing, the mood. avoid restating their appearance; the reference photos carry that."></textarea>
+        </label>
+        <label class="cast-field">
+          <span>model</span>
+          <select id="cast-multi-model"></select>
+        </label>
+      </div>
+      <div class="cast-multi-scene-actions">
+        <button id="cast-multi-gen-btn" type="button" class="cast-upload-btn" disabled>generate</button>
+        <span id="cast-multi-gen-status" class="cast-gen-status"></span>
+      </div>
+      <div id="cast-multi-preview" class="cast-multi-preview" hidden>
+        <img id="cast-multi-img" alt="multi-character scene preview" />
+        <div class="cast-multi-preview-actions">
+          <a id="cast-multi-download" class="cast-save-btn" href="" download>download</a>
+          <button id="cast-multi-discard" type="button" class="cast-secondary-btn cast-danger">discard</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/topbar.js"></script>
+  <script src="/cast.js"></script>
+</body>
+</html>

@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Storyboard Planner -- Vivijure Studio</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="/favicon-16.png" type="image/png" sizes="16x16">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0E1730">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="planner-body">
+  <!-- v0.120.0: shared playground chrome (.topbar / .brand / .account-menu),
+       a full-width sticky sibling of <main> so the glass blur spans the
+       viewport instead of being clipped to the 960px .planner-layout column.
+       The page nav lives in the center; the signed-in user + page links sit
+       in the account popover (wired by topbar.js, no app.js on this page). -->
+  <header class="topbar">
+    <!-- Vivijure identity (this is its own product within the shared shell) -->
+    <a class="brand brand-vivijure" href="/planner.html" aria-label="Vivijure studio">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Vivijure</span>
+    </a>
+    <span class="topbar-spacer"></span>
+    <!-- single branded link back to the skyphusion playground (matches the
+         modernized front-page brand). Cross-app nav (Cast) lives in
+         the account drawer, not as a duplicated top-nav row. -->
+    <a class="brand brand-home" href="/" aria-label="back to skyphusion" title="back to skyphusion">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">skyphusion</span>
+    </a>
+    <div class="account">
+      <button id="account-toggle" type="button" class="icon-btn" aria-haspopup="true" aria-expanded="false" aria-label="Account &amp; tools">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      </button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <button id="account-user" class="account-row account-user" type="button" role="menuitem" title="signed in">
+          <span class="account-ico"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg></span>
+          <span class="account-email" id="account-email">loading&#8230;</span>
+        </button>
+        <!-- v0.139.0: User Preferences (first instance). -->
+        <div class="account-prefs" role="group" aria-label="Preferences">
+          <div class="account-prefs-head">Preferences</div>
+          <label class="account-pref">
+            <input type="checkbox" id="pref-email-notifications" />
+            <span class="account-pref-text">
+              <span class="account-name">Email me when a render finishes</span>
+              <span class="account-sub" id="pref-email-status">off; you will not get render emails</span>
+            </span>
+          </label>
+        </div>
+        <a class="account-row account-link" href="/cast.html" role="menuitem">
+          <span class="account-name account-name-vivijure">Cast</span>
+          <span class="account-sub">Vivijure character references</span>
+        </a>
+      </div>
+    </div>
+  </header>
+  <main class="planner-layout">
+    <header class="planner-header">
+      <h1>storyboard planner</h1>
+    </header>
+
+    <!-- v0.120.0: guided step rail. Each button switches the active step;
+         only the active step's [data-step] sections render. Steps unlock as
+         prerequisites are met (a plan unlocks Cast/Audio; a bundle unlocks
+         Render). Populated + wired in planner.js (buildStepper / showStep). -->
+    <nav id="planner-steps" class="planner-steps" aria-label="storyboard stages"></nav>
+
+    <!-- v0.53.0: persisted project picker. Optional; planner still works
+         transient (no project picked). Picking a project loads its prefs +
+         last saved storyboard; "save to project" stashes the current
+         storyboard back into the picked project. -->
+    <section class="planner-project" data-step="plan">
+      <header class="planner-project-header">
+        <h2 class="planner-stage-title">project</h2>
+        <span id="planner-project-status" class="planner-status"></span>
+      </header>
+      <div class="planner-project-row">
+        <label class="planner-field">
+          <span>active project</span>
+          <select id="planner-project-picker">
+            <option value="">(no project, transient)</option>
+          </select>
+        </label>
+        <button id="planner-project-new" type="button" class="planner-secondary">+ new project</button>
+        <button id="planner-project-save" type="button" class="planner-secondary" disabled>save storyboard to project</button>
+        <button id="planner-project-delete" type="button" class="planner-danger" disabled>delete project</button>
+      </div>
+    </section>
+
+    <section class="planner-form" data-step="plan">
+      <h2 class="planner-stage-title">plan</h2>
+
+      <label class="planner-field">
+        <span>model</span>
+        <select id="planner-model"></select>
+      </label>
+
+      <label class="planner-field">
+        <span>brief</span>
+        <textarea id="planner-brief" rows="6" placeholder="describe the film: setting, mood, length, key beats, who should appear and when..."></textarea>
+      </label>
+
+      <div class="planner-field">
+        <div class="planner-cast-header">
+          <span class="planner-field-label">cast (slot A through D, optional, check to include)</span>
+          <button id="planner-brief-clear" type="button" class="planner-clear-brief" title="clear brief, storyboard, audio, and all stage state -- start a new session">new / reset</button>
+        </div>
+        <div id="planner-cast" class="planner-cast"></div>
+      </div>
+
+      <div class="planner-actions">
+        <span id="planner-status" class="planner-status"></span>
+        <button id="planner-plan" type="button" class="planner-primary">plan</button>
+      </div>
+    </section>
+
+    <section id="planner-output" class="planner-output" data-step="plan" hidden>
+      <header class="planner-output-header">
+        <span id="planner-output-meta"></span>
+        <span id="planner-output-state" class="planner-output-state"></span>
+      </header>
+
+      <div id="planner-errors" class="planner-errors" hidden>
+        <h3>validation errors</h3>
+        <ul id="planner-errors-list"></ul>
+        <button id="planner-reprompt" type="button">re-prompt with these errors</button>
+      </div>
+
+      <div id="planner-result" class="planner-result" hidden>
+        <div class="planner-result-pane">
+          <h3>storyboard JSON (validated)</h3>
+          <pre id="planner-json"></pre>
+        </div>
+        <div class="planner-result-pane">
+          <h3>storyboard.yaml (bundle-ready)</h3>
+          <pre id="planner-yaml"></pre>
+        </div>
+      </div>
+
+      <div id="planner-raw" class="planner-raw" hidden>
+        <h3>raw model output</h3>
+        <pre id="planner-raw-content"></pre>
+      </div>
+    </section>
+
+
+    <!-- v0.49.0: per-scene editor. Lives between plan output and bundle.
+         Mutates planState.storyboard.scenes in-place; debounce-refreshes
+         the YAML preview via POST /api/storyboard/yaml. Hidden until a
+         successful plan resolves. -->
+    <section id="planner-scenes" class="planner-stage" data-step="plan" hidden>
+      <header class="planner-stage-header">
+        <h2 class="planner-stage-title">scene editor</h2>
+        <span id="planner-scenes-status" class="planner-status"></span>
+      </header>
+      <p class="planner-stage-hint">edit prompts, durations, and per-scene cast assignments before bundling. changes flow into the bundle automatically; the YAML pane refreshes after each edit.</p>
+      <div class="planner-scenes-toolbar">
+        <button id="planner-scenes-discard" type="button" class="planner-danger" disabled>discard all edits</button>
+        <span id="planner-scenes-dirty-badge" class="planner-scenes-dirty" hidden>edited</span>
+        <select id="planner-autodirect-intensity" class="planner-toolbar-select" title="auto-direction intensity" hidden>
+          <option value="light">light</option>
+          <option value="medium" selected>medium</option>
+          <option value="bold">bold</option>
+        </select>
+        <button id="planner-autodirect" type="button" class="planner-accent-btn" title="rewrite every shot with cinematic direction via the installed plan.enhance module" hidden>auto-direct shots</button>
+        <span class="planner-toolbar-spacer"></span>
+        <select id="planner-markers-format" class="planner-toolbar-select" title="NLE marker format">
+          <option value="premiere_csv">Premiere CSV</option>
+          <option value="resolve_csv">DaVinci Resolve CSV</option>
+        </select>
+        <button id="planner-markers-export" type="button" class="planner-accent-btn" title="download NLE marker file with one marker per scene">export markers</button>
+      </div>
+      <ol id="planner-scenes-list" class="planner-scenes-list"></ol>
+    </section>
+
+    <!-- v0.51.0: audio bed + beat-driven shot timing. Optional; with no
+         audio set the render stays silent. When an audioKey IS set it
+         flows to render + finalize as audio_key (v0.52.0) and the GPU
+         muxes it onto the final MP4 via export_film(with_audio=True).
+         Generate via MiniMax Music 2.6 through the existing /api/chat
+         music dispatcher, or upload a BYO mp3/wav/aac/ogg/m4a via
+         /api/storyboard/audio-upload. BPM input + snap buttons mutate
+         scene target_seconds; the YAML pane refreshes automatically
+         through the v0.49.0 hook. -->
+    <section id="planner-audio" class="planner-stage" data-step="audio" hidden>
+      <header class="planner-stage-header">
+        <h2 class="planner-stage-title">audio bed + beat timing</h2>
+        <span id="planner-audio-status" class="planner-status"></span>
+      </header>
+      <p class="planner-stage-hint">optional. generate a track or upload your own. set BPM, then snap shot durations to musical phrases so the cuts land on the beat.</p>
+      <!-- v0.132.0: shown instead of a blank step when no storyboard exists yet
+           (the functional blocks below are hidden until one is planned/loaded). -->
+      <p id="planner-audio-locked" class="planner-stage-hint" hidden>plan or load a storyboard first; audio + beat timing attach to the storyboard's scenes. you can upload or generate a track once a plan exists.</p>
+
+      <div id="planner-audio-current" class="planner-audio-current" hidden>
+        <strong>audio bed:</strong>
+        <span id="planner-audio-meta" class="planner-audio-meta"></span>
+        <audio id="planner-audio-player" controls preload="metadata"></audio>
+        <button id="planner-audio-clear" type="button" class="planner-secondary">clear</button>
+      </div>
+
+      <details class="planner-audio-block">
+        <summary>generate music via MiniMax 2.6</summary>
+        <p class="planner-stage-hint">describe the track: genre, mood, instrumentation, era. duration is up to the model; expect ~30-60 seconds. "suggest from video" drafts a prompt matched to your storyboard's mood, tempo, and energy arc (auto-filled the first time you open this step).</p>
+        <textarea id="planner-music-prompt" rows="3" placeholder="cinematic orchestral, slow build, strings + piano, melancholic, modern film score"></textarea>
+        <div class="planner-audio-actions">
+          <button id="planner-music-suggest" type="button" class="planner-secondary">suggest from video</button>
+          <button id="planner-music-gen" type="button" class="planner-primary">generate</button>
+          <span id="planner-music-gen-status" class="planner-status"></span>
+        </div>
+      </details>
+
+      <details class="planner-audio-block">
+        <summary>upload your own track</summary>
+        <p class="planner-stage-hint">mp3, wav, aac, m4a, ogg up to 32 MB.</p>
+        <label class="cast-upload-btn">
+          choose file
+          <input id="planner-audio-file" type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/aac,audio/mp4,audio/ogg" hidden />
+        </label>
+      </details>
+
+      <div class="planner-audio-timing">
+        <label class="planner-field">
+          <span>BPM</span>
+          <input id="planner-bpm" type="number" min="20" max="300" step="1" value="120" />
+        </label>
+        <label class="planner-field">
+          <span>snap shots to (beats)</span>
+          <select id="planner-beats-per-shot">
+            <option value="1">1 (every beat)</option>
+            <option value="2">2 (half bar)</option>
+            <option value="4" selected>4 (one bar)</option>
+            <option value="8">8 (two bars)</option>
+            <option value="16">16 (four bars)</option>
+          </select>
+        </label>
+        <button id="planner-snap-btn" type="button" class="planner-secondary">snap all scene durations</button>
+        <span id="planner-snap-status" class="planner-status"></span>
+      </div>
+
+      <!-- v0.106.0: server-side beat analysis (librosa on the GPU pod via
+           POST /api/audio/analyze). Detects BPM + downbeats and applies
+           beat-aligned target_seconds to each scene, so cuts land on the
+           beat without setting BPM by hand. -->
+      <div class="planner-audio-timing">
+        <label class="planner-field">
+          <span>seconds per shot</span>
+          <input id="planner-beat-clip" type="number" min="1" max="30" step="0.5" value="4" />
+        </label>
+        <button id="planner-analyze-beats" type="button" class="planner-secondary">analyze beats (auto)</button>
+        <span id="planner-beat-status" class="planner-status"></span>
+      </div>
+      <div id="planner-beat-result" class="planner-audio-current" hidden>
+        <span id="planner-beat-summary" class="planner-audio-meta"></span>
+        <button id="planner-beat-apply" type="button" class="planner-primary">apply to storyboard</button>
+      </div>
+    </section>
+
+    <!-- v0.54.0: pre-render preflight. Pure storyboard checks +
+         optional R2 HEAD for the bundle / audio. The bundle and
+         render submit buttons gate on no preflight errors when the
+         panel is open; warnings are advisory and pass through. -->
+    <section id="planner-preflight" class="planner-stage" data-step="cast" hidden>
+      <header class="planner-stage-header">
+        <h2 class="planner-stage-title">preflight</h2>
+        <span id="planner-preflight-status" class="planner-status"></span>
+      </header>
+      <p class="planner-stage-hint">runs validator + scene shape checks + cast readiness + bundle / audio existence. errors gate the bundle button; warnings pass through.</p>
+      <div class="planner-preflight-toolbar">
+        <button id="planner-preflight-run" type="button" class="planner-secondary">run preflight</button>
+        <label class="planner-preflight-auto-label">
+          <input id="planner-preflight-auto" type="checkbox" checked />
+          auto-run on edit
+        </label>
+        <span id="planner-preflight-counts" class="planner-status"></span>
+      </div>
+      <ul id="planner-preflight-issues" class="planner-preflight-issues"></ul>
+    </section>
+
+    <!-- v0.33.0: bundle stage. Revealed after a successful plan. -->
+    <section id="planner-bundle" class="planner-stage" data-step="cast" hidden>
+      <header class="planner-stage-header">
+        <h2 class="planner-stage-title">assemble bundle</h2>
+        <span id="planner-bundle-status" class="planner-status"></span>
+      </header>
+      <p class="planner-stage-hint">
+        upload training images for each character slot that the validated
+        storyboard locked in (usually 8 or more per slot for LoRA training).
+        each file is staged to R2 immediately. when every slot has staged
+        images, click "bundle" to assemble the .tar.gz the GPU worker pulls.
+      </p>
+      <div id="planner-bundle-cast" class="planner-bundle-cast"></div>
+      <!-- v0.149.0 (Phase 4b): optional per-scene start keyframes. Attaching an
+           image here ships it as clips/<id>_keyframe.png in the bundle, which the
+           GPU pod uses as that scene's i2v motion start frame. -->
+      <details id="planner-bundle-scenes-wrap" class="planner-bundle-scenes-wrap" hidden>
+        <summary>per-scene start keyframes (optional)</summary>
+        <p class="planner-stage-hint">attach an authored keyframe to drive a scene's GPU (Wan) motion from that exact frame; scenes left empty render normally.</p>
+        <div id="planner-bundle-scenes" class="planner-bundle-scenes"></div>
+      </details>
+      <div class="planner-actions">
+        <button id="planner-bundle-btn" type="button" class="planner-primary">bundle</button>
+        <span id="planner-bundle-meta" class="planner-status"></span>
+      </div>
+      <div id="planner-bundle-result" class="planner-bundle-result" hidden></div>
+    </section>
+
+    <!-- v0.33.0: render stage. Revealed after a successful bundle. -->
+    <section id="planner-render" class="planner-stage" data-step="render" hidden>
+      <header class="planner-stage-header">
+        <h2 class="planner-stage-title">render</h2>
+        <button id="planner-notify-toggle" type="button" class="planner-notify-toggle" hidden title="get a browser notification when this render finishes">enable notifications</button>
+        <span id="planner-render-status" class="planner-status"></span>
+      </header>
+      <p class="planner-stage-hint">
+        submit the bundle to the vivijure-serverless RunPod endpoint. the
+        worker pulls it, trains LoRAs, renders SDXL keyframes plus Wan I2V
+        motion, exports a silent MP4 to R2. the status pane polls every 8
+        seconds until the job reaches COMPLETED, FAILED, CANCELLED, or
+        TIMED_OUT.
+      </p>
+      <label class="planner-field">
+        <span>quality tier</span>
+        <select id="planner-quality-tier">
+          <option value="draft">draft (33 frames, 8 steps; fastest, lowest quality)</option>
+          <option value="standard">standard (8-step keyframes + 20-step EasyCache i2v; balanced)</option>
+          <option value="final" selected>final (97 frames, 22 steps; production quality)</option>
+        </select>
+      </label>
+      <!-- v0.40.0: keyframes-only preview pass. Renders SDXL keyframes
+           only, skips Wan I2V + silent-MP4 assembly. Lets the user
+           preview shots before committing to a full render (which on
+           the "final" tier can take 30+ minutes). -->
+      <label class="planner-field-check">
+        <input id="planner-keyframes-only" type="checkbox" />
+        <span>render keyframes only (preview before generating motion)</span>
+      </label>
+      <!-- v0.162.0: scatter/gather distributed render. Enabled only when
+           the storyboard has >= 2 shots AND at least one character slot is
+           bound (scatter requires castLoras to be non-empty -- the server
+           hard-400s otherwise). updateScatterGate() enforces this dynamically
+           and shows a short reason when disabled. The shard-count input is
+           hidden until the checkbox is checked. -->
+      <label class="planner-field-check" id="planner-scatter-wrap">
+        <input id="planner-scatter" type="checkbox" />
+        <span>distributed render (scatter/gather)</span>
+      </label>
+      <span id="planner-scatter-reason" class="planner-status planner-scatter-reason" hidden></span>
+      <div class="planner-scatter-shard-row" id="planner-scatter-shard-wrap" hidden>
+        <label class="planner-field-check" for="planner-scatter-shards">shards</label>
+        <input id="planner-scatter-shards" type="number" min="2" value="2" inputmode="numeric" style="width:5em" />
+      </div>
+      <!-- v0.123.0: Phase 2 tiering. The five most-touched render knobs
+           (quality tier + keyframes-only above; seed / lora scale /
+           consistency here) sit in an always-visible common row. Every
+           other knob lives in "advanced settings" below, and the two
+           raw-JSON escape hatches move to "expert" at the bottom. The
+           render_overrides payload shape is unchanged: each control still
+           feeds the same key, empty still means "use bundle default". -->
+      <div class="planner-overrides-common">
+        <!-- v0.135.0: promoted from the deep "image & SDXL" disclosure. The
+             keyframe SDXL base is the primary art-style lever (the keyframe is
+             the frame Wan animates), so it sits with the per-render creative
+             knobs. Value -> local_diffusion_overrides.keyframe_model_id; empty =
+             pod default (photoreal). Turbo excluded (refused as a keyframe base).
+             The img2img SDXL base stays in advanced. -->
+        <label class="planner-field">
+          <span>art style (keyframe SDXL base)</span>
+          <select id="planner-ld-keyframe-model-id">
+            <option value="">auto / pod default (photoreal, RealVisXL V5.0)</option>
+            <option value="cagliostrolab/animagine-xl-4.0">anime (Animagine XL 4.0)</option>
+            <option value="SG161222/RealVisXL_V5.0">photoreal (RealVisXL V5.0)</option>
+            <option value="stabilityai/stable-diffusion-xl-base-1.0">neutral (SDXL base 1.0)</option>
+          </select>
+        </label>
+        <label class="planner-field">
+          <span>seed</span>
+          <div class="planner-overrides-row">
+            <input id="planner-seed" type="number" inputmode="numeric" placeholder="(random per render)" />
+            <button id="planner-seed-randomize" type="button" class="planner-overrides-secondary" title="randomize seed" aria-label="randomize seed">&#127922;</button>
+          </div>
+        </label>
+      </div>
+      <details class="planner-overrides-details">
+        <summary class="planner-overrides-summary">advanced settings (optional)</summary>
+        <p class="planner-overrides-hint">
+          These map 1:1 to the render backend's namespaced render_overrides
+          contract (keyframe / i2v / lora). Empty fields use the quality-tier
+          baseline. The expert raw-JSON block below sends the shape directly.
+        </p>
+        <details class="planner-overrides-domain">
+          <summary class="planner-overrides-summary">keyframe (SDXL)</summary>
+          <div class="planner-overrides-fields">
+            <label class="planner-field"><span>keyframe size "WxH"</span>
+              <input id="planner-keyframe-sdxl-size" type="text" placeholder="1024x1024" /></label>
+            <label class="planner-field"><span>guidance scale (0-30)</span>
+              <input id="planner-ld-keyframe-guidance-scale" type="number" step="0.5" placeholder="tier default" /></label>
+            <label class="planner-field"><span>steps (1-128)</span>
+              <input id="planner-ld-keyframe-steps" type="number" min="1" step="1" placeholder="tier default" /></label>
+            <label class="planner-field"><span>identity method</span>
+              <select id="planner-face-lock-mode">
+                <option value="">tier default</option>
+                <option value="ip_adapter">ip_adapter</option>
+                <option value="instantid">instantid</option>
+                <option value="both">both</option>
+              </select></label>
+            <label class="planner-field"><span>IP-Adapter scale (0-1)</span>
+              <input id="planner-fl-ip-scale" type="number" step="0.05" placeholder="0.65" /></label>
+            <label class="planner-field"><span>InstantID controlnet scale (0-1.5)</span>
+              <input id="planner-fl-iid-cn-scale" type="number" step="0.05" placeholder="0.8" /></label>
+            <label class="planner-field"><span>InstantID IP-Adapter scale (0-1.5)</span>
+              <input id="planner-fl-iid-ip-scale" type="number" step="0.05" placeholder="0.8" /></label>
+          </div>
+          <details class="planner-overrides-raw-details">
+            <summary class="planner-overrides-summary">multi-character (regional; 2+ characters in one frame)</summary>
+            <div class="planner-overrides-fields">
+              <label class="planner-field"><span>regional engine</span>
+                <select id="planner-mc-engine">
+                  <option value="">tier default</option>
+                  <option value="regional">regional (on)</option>
+                  <option value="composite_legacy">off (composite legacy)</option>
+                </select></label>
+              <label class="planner-field"><span>pose conditioning</span>
+                <select id="planner-mc-pose">
+                  <option value="">tier default</option>
+                  <option value="true">on</option>
+                  <option value="false">off</option>
+                </select></label>
+              <label class="planner-field"><span>LoRA scale per slot (0-2)</span>
+                <input id="planner-mc-lora-scale" type="number" step="0.05" placeholder="0.3" /></label>
+              <label class="planner-field"><span>IP-Adapter scale per slot (0-1)</span>
+                <input id="planner-mc-ip-scale" type="number" step="0.05" placeholder="0.7" /></label>
+              <label class="planner-field"><span>max slots (1-4)</span>
+                <input id="planner-mc-max-slots" type="number" min="1" max="4" step="1" placeholder="2" /></label>
+              <label class="planner-field"><span>controlnet pose scale (0-1.5)</span>
+                <input id="planner-mc-cn-scale" type="number" step="0.05" placeholder="0.55" /></label>
+            </div>
+          </details>
+        </details>
+        <details class="planner-overrides-domain">
+          <summary class="planner-overrides-summary">i2v (Wan video)</summary>
+          <div class="planner-overrides-fields">
+            <label class="planner-field"><span>i2v model</span>
+              <input id="planner-wd-i2v-model-id" type="text" placeholder="tier default" /></label>
+            <label class="planner-field"><span>num frames (1-256)</span>
+              <input id="planner-wan-num-frames" type="number" min="1" step="1" placeholder="tier default" /></label>
+            <label class="planner-field"><span>steps (1-64)</span>
+              <input id="planner-wan-inference-steps" type="number" min="1" step="1" placeholder="tier default" /></label>
+            <label class="planner-field"><span>guidance scale (0-30)</span>
+              <input id="planner-wan-guidance-scale" type="number" step="0.5" placeholder="tier default" /></label>
+            <label class="planner-field"><span>fps (1-120)</span>
+              <input id="planner-fps" type="number" min="1" step="1" placeholder="tier default" /></label>
+            <label class="planner-field"><span>flow shift (0-20)</span>
+              <input id="planner-wd-flow-shift" type="number" step="0.5" placeholder="tier default" /></label>
+          </div>
+        </details>
+        <details class="planner-overrides-domain">
+          <summary class="planner-overrides-summary">lora (character training)</summary>
+          <div class="planner-overrides-fields">
+            <label class="planner-field"><span>rank (1-128)</span>
+              <input id="planner-lora-rank" type="number" min="1" step="1" placeholder="tier default" /></label>
+            <label class="planner-field"><span>max steps (1-5000)</span>
+              <input id="planner-lora-steps" type="number" min="1" step="50" placeholder="tier default" /></label>
+            <label class="planner-field"><span>learning rate</span>
+              <input id="planner-lora-lr" type="number" step="0.00001" placeholder="tier default" /></label>
+            <label class="planner-field"><span>resolution (512-1536)</span>
+              <input id="planner-lora-resolution" type="number" min="512" step="64" placeholder="tier default" /></label>
+          </div>
+          <p class="planner-overrides-hint">
+            fresh Stage 1 LoRA training only; pre-trained cast LoRAs (via /cast)
+            are reused as-is and ignore these.
+          </p>
+        </details>
+      </details>
+
+      <!-- Expert escape hatch: the raw namespaced render_overrides JSON, pulled
+           out of "advanced settings" so the structured knobs aren't buried under
+           free-form JSON. Restricted to { keyframe, i2v, lora } + routing flags;
+           wins over the structured fields above on a key conflict. -->
+      <details class="planner-overrides-details planner-overrides-expert">
+        <summary class="planner-overrides-summary">expert: raw JSON</summary>
+        <div class="planner-overrides-expert-block">
+          <span class="planner-overrides-expert-label">raw render_overrides JSON (wins on conflict)</span>
+          <textarea id="planner-render-overrides" rows="4" placeholder='{"keyframe": {"steps": 30, "guidance_scale": 6.5}, "i2v": {"steps": 40, "negative_prompt": "blurry"}}' spellcheck="false"></textarea>
+          <p class="planner-overrides-hint">
+            optional JSON in the backend's namespaced shape:
+            <code>{ "keyframe": {…}, "i2v": {…}, "lora": {…} }</code> plus the routing
+            flags <code>keyframes_only</code> / <code>finish_offloaded</code>. anything
+            outside those sections is dropped. wins over the structured fields above
+            on a key conflict. leave empty for the tier defaults.
+          </p>
+        </div>
+      </details>
+      <div class="planner-actions">
+        <button id="planner-render-btn" type="button" class="planner-primary">render</button>
+        <span id="planner-render-meta" class="planner-status"></span>
+      </div>
+      <div id="planner-render-result" class="planner-render-result" hidden>
+        <div class="planner-render-meta">
+          <div><span class="planner-render-label">job:</span> <code id="planner-render-job-id"></code></div>
+          <div><span class="planner-render-label">status:</span> <span id="planner-render-job-status" class="planner-render-job-status"></span></div>
+          <div id="planner-render-scene" hidden></div>
+          <div id="planner-render-phase" hidden></div>
+          <div id="planner-render-error" class="planner-render-error" hidden></div>
+        </div>
+        <!-- v0.44.0: live progress bar + elapsed + ETA. The bar is
+             driven by out.progress (a 0-1 float the GPU writes to
+             render_status.json and the rp_handler forwards via
+             progress_update); falls back to scene_index / scene_total
+             when out.progress is absent. ETA is a linear extrapolation
+             from elapsed * (1 - progress) / progress, so accuracy
+             improves as the render gets further along. -->
+        <div id="planner-render-progress" class="planner-render-progress" hidden>
+          <div class="planner-render-progress-bar">
+            <div id="planner-render-progress-fill" class="planner-render-progress-fill"></div>
+          </div>
+          <div class="planner-render-progress-text">
+            <span id="planner-render-progress-pct">0%</span>
+            <span class="planner-render-progress-sep">·</span>
+            <span><span class="planner-render-label">elapsed</span> <span id="planner-render-progress-elapsed">0s</span></span>
+            <span class="planner-render-progress-sep">·</span>
+            <span><span class="planner-render-label">eta</span> <span id="planner-render-progress-eta">computing...</span></span>
+          </div>
+        </div>
+        <div class="planner-actions">
+          <button id="planner-render-cancel" type="button" class="planner-render-cancel" hidden>cancel job</button>
+          <!-- v0.63.0: dismiss button visible only after the render reaches a
+               terminal state (COMPLETED / FAILED / CANCELLED / TIMED_OUT).
+               Clears the result panel + renderState + the persisted snapshot
+               so a stale failed render does not stick around the next time
+               the planner page loads. -->
+          <button id="planner-render-dismiss" type="button" class="planner-render-cancel" hidden title="hide this result and clear it from the saved state">dismiss</button>
+        </div>
+        <div id="planner-render-log-wrap" class="planner-render-log-wrap" hidden>
+          <h4>render log</h4>
+          <pre id="planner-render-log"></pre>
+        </div>
+        <div id="planner-render-output" class="planner-render-output" hidden>
+          <h4>output</h4>
+          <pre id="planner-render-output-content"></pre>
+          <div class="planner-actions">
+            <a id="planner-render-download" href="#" class="planner-primary" download>download silent MP4</a>
+            <a id="planner-render-open" href="#" target="_blank" rel="noopener" class="planner-render-link">open in new tab</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- v0.34.1: render history. Loaded on page open from /api/storyboard/renders.
+         Hidden when the user has no past renders. Each row has a "view" action
+         that loads its status into the render stage (and starts polling if the
+         job is still in flight) and a "download" link when the silent MP4 is
+         already in R2.
+         v0.67.0: moved to the bottom of the page so the live workflow (plan ->
+         bundle -> render) sits at the top and history is a reference area
+         below it, not the first thing the user scrolls past every load. -->
+    <section id="planner-history" class="planner-history" data-step="history" hidden>
+      <header class="planner-history-header">
+        <h2 class="planner-stage-title">recent renders</h2>
+        <div class="planner-history-tools">
+          <button id="planner-history-custom" type="button" class="planner-history-refresh" title="render an existing R2 bundle by key">use bundle key...</button>
+          <button id="planner-history-refresh" type="button" class="planner-history-refresh">refresh</button>
+        </div>
+      </header>
+      <!-- v0.37.1: client-side filter bar over the already-loaded history rows.
+           Text input matches project name + label substring; checkboxes gate
+           status buckets. Filtering does not refetch. -->
+      <div class="planner-history-filters">
+        <input id="planner-history-search" type="text" placeholder="search project, label, folder, or tag" autocomplete="off" />
+        <label class="planner-history-filter-check"><input type="checkbox" id="planner-filter-inflight" checked /> in-flight</label>
+        <label class="planner-history-filter-check"><input type="checkbox" id="planner-filter-done" checked /> done</label>
+        <label class="planner-history-filter-check"><input type="checkbox" id="planner-filter-failed" checked /> failed</label>
+        <span id="planner-history-counter" class="planner-history-counter"></span>
+      </div>
+      <!-- v0.127.0: render-history organization facets. The folder <select>
+           and tag pills are populated from the loaded rows in planner.js
+           (rebuildHistoryFacets); the folder datalist backs each row's
+           folder editor input. -->
+      <div class="planner-history-facets">
+        <label class="planner-history-folder-filter">
+          <span>folder</span>
+          <select id="planner-history-folder">
+            <option value="">all folders</option>
+          </select>
+        </label>
+        <div id="planner-history-tagfilter" class="planner-history-tagfilter"></div>
+      </div>
+      <datalist id="planner-history-folder-list"></datalist>
+      <ul id="planner-history-list" class="planner-history-list"></ul>
+    </section>
+
+    <!-- v0.120.0: back / next rail under the active step. Next is gated on
+         the next step being unlocked; it advances through Plan -> Cast &
+         Bundle -> Audio -> Render -> History. Wired in planner.js. -->
+    <div id="planner-stepnav" class="planner-stepnav">
+      <button id="planner-step-back" type="button">&#8592; back</button>
+      <span class="planner-stepnav-spacer"></span>
+      <button id="planner-step-next" type="button" class="planner-stepnav-next">next &#8594;</button>
+    </div>
+  </main>
+
+  <!-- v0.164.0: Screenwriter's Assistant. The storyboard-refinement chat
+       (Opus) lives in a fixed right-rail dock instead of inline, so it can
+       never reflow or grow the page. body.sw-open reserves its column; the
+       #planner-refine section keeps its IDs + data-step, so planner.js drives
+       it unchanged (showRefineSection reveals it once a storyboard exists). -->
+  <button id="sw-tab" class="sw-tab" type="button" aria-controls="sw-dock" aria-expanded="false" title="Open the Screenwriter's Assistant">
+    <span class="sw-tab-icon" aria-hidden="true">&#9998;</span>
+    <span class="sw-tab-label">Screenwriter</span>
+  </button>
+  <aside id="sw-dock" class="sw-dock" aria-label="Screenwriter's Assistant">
+    <header class="sw-dock-head">
+      <div class="sw-dock-titles">
+        <h2 class="sw-dock-title">Screenwriter's Assistant</h2>
+        <span id="planner-refine-status" class="planner-status"></span>
+      </div>
+      <button id="sw-dock-close" class="sw-dock-close" type="button" aria-label="Close assistant">&times;</button>
+    </header>
+    <div class="sw-dock-body">
+      <section id="planner-refine" class="planner-stage sw-refine" data-step="plan" hidden>
+        <p class="planner-stage-hint">Tell me how to revise the storyboard. Try "make scene 2 darker", "add a beat before the ending", or "shorten the opening". Each change rewrites the storyboard and refreshes the editor + YAML.</p>
+        <ul id="planner-refine-turns" class="planner-refine-turns"></ul>
+        <div class="planner-refine-input-row">
+          <textarea id="planner-refine-input" class="planner-refine-input" rows="2" placeholder="describe the change..."></textarea>
+          <button id="planner-refine-send" type="button" class="planner-primary">send</button>
+        </div>
+      </section>
+      <p id="sw-empty" class="sw-empty">Draft a storyboard first, then I can help you revise it scene by scene.</p>
+    </div>
+  </aside>
+
+  <script src="/topbar.js"></script>
+  <script src="/planner.js"></script>
+</body>
+</html>
