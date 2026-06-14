@@ -32,6 +32,11 @@ describe("plan-enhance pure logic", () => {
     expect(parseEnhanced(42, 1)).toBeNull();
   });
 
+  it("parseEnhanced accepts a response that is already a string array", () => {
+    expect(parseEnhanced(["a", "b"], 2)).toEqual(["a", "b"]);
+    expect(parseEnhanced(["a"], 2)).toBeNull();
+  });
+
   it("parseEnhanced falls back to a numbered or bulleted list", () => {
     expect(parseEnhanced("Here you go:\n1. first shot\n2. second shot", 2)).toEqual(["first shot", "second shot"]);
     expect(parseEnhanced("- alpha\n- beta\n- gamma", 3)).toEqual(["alpha", "beta", "gamma"]);

@@ -22,7 +22,7 @@ import { buildMessages, parseEnhanced, mergeEnhanced, scenePrompts, type ChatMes
 // Structural binding type: just the runner we call, so the module stays free of the full Ai
 // overload surface (and of any @cloudflare/workers-types version pin).
 interface Env {
-  AI: { run(model: string, input: { messages: ChatMessage[] }): Promise<{ response?: string }> };
+  AI: { run(model: string, input: { messages: ChatMessage[] }): Promise<{ response?: string | string[] }> };
 }
 
 const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";

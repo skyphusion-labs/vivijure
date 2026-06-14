@@ -73,6 +73,13 @@ function tryNumberedList(raw: string, n: number): string[] | null {
 /** Parse the model's reply into exactly `n` rewritten prompts, or null. Accepts a clean JSON array
  *  first, then falls back to a numbered/bulleted list. */
 export function parseEnhanced(raw: unknown, n: number): string[] | null {
+  // Some Workers AI models return `response` already as a string array, not a JSON string.
+  if (Array.isArray(raw)) {
+    if (raw.length === n && raw.every((x) => typeof x === "string" && (x as string).trim().length > 0)) {
+      return (raw as string[]).map((x) => x.trim());
+    }
+    return null;
+  }
   if (typeof raw !== "string") return null;
   return tryJsonArray(raw, n) ?? tryNumberedList(raw, n);
 }
