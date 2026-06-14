@@ -163,8 +163,9 @@ export interface PlanEnhanceOutput {
  *  intent. The module turns it into a clip (on GPU or via a cloud i2v API). */
 export interface MotionBackendInput {
   shot_id: string;
-  keyframe_key: string; // R2 key of the start keyframe (png)
-  prompt: string;       // the motion prompt for the shot
+  keyframe_url: string;  // presigned, fetchable URL of the start keyframe (the core presigns private R2)
+  keyframe_key?: string; // the underlying R2 key, for reference
+  prompt: string;        // the motion prompt for the shot
   seconds: number;
 }
 /** What a `motion.backend` module returns: the rendered shot clip. */

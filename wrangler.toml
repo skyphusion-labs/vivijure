@@ -92,6 +92,10 @@ new_sqlite_classes = ["AudioBeatSyncContainer", "ImagePrepContainer", "VideoFini
 binding = "MODULE_PLANENHANCE"
 service = "vivijure-module-plan-enhance"
 
+[[services]]
+binding = "MODULE_SEEDANCE"
+service = "vivijure-module-seedance"
+
 # Vanity-domain route: bind the studio to vivijure.skyphusion.org.
 # At deploy: REMOVE the existing transform rule (-> playground /planner.html) and keep the
 # Access app (3377c722 / aud be06bf47) gating this hostname.
