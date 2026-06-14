@@ -19,13 +19,14 @@ export type PlanningProvider = "anthropic" | "xai" | "google" | "workers-ai";
 const PLANNING_MODEL_IDS: readonly string[] = [
   // Release set: the Anthropic Claude family only. Opus is the default and the
   // only model that reliably plans shots AND holds the storyboard.yaml schema;
-  // Sonnet/Haiku are cheaper fallbacks. Everything else (OpenAI, Google, xAI,
-  // open-weight Workers AI) returns later as opt-in expansion modules instead
-  // of shipping a flooded default picker. (v0.165.0)
+  // Sonnet is the cheaper fallback for shorter scenes. Haiku is dropped -- it was
+  // never validated for planning and is almost certainly underpowered for the
+  // structured storyboard task. Everything else (OpenAI, Google, xAI, open-weight
+  // Workers AI) returns later as opt-in expansion modules instead of shipping a
+  // flooded default picker. (v0.165.0; Haiku dropped 2026-06-14)
   "anthropic/claude-opus-4-8",
   "anthropic/claude-opus-4-7",
   "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-haiku-4-5",
 ] as const;
 
 const PLANNING_ID_SET: ReadonlySet<string> = new Set(PLANNING_MODEL_IDS);
