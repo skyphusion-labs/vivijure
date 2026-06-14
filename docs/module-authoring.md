@@ -1,0 +1,170 @@
+# Writing a Vivijure module
+
+> The SDK story. Vivijure is a **host, not a monolith**: the core owns only what is always true
+> (project, storyboard, cast, bundle, the render spine, and a module registry). Every *capability*
+> beyond that is an opt-in **module worker** that plugs into the pipeline through one typed contract.
+> Install a module and its stage lights up, bringing its own settings; install none and you get a
+> clean, honest, empty studio. This guide shows you how to write one.
+
+See also [`module-api.md`](./module-api.md) for the contract design, and the reference module
+[`modules/plan-enhance/`](../modules/plan-enhance) which this guide walks through.
+
+## The shape of a module
+
+A module is a standalone Cloudflare Worker that serves exactly two endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /module.json` | the module's **manifest** (which hooks it serves, its config, how it surfaces in the UI) |
+| `POST /invoke` | run one hook: `{ hook, input, config, context }` in, an `InvokeResponse` out |
+
+The core discovers your module from a `MODULE_<NAME>` service binding, reads your manifest, indexes
+you by hook, and renders your stage in the studio UI from your `config_schema`. It invokes you when a
+render reaches your hook. **The core never knows who answers** -- it just asks the hook.
+
+## The hooks (vivijure-module/1)
+
+| Hook | Purpose | Cardinality |
+|---|---|---|
+| `motion.backend` | keyframe (+ motion prompt) -> shot clip (GPU or cloud) | **pick one** per shot |
+| `finish` | post-process a clip: interpolation / upscale / face restore | **chain** |
+| `score` | add audio to a film: music / narration / beat-sync | **chain** |
+| `plan.enhance` | expand a storyboard before render (LLM auto-direction) | **chain** |
+
+`pick_one` resolves to a single module (the user picks; default is the first). `chain` folds every
+installed module in `ui.order`, each consuming the previous one's output.
+
+## The 4-file template
+
+A module is small. The reference `plan-enhance` module is four files:
+
+```
+modules/<your-module>/
+  wrangler.toml        # name, compat date, and the bindings your /invoke needs
+  src/contract.ts      # VENDORED copy of the contract shapes you use
+  src/<logic>.ts       # your pure logic (so it unit-tests without the runtime)
+  src/index.ts         # the worker: GET /module.json + POST /invoke
+```
+
+### 1. Vendor the contract
+
+A module **vendors** the contract shapes it uses (copy them into `src/contract.ts`) so it stays
+independent of the core's repo -- a module in another repo ships its own copy. Copy only what you
+need from [`src/modules/types.ts`](../src/modules/types.ts): `MODULE_API`, the manifest types, the
+`InvokeRequest`/`InvokeResponse` shapes, and your hook's payload types (e.g. `PlanEnhanceInput` /
+`PlanEnhanceOutput`).
+
+### 2. Declare your manifest
+
+```ts
+const MANIFEST: ModuleManifest = {
+  name: "plan-enhance",
+  version: "0.1.0",
+  api: MODULE_API,                       // "vivijure-module/1"
+  hooks: ["plan.enhance"],
+  provides: [{ id: "auto-direction", label: "LLM auto-direction" }],
+  config_schema: {                       // the UI renders a control per field
+    intensity: { type: "enum", values: ["light", "medium", "bold"], default: "medium", label: "direction intensity" },
+  },
+  ui: { section: "plan", order: 10 },
+};
+```
+
+`config_schema` fields (`int` / `float` / `bool` / `enum` / `string`, each with a `default`, and
+`min`/`max` for numbers) are the single source of truth: the studio renders the control from them,
+the core clamps the user's value against them before calling you, so your `/invoke` never has to
+defend against junk.
+
+### 3. Serve the two endpoints
+
+```ts
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/module.json") {
+      return json(MANIFEST);
+    }
+    if (request.method === "POST" && url.pathname === "/invoke") {
+      const req = (await request.json()) as InvokeRequest<MyInput>;
+      if (req.hook !== "plan.enhance") {
+        return json({ ok: false, error: `unsupported hook ${req.hook}` });
+      }
+      return json(await run(env, req)); // your work -> InvokeResponse
+    }
+    return json({ ok: false, error: "not found" }, 404);
+  },
+};
+```
+
+### 4. Failures are DATA, never an exception
+
+The single most important rule. A module failure must be a value, not a thrown error across the
+wire, so the core degrades instead of crashing. Always return HTTP 200 with an `InvokeResponse`:
+
+```ts
+type InvokeResponse<O> = { ok: true; output: O } | { ok: false; error: string };
+```
+
+For a chain hook, prefer a **soft degrade** where it makes sense: if your work cannot run (an
+upstream model is down, a reply is unparseable), return `{ ok: true, output: <input passed through>, ... }`
+with a note, so the chain continues from a good value. A hard `{ ok: false }` is for "I cannot honor
+this request at all"; the core records it and moves on.
+
+## Wrapping a RunPod (or any cloud) worker
+
+The template generalizes to any off-GPU or cloud capability: keep the same four files and make
+`/invoke` proxy your backend instead of doing the work in the Worker.
+
+```ts
+async function run(env: Env, req: InvokeRequest<MotionInput>): Promise<InvokeResponse<MotionOutput>> {
+  // 1. submit to your RunPod serverless endpoint
+  const sub = await fetch(`https://api.runpod.ai/v2/${env.RUNPOD_ENDPOINT_ID}/run`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.RUNPOD_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({ input: toBackendInput(req.input, req.config) }),
+  });
+  // 2. poll /status until COMPLETED (or stream), 3. map the result to your hook's output type
+  // 4. on any failure return { ok: false, error } (or a soft passthrough for a chain hook)
+}
+```
+
+That is the whole "community becomes the roadmap" play: the RunPod ready-to-deploy hub
+(Wan2.2/SDXL/ComfyUI as `motion.backend`, Whisper STT as `score`, vLLM as a self-hosted
+`plan.enhance`) is a catalog of modules waiting to be wrapped, each one the same four files.
+
+## Bind it to the core
+
+Deploy your module worker, then add a service binding to the core's `wrangler.toml`:
+
+```toml
+[[services]]
+binding = "MODULE_<NAME>"            # the registry discovers any MODULE_* binding
+service = "vivijure-module-<name>"   # your deployed worker's name
+```
+
+Redeploy the core. `GET /api/modules` now lists your module, the studio UI renders its stage, and
+the core invokes it through your hook. Nothing else is hardcoded.
+
+## Prove it conforms
+
+Before you bind a module, run the **conformance harness** against it (see
+[`src/modules/conformance.ts`](../src/modules/conformance.ts)) to confirm it honors the contract --
+a valid manifest, a well-formed `InvokeResponse`, and graceful degradation on a bad request:
+
+```
+MODULE_URL=https://vivijure-module-<name>.<subdomain>.workers.dev \
+  npx vitest run tests/conformance.live.test.ts
+```
+
+If that is green, your module will plug into the core cleanly.
+
+## Checklist
+
+- [ ] `GET /module.json` returns a manifest with `api: "vivijure-module/1"`, a `name`, a `version`,
+      and only known `hooks`.
+- [ ] `config_schema` fields each have a valid `type` and a `default` consistent with it.
+- [ ] `POST /invoke` returns HTTP 200 with a well-formed `InvokeResponse` for every input, including
+      garbage (no thrown errors across the wire).
+- [ ] Pure logic is split out and unit-tested; the worker is thin glue.
+- [ ] Conformance harness is green against the deployed worker.
+- [ ] A `[[services]]` binding named `MODULE_<NAME>` is added to the core and the core redeployed.
