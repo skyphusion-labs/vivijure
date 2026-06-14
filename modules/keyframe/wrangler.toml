@@ -1,0 +1,21 @@
+# keyframe module worker (vivijure-module/1): drives the vivijure-backend GPU render endpoint on
+# RunPod in keyframes-only mode (action=preview) to turn a project's storyboard into start
+# keyframes. Bound into the core as MODULE_KEYFRAME; the registry discovers it from GET /module.json
+# and the studio renders the keyframe stage from it.
+#
+# No R2 binding: the backend writes the keyframe PNGs to the shared `vivijure` bucket with its own
+# creds; this module only reports the keys (the core presigns them for the motion.backend stage).
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-keyframe"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+# Secrets, set AFTER deploy (never committed):
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/keyframe/wrangler.toml      (dedicated scoped vivijure RunPod key)
+#   ! npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/keyframe/wrangler.toml  (the vivijure-backend endpoint id; secret so the public repo never exposes it)
