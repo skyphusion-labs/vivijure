@@ -162,6 +162,12 @@
       <div class="planner-scenes-toolbar">
         <button id="planner-scenes-discard" type="button" class="planner-danger" disabled>discard all edits</button>
         <span id="planner-scenes-dirty-badge" class="planner-scenes-dirty" hidden>edited</span>
+        <select id="planner-autodirect-intensity" class="planner-toolbar-select" title="auto-direction intensity" hidden>
+          <option value="light">light</option>
+          <option value="medium" selected>medium</option>
+          <option value="bold">bold</option>
+        </select>
+        <button id="planner-autodirect" type="button" class="planner-accent-btn" title="rewrite every shot with cinematic direction via the installed plan.enhance module" hidden>auto-direct shots</button>
         <span class="planner-toolbar-spacer"></span>
         <select id="planner-markers-format" class="planner-toolbar-select" title="NLE marker format">
           <option value="premiere_csv">Premiere CSV</option>
