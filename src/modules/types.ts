@@ -13,12 +13,14 @@ export const MODULE_API = "vivijure-module/1" as const;
 /** The pipeline extension points. `pick one` hooks resolve to a single module; `chain` hooks run
  *  every installed module in `ui.order`, each consuming the previous output. */
 export type HookName =
+  | "keyframe"       // storyboard -> start keyframes (SDXL on GPU). Project-level pass, pick one.
   | "motion.backend" // keyframe (+ motion prompt) -> shot clip. GPU or cloud, pick one per shot.
   | "finish"         // post-process a clip: interpolation / upscale / face restore. Chainable.
   | "score"          // add audio to a film: music / narration / beat-sync. Chainable.
   | "plan.enhance";  // expand a storyboard before render: LLM auto-direction. Chainable.
 
 export const HOOK_NAMES: readonly HookName[] = [
+  "keyframe",
   "motion.backend",
   "finish",
   "score",
@@ -27,6 +29,7 @@ export const HOOK_NAMES: readonly HookName[] = [
 
 /** Whether a hook resolves to one module or folds every installed module. */
 export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
+  keyframe: "pick_one",
   "motion.backend": "pick_one",
   finish: "chain",
   score: "chain",
@@ -36,6 +39,7 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
 /** One-line description of each hook, for the self-assembling UI. Single source of truth: the
  *  frontend renders the hook panel from this (served via GET /api/modules), not a hardcoded copy. */
 export const HOOK_BLURBS: Record<HookName, string> = {
+  keyframe: "storyboard -> start keyframes (SDXL)",
   "motion.backend": "keyframe -> shot clip (GPU or cloud)",
   finish: "interpolation / upscale / face restore",
   score: "music / narration / beat-sync",
@@ -168,6 +172,30 @@ export interface PlanEnhanceInput {
 export interface PlanEnhanceOutput {
   storyboard: PlanEnhanceStoryboard;
   notes?: string[];
+}
+
+// keyframe (v1) ---------------------------------------------------------------------------------
+
+/** What the core hands a `keyframe` module: a project bundle to render START keyframes from. This
+ *  is a PROJECT-level pass, not per-shot -- the GPU backend trains/reuses cast LoRAs once and emits
+ *  every shot's keyframe in one job. A per-shot module would re-submit (and risk re-training the
+ *  LoRA) on every shot = GPU waste; the project pass keeps GPU spend to genuinely GPU-bound work.
+ *  The clip orchestrator (motion.backend) then animates each keyframe per shot. */
+export interface KeyframeInput {
+  project: string;     // project id; also the R2 key prefix the keyframes land under
+  bundle_key: string;  // R2 key of the project bundle tarball (storyboard + cast refs / LoRAs)
+  shot_ids?: string[]; // optional subset to (re)generate; omitted = every shot in the bundle
+}
+/** One generated start keyframe, already stored in R2 by the backend. */
+export interface KeyframeShot {
+  shot_id: string;
+  keyframe_key: string; // R2 key of the PNG (renders/<project>/keyframes/<shot>.png)
+}
+/** What a `keyframe` module returns: every keyframe it generated, by shot. The core presigns each
+ *  key into a fetchable keyframe_url when it hands them on to the motion.backend orchestrator. */
+export interface KeyframeOutput {
+  project: string;
+  keyframes: KeyframeShot[];
 }
 
 // motion.backend (v1, forward-declared) ---------------------------------------------------------
