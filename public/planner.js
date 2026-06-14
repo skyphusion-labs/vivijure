@@ -7059,3 +7059,37 @@ document.addEventListener("DOMContentLoaded", () => {
   // so it starts disabled with a reason).
   updateScatterGate();
 });
+
+
+// ---------- Screenwriter's Assistant dock (v0.164.0) ----------
+// The storyboard-refinement chat lives in a fixed right-rail dock (#sw-dock
+// in planner.html) so it never reflows the page. Toggle via the edge tab or
+// the dock's close button; body.sw-open reserves the column. Auto-opens once,
+// the first time the refine section becomes usable (a storyboard exists), so
+// the assistant is discoverable without hunting for it.
+(function initScreenwriterDock() {
+  const dock = document.getElementById("sw-dock");
+  const tab = document.getElementById("sw-tab");
+  if (!dock || !tab) return;
+  const closeBtn = document.getElementById("sw-dock-close");
+  const refine = document.getElementById("planner-refine");
+  function setOpen(open) {
+    document.body.classList.toggle("sw-open", open);
+    tab.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open && refine && !refine.hidden) {
+      const inp = document.getElementById("planner-refine-input");
+      if (inp) inp.focus();
+    }
+  }
+  tab.addEventListener("click", function () {
+    setOpen(!document.body.classList.contains("sw-open"));
+  });
+  if (closeBtn) closeBtn.addEventListener("click", function () { setOpen(false); });
+  if (refine) {
+    let autoOpened = false;
+    const obs = new MutationObserver(function () {
+      if (!autoOpened && !refine.hidden) { autoOpened = true; setOpen(true); }
+    });
+    obs.observe(refine, { attributes: true, attributeFilter: ["hidden"] });
+  }
+})();
