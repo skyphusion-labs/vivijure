@@ -105,7 +105,20 @@ export interface InvokeRequest<I = unknown> {
 /** A module failure is data, never an exception across the wire: the core degrades, it does not
  *  crash, when a module returns `ok: false`. */
 export type InvokeResponse<O = unknown> =
-  | { ok: true; output: O }
+  | { ok: true; output: O }                       // synchronous: the work is done
+  | { ok: true; pending: true; poll: string }     // async: accepted; POST /poll with this token
+  | { ok: false; error: string };
+
+/** Body POSTed to a long-running module's `/poll` to check an async job. */
+export interface PollRequest {
+  poll: string;
+}
+
+/** A module's `/poll` response: still running, finished, or failed. The caller polls until it is no
+ *  longer pending, so a Worker never holds one long-running `/invoke` request open. */
+export type PollResponse<O = unknown> =
+  | { ok: true; pending: true }                   // still running, poll again
+  | { ok: true; output: O }                       // finished
   | { ok: false; error: string };
 
 // --------------------------------------------------------------------------- hook payloads

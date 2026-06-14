@@ -39,7 +39,18 @@ export interface InvokeRequest<I = unknown> {
   context: InvokeContext;
 }
 
+// A module may answer synchronously (output) or, for a long-running job, asynchronously: return
+// pending + a poll token, and the caller drives /poll until it is done.
 export type InvokeResponse<O = unknown> =
+  | { ok: true; output: O }
+  | { ok: true; pending: true; poll: string }
+  | { ok: false; error: string };
+
+export interface PollRequest {
+  poll: string;
+}
+export type PollResponse<O = unknown> =
+  | { ok: true; pending: true }
   | { ok: true; output: O }
   | { ok: false; error: string };
 

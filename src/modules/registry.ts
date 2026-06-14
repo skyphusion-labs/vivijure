@@ -20,6 +20,8 @@ import {
   type InvokeContext,
   type InvokeRequest,
   type InvokeResponse,
+  type PollRequest,
+  type PollResponse,
   type ModuleManifest,
   type ModulesResponse,
   type RegisteredModule,
@@ -218,6 +220,56 @@ export async function invokeModule<I = unknown, O = unknown>(
   }
 }
 
+/** True for the async-accepted shape of an InvokeResponse. */
+function isPending<O>(r: InvokeResponse<O>): r is { ok: true; pending: true; poll: string } {
+  return r.ok === true && (r as { pending?: unknown }).pending === true;
+}
+
+/** POST a module's `/poll` to check an async job. A failure is DATA, like invoke. */
+export async function pollModule<O = unknown>(
+  fetcher: FetcherLike,
+  request: PollRequest,
+): Promise<PollResponse<O>> {
+  try {
+    const res = await fetcher.fetch("https://module/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!res.ok) return { ok: false, error: `module /poll -> ${res.status}` };
+    const data = (await res.json()) as PollResponse<O>;
+    if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") return data;
+    return { ok: false, error: "module returned a malformed PollResponse" };
+  } catch (e) {
+    return { ok: false, error: `module unreachable: ${(e as Error).message}` };
+  }
+}
+
+/** Invoke a module and resolve to a terminal result: a synchronous module returns its output; an
+ *  async module returns `pending` and we poll its `/poll` until done (or the cap). NOTE: the polling
+ *  runs in the caller's request, so this fits synchronous + SHORT async hooks. A long-running hook
+ *  (cloud i2v that takes minutes) should be driven OUT of a request -- an orchestrator (Durable
+ *  Object / cron) calling invokeModule + pollModule across requests -- so no Worker holds a long
+ *  request open. */
+export async function awaitInvoke<I = unknown, O = unknown>(
+  fetcher: FetcherLike,
+  request: InvokeRequest<I>,
+  opts: { pollMs?: number; pollMax?: number } = {},
+): Promise<{ ok: true; output: O } | { ok: false; error: string }> {
+  const r = await invokeModule<I, O>(fetcher, request);
+  if (!r.ok) return r;
+  if (!isPending(r)) return { ok: true, output: (r as { output: O }).output };
+  const pollMs = opts.pollMs ?? 3000;
+  const pollMax = opts.pollMax ?? 40;
+  for (let i = 0; i < pollMax; i++) {
+    await new Promise((res) => setTimeout(res, pollMs));
+    const p = await pollModule<O>(fetcher, { poll: r.poll });
+    if (!p.ok) return p;
+    if (!(p as { pending?: unknown }).pending) return { ok: true, output: (p as { output: O }).output };
+  }
+  return { ok: false, error: "module async job did not finish within the poll window" };
+}
+
 /** Dispatch a `pick_one` hook: resolve the single serving module (honoring an optional `choice`),
  *  clamp the user's config against that module's schema, and invoke it. Returns `{ ok: false }` when
  *  no module serves the hook or its binding is missing -- the caller decides whether that is fatal. */
@@ -228,7 +280,7 @@ export async function dispatchPickOne<I = unknown, O = unknown>(
   input: I,
   context: InvokeContext,
   opts: { config?: Record<string, unknown>; choice?: string } = {},
-): Promise<InvokeResponse<O>> {
+): Promise<{ ok: true; output: O } | { ok: false; error: string }> {
   const module = resolvePickOne(modules, hook, opts.choice);
   if (!module) return { ok: false, error: `no module serves pick_one hook "${hook}"` };
   const fetcher = fetcherFor(env, module);
@@ -236,7 +288,7 @@ export async function dispatchPickOne<I = unknown, O = unknown>(
     return { ok: false, error: `module ${module.name} binding ${module.binding} is not bound` };
   }
   const config = validateConfig(module.config_schema, opts.config);
-  return invokeModule<I, O>(fetcher, { hook, input, config, context });
+  return awaitInvoke<I, O>(fetcher, { hook, input, config, context });
 }
 
 /** The result of folding a `chain` hook over its serving modules. `output` is the last module's
@@ -274,7 +326,7 @@ export async function dispatchChain<I = unknown, O = unknown>(
       continue;
     }
     const config = validateConfig(module.config_schema, opts.configFor?.(module.name));
-    const r = await invokeModule<I, O>(fetcher, { hook, input: current, config, context });
+    const r = await awaitInvoke<I, O>(fetcher, { hook, input: current, config, context });
     if (r.ok) {
       last = r.output;
       current = opts.nextInput(r.output, seed);

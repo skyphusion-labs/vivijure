@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampDuration, buildSeedanceBody, extractVideoUrl, clipKey } from "../modules/seedance/src/seedance";
+import { clampDuration, buildSeedanceBody, extractVideoUrl, clipKey, encodePoll, decodePoll } from "../modules/seedance/src/seedance";
 
 describe("seedance pure logic", () => {
   it("clampDuration bounds the shot length into Seedance range", () => {
@@ -50,5 +50,11 @@ describe("seedance pure logic", () => {
 
   it("clipKey sanitizes project + shot into an R2 path", () => {
     expect(clipKey("My Project!", "shot 01")).toBe("renders/My_Project_/clips/shot_01_seedance.mp4");
+  });
+
+  it("encodePoll/decodePoll round-trip the async job state", () => {
+    const st = { jobId: "abc123", project: "My Proj", shotId: "shot_01", seconds: 5 };
+    expect(decodePoll(encodePoll(st))).toEqual(st);
+    expect(decodePoll("not-valid-token")).toBeNull();
   });
 });
