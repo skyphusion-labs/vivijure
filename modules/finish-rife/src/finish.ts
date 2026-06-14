@@ -18,8 +18,8 @@ export function defaultConfig(): FinishConfig {
 export function coerceConfig(cfg: Record<string, unknown>): FinishConfig {
   const base = defaultConfig();
   const factor = Number(cfg.interpolation_factor ?? base.interpolation_factor);
-  // snap to nearest power of two in {1,2,4,8}
-  const snapped = [1, 2, 4, 8].reduce((best, v) => Math.abs(v - factor) < Math.abs(best - factor) ? v : best, 2);
+  // floor to the largest power-of-two <= factor (matches the backend int() truncation)
+  const snapped = [8, 4, 2, 1].find(v => v <= factor) ?? 1;
   return {
     interpolate: typeof cfg.interpolate === "boolean" ? cfg.interpolate : base.interpolate,
     interpolation_factor: snapped,
@@ -30,11 +30,11 @@ export function coerceConfig(cfg: Record<string, unknown>): FinishConfig {
 }
 
 /** The RunPod /run body for vivijure-backend action="finish_clip". */
-export function buildRunPodBody(input: FinishInput, cfg: FinishConfig): { input: Record<string, unknown> } {
+export function buildRunPodBody(input: FinishInput, cfg: FinishConfig, project: string): { input: Record<string, unknown> } {
   return {
     input: {
       action: "finish_clip",
-      project: "finish-rife",   // placeholder project; output key uses shot_id
+      project,
       shot_id: input.shot_id,
       clip_key: input.clip_key,
       config: {

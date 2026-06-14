@@ -82,7 +82,7 @@ async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
     const r = await fetch(runpodBase(env) + "/run", {
       method: "POST",
       headers: { ...auth(env), "content-type": "application/json" },
-      body: JSON.stringify(buildRunPodBody(input, cfg)),
+      body: JSON.stringify(buildRunPodBody(input, cfg, req.context.project)),
     });
     if (!r.ok) return passthrough(input);   // RunPod unavailable: soft degrade
     const jobId = ((await r.json()) as { id?: string }).id;
