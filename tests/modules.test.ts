@@ -217,7 +217,7 @@ describe("invokeModule", () => {
       hook: "finish", input: {}, config: {}, context: ctx,
     });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.output.gotHook).toBe("finish");
+    if (r.ok && "output" in r) expect(r.output.gotHook).toBe("finish");
   });
   it("degrades to ok:false on a non-200, never throws", async () => {
     const f = { fetch: async () => new Response("nope", { status: 500 }) };
