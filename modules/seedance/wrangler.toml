@@ -8,6 +8,7 @@ name = "vivijure-module-seedance"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
 
 [observability]
 enabled = true
