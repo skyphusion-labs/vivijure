@@ -67,14 +67,18 @@ async function readBody<T>(req: Request): Promise<T> {
 type Handler = (req: Request, env: Env, ctx: ExecutionContext, p: Record<string, string>) => Promise<Response>;
 interface Route { method: string; pattern: string; handler: Handler; }
 
+// Pattern segments are a literal, ":name" (one segment), or a trailing "*name" catch-all that
+// captures the rest of the path -- used for /api/artifact/*key, where the R2 key contains slashes.
 function match(routes: Route[], method: string, pathname: string) {
   for (const r of routes) {
     if (r.method !== method) continue;
     const pp = r.pattern.split("/"), sp = pathname.split("/");
-    if (pp.length !== sp.length) continue;
+    const star = pp.findIndex((seg) => seg[0] === "*");
+    if (star === -1 ? pp.length !== sp.length : sp.length < pp.length) continue;
     const p: Record<string, string> = {}; let ok = true;
     for (let i = 0; i < pp.length; i++) {
-      if (pp[i][0] === ":") p[pp[i].slice(1)] = decodeURIComponent(sp[i]);
+      if (pp[i][0] === "*") { p[pp[i].slice(1)] = sp.slice(i).map(decodeURIComponent).join("/"); break; }
+      else if (pp[i][0] === ":") p[pp[i].slice(1)] = decodeURIComponent(sp[i]);
       else if (pp[i] !== sp[i]) { ok = false; break; }
     }
     if (ok) return { handler: r.handler, params: p };
@@ -176,6 +180,36 @@ const hRemoveSource: Handler = async (req, env, _c, p) => {
   const res = await removeSource(env, idParam(p.id), getUserEmail(req), b.key);
   if (!res.row) throw notFound("cast member or source");
   return json({ cast: res.row });
+};
+
+// --- artifact upload + serve --------------------------------------------
+// The core has the R2_RENDERS binding, so it stores/serves bytes directly -- no presign round-trip
+// needed for portrait-sized images. A client (browser OR the Discord bot, which has no R2 access)
+// POSTs raw image bytes to /api/upload and gets back a { key }, then registers it on a cast member
+// via the existing /api/cast/:id/{portrait,ref,source} endpoints. Artifacts are served back by key
+// at /api/artifact/<key> (the studio is CF Access-gated, so serving by key is safe single-tenant).
+const UPLOAD_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25MB -- portraits/refs are ~1-3MB; this is generous headroom
+const hUpload: Handler = async (req, env) => {
+  const mime = (req.headers.get("content-type") || "").split(";")[0].trim() || "application/octet-stream";
+  const ext = UPLOAD_EXT[mime] || "bin";
+  const bytes = await req.arrayBuffer();
+  if (!bytes.byteLength) throw badRequest("empty upload body");
+  if (bytes.byteLength > MAX_UPLOAD_BYTES) throw badRequest("upload too large (max 25MB)");
+  const key = `uploads/${crypto.randomUUID()}.${ext}`;
+  await env.R2_RENDERS.put(key, bytes, { httpMetadata: { contentType: mime } });
+  return json({ key, mime, bytes: bytes.byteLength }, 201);
+};
+const hServeArtifact: Handler = async (_req, env, _c, p) => {
+  const key = p.key;
+  if (!key) throw notFound("artifact");
+  const obj = await env.R2_RENDERS.get(key);
+  if (!obj) throw notFound("artifact");
+  const headers = new Headers();
+  headers.set("content-type", obj.httpMetadata?.contentType || "application/octet-stream");
+  headers.set("cache-control", "private, max-age=300");
+  headers.set("content-length", String(obj.size));
+  return new Response(obj.body, { headers });
 };
 
 // --- renders (library / metadata) ----------------------------------------
@@ -413,6 +447,8 @@ const API_ROUTES: Route[] = [
   { method: "POST",   pattern: "/api/cast/:id/source",                 handler: hAddSource },
   { method: "DELETE", pattern: "/api/cast/:id/source",                 handler: hRemoveSource },
   { method: "POST",   pattern: "/api/cast/:id/lora",                   handler: hTodo },
+  { method: "POST",   pattern: "/api/upload",                          handler: hUpload },
+  { method: "GET",    pattern: "/api/artifact/*key",                   handler: hServeArtifact },
   { method: "POST",   pattern: "/api/storyboard/preflight",            handler: hPreflight },
   { method: "POST",   pattern: "/api/storyboard/plan",                 handler: hPlan },
   { method: "POST",   pattern: "/api/storyboard/refine",               handler: hRefine },
