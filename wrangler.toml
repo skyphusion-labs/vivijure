@@ -42,40 +42,40 @@ database_id = "bb806935-47a7-4524-93dd-251024794a55"
 
 # --- CPU container Durable Objects (off-GPU work). Build contexts live in containers/<name>/
 # --- (migrated from skyphusion-llm-public); the image is each Dockerfile. ---
-# --- DISABLED for now (same as main, PR #44): building these images needs Docker, which the CI
-# --- deploy job (node:22-alpine) cannot launch, and we do not need them up yet. Re-enable the three
-# --- bindings + [[containers]] + the migration together when the phase-1 render-migration lands.
+# --- ENABLED: video-finish only -- the assemble container (ffmpeg concat + audio mux) for the
+# --- render pipeline. Its image needs Docker to build; the CI deploy job installs the docker CLI
+# --- (apk add docker-cli; see .github/workflows/ci.yml) and the host docker.sock is bind-mounted.
+# --- audio-beat-sync + image-prep stay DISABLED below until their features are wired (heavy deps,
+# --- unused for now); enabling them = uncomment + add their classes to a NEW migration tag.
+[[durable_objects.bindings]]
+name = "VIDEO_FINISH"
+class_name = "VideoFinishContainer"
+
+[[containers]]
+class_name = "VideoFinishContainer"
+image = "./containers/video-finish/Dockerfile"
+max_instances = 3
+
+# Fresh worker -> initial migration registering the video-finish container DO class.
+[[migrations]]
+tag = "v1-video-finish"
+new_sqlite_classes = ["VideoFinishContainer"]
+
+# DISABLED (uncomment + new migration tag when wired):
 # [[durable_objects.bindings]]
 # name = "AUDIO_BEAT_SYNC"
 # class_name = "AudioBeatSyncContainer"
-#
 # [[durable_objects.bindings]]
 # name = "IMAGE_PREP"
 # class_name = "ImagePrepContainer"
-#
-# [[durable_objects.bindings]]
-# name = "VIDEO_FINISH"
-# class_name = "VideoFinishContainer"
-#
 # [[containers]]
 # class_name = "AudioBeatSyncContainer"
 # image = "./containers/audio-beat-sync/Dockerfile"
 # max_instances = 3
-#
 # [[containers]]
 # class_name = "ImagePrepContainer"
 # image = "./containers/image-prep/Dockerfile"
 # max_instances = 5
-#
-# [[containers]]
-# class_name = "VideoFinishContainer"
-# image = "./containers/video-finish/Dockerfile"
-# max_instances = 3
-#
-# # Fresh worker -> one initial migration registering all three container DO classes.
-# [[migrations]]
-# tag = "v1-render-containers"
-# new_sqlite_classes = ["AudioBeatSyncContainer", "ImagePrepContainer", "VideoFinishContainer"]
 
 # --- Secrets (npx wrangler secret put <NAME>): RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID,
 # --- R2_S3_ACCESS_KEY_ID, R2_S3_SECRET_ACCESS_KEY, GATEWAY_ID.
