@@ -87,7 +87,7 @@
         <label class="planner-field">
           <span>active project</span>
           <select id="planner-project-picker">
-            <option value="">(no project — transient)</option>
+            <option value="">(no project, transient)</option>
           </select>
         </label>
         <button id="planner-project-new" type="button" class="planner-secondary">+ new project</button>
@@ -103,33 +103,6 @@
         <span>model</span>
         <select id="planner-model"></select>
       </label>
-
-      <!-- v0.131.0: freeform "ask the model" chat, directly under the model
-           picker. Multi-turn conversation with the selected planning model,
-           independent of any storyboard. Each turn POSTs {model, user_input,
-           conversation_id} to /api/chat; the model's memory is server-side via
-           conversation_id. Reuses the .composer-send button from the main chat
-           UI and .planner-refine-* styling for the thread. -->
-      <div id="planner-chat" class="planner-field" data-step="plan">
-        <div class="planner-chat-head">
-          <span class="planner-field-label">ask the model</span>
-          <span id="planner-chat-status" class="planner-status"></span>
-        </div>
-        <ul id="planner-chat-turns" class="planner-refine-turns"></ul>
-        <div class="planner-refine-input-row">
-          <textarea id="planner-chat-input" class="planner-refine-input" rows="2" placeholder="enter to send, shift+enter for newline"></textarea>
-          <button id="planner-chat-send" type="button" class="composer-send" title="send" aria-label="send">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V5M6 11l6-6 6 6"/></svg>
-          </button>
-        </div>
-        <div class="planner-actions">
-          <!-- v0.134.0: summarize the conversation into the brief (replaces the
-               old auto-fill of raw replies). The brief is then consumed by the
-               Plan step to build storyboard.json. -->
-          <button id="planner-chat-script" type="button" class="planner-primary">script my plan</button>
-          <button id="planner-chat-clear" type="button" class="planner-secondary">new conversation</button>
-        </div>
-      </div>
 
       <label class="planner-field">
         <span>brief</span>
@@ -179,23 +152,6 @@
       </div>
     </section>
 
-    <!-- v0.50.0: iterative refinement chat. Lives between plan output and
-         the scene editor. Each turn sends {model, storyboard, message} to
-         /api/storyboard/refine and replaces planState.storyboard with the
-         returned draft. Stateless: chat history is for the user's display,
-         not replayed to the model. Hidden until a plan resolves. -->
-    <section id="planner-refine" class="planner-stage" data-step="plan" hidden>
-      <header class="planner-stage-header">
-        <h2 class="planner-stage-title">refine via chat</h2>
-        <span id="planner-refine-status" class="planner-status"></span>
-      </header>
-      <p class="planner-stage-hint">type instructions ("add a fight scene before the ending", "make scene 2 darker", "shorten the opening"). each turn rewrites the storyboard and refreshes the editor + YAML below.</p>
-      <ul id="planner-refine-turns" class="planner-refine-turns"></ul>
-      <div class="planner-refine-input-row">
-        <textarea id="planner-refine-input" class="planner-refine-input" rows="2" placeholder="describe the change..."></textarea>
-        <button id="planner-refine-send" type="button" class="planner-primary">send</button>
-      </div>
-    </section>
 
     <!-- v0.49.0: per-scene editor. Lives between plan output and bundle.
          Mutates planState.storyboard.scenes in-place; debounce-refreshes
@@ -645,6 +601,36 @@
       <button id="planner-step-next" type="button" class="planner-stepnav-next">next &#8594;</button>
     </div>
   </main>
+
+  <!-- v0.164.0: Screenwriter's Assistant. The storyboard-refinement chat
+       (Opus) lives in a fixed right-rail dock instead of inline, so it can
+       never reflow or grow the page. body.sw-open reserves its column; the
+       #planner-refine section keeps its IDs + data-step, so planner.js drives
+       it unchanged (showRefineSection reveals it once a storyboard exists). -->
+  <button id="sw-tab" class="sw-tab" type="button" aria-controls="sw-dock" aria-expanded="false" title="Open the Screenwriter's Assistant">
+    <span class="sw-tab-icon" aria-hidden="true">&#9998;</span>
+    <span class="sw-tab-label">Screenwriter</span>
+  </button>
+  <aside id="sw-dock" class="sw-dock" aria-label="Screenwriter's Assistant">
+    <header class="sw-dock-head">
+      <div class="sw-dock-titles">
+        <h2 class="sw-dock-title">Screenwriter's Assistant</h2>
+        <span id="planner-refine-status" class="planner-status"></span>
+      </div>
+      <button id="sw-dock-close" class="sw-dock-close" type="button" aria-label="Close assistant">&times;</button>
+    </header>
+    <div class="sw-dock-body">
+      <section id="planner-refine" class="planner-stage sw-refine" data-step="plan" hidden>
+        <p class="planner-stage-hint">Tell me how to revise the storyboard. Try "make scene 2 darker", "add a beat before the ending", or "shorten the opening". Each change rewrites the storyboard and refreshes the editor + YAML.</p>
+        <ul id="planner-refine-turns" class="planner-refine-turns"></ul>
+        <div class="planner-refine-input-row">
+          <textarea id="planner-refine-input" class="planner-refine-input" rows="2" placeholder="describe the change..."></textarea>
+          <button id="planner-refine-send" type="button" class="planner-primary">send</button>
+        </div>
+      </section>
+      <p id="sw-empty" class="sw-empty">Draft a storyboard first, then I can help you revise it scene by scene.</p>
+    </div>
+  </aside>
 
   <script src="/topbar.js"></script>
   <script src="/planner.js"></script>
