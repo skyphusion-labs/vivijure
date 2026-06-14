@@ -8,8 +8,13 @@ export function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { ...init, headers });
 }
 
-/** The caller's identity. Cloudflare Access sets this header; the worker trusts it to scope every
- *  render/cast/storyboard row per user. `wrangler dev` has no Access -> "anonymous". */
-export function getUserEmail(request: Request): string {
-  return request.headers.get("cf-access-authenticated-user-email") ?? "anonymous";
+/** The owner key every render/cast/storyboard row is scoped to. Vivijure is a SINGLE-OPERATOR
+ *  studio (not multi-user -- per-user identity was playground heritage), so there is one shared
+ *  owner: everything is visible to everyone with access, and non-browser clients (the Discord bot /
+ *  CF Access service tokens, which carry no user email) see the same data. Email is no longer an
+ *  access gate. (If per-user provenance/notify is ever wanted, read the Access header separately --
+ *  do not reintroduce it here as a visibility filter.) */
+export const STUDIO_OWNER = "studio";
+export function getUserEmail(_request: Request): string {
+  return STUDIO_OWNER;
 }

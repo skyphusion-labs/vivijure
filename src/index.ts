@@ -83,16 +83,18 @@ function match(routes: Route[], method: string, pathname: string) {
 }
 
 // --- projects ------------------------------------------------------------
-const hListProjects: Handler = async (req, env) => json(await listProjectsForUser(env, getUserEmail(req)));
+// Responses are wrapped by resource name ({projects}/{project}) -- the frontend reads data.projects
+// / data.project. (Migration regression: these used to return bare rows, which crashed create.)
+const hListProjects: Handler = async (req, env) => json({ projects: await listProjectsForUser(env, getUserEmail(req)) });
 const hCreateProject: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; prefs?: Record<string, unknown> }>(req);
   if (!b.name) throw badRequest("name required");
-  return json(await createProject(env, getUserEmail(req), { name: b.name, prefs: b.prefs }), 201);
+  return json({ project: await createProject(env, getUserEmail(req), { name: b.name, prefs: b.prefs }) }, 201);
 };
 const hGetProject: Handler = async (req, env, _c, p) => {
   const row = await getProjectById(env, idParam(p.id), getUserEmail(req));
   if (!row) throw notFound("project");
-  return json(row);
+  return json({ project: row });
 };
 const hPatchProject: Handler = async (req, env, _c, p) => {
   const id = idParam(p.id), email = getUserEmail(req);
@@ -101,7 +103,7 @@ const hPatchProject: Handler = async (req, env, _c, p) => {
     ? await setLastStoryboard(env, id, email, b.storyboard)
     : await updateProjectMeta(env, id, email, { name: b.name, prefs: b.prefs });
   if (!row) throw notFound("project");
-  return json(row);
+  return json({ project: row });
 };
 const hDeleteProject: Handler = async (req, env, _c, p) => {
   const row = await deleteProject(env, idParam(p.id), getUserEmail(req));
@@ -110,22 +112,23 @@ const hDeleteProject: Handler = async (req, env, _c, p) => {
 };
 
 // --- cast ----------------------------------------------------------------
-const hListCast: Handler = async (req, env) => json(await listCastForUser(env, getUserEmail(req)));
+// Wrapped by resource name ({cast}) -- the frontend reads data.cast (array for list, object for item).
+const hListCast: Handler = async (req, env) => json({ cast: await listCastForUser(env, getUserEmail(req)) });
 const hCreateCast: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; bible?: string | null }>(req);
   if (!b.name) throw badRequest("name required");
-  return json(await createCast(env, getUserEmail(req), { name: b.name, bible: b.bible }), 201);
+  return json({ cast: await createCast(env, getUserEmail(req), { name: b.name, bible: b.bible }) }, 201);
 };
 const hGetCast: Handler = async (req, env, _c, p) => {
   const row = await getCastById(env, idParam(p.id), getUserEmail(req));
   if (!row) throw notFound("cast member");
-  return json(row);
+  return json({ cast: row });
 };
 const hPatchCast: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ name?: string; bible?: string | null }>(req);
   const row = await updateCast(env, idParam(p.id), getUserEmail(req), b);
   if (!row) throw notFound("cast member");
-  return json(row);
+  return json({ cast: row });
 };
 const hDeleteCast: Handler = async (req, env, _c, p) => {
   const row = await deleteCast(env, idParam(p.id), getUserEmail(req));
@@ -139,40 +142,40 @@ const hSetPortrait: Handler = async (req, env, _c, p) => {
   if (!b.key || !b.mime) throw badRequest("key and mime required");
   const row = await setPortrait(env, idParam(p.id), getUserEmail(req), b.key, b.mime);
   if (!row) throw notFound("cast member");
-  return json(row);
+  return json({ cast: row });
 };
 const hClearPortrait: Handler = async (req, env, _c, p) => {
   const row = await clearPortrait(env, idParam(p.id), getUserEmail(req));
   if (!row) throw notFound("cast member");
-  return json(row);
+  return json({ cast: row });
 };
 const hAddRef: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string; mime?: string }>(req);
   if (!b.key || !b.mime) throw badRequest("key and mime required");
   const row = await addRef(env, idParam(p.id), getUserEmail(req), { key: b.key, mime: b.mime });
   if (!row) throw notFound("cast member");
-  return json(row);
+  return json({ cast: row });
 };
 const hRemoveRef: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string }>(req);
   if (!b.key) throw badRequest("key required");
   const res = await removeRef(env, idParam(p.id), getUserEmail(req), b.key);
   if (!res.row) throw notFound("cast member or ref");
-  return json(res.row);
+  return json({ cast: res.row });
 };
 const hAddSource: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string; mime?: string }>(req);
   if (!b.key || !b.mime) throw badRequest("key and mime required");
   const row = await addSource(env, idParam(p.id), getUserEmail(req), { key: b.key, mime: b.mime });
   if (!row) throw notFound("cast member");
-  return json(row);
+  return json({ cast: row });
 };
 const hRemoveSource: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string }>(req);
   if (!b.key) throw badRequest("key required");
   const res = await removeSource(env, idParam(p.id), getUserEmail(req), b.key);
   if (!res.row) throw notFound("cast member or source");
-  return json(res.row);
+  return json({ cast: res.row });
 };
 
 // --- renders (library / metadata) ----------------------------------------
