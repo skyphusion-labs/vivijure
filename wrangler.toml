@@ -111,11 +111,9 @@ service = "vivijure-module-keyframe"
 binding = "MODULE_FINISH_RIFE"
 service = "vivijure-module-finish-rife"
 
-# Vanity-domain route (DEFERRED): binding vivijure.skyphusion.org/* needs manual dashboard steps
-# first -- REMOVE the existing transform rule (-> playground /planner.html) and configure the Access
-# app (3377c722 / aud be06bf47) -- otherwise it conflicts at the edge (1042). Re-add this block as
-# the deliberate cutover once the dashboard side is done (Strummer + Conrad). Studio runs on
-# vivijure-studio.skyphusion.workers.dev until then.
-# [[routes]]
-# pattern = "vivijure.skyphusion.org/*"
-# zone_name = "skyphusion.org"
+# Vanity-domain route: bind the studio to vivijure.skyphusion.org. Cutover done 2026-06-14 --
+# the old playground routes/transform rule were removed from this hostname, and the Access app
+# (3377c722 / aud be06bf47) gates it (crew service tokens bypass; Conrad is the only human auth).
+[[routes]]
+pattern = "vivijure.skyphusion.org/*"
+zone_name = "skyphusion.org"
