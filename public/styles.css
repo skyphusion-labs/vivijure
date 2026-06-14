@@ -147,6 +147,16 @@ body.sw-open .planner-layout { overflow-x: hidden; }
 .cast-editor,
 .cast-editor-empty { grid-area: editor; }
 .cast-multi-scene  { grid-area: multi; }
+
+/* cast image constraints -- portrait fills the editor pane without blowing out the grid cell */
+.cast-portrait-wrap { max-width: 100%; overflow: hidden; border-radius: 12px; }
+.cast-portrait-img  { max-width: 100%; max-height: 420px; width: auto; height: auto; object-fit: contain; border-radius: 12px; display: block; }
+/* gen preview: same constraints as the saved portrait */
+.cast-gen-preview img { max-width: 100%; max-height: 360px; height: auto; object-fit: contain; border-radius: 10px; display: block; }
+/* source and ref thumbnails: small fixed-size grid of thumbs */
+.cast-source-item img,
+.cast-refs-list  img { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; display: block; }
+
 .cast-layout input, .cast-layout select, .cast-layout textarea {
   background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); border-radius: 10px;
   padding: 9px 12px; font: inherit; width: 100%; max-width: 100%; }
