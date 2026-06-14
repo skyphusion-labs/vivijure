@@ -4,6 +4,9 @@
 import { describe, it, expect } from "vitest";
 import { checkManifest, checkInvokeResponse, allPass, failures } from "../src/modules/conformance";
 
+// Node global, not in the project tsconfig types (workers-types only); declare it locally.
+declare const process: { env: Record<string, string | undefined> };
+
 const BASE = process.env.MODULE_URL;
 
 describe.skipIf(!BASE)("live module conformance (" + (BASE || "set MODULE_URL") + ")", () => {
