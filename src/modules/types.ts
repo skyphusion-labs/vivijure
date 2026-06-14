@@ -132,6 +132,31 @@ export interface FinishOutput {
   applied: string[]; // e.g. ["interpolate:2x", "face_restore:gfpgan"]
 }
 
+// plan.enhance (v1) -----------------------------------------------------------------------------
+
+/** What the core hands a `plan.enhance` module: the storyboard to enrich (its scenes carry the shot
+ *  prompts the module rewrites) plus the original brief for context. Structural passthrough -- a
+ *  module rewrites scenes[].prompt and preserves every other field on the storyboard and scenes. */
+export interface PlanEnhanceScene {
+  prompt: string;
+  [k: string]: unknown;
+}
+export interface PlanEnhanceStoryboard {
+  scenes: PlanEnhanceScene[];
+  [k: string]: unknown;
+}
+export interface PlanEnhanceInput {
+  storyboard: PlanEnhanceStoryboard;
+  brief?: string;
+}
+
+/** What a `plan.enhance` module returns: the enriched storyboard plus optional human-readable notes
+ *  on what it did (or why it passed through unchanged). */
+export interface PlanEnhanceOutput {
+  storyboard: PlanEnhanceStoryboard;
+  notes?: string[];
+}
+
 // --------------------------------------------------------------------------- registry view
 
 /** One registered module as the core exposes it to the frontend (the manifest minus internals). */

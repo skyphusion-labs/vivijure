@@ -1,0 +1,78 @@
+// Pure plan.enhance logic: build the director prompt, parse the model's reply, and merge the
+// enhanced prompts back into the storyboard. No I/O here, so it unit-tests without the AI binding.
+
+import type { PlanEnhanceScene, PlanEnhanceStoryboard } from "./contract";
+
+export type Intensity = "light" | "medium" | "bold";
+
+const INTENSITY_GUIDE: Record<Intensity, string> = {
+  light:
+    "Add a light touch of cinematic direction: one concrete camera or lighting detail per shot. Stay close to the original.",
+  medium:
+    "Add clear cinematic direction: camera framing or movement, lens feel, and lighting or mood, in a natural sentence or two per shot.",
+  bold:
+    "Direct each shot vividly: camera framing and movement, lens, lighting, mood, and a sense of motion, while keeping the original subject and action.",
+};
+
+export interface ChatMessage {
+  role: "system" | "user";
+  content: string;
+}
+
+/** Build the chat messages for one enhancement pass over all scene prompts. The model is asked to
+ *  return ONLY a JSON array of N rewritten prompts: same order, same length. */
+export function buildMessages(prompts: string[], intensity: Intensity): ChatMessage[] {
+  const guide = INTENSITY_GUIDE[intensity] ?? INTENSITY_GUIDE.medium;
+  const numbered = prompts.map((p, i) => `${i + 1}. ${p}`).join("\n");
+  return [
+    {
+      role: "system",
+      content:
+        "You are a film director doing a pass over a storyboard's shot descriptions. " +
+        guide +
+        " Preserve each shot's subject, action, and meaning; do not add or remove shots; do not change who appears. " +
+        "Reply with ONLY a JSON array of strings: the rewritten shot descriptions, in the same order, the same length as the input. No prose, no keys, no markdown fences.",
+    },
+    { role: "user", content: `Rewrite these ${prompts.length} shot descriptions:\n${numbered}` },
+  ];
+}
+
+/** Parse the model's reply into exactly `n` rewritten prompts, or null if it is not a clean,
+ *  right-length array of non-empty strings. Tolerates a code fence and surrounding prose. */
+export function parseEnhanced(raw: unknown, n: number): string[] | null {
+  if (typeof raw !== "string") return null;
+  let s = raw.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const start = s.indexOf("[");
+  const end = s.lastIndexOf("]");
+  if (start === -1 || end === -1 || end < start) return null;
+  let arr: unknown;
+  try {
+    arr = JSON.parse(s.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(arr) || arr.length !== n) return null;
+  if (!arr.every((x) => typeof x === "string" && (x as string).trim().length > 0)) return null;
+  return (arr as string[]).map((x) => x.trim());
+}
+
+/** Merge enhanced prompts back into a storyboard, preserving every other field on the storyboard and
+ *  on each scene. Returns a new object (no mutation). */
+export function mergeEnhanced(
+  storyboard: PlanEnhanceStoryboard,
+  enhanced: string[],
+): PlanEnhanceStoryboard {
+  const scenes: PlanEnhanceScene[] = storyboard.scenes.map((scene, i) =>
+    typeof enhanced[i] === "string" ? { ...scene, prompt: enhanced[i] } : scene,
+  );
+  return { ...storyboard, scenes };
+}
+
+/** The scene prompts to enhance, or null when there is nothing to do (no scenes). Missing prompts
+ *  coerce to empty strings so the array length always matches scenes.length. */
+export function scenePrompts(storyboard: PlanEnhanceStoryboard): string[] | null {
+  if (!storyboard || !Array.isArray(storyboard.scenes) || storyboard.scenes.length === 0) return null;
+  return storyboard.scenes.map((s) => (typeof s.prompt === "string" ? s.prompt : ""));
+}
