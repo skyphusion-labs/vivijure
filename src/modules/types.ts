@@ -157,6 +157,39 @@ export interface PlanEnhanceOutput {
   notes?: string[];
 }
 
+// motion.backend (v1, forward-declared) ---------------------------------------------------------
+
+/** What the core hands a `motion.backend` module for ONE shot: a start keyframe and the motion
+ *  intent. The module turns it into a clip (on GPU or via a cloud i2v API). */
+export interface MotionBackendInput {
+  shot_id: string;
+  keyframe_key: string; // R2 key of the start keyframe (png)
+  prompt: string;       // the motion prompt for the shot
+  seconds: number;
+}
+/** What a `motion.backend` module returns: the rendered shot clip. */
+export interface MotionBackendOutput {
+  shot_id: string;
+  clip_key: string;     // R2 key of the rendered clip (mp4)
+  fps: number;
+  frames: number;
+}
+
+// score (v1, forward-declared) ------------------------------------------------------------------
+
+/** What the core hands a `score` module: the assembled (silent) film and its shape, plus optional
+ *  storyboard context for mood/tempo. */
+export interface ScoreInput {
+  film_key: string;     // R2 key of the silent film (mp4)
+  seconds: number;
+  storyboard?: PlanEnhanceStoryboard;
+}
+/** What a `score` module returns: the film with audio applied (or muxed), and what it added. */
+export interface ScoreOutput {
+  film_key: string;     // R2 key of the scored film (mp4)
+  applied: string[];    // e.g. ["music:minimax", "narration:tts"]
+}
+
 // --------------------------------------------------------------------------- registry view
 
 /** One registered module as the core exposes it to the frontend (the manifest minus internals). */

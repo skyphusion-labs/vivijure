@@ -6,6 +6,7 @@
 // scatter.ts's ScatterArgs or train-lora orchestration are marked TODO and return 501 for now.
 
 import { discoverModules, modulesResponse, dispatchChain } from "./modules/registry";
+import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
 import { getUserEmail } from "./shared";
 import type { Env } from "./env";
@@ -285,6 +286,15 @@ const hRefine: Handler = async (req, env) => {
 // --- module-host: run the plan.enhance chain over a storyboard (invoke-from-core). The core does
 // not know who answers: it discovers the installed modules and folds the plan.enhance chain. With
 // no module installed the storyboard returns unchanged (applied empty) -- a lean studio still works.
+// --- module-host: resolve the render pipeline from the installed registry + the user's selection
+// (render-flow dispatch, core half). Returns which module serves each render hook with its clamped
+// config; EXECUTION of those hooks is the backend's job. Null/empty when nothing is installed.
+const hRenderPlan: Handler = async (req, env) => {
+  const a = await readBody<{ selection?: RenderPipelineSelection }>(req);
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  return json({ ok: true, plan: resolveRenderPipeline(modules, a.selection ?? {}) });
+};
+
 const hEnhance: Handler = async (req, env) => {
   const a = await readBody<{
     storyboard?: PlanEnhanceStoryboard;
@@ -389,6 +399,7 @@ const API_ROUTES: Route[] = [
   { method: "POST",   pattern: "/api/storyboard/bundle",               handler: hBundle },
   { method: "POST",   pattern: "/api/audio/analyze",                   handler: hAudioUpload },
   { method: "POST",   pattern: "/api/storyboard/render",               handler: hSubmitRender },
+  { method: "POST",   pattern: "/api/storyboard/render-plan",          handler: hRenderPlan },
   { method: "POST",   pattern: "/api/storyboard/render/scatter",       handler: hScatterRender },
   { method: "POST",   pattern: "/api/storyboard/render-from-keyframes", handler: hFinalizeRender },
   { method: "GET",    pattern: "/api/storyboard/render/:jobId",        handler: hPollRender },
