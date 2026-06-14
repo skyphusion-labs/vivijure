@@ -357,12 +357,13 @@ const hPollClips: Handler = async (_req, env, _c, p) => {
 // Film orchestrator: the keyframe -> clip handoff. POST starts it (runs the keyframe module), GET
 // advances it across the keyframe -> clips phases. See film-orchestrator.ts.
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown> }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>> }>(req);
   if (!a.project || !a.bundle_key) throw badRequest("project and bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
   const job = await startFilmJob(env, {
     project: a.project, bundle_key: a.bundle_key, scenes: a.scenes,
     motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
+    finish_config: a.finish_config,
   });
   return json({ ok: true, ...summarizeFilm(job, null) }, 201);
 };
