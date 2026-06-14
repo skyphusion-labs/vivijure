@@ -270,3 +270,61 @@ body.sw-open .sw-dock { transform: none; }
   body.sw-open { padding-right: 0; }
   .sw-dock { width: min(var(--sw-w), 100vw); }
 }
+
+
+/* ==========================================================================
+   Self-assembling render pipeline (module-host projection, v0.166.0). The
+   landing renders these stages from GET /api/modules: each hook is a stage,
+   each installed module slots in and brings its own config_schema controls.
+   ========================================================================== */
+.pipeline-sub { margin: 0 0 14px; }
+.pipeline-stages { display: grid; gap: 12px; }
+
+.stage {
+  border: 1px solid var(--line); border-left: 3px solid var(--off);
+  border-radius: 12px; padding: 14px 16px; background: var(--panel-2);
+}
+.stage-on { border-left-color: var(--on); }
+.stage-off { opacity: 0.82; }
+
+.stage-head { display: flex; align-items: center; gap: 10px; }
+.stage-name {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700; font-size: 14px;
+}
+.stage-badge {
+  font-size: 11px; letter-spacing: 0.04em; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px;
+}
+.stage-on .stage-badge { color: var(--accent); border-color: var(--accent); }
+.stage-blurb { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+.stage-empty { color: var(--muted); font-style: italic; font-size: 13px; margin: 10px 0 0; }
+.stage-single { margin-top: 10px; font-weight: 600; }
+
+.stage-pick {
+  margin-top: 10px; background: var(--panel); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 9px; padding: 8px 10px; font: inherit; width: 100%;
+}
+.stage-pick:focus { outline: none; border-color: var(--accent); }
+
+.stage-chain { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; counter-reset: chain; }
+.chain-item {
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel);
+}
+.chain-mod-name { font-weight: 600; }
+.chain-mod-name::before {
+  counter-increment: chain; content: counter(chain) ". "; color: var(--muted); font-weight: 700;
+}
+
+.stage-config { margin-top: 10px; }
+.mod-nosettings { color: var(--muted); font-size: 12px; font-style: italic; margin: 0; }
+.mod-fields { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.mod-field { display: grid; gap: 5px; }
+.mod-field-label { color: var(--muted); font-size: 12px; }
+.mod-field-hint { color: var(--off); font-size: 11px; }
+.mod-field input[type="number"], .mod-field input[type="text"], .mod-field select {
+  background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 9px; padding: 8px 10px; font: inherit; width: 100%;
+}
+.mod-field input:focus, .mod-field select:focus { outline: none; border-color: var(--accent); }
+.mod-field-bool { grid-auto-flow: column; justify-content: start; align-items: center; gap: 8px; }
+.mod-field-bool input { width: auto; }
