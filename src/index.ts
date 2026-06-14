@@ -7,6 +7,7 @@
 
 import { discoverModules, modulesResponse, dispatchChain } from "./modules/registry";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
+import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
 import { getUserEmail } from "./shared";
 import type { Env } from "./env";
@@ -295,6 +296,26 @@ const hRenderPlan: Handler = async (req, env) => {
   return json({ ok: true, plan: resolveRenderPipeline(modules, a.selection ?? {}) });
 };
 
+// --- render-execution: orchestrate the motion.backend module per shot (async run/poll, across
+// requests). POST starts the job + submits each shot; GET advances it (polls the pending shots).
+const hStartClips: Handler = async (req, env) => {
+  const a = await readBody<{ project?: string; shots?: ClipShotInput[]; motion_backend?: string; config?: Record<string, unknown> }>(req);
+  if (!Array.isArray(a.shots) || a.shots.length === 0) throw badRequest("shots[] required");
+  const job = await startClipJob(env, { project: a.project ?? "clips", shots: a.shots, motion_backend: a.motion_backend, config: a.config });
+  return json({
+    ok: true, job_id: job.job_id, motion_backend: job.motion_backend, ...summarizeJob(job),
+    shots: job.shots.map((sh) => ({ shot_id: sh.shot_id, status: sh.status, error: sh.error })),
+  });
+};
+const hPollClips: Handler = async (_req, env, _c, p) => {
+  const job = await advanceClipJob(env, p.id);
+  if (!job) throw notFound("clip job");
+  return json({
+    ok: true, job_id: job.job_id, motion_backend: job.motion_backend, ...summarizeJob(job),
+    shots: job.shots.map((sh) => ({ shot_id: sh.shot_id, status: sh.status, clip_key: sh.clip_key, error: sh.error })),
+  });
+};
+
 const hEnhance: Handler = async (req, env) => {
   const a = await readBody<{
     storyboard?: PlanEnhanceStoryboard;
@@ -400,6 +421,8 @@ const API_ROUTES: Route[] = [
   { method: "POST",   pattern: "/api/audio/analyze",                   handler: hAudioUpload },
   { method: "POST",   pattern: "/api/storyboard/render",               handler: hSubmitRender },
   { method: "POST",   pattern: "/api/storyboard/render-plan",          handler: hRenderPlan },
+  { method: "POST",   pattern: "/api/render/clips",                     handler: hStartClips },
+  { method: "GET",    pattern: "/api/render/clips/:id",                 handler: hPollClips },
   { method: "POST",   pattern: "/api/storyboard/render/scatter",       handler: hScatterRender },
   { method: "POST",   pattern: "/api/storyboard/render-from-keyframes", handler: hFinalizeRender },
   { method: "GET",    pattern: "/api/storyboard/render/:jobId",        handler: hPollRender },
