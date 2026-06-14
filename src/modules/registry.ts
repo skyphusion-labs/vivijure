@@ -280,7 +280,7 @@ export async function dispatchPickOne<I = unknown, O = unknown>(
   input: I,
   context: InvokeContext,
   opts: { config?: Record<string, unknown>; choice?: string } = {},
-): Promise<InvokeResponse<O>> {
+): Promise<{ ok: true; output: O } | { ok: false; error: string }> {
   const module = resolvePickOne(modules, hook, opts.choice);
   if (!module) return { ok: false, error: `no module serves pick_one hook "${hook}"` };
   const fetcher = fetcherFor(env, module);
