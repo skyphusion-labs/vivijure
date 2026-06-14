@@ -8,6 +8,7 @@
 import { discoverModules, modulesResponse, dispatchChain } from "./modules/registry";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
 import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
+import { startFilmJob, advanceFilmJob, summarizeFilm, type FilmScene } from "./film-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
 import { getUserEmail } from "./shared";
 import type { Env } from "./env";
@@ -353,6 +354,24 @@ const hPollClips: Handler = async (_req, env, _c, p) => {
   });
 };
 
+// Film orchestrator: the keyframe -> clip handoff. POST starts it (runs the keyframe module), GET
+// advances it across the keyframe -> clips phases. See film-orchestrator.ts.
+const hStartFilm: Handler = async (req, env) => {
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown> }>(req);
+  if (!a.project || !a.bundle_key) throw badRequest("project and bundle_key required");
+  if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
+  const job = await startFilmJob(env, {
+    project: a.project, bundle_key: a.bundle_key, scenes: a.scenes,
+    motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
+  });
+  return json({ ok: true, ...summarizeFilm(job, null) }, 201);
+};
+const hPollFilm: Handler = async (_req, env, _c, p) => {
+  const r = await advanceFilmJob(env, p.id);
+  if (!r) throw notFound("film job");
+  return json({ ok: true, ...summarizeFilm(r.job, r.clipJob) });
+};
+
 const hEnhance: Handler = async (req, env) => {
   const a = await readBody<{
     storyboard?: PlanEnhanceStoryboard;
@@ -462,6 +481,8 @@ const API_ROUTES: Route[] = [
   { method: "POST",   pattern: "/api/storyboard/render-plan",          handler: hRenderPlan },
   { method: "POST",   pattern: "/api/render/clips",                     handler: hStartClips },
   { method: "GET",    pattern: "/api/render/clips/:id",                 handler: hPollClips },
+  { method: "POST",   pattern: "/api/render/film",                      handler: hStartFilm },
+  { method: "GET",    pattern: "/api/render/film/:id",                  handler: hPollFilm },
   { method: "POST",   pattern: "/api/storyboard/render/scatter",       handler: hScatterRender },
   { method: "POST",   pattern: "/api/storyboard/render-from-keyframes", handler: hFinalizeRender },
   { method: "GET",    pattern: "/api/storyboard/render/:jobId",        handler: hPollRender },
