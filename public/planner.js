@@ -6875,3 +6875,69 @@ document.addEventListener("DOMContentLoaded", () => {
     obs.observe(refine, { attributes: true, attributeFilter: ["hidden"] });
   }
 })();
+
+
+// ---------- Auto-direct: the plan.enhance hook in the UI (v0.167.0) ----------
+// Self-assembling: the "auto-direct shots" control surfaces ONLY when a module
+// serves the plan.enhance hook (asked once via GET /api/modules). It sends the
+// current storyboard to POST /api/storyboard/enhance, which folds the
+// plan.enhance chain in the core, and applies the enriched storyboard back into
+// the editor exactly the way a refine does (json pane, scene editor, YAML,
+// persist, preflight). No module installed -> the control never appears.
+(function initAutoDirect() {
+  const btn = document.getElementById("planner-autodirect");
+  const sel = document.getElementById("planner-autodirect-intensity");
+  if (!btn) return;
+
+  fetch("/api/modules")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const serves = d && d.hooks && Array.isArray(d.hooks["plan.enhance"]) && d.hooks["plan.enhance"].length;
+      if (serves) {
+        btn.hidden = false;
+        if (sel) sel.hidden = false;
+      }
+    })
+    .catch(() => {});
+
+  btn.addEventListener("click", async () => {
+    const sb = planState.storyboard;
+    if (!sb || !Array.isArray(sb.scenes) || !sb.scenes.length) {
+      setSceneStatus("plan or load a storyboard first", "error");
+      return;
+    }
+    const intensity = sel ? sel.value : "medium";
+    btn.disabled = true;
+    setSceneStatus("auto-directing shots...", "loading");
+    let data;
+    try {
+      const resp = await fetch("/api/storyboard/enhance", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ storyboard: sb, config: { intensity } }),
+      });
+      data = await resp.json();
+      if (!resp.ok || !data || data.ok !== true || !data.storyboard) {
+        throw new Error((data && data.error) || "enhance failed (" + resp.status + ")");
+      }
+    } catch (err) {
+      setSceneStatus("auto-direct failed: " + err.message, "error");
+      btn.disabled = false;
+      return;
+    }
+    planState.storyboard = data.storyboard;
+    const jsonPane = document.getElementById("planner-json");
+    if (jsonPane) jsonPane.textContent = JSON.stringify(data.storyboard, null, 2);
+    renderSceneEditor(data.storyboard);
+    refreshYamlPreview();
+    persistSoon();
+    schedulePreflight();
+    const applied = Array.isArray(data.applied) && data.applied.length ? data.applied.join(", ") : "";
+    const note = Array.isArray(data.notes) && data.notes.length ? data.notes[0] : "";
+    setSceneStatus(
+      "auto-directed" + (applied ? " via " + applied : "") + (note ? " -- " + note : ""),
+      "success",
+    );
+    btn.disabled = false;
+  });
+})();
