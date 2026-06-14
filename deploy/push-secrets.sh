@@ -9,7 +9,7 @@ put() { printf '%s' "$2" | npx --no-install wrangler secret put "$1" >/dev/null 
 [ -n "${CF_AIG_TOKEN:-}" ]        && put CF_AIG_TOKEN          "$CF_AIG_TOKEN"        || echo "  skip CF_AIG_TOKEN (unset)"
 [ -n "${XAI_API_KEY:-}" ]         && put XAI_API_KEY           "$XAI_API_KEY"         || echo "  skip XAI_API_KEY (unset)"
 [ -n "${RUNPOD_API_KEY:-}" ]      && put RUNPOD_API_KEY        "$RUNPOD_API_KEY"      || echo "  skip RUNPOD_API_KEY (unset)"
-put RUNPOD_ENDPOINT_ID "${RUNPOD_ENDPOINT_ID:-t9wcvlxh8rc5la}"
+[ -n "${RUNPOD_ENDPOINT_ID:-}" ] && put RUNPOD_ENDPOINT_ID    "$RUNPOD_ENDPOINT_ID"  || echo "  skip RUNPOD_ENDPOINT_ID (unset)"
 put GATEWAY_ID         "${GATEWAY_ID:-skyphusion-llm}"
 [ -n "${R2_ACCESS_KEY_ID:-}" ]    && put R2_S3_ACCESS_KEY_ID   "$R2_ACCESS_KEY_ID"    || echo "  skip R2_S3_ACCESS_KEY_ID (unset)"
 [ -n "${R2_SECRET_ACCESS_KEY:-}" ]&& put R2_S3_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY" || echo "  skip R2_S3_SECRET_ACCESS_KEY (unset)"
