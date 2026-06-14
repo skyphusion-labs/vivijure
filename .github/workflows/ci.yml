@@ -33,13 +33,6 @@ jobs:
       - name: Test
         run: npm test
 
-      # wrangler builds the video-finish container image at deploy time, which needs the Docker CLI.
-      # The job runs in node:22-alpine (no docker), but the host docker.sock is bind-mounted into it,
-      # so installing the CLI is enough to reach the daemon and build the image.
-      - name: Docker CLI (for the video-finish container image build)
-        if: github.ref == 'refs/heads/main'
-        run: apk add --no-cache docker-cli
-
       - name: Deploy (main only)
         if: github.ref == 'refs/heads/main'
         env:
