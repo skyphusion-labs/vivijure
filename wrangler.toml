@@ -55,6 +55,11 @@ class_name = "VideoFinishContainer"
 class_name = "VideoFinishContainer"
 image = "./containers/video-finish/Dockerfile"
 max_instances = 3
+# ffmpeg libx264 normalize/encode peaks ~1.2 GiB RSS per clip (measured: 960x960 -> 1080p, medium).
+# The default "dev" instance is 256 MiB -> ffmpeg gets OOM-killed (exit 137) -> opaque 500. "standard"
+# (4 GiB) gives comfortable headroom for the per-clip encode (clips normalize sequentially, so peak is
+# one encode at a time) and the crossfade re-encode path. See the first full-film e2e (assemble 500).
+instance_type = "standard"
 
 # Fresh worker -> initial migration registering the video-finish container DO class.
 [[migrations]]
