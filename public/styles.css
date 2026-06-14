@@ -85,6 +85,8 @@ body {
 
 /* centered column, mirrors .shell */
 .planner-layout, .cast-layout { max-width: 880px; margin: 0 auto; padding: 26px 22px 96px; display: grid; gap: 18px; }
+.planner-layout > * { min-width: 0; }
+body.sw-open .planner-layout { overflow-x: hidden; }
 .planner-header h1, .planner-layout > h1, .cast-layout > h1, main > h1 {
   margin: 2px 0 4px; font-size: 26px; letter-spacing: -0.01em; font-weight: 800;
 }
@@ -132,6 +134,19 @@ body {
 .planner-field > span, .planner-field-label { color: var(--muted); font-size: 13px; }
 .planner-layout input[type="text"], .planner-layout input[type="number"], .planner-layout input[type="file"],
 .planner-layout select, .planner-layout textarea,
+.cast-layout {
+  grid-template-columns: 260px 1fr;
+  grid-template-areas:
+    "header header"
+    "list   editor"
+    "multi  multi";
+  align-items: start;
+}
+.cast-header       { grid-area: header; }
+.cast-list-pane    { grid-area: list; }
+.cast-editor,
+.cast-editor-empty { grid-area: editor; }
+.cast-multi-scene  { grid-area: multi; }
 .cast-layout input, .cast-layout select, .cast-layout textarea {
   background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); border-radius: 10px;
   padding: 9px 12px; font: inherit; width: 100%; max-width: 100%; }
@@ -202,6 +217,7 @@ details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
 
 @media (max-width: 720px) {
   .planner-result, .planner-overrides-fields, .planner-overrides-common { grid-template-columns: 1fr; }
+  .cast-layout { grid-template-columns: 1fr; grid-template-areas: "header" "list" "editor" "multi"; }
 }
 
 

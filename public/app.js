@@ -75,9 +75,10 @@ function controlFor(moduleName, key, field) {
   wrap.append(input);
   if ((field.type === "int" || field.type === "float") &&
       (typeof field.min === "number" || typeof field.max === "number")) {
-    const lo = typeof field.min === "number" ? field.min : "";
-    const hi = typeof field.max === "number" ? field.max : "";
-    wrap.append(el("span", "mod-field-hint", "range " + lo + " to " + hi));
+    const lo = typeof field.min === "number" ? field.min : null;
+    const hi = typeof field.max === "number" ? field.max : null;
+    const hint = lo !== null && hi !== null ? `range ${lo} to ${hi}` : lo !== null ? `min ${lo}` : `max ${hi}`;
+    wrap.append(el("span", "mod-field-hint", hint));
   }
   return wrap;
 }

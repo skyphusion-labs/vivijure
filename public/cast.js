@@ -413,7 +413,7 @@
     const id = state.selectedId;
     if (!id || !file) return;
     try {
-      const data = await api("/api/cast/" + id + "/sources", {
+      const data = await api("/api/cast/" + id + "/source", {
         method: "POST",
         headers: { "content-type": file.type || "image/png" },
         body: file,
@@ -432,7 +432,7 @@
     if (!id) return;
     if (!window.confirm("remove this source photo?")) return;
     try {
-      const data = await api("/api/cast/" + id + "/sources/" + encodeRefKey(key), {
+      const data = await api("/api/cast/" + id + "/source/" + encodeRefKey(key), {
         method: "DELETE",
       });
       const idx = state.cast.findIndex((c) => c.id === id);
