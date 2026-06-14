@@ -9,7 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig } from "./modules/registry";
-import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput } from "./modules/types";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob,
   type ClipShotInput, type ClipJob, type JobSummary,
@@ -19,11 +19,14 @@ import { presignR2Get, presignR2Put } from "./r2-presign";
 export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
 
 /** One clip moving through the `finish` chain (post-clips). `chain` is the finish module bindings in
- *  ui.order; `idx` walks through them, each consuming the previous module's output clip. */
+ *  ui.order; `idx` walks through them, each consuming the previous module's output clip. `configs` is
+ *  the validated config for each chain step (parallel to `chain`), so each module gets its
+ *  config_schema defaults -- without it a module receives `{}` and no-ops (see issue #75). */
 export interface FinishShot {
   shot_id: string;
   clip_key: string;   // current clip key (updated as each finish module completes)
   chain: string[];    // finish module env-binding names, in ui.order
+  configs?: Record<string, unknown>[]; // validated config per chain step, parallel to `chain`
   idx: number;
   status: "pending" | "done" | "failed";
   poll?: string;
@@ -38,6 +41,7 @@ export interface FilmJob {
   scenes: FilmScene[];
   motion_backend: string | null;
   motion_config: Record<string, unknown>;
+  finish_config: Record<string, Record<string, unknown>>; // per finish module (keyed by module name), validated at enterFinishPhase
   keyframe_binding: string | null;
   phase: "keyframe" | "clips" | "finish" | "assemble" | "done" | "failed";
   keyframe_poll?: string;
@@ -149,17 +153,31 @@ export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
   if (fs.idx >= fs.chain.length) fs.status = "done"; // else stays pending; next advance submits chain[idx]
 }
 
+/** Pure: resolve the validated config for each finish module, in chain order. Each module gets its
+ *  config_schema defaults (the contract promises config is "already validated against the module's
+ *  config_schema"); user overrides are keyed by module NAME (what /api/modules exposes), one hop,
+ *  same words down. Without this a module receives `{}` and falls back to its do-nothing path, so
+ *  finish-rife no-op'd in the first e2e (issue #75). */
+export function resolveFinishConfigs(
+  serving: { name: string; config_schema?: ConfigSchema }[],
+  finishConfig: Record<string, Record<string, unknown>> | undefined,
+): Record<string, unknown>[] {
+  return serving.map((m) => validateConfig(m.config_schema, finishConfig?.[m.name]));
+}
+
 /** Internal: clips done -> set up the finish chain (one FinishShot per done clip). No finish modules
  *  installed -> skip straight to assemble (the raw clips). No clips rendered at all -> fail (nothing
  *  to assemble). */
 async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob): Promise<void> {
   const modules = await discoverModules(env as unknown as Record<string, unknown>);
-  const chain = servingForHook(modules, "finish").map((m) => m.binding); // ui.order; the full finish chain
+  const serving = servingForHook(modules, "finish"); // ui.order; the full finish chain
+  const chain = serving.map((m) => m.binding);
+  const configs = resolveFinishConfigs(serving, job.finish_config);
   const doneClips = clipJob.shots.filter((s) => s.status === "done" && s.clip_key);
   if (!doneClips.length) { job.phase = "failed"; job.error = "no clips rendered to assemble"; return; }
   if (!chain.length) { job.phase = "assemble"; return; } // no finish modules -> assemble raw clips
   job.finish_shots = doneClips.map((s) => ({
-    shot_id: s.shot_id, clip_key: s.clip_key as string, chain, idx: 0, status: "pending" as const, applied: [],
+    shot_id: s.shot_id, clip_key: s.clip_key as string, chain, configs, idx: 0, status: "pending" as const, applied: [],
   }));
   job.phase = "finish";
 }
@@ -175,7 +193,8 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
     const req = {
       hook: "finish" as const,
       input: { shot_id: fs.shot_id, clip_key: fs.clip_key } as FinishInput,
-      config: {}, context: { project: job.project, job_id: job.film_id },
+      config: fs.configs?.[fs.idx] ?? {}, // validated per-module config (issue #75); {} only for legacy jobs
+      context: { project: job.project, job_id: job.film_id },
     };
     if (!fs.poll) {
       const r = await invokeModule<FinishInput, FinishOutput>(fetcher, req);
@@ -298,6 +317,7 @@ export async function startFilmJob(
   args: {
     project: string; bundle_key: string; scenes: FilmScene[];
     motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
+    finish_config?: Record<string, Record<string, unknown>>;
   },
 ): Promise<FilmJob> {
   const envRec = env as unknown as Record<string, unknown>;
@@ -307,6 +327,7 @@ export async function startFilmJob(
     film_id: "film-" + crypto.randomUUID(),
     project: args.project, bundle_key: args.bundle_key, scenes: args.scenes,
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
+    finish_config: args.finish_config ?? {},
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
   };
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;

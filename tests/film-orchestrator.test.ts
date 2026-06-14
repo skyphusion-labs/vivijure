@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+import type { ConfigSchema } from "../src/modules/types";
 
 const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
   shot_id: "shot_01", clip_key: "clips/shot_01.mp4", chain: ["MODULE_FINISH_RIFE"], idx: 0,
@@ -110,5 +111,36 @@ describe("orderFinalClips", () => {
 
   it("returns empty when nothing rendered", () => {
     expect(orderFinalClips(scenes, [])).toEqual([]);
+  });
+});
+
+describe("resolveFinishConfigs (issue #75: finish modules must get their schema defaults)", () => {
+  // a finish-rife-like schema: defaults turn interpolation on
+  const rifeSchema: ConfigSchema = {
+    interpolate: { type: "bool", default: true },
+    interpolation_factor: { type: "int", default: 2, min: 1, max: 8 },
+    face_restore: { type: "enum", values: ["none", "gfpgan", "codeformer"], default: "none" },
+  };
+  const serving = [{ name: "finish-rife", config_schema: rifeSchema }];
+
+  it("applies schema defaults when the caller supplies no finish_config (the no-op bug fix)", () => {
+    const [cfg] = resolveFinishConfigs(serving, undefined);
+    // defaults present -> the module actually runs (interpolate true), not {} -> no-op
+    expect(cfg).toEqual({ interpolate: true, interpolation_factor: 2, face_restore: "none" });
+  });
+
+  it("merges + clamps user overrides keyed by module name, keeping unspecified defaults", () => {
+    const [cfg] = resolveFinishConfigs(serving, {
+      "finish-rife": { interpolation_factor: 99, face_restore: "gfpgan" }, // 99 clamps to max 8
+    });
+    expect(cfg).toEqual({ interpolate: true, interpolation_factor: 8, face_restore: "gfpgan" });
+  });
+
+  it("returns configs in chain order, one per module", () => {
+    const two = [
+      { name: "a", config_schema: { x: { type: "int", default: 1 } } as ConfigSchema },
+      { name: "b", config_schema: { y: { type: "bool", default: false } } as ConfigSchema },
+    ];
+    expect(resolveFinishConfigs(two, { b: { y: true } })).toEqual([{ x: 1 }, { y: true }]);
   });
 });
