@@ -14,7 +14,7 @@ import {
   startClipJob, advanceClipJob, summarizeJob,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
-import { presignR2Get } from "./r2-presign";
+import { presignR2Get, presignR2Put } from "./r2-presign";
 
 export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
 
@@ -39,10 +39,11 @@ export interface FilmJob {
   motion_backend: string | null;
   motion_config: Record<string, unknown>;
   keyframe_binding: string | null;
-  phase: "keyframe" | "clips" | "finish" | "done" | "failed";
+  phase: "keyframe" | "clips" | "finish" | "assemble" | "done" | "failed";
   keyframe_poll?: string;
   clip_job_id?: string;
   finish_shots?: FinishShot[];
+  film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   error?: string;
   created_at: number;
 }
@@ -78,6 +79,7 @@ export interface FilmSummary {
   error?: string;
   clips?: JobSummary;
   finish?: FinishSummary;
+  film_key?: string; // present once the film is assembled (phase "done")
 }
 export function summarizeFinish(shots: FinishShot[]): FinishSummary {
   return {
@@ -92,7 +94,24 @@ export function summarizeFilm(job: FilmJob, clipJob: ClipJob | null): FilmSummar
     film_id: job.film_id, phase: job.phase, error: job.error,
     clips: clipJob ? summarizeJob(clipJob) : undefined,
     finish: job.finish_shots ? summarizeFinish(job.finish_shots) : undefined,
+    film_key: job.film_key,
   };
+}
+
+/** Pure: order a set of finished clips by the storyboard's scene order, keeping only shots that
+ *  produced a clip. The film must play in scene order regardless of which order the clip/finish
+ *  stages happened to complete in. A shot with no clip is dropped (it never rendered). */
+export function orderFinalClips(
+  scenes: FilmScene[],
+  shots: { shot_id: string; clip_key: string }[],
+): { shot_id: string; clip_key: string }[] {
+  const byShot = new Map(shots.map((s) => [s.shot_id, s.clip_key]));
+  const out: { shot_id: string; clip_key: string }[] = [];
+  for (const sc of scenes) {
+    const clip_key = byShot.get(sc.shot_id);
+    if (clip_key) out.push({ shot_id: sc.shot_id, clip_key });
+  }
+  return out;
 }
 
 /** Internal: presign each matched keyframe -> start the clip job, advancing the film to phase=clips. */
@@ -131,12 +150,14 @@ export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
 }
 
 /** Internal: clips done -> set up the finish chain (one FinishShot per done clip). No finish modules
- *  installed, or no clips to finish -> straight to done. */
+ *  installed -> skip straight to assemble (the raw clips). No clips rendered at all -> fail (nothing
+ *  to assemble). */
 async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob): Promise<void> {
   const modules = await discoverModules(env as unknown as Record<string, unknown>);
   const chain = servingForHook(modules, "finish").map((m) => m.binding); // ui.order; the full finish chain
   const doneClips = clipJob.shots.filter((s) => s.status === "done" && s.clip_key);
-  if (!chain.length || !doneClips.length) { job.phase = "done"; return; }
+  if (!doneClips.length) { job.phase = "failed"; job.error = "no clips rendered to assemble"; return; }
+  if (!chain.length) { job.phase = "assemble"; return; } // no finish modules -> assemble raw clips
   job.finish_shots = doneClips.map((s) => ({
     shot_id: s.shot_id, clip_key: s.clip_key as string, chain, idx: 0, status: "pending" as const, applied: [],
   }));
@@ -144,7 +165,7 @@ async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob): Promi
 }
 
 /** Advance the finish chain: per shot, submit its current finish module or poll the in-flight one,
- *  chaining to the next module on completion. Phase -> done when every shot is terminal. */
+ *  chaining to the next module on completion. Phase -> assemble when every shot is terminal. */
 async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
   const envRec = env as unknown as Record<string, unknown>;
   for (const fs of job.finish_shots || []) {
@@ -168,7 +189,102 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
       else if (!(p as { pending?: boolean }).pending) { applyFinishOutput(fs, (p as { output: FinishOutput }).output); }
     }
   }
-  if ((job.finish_shots || []).every((fs) => fs.status !== "pending")) job.phase = "done";
+  if ((job.finish_shots || []).every((fs) => fs.status !== "pending")) job.phase = "assemble";
+}
+
+// --------------------------------------------------------------------------- assemble (phase 4)
+
+/** The video-finish container's POST /finish response (containers/video-finish/app.py). */
+interface FinishContainerResult {
+  ok: boolean;
+  key?: string;
+  bytes?: number;
+  durationSeconds?: number;
+  shots?: number;
+  error?: string;
+}
+
+/** Call the video-finish container's POST /finish: warm the singleton, then post with a retry on a
+ *  503 (a fully-cold container can 503 while its port is still binding -- same shape as callImagePrep
+ *  in bundle-assembler). backoffMs is injectable so tests do not actually wait. Returns the Response
+ *  or null on a network error. */
+export async function callVideoFinish(
+  env: Env,
+  payload: {
+    clips: { url: string }[];
+    outputUrl: string;
+    outputKey: string;
+    width?: number;
+    height?: number;
+    fps?: number;
+  },
+  opts: { retries?: number; backoffMs?: number } = {},
+): Promise<Response | null> {
+  const retries = opts.retries ?? 3;
+  const backoffMs = opts.backoffMs ?? 1500;
+  const stub = env.VIDEO_FINISH.get(env.VIDEO_FINISH.idFromName("singleton"));
+  const init = {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  };
+  try {
+    await stub.fetch("https://container/health"); // warm the singleton so /finish lands on a bound container
+  } catch {
+    /* best effort; the retry loop covers a cold start */
+  }
+  let resp: Response | null = null;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      resp = await stub.fetch("https://container/finish", init);
+    } catch {
+      resp = null;
+    }
+    if (resp && resp.status !== 503) return resp;
+    if (attempt < retries - 1) await new Promise((r) => setTimeout(r, backoffMs)); // container still binding
+  }
+  return resp;
+}
+
+const filmOutKey = (filmId: string) => `renders/${filmId}/film.mp4`;
+
+/** Internal: the assemble leg. Gather the final clips (in scene order), presign each as a fetchable
+ *  GET + presign the film output as a PUT, and hand them to the video-finish container, which ffmpeg-
+ *  concats them into one mp4 and PUTs it. This is a CPU-only job (never GPU). The container call is
+ *  synchronous; for a long film it can run a while, so if the request times out the phase stays
+ *  "assemble" and the next advance re-attempts (re-PUTting the same key is idempotent). */
+async function enterAssemblePhase(
+  env: Env,
+  job: FilmJob,
+  finalClips: { shot_id: string; clip_key: string }[],
+): Promise<void> {
+  if (!finalClips.length) { job.phase = "failed"; job.error = "no clips to assemble"; return; }
+  if (!env.VIDEO_FINISH) { job.phase = "failed"; job.error = "video-finish container not bound"; return; }
+
+  const clips: { url: string }[] = [];
+  for (const c of finalClips) {
+    clips.push({ url: await presignR2Get(env, c.clip_key, 1800) }); // 30min: covers a multi-clip concat
+  }
+  const outputKey = filmOutKey(job.film_id);
+  const outputUrl = await presignR2Put(env, outputKey, 1800);
+
+  // Resolution/fps are left to the container default (it normalizes the clips); the motion output
+  // does not carry width/height, so matching the source resolution is a later polish, not a gate.
+  const resp = await callVideoFinish(env, { clips, outputUrl, outputKey });
+  if (!resp || !resp.ok) {
+    job.phase = "failed";
+    job.error = `video-finish container ${resp ? `returned ${resp.status}` : "unreachable"}`;
+    return;
+  }
+  let body: FinishContainerResult;
+  try {
+    body = (await resp.json()) as FinishContainerResult;
+  } catch {
+    job.phase = "failed"; job.error = "video-finish returned a non-JSON response"; return;
+  }
+  if (!body.ok) { job.phase = "failed"; job.error = `video-finish failed: ${body.error || "unknown error"}`; return; }
+  job.film_key = outputKey;
+  job.phase = "done";
 }
 
 /** Start a film job: resolve the keyframe module, submit the project preview, persist the poll token. */
@@ -242,9 +358,25 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
     if (cj) clipJob = JSON.parse(await cj.text()) as ClipJob;
   }
 
-  // Phase 3: drive the finish chain per clip (async, across requests), then -> done.
+  // Phase 3: drive the finish chain per clip (async, across requests), then -> assemble.
   if (job.phase === "finish" && job.finish_shots) {
     await advanceFinishPhase(env, job);
+    await putFilm(env, job);
+  }
+
+  // Phase 4: assemble the final clips into one film (CPU-only ffmpeg concat in the video-finish
+  // container), then -> done. The final clips are the finish-chain outputs if finish ran, else the
+  // raw rendered clips; either way ordered by the storyboard. Reached inline once finish/clips
+  // complete (the intermediate "assemble" was persisted above, so a timed-out concat just retries).
+  if (job.phase === "assemble") {
+    const source = job.finish_shots
+      ? job.finish_shots
+          .filter((fs) => fs.status === "done")
+          .map((fs) => ({ shot_id: fs.shot_id, clip_key: fs.clip_key }))
+      : (clipJob?.shots || [])
+          .filter((s) => s.status === "done" && s.clip_key)
+          .map((s) => ({ shot_id: s.shot_id, clip_key: s.clip_key as string }));
+    await enterAssemblePhase(env, job, orderFinalClips(job.scenes, source));
     await putFilm(env, job);
   }
 

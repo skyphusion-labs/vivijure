@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, type FilmScene, type FinishShot } from "../src/film-orchestrator";
 
 const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
   shot_id: "shot_01", clip_key: "clips/shot_01.mp4", chain: ["MODULE_FINISH_RIFE"], idx: 0,
@@ -74,5 +74,41 @@ describe("joinKeyframesToScenes", () => {
     const { matched, missing } = joinKeyframesToScenes(scenes, []);
     expect(matched).toEqual([]);
     expect(missing).toEqual(["shot_01", "shot_02", "shot_03"]);
+  });
+});
+
+describe("orderFinalClips", () => {
+  it("orders clips by scene order regardless of completion order, for assemble", () => {
+    // clips arrive out of order (shot_03 finished first, shot_01 last)
+    const out = orderFinalClips(scenes, [
+      { shot_id: "shot_03", clip_key: "c/shot_03.mp4" },
+      { shot_id: "shot_01", clip_key: "c/shot_01.mp4" },
+      { shot_id: "shot_02", clip_key: "c/shot_02.mp4" },
+    ]);
+    expect(out).toEqual([
+      { shot_id: "shot_01", clip_key: "c/shot_01.mp4" },
+      { shot_id: "shot_02", clip_key: "c/shot_02.mp4" },
+      { shot_id: "shot_03", clip_key: "c/shot_03.mp4" },
+    ]);
+  });
+
+  it("drops shots that produced no clip (never rendered), keeping the rest in scene order", () => {
+    const out = orderFinalClips(scenes, [
+      { shot_id: "shot_02", clip_key: "c/shot_02.mp4" },
+      { shot_id: "shot_01", clip_key: "c/shot_01.mp4" },
+    ]);
+    expect(out.map((c) => c.shot_id)).toEqual(["shot_01", "shot_02"]);
+  });
+
+  it("ignores clips for shots not in the storyboard", () => {
+    const out = orderFinalClips(scenes, [
+      { shot_id: "shot_99", clip_key: "c/orphan.mp4" },
+      { shot_id: "shot_02", clip_key: "c/shot_02.mp4" },
+    ]);
+    expect(out).toEqual([{ shot_id: "shot_02", clip_key: "c/shot_02.mp4" }]);
+  });
+
+  it("returns empty when nothing rendered", () => {
+    expect(orderFinalClips(scenes, [])).toEqual([]);
   });
 });
