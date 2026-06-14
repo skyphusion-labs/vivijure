@@ -335,14 +335,25 @@
     }
   }
 
+  async function uploadBytes(file) {
+    const up = await api("/api/upload", {
+      method: "POST",
+      headers: { "content-type": file.type || "image/octet-stream" },
+      body: file,
+    });
+    if (!up || !up.key) throw new Error("upload: no key returned");
+    return { key: up.key, mime: up.mime || file.type };
+  }
+
   async function uploadPortraitFile(file) {
     const id = state.selectedId;
     if (!id || !file) return;
     try {
+      const { key, mime } = await uploadBytes(file);
       const data = await api("/api/cast/" + id + "/portrait", {
         method: "POST",
-        headers: { "content-type": file.type || "image/png" },
-        body: file,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key, mime }),
       });
       const idx = state.cast.findIndex((c) => c.id === id);
       if (idx >= 0) state.cast[idx] = data.cast;
@@ -413,10 +424,11 @@
     const id = state.selectedId;
     if (!id || !file) return;
     try {
+      const { key, mime } = await uploadBytes(file);
       const data = await api("/api/cast/" + id + "/source", {
         method: "POST",
-        headers: { "content-type": file.type || "image/png" },
-        body: file,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key, mime }),
       });
       const idx = state.cast.findIndex((c) => c.id === id);
       if (idx >= 0) state.cast[idx] = data.cast;
@@ -448,10 +460,11 @@
     const id = state.selectedId;
     if (!id || !file) return;
     try {
-      const data = await api("/api/cast/" + id + "/refs", {
+      const { key, mime } = await uploadBytes(file);
+      const data = await api("/api/cast/" + id + "/ref", {
         method: "POST",
-        headers: { "content-type": file.type || "image/png" },
-        body: file,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key, mime }),
       });
       const idx = state.cast.findIndex((c) => c.id === id);
       if (idx >= 0) state.cast[idx] = data.cast;
