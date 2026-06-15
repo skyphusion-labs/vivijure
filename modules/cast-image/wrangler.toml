@@ -14,9 +14,10 @@ workers_dev = false
 [observability]
 enabled = true
 
-# Image generation through the AI Gateway: FLUX 2 via Workers AI, Google nano-banana via Unified
-# Billing -- the same binding the core uses. (Wiring TODO: GATEWAY_ID secret likely needed for the
-# Google routing, set on deploy: `npx wrangler secret put GATEWAY_ID -c modules/cast-image/wrangler.toml`.)
+# Image generation (ported from the playground's runImage): FLUX 2 (@cf) runs DIRECT on the binding
+# (gateway-bypassed, multipart multiref); the proxied nano-banana fallback runs THROUGH the AI Gateway,
+# so GATEWAY_ID must be set before that fallback path is exercised:
+#   ! npx wrangler secret put GATEWAY_ID -c modules/cast-image/wrangler.toml
 [ai]
 binding = "AI"
 
