@@ -79,11 +79,14 @@ remote = true
 # R2_S3_ENDPOINT = "https://<account>.r2.cloudflarestorage.com"
 # R2_S3_BUCKET = "vivijure"
 
-# --- Transactional mail (render-complete). Wire when render-email lands (PR 2):
-# [[services]]
-# binding = "EMAIL"
-# service = "skyphusion-email"
-# entrypoint = "EmailService"
+# --- Transactional mail (render-complete notification): native Cloudflare Email Service. When a film
+# --- reaches "done", the owner gets a presigned download link. NO `remote` -> prod sends for real,
+# --- while `wrangler dev` SIMULATES (logs, no real send) so local runs never email users.
+# --- PREREQUISITE: onboard the from-domain once (not in this config):
+# ---   ! npx wrangler email sending enable skyphusion.org
+# --- The send is best-effort + guarded (if (env.EMAIL)), so an un-onboarded domain never fails a render.
+[[send_email]]
+name = "EMAIL"
 
 # --- Opt-in MODULE workers: service bindings named MODULE_<NAME>; the registry discovers them.
 [[services]]

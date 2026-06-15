@@ -51,6 +51,7 @@ export interface FilmJob {
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   error?: string;
   created_at: number;
+  user_email?: string; // film owner; the render-complete notification (if any) is mailed here
 }
 
 interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
@@ -269,6 +270,33 @@ const filmOutKey = (filmId: string) => `renders/${filmId}/film.mp4`;
  *  concats them into one mp4 and PUTs it. This is a CPU-only job (never GPU). The container call is
  *  synchronous; for a long film it can run a while, so if the request times out the phase stays
  *  "assemble" and the next advance re-attempts (re-PUTting the same key is idempotent). */
+const RENDER_EMAIL_FROM = { email: "render@skyphusion.org", name: "Vivijure" };
+
+const escapeHtml = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** Best-effort render-complete email: when a film reaches "done", mail its owner a presigned download
+ *  link (native Cloudflare Email Service). Guarded + try/caught so a mail failure -- binding absent,
+ *  from-domain not onboarded, send error -- NEVER fails the render; the film is already assembled and
+ *  in R2 by the time this runs. No-ops when there's no EMAIL binding or no owner address. */
+async function sendRenderCompleteEmail(env: Env, job: FilmJob): Promise<void> {
+  if (!env.EMAIL || !job.user_email || !job.film_key) return;
+  try {
+    const url = await presignR2Get(env, job.film_key, 86400); // 24h link, matches withFilmDownloadUrl
+    const title = job.project || "your film";
+    await env.EMAIL.send({
+      to: job.user_email,
+      from: RENDER_EMAIL_FROM,
+      subject: `Your film "${title}" is ready`,
+      text: `Your Vivijure render "${title}" is complete.\n\nDownload (link valid 24 hours):\n${url}\n`,
+      html: `<p>Your Vivijure render <strong>"${escapeHtml(title)}"</strong> is complete. \u{1F3AC}</p>`
+        + `<p><a href="${escapeHtml(url)}">Download your film</a> (link valid for 24 hours).</p>`,
+    });
+  } catch (e) {
+    console.warn(`render-complete email failed for ${job.film_id}: ${(e as Error).message}`);
+  }
+}
+
 async function enterAssemblePhase(
   env: Env,
   job: FilmJob,
@@ -306,6 +334,7 @@ async function enterAssemblePhase(
   if (!body.ok) { job.phase = "failed"; job.error = `video-finish failed: ${body.error || "unknown error"}`; return; }
   job.film_key = outputKey;
   job.phase = "done";
+  await sendRenderCompleteEmail(env, job); // best-effort; never fails the (already-assembled) render
 }
 
 /** Pure: normalize caller scene ids to the canonical `shot_NN` the bundle uses. /api/storyboard/bundle
@@ -325,6 +354,7 @@ export async function startFilmJob(
     project: string; bundle_key: string; scenes: FilmScene[];
     motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
     finish_config?: Record<string, Record<string, unknown>>;
+    user_email?: string;
   },
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
@@ -337,6 +367,7 @@ export async function startFilmJob(
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
+    user_email: args.user_email,
   };
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
   if (!kf || !fetcher) {
