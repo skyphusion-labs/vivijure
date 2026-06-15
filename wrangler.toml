@@ -52,7 +52,7 @@ new_sqlite_classes = ["VideoFinishContainer"]
 
 [[migrations]]
 tag = "v2-drop-cpu-containers"
-deleted_classes = ["VideoFinishContainer"]
+deleted_classes = ["VideoFinishContainer", "ImagePrepContainer", "AudioBeatSyncContainer"]
 
 # Workers VPC: the 3 CPU containers (video-finish / image-prep / audio-beat-sync) run always-on on
 # the fleet, reached over private VPC bindings (issue #83 -- off CF Containers, no cold start).
