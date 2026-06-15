@@ -32,15 +32,16 @@ import {
   readOutput,
   type CastImageState,
 } from "./cast-image";
+import { generateImage, type AiRun } from "./image-gen";
 
 // Minimal binding shapes this module needs.
-interface AiBinding { run(model: string, input: Record<string, unknown>): Promise<unknown>; }
 interface R2Bucket {
   put(key: string, value: ArrayBuffer | string, opts?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
   get(key: string): Promise<{ text(): Promise<string> } | null>;
 }
 interface Env {
-  AI: AiBinding;          // AI Gateway binding (FLUX 2 via Workers AI; Google via Unified Billing)
+  AI: AiRun;              // AI binding: FLUX 2 run direct (gateway-bypassed), proxied models via the gateway
+  GATEWAY_ID: string;     // AI Gateway slug (secret); needed for the proxied / nano-banana fallback path
   R2_RENDERS: R2Bucket;   // the shared `vivijure` bucket: run state + generated refs land here
 }
 
@@ -70,43 +71,6 @@ const PER_POLL = 1;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-}
-
-/** Generate ONE image from a prompt + the portrait/source refs; return the bytes + mime.
- *
- *  WIRING TODO -- the one integration point of this scaffold: reconcile the `env.AI.run` image
- *  PAYLOAD + RESULT extraction with the core's `src/ai-binding.ts` + `src/output-extract.ts`. The core
- *  already handles FLUX-2 multi-reference input, the Nano-Banana URL-result shape, and the AI Gateway
- *  envelope -- this best-effort shape captures the intent (prompt + reference images in, image bytes
- *  out) but the exact field names / extraction must match the core before this is deploy-functional.
- *  (Cleanest path: extract a tiny shared `imageGen()` from ai-binding the module can vendor.) Throws
- *  on a flagged / refused generation so the caller can fall back. */
-async function generateImage(env: Env, model: string, prompt: string, refUrls: string[]): Promise<{ bytes: ArrayBuffer; mime: string }> {
-  const refs: string[] = [];
-  for (const u of refUrls) {
-    const r = await fetch(u);
-    if (!r.ok) continue;
-    const buf = new Uint8Array(await r.arrayBuffer());
-    let bin = "";
-    for (const b of buf) bin += String.fromCharCode(b);
-    refs.push(btoa(bin));
-  }
-  const out = await env.AI.run(model, { prompt, image_b64: refs });
-  // best-effort extraction: a URL (the Nano-Banana family returns one), or base64 image bytes.
-  const o = out as { image?: string; url?: string; images?: string[] };
-  const url = typeof out === "string" && /^https?:\/\//.test(out) ? out : o.url;
-  if (url) {
-    const v = await fetch(url);
-    return { bytes: await v.arrayBuffer(), mime: v.headers.get("content-type") || "image/png" };
-  }
-  const b64 = o.image || o.images?.[0];
-  if (b64) {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return { bytes: bytes.buffer, mime: "image/png" };
-  }
-  throw new Error("cast-image: model returned no image");
 }
 
 /** /invoke: validate, compose the prompt set, persist the run state to R2, return a stable poll
@@ -143,13 +107,13 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<CastImage
     const prompt = state.prompts[0];
     let img: { bytes: ArrayBuffer; mime: string };
     try {
-      img = await generateImage(env, state.model, prompt, state.ref_urls);
+      img = await generateImage(env.AI, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
     } catch (e) {
       if (isFlaggedError((e as Error).message) && state.model !== FLAG_FALLBACK_MODEL) {
         state.model = FLAG_FALLBACK_MODEL;
         state.fallback_used = true;
         try {
-          img = await generateImage(env, state.model, prompt, state.ref_urls);
+          img = await generateImage(env.AI, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
         } catch (e2) {
           return { ok: false, error: "cast.image: generation failed (post-fallback): " + (e2 as Error).message };
         }
