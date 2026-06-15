@@ -17,7 +17,8 @@ export type HookName =
   | "motion.backend" // keyframe (+ motion prompt) -> shot clip. GPU or cloud, pick one per shot.
   | "finish"         // post-process a clip: interpolation / upscale / face restore. Chainable.
   | "score"          // add audio to a film: music / narration / beat-sync. Chainable.
-  | "plan.enhance";  // expand a storyboard before render: LLM auto-direction. Chainable.
+  | "plan.enhance"   // expand a storyboard before render: LLM auto-direction. Chainable.
+  | "cast.image";    // character portrait + bible -> LoRA training reference images. Cast-prep, pick one.
 
 export const HOOK_NAMES: readonly HookName[] = [
   "keyframe",
@@ -25,6 +26,7 @@ export const HOOK_NAMES: readonly HookName[] = [
   "finish",
   "score",
   "plan.enhance",
+  "cast.image",
 ];
 
 /** Whether a hook resolves to one module or folds every installed module. */
@@ -34,6 +36,7 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
   finish: "chain",
   score: "chain",
   "plan.enhance": "chain",
+  "cast.image": "pick_one",
 };
 
 /** One-line description of each hook, for the self-assembling UI. Single source of truth: the
@@ -44,6 +47,7 @@ export const HOOK_BLURBS: Record<HookName, string> = {
   finish: "interpolation / upscale / face restore",
   score: "music / narration / beat-sync",
   "plan.enhance": "LLM auto-direction",
+  "cast.image": "character refs from a portrait + bible",
 };
 
 // --------------------------------------------------------------------------- manifest
@@ -235,6 +239,32 @@ export interface ScoreInput {
 export interface ScoreOutput {
   film_key: string;     // R2 key of the scored film (mp4)
   applied: string[];    // e.g. ["music:minimax", "narration:tts"]
+}
+
+// cast.image (v1) -------------------------------------------------------------------------------
+
+/** What the core hands a `cast.image` module: one cast member's seed material to generate LoRA
+ *  TRAINING reference images from -- a portrait (the identity seed), optional human-uploaded source
+ *  photos for extra conditioning, and the bible/style that shape the prompts. A CAST-PREP pass,
+ *  upstream of keyframe: the generated images become the cast member's training refs. The portrait /
+ *  source URLs are presigned + fetchable (the core presigns the private R2 objects so a cloud image
+ *  model can pull them), mirroring how motion.backend gets keyframe_url. */
+export interface CastImageInput {
+  cast_id: number;
+  portrait_url: string;   // presigned URL of the character portrait (the generation seed)
+  portrait_key?: string;  // the underlying R2 key, for reference
+  source_urls?: string[]; // optional presigned URLs of human-uploaded reference photos (extra conditioning)
+  bible?: string;         // character bible/description; composed into each prompt (capped)
+  art_style?: string;     // optional art-style lead (e.g. "anime"); blank keeps the photographic templates
+}
+
+/** What a `cast.image` module returns: the generated training reference images (already stored in
+ *  R2), ready to feed LoRA training, plus what it did. The core appends these to the cast member's
+ *  ref set. */
+export interface CastImageOutput {
+  cast_id: number;
+  images: { key: string; mime: string }[]; // R2 keys of the generated reference images
+  applied: string[];                        // e.g. ["model:flux-2-klein-9b", "generated:10"]
 }
 
 // --------------------------------------------------------------------------- registry view
