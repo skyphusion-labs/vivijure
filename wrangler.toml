@@ -74,6 +74,16 @@ binding = "VIDEO_FINISH_VPC"
 service_id = "019ecbe6-9fc1-70a0-9946-14bbec0f51bc"
 remote = true
 
+[[vpc_services]]
+binding = "IMAGE_PREP_VPC"
+service_id = "019ecc06-3084-79f1-a417-c621b1376f56"
+remote = true
+
+[[vpc_services]]
+binding = "AUDIO_BEAT_SYNC_VPC"
+service_id = "019ecc06-3790-7403-9d8f-20f1287a513a"
+remote = true
+
 # DISABLED (uncomment + new migration tag when wired):
 # [[durable_objects.bindings]]
 # name = "AUDIO_BEAT_SYNC"

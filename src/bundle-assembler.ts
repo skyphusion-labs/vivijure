@@ -298,22 +298,18 @@ export async function callImagePrep(
 ): Promise<Response | null> {
   const retries = opts.retries ?? 3;
   const backoffMs = opts.backoffMs ?? 1500;
-  const stub = env.IMAGE_PREP.get(env.IMAGE_PREP.idFromName("singleton"));
   const init = {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   };
-  // Warm the singleton so the prep call below lands on a bound container.
-  try {
-    await stub.fetch("https://container/health");
-  } catch {
-    /* best effort; the retry loop below still covers a cold start */
-  }
+  // image-prep runs always-on on the fleet, reached over a Workers VPC binding
+  // (private, no cold start) -- so the old Container-DO singleton + warm-/health
+  // dance is gone (issue #83). The 503 retry stays as cheap transport insurance.
   let resp: Response | null = null;
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      resp = await stub.fetch("https://container/portrait/prep", init);
+      resp = await env.IMAGE_PREP_VPC.fetch("http://image-prep/portrait/prep", init);
     } catch {
       resp = null;
     }
