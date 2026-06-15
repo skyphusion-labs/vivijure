@@ -139,6 +139,11 @@ service = "vivijure-module-keyframe"
 binding = "MODULE_FINISH_RIFE"
 service = "vivijure-module-finish-rife"
 
+# Cast.image: generate a character's LoRA training reference set (FLUX 2 / Nano Banana). Cast-prep.
+[[services]]
+binding = "MODULE_CAST_IMAGE"
+service = "vivijure-module-cast-image"
+
 # Vanity domain: vivijure.skyphusion.org is bound to this worker as a dashboard-managed CUSTOM
 # DOMAIN (auto DNS + cert), NOT a wrangler [[routes]] entry -- a route + custom domain for the same
 # hostname conflict on deploy, so the route block is intentionally omitted. The Access app

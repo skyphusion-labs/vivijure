@@ -140,8 +140,9 @@ describe("modulesResponse", () => {
   it("serves the static hook catalog (name + blurb + cardinality), independent of installs", () => {
     const r = modulesResponse([]);
     expect(r.catalog.map((h) => h.name)).toEqual([
-      "keyframe", "motion.backend", "finish", "score", "plan.enhance",
+      "keyframe", "motion.backend", "finish", "score", "plan.enhance", "cast.image",
     ]);
+    expect(r.catalog.find((h) => h.name === "cast.image")?.cardinality).toBe("pick_one");
     expect(r.catalog.find((h) => h.name === "keyframe")?.cardinality).toBe("pick_one");
     expect(r.catalog.find((h) => h.name === "motion.backend")?.cardinality).toBe("pick_one");
     expect(r.catalog.find((h) => h.name === "finish")?.cardinality).toBe("chain");
