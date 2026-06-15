@@ -65,6 +65,7 @@ export interface Env {
   AUDIO_BEAT_SYNC: DurableObjectNamespace;
   IMAGE_PREP: DurableObjectNamespace;
   VIDEO_FINISH: DurableObjectNamespace;
+  VIDEO_FINISH_VPC: Fetcher; // Workers VPC -> always-on fleet video-finish (issue #83)
 
   // Transactional mail (render-complete notification). Optional; guard with `if (env.EMAIL)`.
   EMAIL?: EmailServiceBinding;

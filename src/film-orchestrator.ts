@@ -242,21 +242,17 @@ export async function callVideoFinish(
 ): Promise<Response | null> {
   const retries = opts.retries ?? 3;
   const backoffMs = opts.backoffMs ?? 1500;
-  const stub = env.VIDEO_FINISH.get(env.VIDEO_FINISH.idFromName("singleton"));
   const init = {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   };
-  try {
-    await stub.fetch("https://container/health"); // warm the singleton so /finish lands on a bound container
-  } catch {
-    /* best effort; the retry loop covers a cold start */
-  }
+  // video-finish runs always-on on the fleet, reached over a Workers VPC binding (private, no cold
+  // start) -- so the old Container-DO singleton + warm-/health dance is gone (issue #83).
   let resp: Response | null = null;
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      resp = await stub.fetch("https://container/finish", init);
+      resp = await env.VIDEO_FINISH_VPC.fetch("http://video-finish/finish", init);
     } catch {
       resp = null;
     }
