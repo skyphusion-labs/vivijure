@@ -61,5 +61,6 @@ export interface FinishOutput {
   clip_key: string;
   out_fps: number;
   frames: number;
-  applied: string[];
+  applied: string[];   // ["interpolate:2x", ...] on success; ["passthrough:<reason>"] / ["noop:nothing-enabled"] otherwise
+  degraded?: string;   // reason, set ONLY on a real passthrough degrade (never on success or the no-op); see #77
 }
