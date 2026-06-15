@@ -422,9 +422,9 @@ const hModels: Handler = async () => json({ models: PLANNING_MODELS });
 const hYaml: Handler = async (req) => {
   const a = await readBody<{ storyboard?: StoryboardValidated }>(req);
   if (!a.storyboard) throw badRequest("storyboard required");
-  return new Response(serializeStoryboardYaml(a.storyboard), {
-    headers: { "content-type": "text/yaml; charset=utf-8", "content-disposition": "attachment; filename=\"storyboard.yaml\"" },
-  });
+  // The planner fetches this and reads { ok, yaml } as JSON (yaml preview + auto-direct refresh).
+  // Returning raw text/yaml made the client's resp.json() throw "unexpected keyword at line 1".
+  return json({ ok: true, yaml: serializeStoryboardYaml(a.storyboard) });
 };
 const hMarkers: Handler = async (req) => {
   const a = await readBody<{ storyboard?: unknown; format?: MarkersFormat; fps?: number }>(req);
