@@ -18,7 +18,8 @@ export type HookName =
   | "finish"         // post-process a clip: interpolation / upscale / face restore. Chainable.
   | "score"          // add audio to a film: music / narration / beat-sync. Chainable.
   | "plan.enhance"   // expand a storyboard before render: LLM auto-direction. Chainable.
-  | "cast.image";    // character portrait + bible -> LoRA training reference images. Cast-prep, pick one.
+  | "cast.image"     // character portrait + bible -> LoRA training reference images. Cast-prep, pick one.
+  | "notify";        // film done -> deliver a render-complete notification (email / webhook / ...). Chain.
 
 export const HOOK_NAMES: readonly HookName[] = [
   "keyframe",
@@ -27,6 +28,7 @@ export const HOOK_NAMES: readonly HookName[] = [
   "score",
   "plan.enhance",
   "cast.image",
+  "notify",
 ];
 
 /** Whether a hook resolves to one module or folds every installed module. */
@@ -37,6 +39,7 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
   score: "chain",
   "plan.enhance": "chain",
   "cast.image": "pick_one",
+  notify: "chain",
 };
 
 /** One-line description of each hook, for the self-assembling UI. Single source of truth: the
@@ -48,6 +51,7 @@ export const HOOK_BLURBS: Record<HookName, string> = {
   score: "music / narration / beat-sync",
   "plan.enhance": "LLM auto-direction",
   "cast.image": "character refs from a portrait + bible",
+  notify: "render-complete notification (email / webhook)",
 };
 
 // --------------------------------------------------------------------------- manifest
@@ -265,6 +269,27 @@ export interface CastImageOutput {
   cast_id: number;
   images: { key: string; mime: string }[]; // R2 keys of the generated reference images
   applied: string[];                        // e.g. ["model:flux-2-klein-9b", "generated:10"]
+}
+
+// notify (v1) -----------------------------------------------------------------------------------
+
+/** What the core hands a `notify` module when a film reaches "done": the completion event + the facts
+ *  a notifier needs to deliver (a presigned download_url, the project name, the owner address). A
+ *  TERMINAL side-effect hook -- fired once on the done-transition, `chain` (every installed notifier
+ *  delivers independently: email AND webhook AND ...). A notifier with nothing to do for its channel
+ *  (e.g. no recipient address) returns an empty `delivered`, never an error. */
+export interface NotifyInput {
+  event: "render.complete";
+  film_id: string;
+  project: string;
+  download_url?: string; // presigned link to the finished film (the core presigns it)
+  seconds?: number;      // film length, if known
+  user_email?: string;   // the film owner's address (for an email notifier)
+}
+
+/** What a `notify` module returns: the channels it delivered on (for the core's log / summary). */
+export interface NotifyOutput {
+  delivered: string[]; // e.g. ["email:owner@example.com"]
 }
 
 // --------------------------------------------------------------------------- registry view

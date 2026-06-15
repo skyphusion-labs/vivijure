@@ -9,7 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig } from "./modules/registry";
-import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema } from "./modules/types";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob,
   type ClipShotInput, type ClipJob, type JobSummary,
@@ -51,6 +51,7 @@ export interface FilmJob {
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   error?: string;
   created_at: number;
+  user_email?: string; // film owner; passed to the `notify` hook on done (e.g. for an email notifier)
 }
 
 interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
@@ -269,6 +270,36 @@ const filmOutKey = (filmId: string) => `renders/${filmId}/film.mp4`;
  *  concats them into one mp4 and PUTs it. This is a CPU-only job (never GPU). The container call is
  *  synchronous; for a long film it can run a while, so if the request times out the phase stays
  *  "assemble" and the next advance re-attempts (re-PUTting the same key is idempotent). */
+/** Best-effort: on the done-transition, fire the `notify` hook chain -- every installed notify module
+ *  (email, webhook, ...) delivers independently. Presigns the film's download link + hands over the
+ *  completion context. A notifier failure (or none installed) NEVER fails the already-assembled render;
+ *  the film is in R2 by the time this runs. */
+async function fireNotify(env: Env, job: FilmJob): Promise<void> {
+  if (!job.film_key) return;
+  try {
+    const envRec = env as unknown as Record<string, unknown>;
+    const notifiers = servingForHook(await discoverModules(envRec), "notify");
+    if (!notifiers.length) return;
+    const download_url = await presignR2Get(env, job.film_key, 86400); // 24h link, matches the poll summary
+    const input: NotifyInput = {
+      event: "render.complete", film_id: job.film_id, project: job.project,
+      download_url, user_email: job.user_email,
+    };
+    const context = { project: job.project, job_id: job.film_id, user_email: job.user_email };
+    for (const m of notifiers) {
+      const fetcher = asFetcher(envRec[m.binding]);
+      if (!fetcher) continue;
+      try {
+        await invokeModule<NotifyInput, NotifyOutput>(fetcher, {
+          hook: "notify", input, config: validateConfig(m.config_schema ?? {}, {}), context,
+        });
+      } catch { /* best-effort per notifier -- a delivery failure never fails the render */ }
+    }
+  } catch (e) {
+    console.warn(`notify chain failed for ${job.film_id}: ${(e as Error).message}`);
+  }
+}
+
 async function enterAssemblePhase(
   env: Env,
   job: FilmJob,
@@ -306,6 +337,7 @@ async function enterAssemblePhase(
   if (!body.ok) { job.phase = "failed"; job.error = `video-finish failed: ${body.error || "unknown error"}`; return; }
   job.film_key = outputKey;
   job.phase = "done";
+  await fireNotify(env, job); // best-effort notify chain; never fails the (already-assembled) render
 }
 
 /** Pure: normalize caller scene ids to the canonical `shot_NN` the bundle uses. /api/storyboard/bundle
@@ -325,6 +357,7 @@ export async function startFilmJob(
     project: string; bundle_key: string; scenes: FilmScene[];
     motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
     finish_config?: Record<string, Record<string, unknown>>;
+    user_email?: string;
   },
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
@@ -337,6 +370,7 @@ export async function startFilmJob(
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
+    user_email: args.user_email,
   };
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
   if (!kf || !fetcher) {
