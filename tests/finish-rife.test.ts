@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput,
+  coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
 } from "../modules/finish-rife/src/finish";
 import { checkManifest, checkInvokeResponse, allPass, failures } from "../src/modules/conformance";
 import type { FinishInput } from "../modules/finish-rife/src/contract";
@@ -150,5 +150,54 @@ describe("finish-rife: manifest conformance", () => {
   it("invoke error response passes the conformance response checker", () => {
     const r = checkInvokeResponse({ ok: false, error: "finish-rife: input needs shot_id and clip_key" });
     expect(r.pass).toBe(true);
+  });
+
+  it("a degraded passthrough output still passes the conformance response checker", () => {
+    const r = checkInvokeResponse({ ok: true, output: passthroughOutput(SAMPLE_INPUT, "no-runpod-secrets") });
+    expect(r.pass).toBe(true);
+  });
+});
+
+describe("finish-rife: passthroughOutput (degrade observability #77)", () => {
+  it("carries the clip + source fps/frames through unchanged", () => {
+    const o = passthroughOutput(SAMPLE_INPUT, "no-jobid");
+    expect(o.shot_id).toBe(SAMPLE_INPUT.shot_id);
+    expect(o.clip_key).toBe(SAMPLE_INPUT.clip_key);  // input passed through, not a new clip
+    expect(o.out_fps).toBe(SAMPLE_INPUT.src_fps);
+    expect(o.frames).toBe(SAMPLE_INPUT.frames);
+  });
+
+  it("a real degrade tags applied with passthrough:<reason> AND sets degraded", () => {
+    const o = passthroughOutput(SAMPLE_INPUT, "no-runpod-secrets");
+    expect(o.applied).toEqual(["passthrough:no-runpod-secrets"]);
+    expect(o.degraded).toBe("no-runpod-secrets");
+  });
+
+  it("the intentional no-op is DISTINGUISHABLE: noop:<reason> and NO degraded field", () => {
+    const o = passthroughOutput(SAMPLE_INPUT, "nothing-enabled", { degraded: false });
+    expect(o.applied).toEqual(["noop:nothing-enabled"]);
+    expect(o.degraded).toBeUndefined();
+  });
+
+  it("detail enriches the degraded note (and warn line) but not the short applied tag", () => {
+    const o = passthroughOutput(SAMPLE_INPUT, "runpod-run-failed", { detail: "HTTP 500" });
+    expect(o.applied).toEqual(["passthrough:runpod-run-failed"]);  // tag stays terse
+    expect(o.degraded).toBe("runpod-run-failed: HTTP 500");        // note carries the cause
+  });
+
+  it("covers every degrade reason the worker emits", () => {
+    for (const reason of ["no-runpod-secrets", "runpod-run-failed", "no-jobid", "exception"]) {
+      const o = passthroughOutput(SAMPLE_INPUT, reason);
+      expect(o.applied[0]).toBe(`passthrough:${reason}`);
+      expect(o.degraded).toBeTruthy();
+    }
+  });
+
+  it("a real misconfig is NOT indistinguishable from the no-op (the #77 bug)", () => {
+    const degraded = passthroughOutput(SAMPLE_INPUT, "no-runpod-secrets");
+    const noop = passthroughOutput(SAMPLE_INPUT, "nothing-enabled", { degraded: false });
+    expect(degraded.applied).not.toEqual(noop.applied);   // the old applied:[] ambiguity is gone
+    expect(Boolean(degraded.degraded)).toBe(true);
+    expect(Boolean(noop.degraded)).toBe(false);
   });
 });

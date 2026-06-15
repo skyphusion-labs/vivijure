@@ -21,7 +21,7 @@ import {
   type FinishOutput,
 } from "./contract";
 import {
-  coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput,
+  coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
 } from "./finish";
 
 interface Env {
@@ -60,9 +60,19 @@ function auth(env: Env) {
   return { authorization: "Bearer " + env.RUNPOD_API_KEY };
 }
 
-/** Soft degrade: pass the input clip through unchanged (for a chain hook a no-op is better than a crash). */
-function passthrough(input: FinishInput): InvokeResponse<FinishOutput> {
-  return { ok: true, output: { shot_id: input.shot_id, clip_key: input.clip_key, out_fps: input.src_fps, frames: input.frames, applied: [] } };
+/** Soft degrade: pass the input clip through unchanged (for a chain hook a no-op beats a crash), but
+ *  ALWAYS record why -- `passthroughOutput` tags `applied` with the reason and sets `degraded`, so a
+ *  real misconfig/backend failure is never indistinguishable from the legitimate no-op (#77). A real
+ *  degrade is also warned to the log (observability is on, so `wrangler tail` surfaces it); the
+ *  intentional no-op (`degraded:false`) is silent. */
+function passthrough(
+  input: FinishInput,
+  reason: string,
+  opts: { degraded?: boolean; detail?: string } = {},
+): InvokeResponse<FinishOutput> {
+  const output = passthroughOutput(input, reason, opts);
+  if (output.degraded) console.warn(`finish-rife: passthrough (${output.degraded}) shot=${input.shot_id}`);
+  return { ok: true, output };
 }
 
 async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<InvokeResponse<FinishOutput>> {
@@ -71,12 +81,14 @@ async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
     return { ok: false, error: "finish-rife: input needs shot_id and clip_key" };
   }
   if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
-    return passthrough(input);  // not configured: pass through rather than hard-fail the chain
+    return passthrough(input, "no-runpod-secrets");  // not configured: degrade, but say so
   }
 
   const cfg = coerceConfig(req.config);
-  // If nothing is enabled, skip the GPU round-trip entirely.
-  if (!cfg.interpolate && cfg.face_restore === "none") return passthrough(input);
+  // Nothing enabled: a real, intentional no-op (NOT a degrade) -- skip the GPU round-trip.
+  if (!cfg.interpolate && cfg.face_restore === "none") {
+    return passthrough(input, "nothing-enabled", { degraded: false });
+  }
 
   try {
     const r = await fetch(runpodBase(env) + "/run", {
@@ -84,16 +96,16 @@ async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
       headers: { ...auth(env), "content-type": "application/json" },
       body: JSON.stringify(buildRunPodBody(input, cfg, req.context.project)),
     });
-    if (!r.ok) return passthrough(input);   // RunPod unavailable: soft degrade
+    if (!r.ok) return passthrough(input, "runpod-run-failed", { detail: "HTTP " + r.status });
     const jobId = ((await r.json()) as { id?: string }).id;
-    if (!jobId) return passthrough(input);
+    if (!jobId) return passthrough(input, "no-jobid");
     return {
       ok: true,
       pending: true,
       poll: encodePoll({ jobId, shotId: input.shot_id, srcFps: input.src_fps, frames: input.frames }),
     };
-  } catch {
-    return passthrough(input);
+  } catch (e) {
+    return passthrough(input, "exception", { detail: (e as Error).message });
   }
 }
 

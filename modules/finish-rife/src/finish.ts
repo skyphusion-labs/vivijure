@@ -1,7 +1,31 @@
 // Pure finish-rife logic: build the RunPod request body, parse the result, encode/decode the
 // async poll token. No I/O here -- unit-tests without runtime or spend.
 
-import type { FinishInput } from "./contract";
+import type { FinishInput, FinishOutput } from "./contract";
+
+/** Build the passthrough FinishOutput that records WHY the clip went through unchanged, so a real
+ *  failure (misconfig / backend down) is never indistinguishable from the legitimate "nothing
+ *  enabled" no-op -- the silent-degrade bug of #77. A genuine degrade tags `applied` with
+ *  `passthrough:<reason>` and sets the `degraded` field; the intentional no-op tags
+ *  `noop:<reason>` and leaves `degraded` unset. `detail` enriches the degraded note (and the
+ *  caller's warn line) without bloating the short `applied` tag. Pure: no I/O, no logging -- the
+ *  index worker does the console.warn, this just shapes the data. */
+export function passthroughOutput(
+  input: FinishInput,
+  reason: string,
+  opts: { degraded?: boolean; detail?: string } = {},
+): FinishOutput {
+  const degraded = opts.degraded ?? true;
+  const out: FinishOutput = {
+    shot_id: input.shot_id,
+    clip_key: input.clip_key,
+    out_fps: input.src_fps,
+    frames: input.frames,
+    applied: [`${degraded ? "passthrough" : "noop"}:${reason}`],
+  };
+  if (degraded) out.degraded = opts.detail ? `${reason}: ${opts.detail}` : reason;
+  return out;
+}
 
 export interface FinishConfig {
   interpolate: boolean;

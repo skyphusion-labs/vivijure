@@ -148,7 +148,10 @@ export interface FinishOutput {
   clip_key: string; // R2 key of the FINISHED clip (may equal the input if it no-op'd)
   out_fps: number;
   frames: number;
-  applied: string[]; // e.g. ["interpolate:2x", "face_restore:gfpgan"]
+  applied: string[]; // e.g. ["interpolate:2x", "face_restore:gfpgan"]; or ["passthrough:<reason>"] / ["noop:nothing-enabled"]
+  degraded?: string; // set ONLY when the clip was passed through because the finish could not run
+                     // (misconfig / backend down), carrying the reason; absent on success and on
+                     // the intentional no-op, so a real degrade is never silent (finish-rife #77)
 }
 
 // plan.enhance (v1) -----------------------------------------------------------------------------
