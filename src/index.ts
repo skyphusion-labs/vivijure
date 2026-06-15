@@ -9,6 +9,7 @@ import { discoverModules, modulesResponse, dispatchChain } from "./modules/regis
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
 import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
 import { startFilmJob, advanceFilmJob, summarizeFilm, type FilmScene, type FilmSummary } from "./film-orchestrator";
+import { startCastRefsJob, advanceCastRefsJob, summarizeCastRefs } from "./cast-image-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
 import { getUserEmail } from "./shared";
 import type { Env } from "./env";
@@ -178,6 +179,25 @@ const hRemoveSource: Handler = async (req, env, _c, p) => {
   const res = await removeSource(env, idParam(p.id), getUserEmail(req), b.key);
   if (!res.row) throw notFound("cast member or source");
   return json({ cast: res.row });
+};
+
+// cast.image: generate a cast member's LoRA training reference set via the installed cast.image
+// module (FLUX 2 / Nano Banana), then register the generated images onto the member. Async run/poll
+// across requests (a 10-image set can't finish in one request) -- POST starts it, GET advances it.
+const hGenerateCastRefs: Handler = async (req, env, _c, p) => {
+  const id = idParam(p.id), email = getUserEmail(req);
+  const b = await readBody<{ config?: Record<string, unknown>; art_style?: string; source_keys?: string[]; choice?: string }>(req);
+  const job = await startCastRefsJob(env, {
+    castId: id, userEmail: email, config: b.config, artStyle: b.art_style, sourceKeys: b.source_keys, choice: b.choice,
+  });
+  if (!job) throw notFound("cast member");
+  return json({ ok: true, ...summarizeCastRefs(job) }, 201);
+};
+const hPollCastRefs: Handler = async (req, env, _c, p) => {
+  const id = idParam(p.id), email = getUserEmail(req);
+  const job = await advanceCastRefsJob(env, id, p.jobId);
+  if (!job || job.user_email !== email) throw notFound("cast refs job"); // ownership: the doc carries the owner
+  return json({ ok: true, ...summarizeCastRefs(job) });
 };
 
 // --- artifact upload + serve --------------------------------------------
@@ -476,6 +496,8 @@ const API_ROUTES: Route[] = [
   { method: "DELETE", pattern: "/api/cast/:id/ref",                    handler: hRemoveRef },
   { method: "POST",   pattern: "/api/cast/:id/source",                 handler: hAddSource },
   { method: "DELETE", pattern: "/api/cast/:id/source",                 handler: hRemoveSource },
+  { method: "POST",   pattern: "/api/cast/:id/generate-refs",          handler: hGenerateCastRefs },
+  { method: "GET",    pattern: "/api/cast/:id/refs-job/:jobId",        handler: hPollCastRefs },
   { method: "POST",   pattern: "/api/cast/:id/lora",                   handler: hTodo },
   { method: "POST",   pattern: "/api/upload",                          handler: hUpload },
   { method: "GET",    pattern: "/api/artifact/*key",                   handler: hServeArtifact },

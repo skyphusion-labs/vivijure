@@ -793,24 +793,6 @@
     el.classList.toggle("is-error", !!isError);
   }
 
-  function renderTrainingProgress(rows) {
-    const ul = $("#cast-training-progress");
-    ul.innerHTML = "";
-    for (const r of rows) {
-      const li = document.createElement("li");
-      li.className = "cast-training-row cast-training-row-" + r.status;
-      const label = document.createElement("span");
-      label.className = "cast-training-row-label";
-      label.textContent = (r.index + 1) + "/" + rows.length;
-      li.appendChild(label);
-      const status = document.createElement("span");
-      status.className = "cast-training-row-status";
-      status.textContent = r.status === "done" ? "done" : r.status === "fail" ? ("fail: " + (r.error || "?")) : r.status;
-      li.appendChild(status);
-      ul.appendChild(li);
-    }
-  }
-
   // v0.91.0: training-set generator now accepts EITHER the saved
   // portrait OR the selected v0.90.0 sources as reference material.
   // Gate is enabled when either is present. selectedTrainingSources()
@@ -845,6 +827,13 @@
     }
   }
 
+  // v0.158.0: the training set is generated SERVER-SIDE by the cast.image
+  // module now, not by this per-image client loop against /api/chat. The
+  // browser starts a job (POST .../generate-refs) and polls it to done (GET
+  // .../refs-job/:jobId); the module presigns the portrait/sources, renders
+  // the 10-prompt set a few images at a time, and the core registers them onto
+  // the cast member when the run finishes. No more client-side downscaling or
+  // chat-artifact plumbing -- the prompt set + composition live in the module.
   async function generateTrainingSet() {
     const id = state.selectedId;
     if (!id) return;
@@ -863,84 +852,64 @@
     const refLabel = useSources
       ? `${sourcesToUse.length} selected source${sourcesToUse.length === 1 ? "" : "s"}`
       : "the saved portrait";
-    if (!window.confirm(`generate 10 training images using ${refLabel} as the reference? this takes about 2-4 minutes. you can navigate away mid-run; the saved refs will appear when you come back to this character.`)) return;
+    if (!window.confirm(`generate ${TRAINING_PROMPTS.length} training images using ${refLabel} as the reference? this takes about 2-4 minutes -- keep this tab open while it runs.`)) return;
 
     training.busy = true;
     training.abort = false;
     $("#cast-training-btn").disabled = true;
-    setTrainingStatus(useSources ? "loading sources..." : "loading portrait...");
+    $("#cast-training-progress").innerHTML = "";
+    setTrainingStatus("starting...");
 
-    // Build the attachments list once. FLUX 2 caps inputs at 4 per
-    // call (slice already applied in selectedTrainingSources); same
-    // pattern as v0.90.0 generatePortrait.
-    const attachments = [];
     try {
-      if (useSources) {
-        for (const s of sourcesToUse) {
-          const dataUrl = await fetchPortraitAsDataUrl(s.key);
-          attachments.push({ type: "image", mime: s.mime || "image/png", filename: "source.png", data: dataUrl });
-        }
+      const start = await api("/api/cast/" + id + "/generate-refs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          config: { model: getSelectedTrainingModelId(), num_images: TRAINING_PROMPTS.length },
+          art_style: getTrainingStyle() || undefined,
+          source_keys: useSources ? sourcesToUse.map((s) => s.key) : undefined,
+        }),
+      });
+      if (start.phase === "failed") throw new Error(start.error || "could not start generation");
+      const jobId = start.job_id;
+      setTrainingStatus("generating training set (about 2-4 minutes)...");
+
+      // Poll to a terminal phase. Each GET drives one image render server-side,
+      // so the request itself is slow; a short gap between polls is plenty. The
+      // loop cap is a generous backstop above the image count.
+      let job = start;
+      const maxPolls = TRAINING_PROMPTS.length * 4 + 10;
+      for (let i = 0; i < maxPolls && !training.abort; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        job = await api("/api/cast/" + id + "/refs-job/" + encodeURIComponent(jobId));
+        if (job.phase !== "generating") break;
+      }
+
+      if (training.abort) {
+        setTrainingStatus("stopped polling. the run may still finish server-side; reopen this character to see saved refs.");
+      } else if (job.phase === "failed") {
+        throw new Error(job.error || "generation failed");
+      } else if (job.phase === "done") {
+        const n = job.registered || 0;
+        setTrainingStatus(n + " training image" + (n === 1 ? "" : "s") + " saved.", n === 0);
       } else {
-        const dataUrl = await fetchPortraitAsDataUrl(c.portrait_key);
-        attachments.push({ type: "image", mime: "image/png", filename: "portrait.png", data: dataUrl });
+        setTrainingStatus("still running; reopen this character shortly to see the saved refs.", true);
+      }
+
+      // Refresh the cast member so the newly-registered refs render.
+      const refreshed = await api("/api/cast/" + id);
+      if (refreshed && refreshed.cast) {
+        const idx = state.cast.findIndex((x) => x.id === id);
+        if (idx >= 0) state.cast[idx] = refreshed.cast;
+        populateEditor(refreshed.cast);
+        renderCastList();
       }
     } catch (e) {
-      setTrainingStatus(`could not load ${useSources ? "sources" : "portrait"}: ` + e.message, true);
+      setTrainingStatus("generation failed: " + e.message, true);
+    } finally {
       training.busy = false;
-      $("#cast-training-btn").disabled = false;
-      return;
+      updateTrainingGate(findCast(id));
     }
-
-    const rows = TRAINING_PROMPTS.map((t, i) => ({ index: i, status: "pending" }));
-    renderTrainingProgress(rows);
-
-    let okCount = 0;
-    let failCount = 0;
-
-    for (let i = 0; i < TRAINING_PROMPTS.length; i++) {
-      if (training.abort) break;
-      rows[i].status = "running";
-      renderTrainingProgress(rows);
-      setTrainingStatus("generating " + (i + 1) + "/" + TRAINING_PROMPTS.length + "...");
-
-      const promptText = composeTrainingPrompt(TRAINING_PROMPTS[i], c.bible, getTrainingStyle());
-      try {
-        const result = await chatImageWithRetry({
-          model: getSelectedTrainingModelId(),
-          user_input: promptText,
-          attachments,
-        });
-        const oa = result && result.output_artifact;
-        if (!oa || oa.type !== "image" || !oa.key) throw new Error("no image returned");
-        const saved = await api("/api/cast/" + id + "/refs", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ from_chat_artifact: oa.key }),
-        });
-        const idx = state.cast.findIndex((x) => x.id === id);
-        if (idx >= 0) state.cast[idx] = saved.cast;
-        rows[i].status = "done";
-        okCount++;
-      } catch (e) {
-        rows[i].status = "fail";
-        rows[i].error = e.message;
-        failCount++;
-      }
-      renderTrainingProgress(rows);
-    }
-
-    const cur = findCast(id);
-    if (cur) populateEditor(cur);
-    renderCastList();
-
-    training.busy = false;
-    updateTrainingGate(cur);
-    setTrainingStatus(
-      training.abort
-        ? "stopped. " + okCount + " saved, " + failCount + " failed."
-        : okCount + " saved, " + failCount + " failed.",
-      failCount > 0 && !training.abort,
-    );
   }
 
   // ---------- v0.92.0: multi-character scene preview ----------
