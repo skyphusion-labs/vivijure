@@ -275,7 +275,7 @@ async function enterAssemblePhase(
   finalClips: { shot_id: string; clip_key: string }[],
 ): Promise<void> {
   if (!finalClips.length) { job.phase = "failed"; job.error = "no clips to assemble"; return; }
-  if (!env.VIDEO_FINISH) { job.phase = "failed"; job.error = "video-finish container not bound"; return; }
+  if (!env.VIDEO_FINISH_VPC) { job.phase = "failed"; job.error = "video-finish VPC binding not configured"; return; }
 
   const clips: { url: string }[] = [];
   for (const c of finalClips) {

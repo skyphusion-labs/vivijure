@@ -40,35 +40,22 @@ binding = "DB"
 database_name = "vivijure-studio"
 database_id = "bb806935-47a7-4524-93dd-251024794a55"
 
-# --- CPU container Durable Objects (off-GPU work). Build contexts live in containers/<name>/
-# --- (migrated from skyphusion-llm-public); the image is each Dockerfile. ---
-# --- ENABLED: video-finish only -- the assemble container (ffmpeg concat + audio mux) for the
-# --- render pipeline. Its image needs Docker to build; the CI deploy job installs the docker CLI
-# --- (apk add docker-cli; see .github/workflows/ci.yml) and the host docker.sock is bind-mounted.
-# --- audio-beat-sync + image-prep stay DISABLED below until their features are wired (heavy deps,
-# --- unused for now); enabling them = uncomment + add their classes to a NEW migration tag.
-[[durable_objects.bindings]]
-name = "VIDEO_FINISH"
-class_name = "VideoFinishContainer"
+# --- Off-GPU CPU work runs always-on on the fleet (issue #83), reached privately over Workers VPC
+# --- (see [[vpc_services]] below). The CF Container + its Durable Object class were removed once the
+# --- VPC path was validated end-to-end in prod (clears #64, #82). Build contexts for the 3 images
+# --- live in containers/<name>/ and now run as always-on Docker via containers/compose.yaml.
 
-[[containers]]
-class_name = "VideoFinishContainer"
-image = "./containers/video-finish/Dockerfile"
-max_instances = 3
-# ffmpeg libx264 normalize/encode peaks ~1.2 GiB RSS per clip (measured: 960x960 -> 1080p, medium).
-# The default "dev" instance is 256 MiB -> ffmpeg gets OOM-killed (exit 137) -> opaque 500. "standard-1"
-# (4 GiB) gives comfortable headroom for the per-clip encode (clips normalize sequentially, so peak is
-# one encode at a time) and the crossfade re-encode path. See the first full-film e2e (assemble 500).
-instance_type = "standard-1"
-
-# Fresh worker -> initial migration registering the video-finish container DO class.
+# Migration history: v1 created the video-finish container DO class; v2 drops it (off CF Containers).
 [[migrations]]
 tag = "v1-video-finish"
 new_sqlite_classes = ["VideoFinishContainer"]
 
-# Workers VPC: video-finish now runs always-on on the fleet, reached over a private VPC binding
-# (issue #83 -- off CF Containers, no cold start). callVideoFinish uses this. The CF Container above
-# is kept declared as a transitional fallback until the VPC path is validated in prod, then removed.
+[[migrations]]
+tag = "v2-drop-cpu-containers"
+deleted_classes = ["VideoFinishContainer"]
+
+# Workers VPC: the 3 CPU containers (video-finish / image-prep / audio-beat-sync) run always-on on
+# the fleet, reached over private VPC bindings (issue #83 -- off CF Containers, no cold start).
 [[vpc_services]]
 binding = "VIDEO_FINISH_VPC"
 service_id = "019ecbe6-9fc1-70a0-9946-14bbec0f51bc"
@@ -83,21 +70,6 @@ remote = true
 binding = "AUDIO_BEAT_SYNC_VPC"
 service_id = "019ecc06-3790-7403-9d8f-20f1287a513a"
 remote = true
-
-# DISABLED (uncomment + new migration tag when wired):
-# [[durable_objects.bindings]]
-# name = "AUDIO_BEAT_SYNC"
-# class_name = "AudioBeatSyncContainer"
-# [[durable_objects.bindings]]
-# name = "IMAGE_PREP"
-# class_name = "ImagePrepContainer"
-# [[containers]]
-# class_name = "AudioBeatSyncContainer"
-# image = "./containers/audio-beat-sync/Dockerfile"
-# max_instances = 3
-# [[containers]]
-# class_name = "ImagePrepContainer"
-# image = "./containers/image-prep/Dockerfile"
 # max_instances = 5
 
 # --- Secrets (npx wrangler secret put <NAME>): RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID,
