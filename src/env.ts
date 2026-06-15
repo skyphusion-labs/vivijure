@@ -62,9 +62,6 @@ export interface Env {
   RUNPOD_ENDPOINT_ID: string;
 
   // CPU container Durable Objects (off-GPU beat-sync, portrait prep, ffmpeg finish).
-  AUDIO_BEAT_SYNC: DurableObjectNamespace;
-  IMAGE_PREP: DurableObjectNamespace;
-  VIDEO_FINISH: DurableObjectNamespace;
   VIDEO_FINISH_VPC: Fetcher; // Workers VPC -> always-on fleet video-finish (issue #83)
   IMAGE_PREP_VPC: Fetcher; // Workers VPC -> always-on fleet image-prep (issue #83)
   AUDIO_BEAT_SYNC_VPC: Fetcher; // Workers VPC -> always-on fleet audio-beat-sync (issue #83)

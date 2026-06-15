@@ -41,9 +41,6 @@ import { assembleBundle, type AssembleBundleArgs } from "./bundle-assembler";
 import { presignR2Get } from "./r2-presign";
 
 // Container DOs -- exported so the runtime registers them (bound in wrangler.toml).
-export { AudioBeatSyncContainer } from "./containers/audio-beat-sync";
-export { ImagePrepContainer } from "./containers/image-prep";
-export { VideoFinishContainer } from "./containers/video-finish";
 
 // Local JSON response helper -- status as a plain number (shared.ts's json takes a ResponseInit).
 const json = (body: unknown, status = 200): Response =>
