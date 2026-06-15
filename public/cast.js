@@ -656,23 +656,19 @@
     try { localStorage.setItem(TRAINING_STYLE_LS + state.selectedId, el.value.trim()); } catch (_) {}
   }
 
+  // Portrait-gen uses the same static image-gen catalog as training (FLUX 2 / Nano Banana).
+  // No fetch: the old /api/models route 404'd, and /api/storyboard/models serves LLM planning
+  // models (type "text"), not image-gen -- so the filtered list was always empty anyway.
   async function ensurePortraitGenModelOptions() {
     const sel = $("#cast-portrait-gen-model");
     if (sel.options.length > 0) return;
-    try {
-      const models = await loadImageModels();
-      for (const m of models) {
-        const opt = document.createElement("option");
-        opt.value = m.id;
-        opt.textContent = m.label || m.id;
-        sel.appendChild(opt);
-      }
-    } catch (e) {
+    for (const m of TRAINING_MODELS) {
       const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "(could not load models: " + e.message + ")";
+      opt.value = m.id;
+      opt.textContent = m.label || m.id;
       sel.appendChild(opt);
     }
+    sel.value = DEFAULT_TRAINING_MODEL_ID;
   }
 
   // Portrait gen state (one in-flight at a time per character).
