@@ -66,6 +66,14 @@ instance_type = "standard-1"
 tag = "v1-video-finish"
 new_sqlite_classes = ["VideoFinishContainer"]
 
+# Workers VPC: video-finish now runs always-on on the fleet, reached over a private VPC binding
+# (issue #83 -- off CF Containers, no cold start). callVideoFinish uses this. The CF Container above
+# is kept declared as a transitional fallback until the VPC path is validated in prod, then removed.
+[[vpc_services]]
+binding = "VIDEO_FINISH_VPC"
+service_id = "019ecbe6-9fc1-70a0-9946-14bbec0f51bc"
+remote = true
+
 # DISABLED (uncomment + new migration tag when wired):
 # [[durable_objects.bindings]]
 # name = "AUDIO_BEAT_SYNC"
