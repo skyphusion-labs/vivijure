@@ -118,6 +118,11 @@ remote = true
 binding = "MODULE_PLANENHANCE"
 service = "vivijure-module-plan-enhance"
 
+# Own-GPU i2v (Wan2.2 via the vivijure-backend RunPod endpoint): the BYO-GPU default motion.backend.
+[[services]]
+binding = "MODULE_OWN_GPU"
+service = "vivijure-module-own-gpu"
+
 [[services]]
 binding = "MODULE_SEEDANCE"
 service = "vivijure-module-seedance"

@@ -1,0 +1,22 @@
+# own-gpu module worker (vivijure-module/1): image-to-video on YOUR OWN GPU via the vivijure-backend
+# RunPod serverless endpoint (Wan2.2-I2V, the i2v_clip action). Bound into the core as MODULE_OWN_GPU;
+# the registry discovers it from GET /module.json and the studio renders the motion.backend stage.
+# This is the BYO-GPU default (ui.order 5, ahead of the cloud i2v modules) -- no rent, own keys.
+#
+# The backend SHARES our R2 bucket: it reads the keyframe by key and writes the finished clip itself,
+# returning the clip_key. So this module needs NO R2 binding, only the RunPod creds.
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-own-gpu"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Secrets, set AFTER deploy (never committed). RUNPOD_ENDPOINT_ID is the user's own i2v endpoint
+# (ours is t9wcvlxh8rc5la); RUNPOD_API_KEY a DEDICATED, scoped vivijure RunPod key:
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/own-gpu/wrangler.toml
+#   ! npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/own-gpu/wrangler.toml
