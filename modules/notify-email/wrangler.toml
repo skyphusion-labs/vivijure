@@ -1,0 +1,20 @@
+# notify-email module (vivijure-module/1): the email backend of the `notify` hook. On a
+# render.complete event, mails the film owner a download link via the native CF Email Service.
+# Bound into the core as MODULE_NOTIFY_EMAIL; the registry discovers it from GET /module.json and
+# the studio renders the notify stage from it. account_id is read from CLOUDFLARE_ACCOUNT_ID (env).
+#
+# PREREQUISITE (one-time, not in this config): onboard the from-domain for Email Sending --
+#   ! npx wrangler email sending enable skyphusion.org
+
+name = "vivijure-module-notify-email"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Native Cloudflare Email Service. NO `remote` -> prod sends for real; `wrangler dev` simulates (no send).
+[[send_email]]
+name = "EMAIL"

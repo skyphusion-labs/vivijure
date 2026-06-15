@@ -79,11 +79,9 @@ remote = true
 # R2_S3_ENDPOINT = "https://<account>.r2.cloudflarestorage.com"
 # R2_S3_BUCKET = "vivijure"
 
-# --- Transactional mail (render-complete). Wire when render-email lands (PR 2):
-# [[services]]
-# binding = "EMAIL"
-# service = "skyphusion-email"
-# entrypoint = "EmailService"
+# --- Render-complete notification = the `notify` hook + the notify-email module (MODULE_NOTIFY_EMAIL
+# --- below), NOT a core binding. Notification is multi-backend (email / webhook / ...), so it's a
+# --- module: the core fires the `notify` chain on the done-transition; each notifier delivers.
 
 # --- Opt-in MODULE workers: service bindings named MODULE_<NAME>; the registry discovers them.
 [[services]]
@@ -115,6 +113,11 @@ service = "vivijure-module-finish-rife"
 [[services]]
 binding = "MODULE_CAST_IMAGE"
 service = "vivijure-module-cast-image"
+
+# Notify (render-complete): the email backend of the `notify` hook -- native CF Email Service.
+[[services]]
+binding = "MODULE_NOTIFY_EMAIL"
+service = "vivijure-module-notify-email"
 
 # Vanity domain: vivijure.skyphusion.org is bound to this worker as a dashboard-managed CUSTOM
 # DOMAIN (auto DNS + cert), NOT a wrangler [[routes]] entry -- a route + custom domain for the same

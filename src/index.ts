@@ -373,7 +373,7 @@ const hStartFilm: Handler = async (req, env) => {
   const job = await startFilmJob(env, {
     project, bundle_key: a.bundle_key, scenes: a.scenes,
     motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
-    finish_config: a.finish_config,
+    finish_config: a.finish_config, user_email: getUserEmail(req),
   });
   return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(job, null))) }, 201);
 };
