@@ -15,6 +15,7 @@ import {
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { presignR2Get, presignR2Put } from "./r2-presign";
+import { coerceShotId } from "./storyboard-validate";
 
 export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
 
@@ -311,6 +312,16 @@ async function enterAssemblePhase(
   job.phase = "done";
 }
 
+/** Pure: normalize caller scene ids to the canonical `shot_NN` the bundle uses. /api/storyboard/bundle
+ *  runs validateStoryboard, which coerces every scene id to `shot_<index+1>` in declaration order --
+ *  so a caller that supplies its own ids (e.g. the Slate bot's `s1`/`s2`) gets a bundle storyboard
+ *  whose ids do NOT match the film's shot_ids, and the keyframe stage rejects them
+ *  (`process_shot_ids not in storyboard`). Coerce here with the SAME function so they line up by
+ *  position (a valid `shot_NN` survives; anything else is renumbered). */
+export function coerceSceneIds(scenes: FilmScene[]): FilmScene[] {
+  return (scenes || []).map((s, i) => ({ ...s, shot_id: coerceShotId(s.shot_id, i) }));
+}
+
 /** Start a film job: resolve the keyframe module, submit the project preview, persist the poll token. */
 export async function startFilmJob(
   env: Env,
@@ -320,12 +331,13 @@ export async function startFilmJob(
     finish_config?: Record<string, Record<string, unknown>>;
   },
 ): Promise<FilmJob> {
+  const scenes = coerceSceneIds(args.scenes ?? []);
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
   const kf = servingForHook(modules, "keyframe")[0] ?? null;
   const job: FilmJob = {
     film_id: "film-" + crypto.randomUUID(),
-    project: args.project, bundle_key: args.bundle_key, scenes: args.scenes,
+    project: args.project, bundle_key: args.bundle_key, scenes,
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
@@ -338,7 +350,7 @@ export async function startFilmJob(
     const config = validateConfig(kf.config_schema, args.keyframe_config);
     const r = await invokeModule<KeyframeInput, KeyframeOutput>(fetcher, {
       hook: "keyframe",
-      input: { project: args.project, bundle_key: args.bundle_key, shot_ids: args.scenes.map((s) => s.shot_id) },
+      input: { project: args.project, bundle_key: args.bundle_key, shot_ids: scenes.map((s) => s.shot_id) },
       config,
       context: { project: args.project, job_id: job.film_id },
     });

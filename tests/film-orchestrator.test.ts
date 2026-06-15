@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, type FilmScene, type FinishShot } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 
 const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
@@ -142,5 +142,24 @@ describe("resolveFinishConfigs (issue #75: finish modules must get their schema 
       { name: "b", config_schema: { y: { type: "bool", default: false } } as ConfigSchema },
     ];
     expect(resolveFinishConfigs(two, { b: { y: true } })).toEqual([{ x: 1 }, { y: true }]);
+  });
+});
+
+
+describe("coerceSceneIds (scene-id seam: caller ids -> bundle's canonical shot_NN)", () => {
+  it("renumbers non-canonical ids by declaration order", () => {
+    const out = coerceSceneIds([
+      { shot_id: "s1", prompt: "a", seconds: 5 },
+      { shot_id: "s2", prompt: "b", seconds: 5 },
+      { shot_id: "s3", prompt: "c", seconds: 5 },
+    ]);
+    expect(out.map((s) => s.shot_id)).toEqual(["shot_01", "shot_02", "shot_03"]);
+  });
+  it("keeps already-canonical shot_NN ids and preserves prompt/seconds", () => {
+    expect(coerceSceneIds([{ shot_id: "shot_07", prompt: "x", seconds: 8 }]))
+      .toEqual([{ shot_id: "shot_07", prompt: "x", seconds: 8 }]);
+  });
+  it("handles empty input", () => {
+    expect(coerceSceneIds([])).toEqual([]);
   });
 });

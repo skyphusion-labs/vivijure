@@ -64,7 +64,7 @@ function countWords(prompt: string): number {
   return prompt.trim().split(/\s+/).filter((w) => w.length > 0).length;
 }
 
-function coerceShotId(rawId: string | undefined, index: number): string {
+export function coerceShotId(rawId: string | undefined, index: number): string {
   const desired = `shot_${String(index + 1).padStart(2, "0")}`;
   if (typeof rawId !== "string") return desired;
   const trimmed = rawId.trim();
