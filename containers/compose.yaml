@@ -1,0 +1,72 @@
+# Vivijure media stack -- the 3 always-on CPU containers (issue #83).
+#
+# These run always-on on the fleet (dischord) instead of CF Containers (beta,
+# scale-to-zero -> cold-start 504s). The studio Worker reaches each privately
+# over Workers VPC: one cloudflared tunnel (3111f3fe) -> a VPC Service per
+# container -> the docker service name on the `vivijure` network. Service names
+# below MUST match the VPC Service `host` (video-finish / image-prep /
+# audio-beat-sync). All three are stateless and credential-free: the Worker
+# presigns short-lived R2 GET/PUT URLs and passes them in the request body, so
+# no R2 binding, no secrets, no mounts here.
+#
+# Deploy:  docker compose -p vivijure-media -f compose.yaml up -d --build
+# Health:  curl http://127.0.0.1:8780/health   (video-finish; 8781 prep, 8782 audio)
+
+name: vivijure-media
+
+x-common: &common
+  restart: unless-stopped
+  environment:
+    PORT: "8000"
+  networks:
+    - vivijure
+
+services:
+  video-finish:
+    <<: *common
+    build: ./video-finish
+    image: vj-video-finish:local
+    container_name: video-finish
+    ports:
+      - "127.0.0.1:8780:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  image-prep:
+    <<: *common
+    build: ./image-prep
+    image: vj-image-prep:local
+    container_name: image-prep
+    ports:
+      - "127.0.0.1:8781:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  audio-beat-sync:
+    <<: *common
+    build: ./audio-beat-sync
+    image: vj-audio-beat-sync:local
+    container_name: audio-beat-sync
+    ports:
+      - "127.0.0.1:8782:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+# Shared external network (also joined by the cloudflared stack). Create once on
+# a fresh box:  docker network create vivijure
+networks:
+  vivijure:
+    name: vivijure
+    external: true

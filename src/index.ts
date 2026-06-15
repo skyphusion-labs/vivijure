@@ -444,8 +444,8 @@ const hAudioUpload: Handler = async (req, env) => {
   const a = await readBody<AudioAnalyzeRequest>(req);
   if (!a.audioKey) throw badRequest("audioKey required");
   const audioUrl = await presignR2Get(env, a.audioKey, 300);
-  const stub = env.AUDIO_BEAT_SYNC.get(env.AUDIO_BEAT_SYNC.idFromName("singleton"));
-  const resp = await stub.fetch("https://container/analyze", {
+  // audio-beat-sync runs always-on on the fleet over a Workers VPC binding (issue #83).
+  const resp = await env.AUDIO_BEAT_SYNC_VPC.fetch("http://audio-beat-sync/analyze", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ audioUrl, clipSeconds: a.clipSeconds, mode: a.mode, minSceneS: a.minSceneS, maxSceneS: a.maxSceneS, forceShots: a.forceShots }),
