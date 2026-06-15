@@ -301,6 +301,32 @@ export async function addRef(
   return result ? rowToCast(result) : null;
 }
 
+// Append a batch of refs in one UPDATE (read-modify-write once, not per ref). Used by the
+// cast-image orchestrator to register a whole generated training set onto the cast member at the
+// end of a run -- ten sequential addRef round-trips would be ten D1 writes and ten races.
+export async function addRefs(
+  env: Env,
+  id: number,
+  userEmail: string,
+  refs: CastRefImage[],
+): Promise<CastMember | null> {
+  if (refs.length === 0) return getCastById(env, id, userEmail);
+  const cur = await getCastById(env, id, userEmail);
+  if (!cur) return null;
+  const next = [...cur.ref_keys, ...refs];
+  const result = await env.DB.prepare(
+    `UPDATE cast_members
+        SET ref_keys_json = ?, updated_at = datetime('now')
+      WHERE id = ? AND user_email = ?
+     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+               ref_keys_json, source_keys_json, created_at, updated_at,
+            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
+  )
+    .bind(JSON.stringify(next), id, userEmail)
+    .first<CastRow>();
+  return result ? rowToCast(result) : null;
+}
+
 export async function removeRef(
   env: Env,
   id: number,
