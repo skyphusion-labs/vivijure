@@ -16,6 +16,7 @@ import type { MotionBackendInput, MotionBackendOutput, PollResponse } from "./mo
 export interface ClipShotInput {
   shot_id: string;
   keyframe_url: string;
+  keyframe_key?: string; // the underlying R2 key; an own-GPU backend that shares the bucket reads it
   prompt: string;
   seconds: number;
 }
@@ -94,7 +95,7 @@ export async function startClipJob(
     }
     const r = await invokeModule<MotionBackendInput, MotionBackendOutput>(fetcher, {
       hook: "motion.backend",
-      input: { shot_id: sh.shot_id, keyframe_url: sh.keyframe_url, prompt: sh.prompt, seconds: sh.seconds },
+      input: { shot_id: sh.shot_id, keyframe_url: sh.keyframe_url, keyframe_key: sh.keyframe_key, prompt: sh.prompt, seconds: sh.seconds },
       config,
       context: { project: args.project, job_id },
     });
