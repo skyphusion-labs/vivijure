@@ -1,0 +1,27 @@
+# cast-image module worker (vivijure-module/1): generates a character's LoRA TRAINING reference set
+# from a portrait + bible via the studio image models (FLUX 2 Klein / Nano Banana Pro), with the
+# safety-flag fallback. A server-side lift of public/cast.js's generateTrainingSet -- swappable, and
+# no longer blocking the cast page. Bound into the core as MODULE_CAST_IMAGE; the registry discovers
+# it from GET /module.json and the studio renders the cast.image stage from it.
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-cast-image"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Image generation through the AI Gateway: FLUX 2 via Workers AI, Google nano-banana via Unified
+# Billing -- the same binding the core uses. (Wiring TODO: GATEWAY_ID secret likely needed for the
+# Google routing, set on deploy: `npx wrangler secret put GATEWAY_ID -c modules/cast-image/wrangler.toml`.)
+[ai]
+binding = "AI"
+
+# Generated reference images + the async run-state docs land in the shared render bucket so the core
+# can register them onto the cast member's ref set.
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
