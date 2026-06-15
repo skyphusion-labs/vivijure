@@ -32,7 +32,7 @@ import {
   readOutput,
   type CastImageState,
 } from "./cast-image";
-import { generateImage, type AiRun } from "./image-gen";
+import { generateImage, type AiRun, type ImagesBinding } from "./image-gen";
 
 // Minimal binding shapes this module needs.
 interface R2Bucket {
@@ -43,6 +43,7 @@ interface Env {
   AI: AiRun;              // AI binding: FLUX 2 run direct (gateway-bypassed), proxied models via the gateway
   GATEWAY_ID: string;     // AI Gateway slug (secret); needed for the proxied / nano-banana fallback path
   R2_RENDERS: R2Bucket;   // the shared `vivijure` bucket: run state + generated refs land here
+  IMAGES?: ImagesBinding; // Cloudflare Images: downscale refs to <=512px (FLUX-2's input cap; bounds nano-banana payloads)
 }
 
 const MODELS = [
@@ -107,13 +108,13 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<CastImage
     const prompt = state.prompts[0];
     let img: { bytes: ArrayBuffer; mime: string };
     try {
-      img = await generateImage(env.AI, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
+      img = await generateImage(env.AI, env.IMAGES, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
     } catch (e) {
       if (isFlaggedError((e as Error).message) && state.model !== FLAG_FALLBACK_MODEL) {
         state.model = FLAG_FALLBACK_MODEL;
         state.fallback_used = true;
         try {
-          img = await generateImage(env.AI, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
+          img = await generateImage(env.AI, env.IMAGES, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
         } catch (e2) {
           return { ok: false, error: "cast.image: generation failed (post-fallback): " + (e2 as Error).message };
         }

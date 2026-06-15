@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   isFlux2,
   base64ToBytes,
+  bytesToBase64,
   extractProxiedImageUrl,
   proxiedParams,
+  REF_MAX_DIM,
 } from "../modules/cast-image/src/image-gen";
 
 describe("cast-image image-gen helpers (ported from the playground)", () => {
@@ -29,10 +31,38 @@ describe("cast-image image-gen helpers (ported from the playground)", () => {
     expect(extractProxiedImageUrl(null)).toBeNull();
   });
 
-  it("proxiedParams is provider-keyed + prompt-only (ported from buildProxiedImageParams)", () => {
+  it("proxiedParams is provider-keyed + prompt-only with no refs (ported from buildProxiedImageParams)", () => {
     expect(proxiedParams("google/nano-banana-pro", "p")).toEqual({ prompt: "p", output_format: "png" });
     expect(proxiedParams("openai/gpt-image-1.5", "p")).toEqual({ prompt: "p", quality: "high", size: "1024x1024" });
     expect(proxiedParams("recraft/recraftv4", "p")).toEqual({ prompt: "p", size: "1024x1024", style: "digital_illustration" });
     expect(proxiedParams("something/else", "p")).toEqual({ prompt: "p" });
+  });
+
+  it("proxiedParams wires reference images into image_input[] for google, capped at 3", () => {
+    const refs = ["data:image/png;base64,a", "data:image/png;base64,b", "data:image/png;base64,c", "data:image/png;base64,d"];
+    expect(proxiedParams("google/nano-banana-pro", "p", refs)).toEqual({
+      prompt: "p",
+      output_format: "png",
+      image_input: refs.slice(0, 3), // nano-banana image_input maxItems: 3
+    });
+  });
+
+  it("proxiedParams uses images[] for openai (cap 16) and ignores refs for providers without ref input", () => {
+    expect(proxiedParams("openai/gpt-image-1.5", "p", ["data:image/png;base64,a"])).toEqual({
+      prompt: "p", quality: "high", size: "1024x1024", images: ["data:image/png;base64,a"],
+    });
+    // recraft has no documented ref input -> refs dropped
+    expect(proxiedParams("recraft/recraftv4", "p", ["data:image/png;base64,a"])).toEqual({
+      prompt: "p", size: "1024x1024", style: "digital_illustration",
+    });
+  });
+
+  it("bytesToBase64 round-trips with base64ToBytes (the image_input data-URI payload)", () => {
+    const bytes = new Uint8Array([0, 1, 2, 250, 255, 128, 64]);
+    expect(Array.from(base64ToBytes(bytesToBase64(bytes)))).toEqual([0, 1, 2, 250, 255, 128, 64]);
+  });
+
+  it("REF_MAX_DIM is FLUX-2's 512px input cap", () => {
+    expect(REF_MAX_DIM).toBe(512);
   });
 });

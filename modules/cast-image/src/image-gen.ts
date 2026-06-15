@@ -3,16 +3,38 @@
 // studio OWNS cast-ref image gen instead of reaching back to the playground's /api/chat. Two shapes:
 //   @cf FLUX-2 : multipart FormData (prompt + input_image_0..3 reference blobs), gateway-BYPASSED,
 //                returns { image: base64 } -> PNG bytes. The reference-conditioned path (the portrait).
-//   proxied    : env.AI.run THROUGH the gateway, prompt-only params, returns a URL (the nano-banana
-//                fallback -- prompt-only, no reference conditioning, matching the playground).
-// `generateImage` does I/O (fetches the refs + the result URL); the small helpers below are pure +
-// unit-tested.
+//   proxied    : env.AI.run THROUGH the gateway, returns a URL (the nano-banana fallback). Reference
+//                images go in image_input[] (<=3, base64 data URIs) so the fallback keeps character
+//                identity instead of being prompt-only.
+// `generateImage` does I/O (fetches/downscales the refs + fetches the result URL); the small helpers
+// below are pure + unit-tested.
+//
+// Reference images are DOWNSCALED to <=512px before use (via the Images binding): FLUX-2 caps inputs
+// at 512x512 per image (sending bigger gets rejected upstream), and bounding the nano-banana data
+// URIs keeps the gateway JSON payload sane. The browser used to do this client-side
+// (cast.js downscaleToDataUrl); it now lives server-side with the rest of the generation.
 
 /** Minimal AI binding shape: `.run(model, params, opts?)`. The gateway opt is omitted for FLUX-2
  *  (multipart + gateway-incompatible, run direct) and passed for the proxied path. */
 export interface AiRun {
   run(model: string, params: unknown, opts?: { gateway?: { id: string } }): Promise<unknown>;
 }
+
+/** Minimal Cloudflare Images binding shape (env.IMAGES): chainable input -> transform -> output.
+ *  Used only to downscale reference images; optional so the module still runs (refs un-resized) if a
+ *  deployment has not bound it. */
+interface ImagesTransformer {
+  transform(opts: Record<string, unknown>): ImagesTransformer;
+  output(opts: { format: string }): Promise<{ response(): Response }>;
+}
+export interface ImagesBinding {
+  input(stream: ReadableStream): ImagesTransformer;
+}
+
+/** FLUX-2 input cap (512x512 per image) -- also the downscale target for the nano-banana refs. */
+export const REF_MAX_DIM = 512;
+const FLUX2_MAX_REFS = 4;   // FLUX-2 takes up to 4 input_image_N
+const PROXIED_MAX_REFS = 3; // nano-banana image_input[] maxItems
 
 export function isFlux2(model: string): boolean {
   return model.startsWith("@cf/black-forest-labs/flux-2-");
@@ -26,6 +48,17 @@ export function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
+/** bytes -> base64. Used to build the nano-banana image_input data URIs. Chunked so a large ref does
+ *  not blow the call stack (String.fromCharCode.apply on a big array throws). */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
 /** Pull the URL out of a proxied image-gen response (ported from output-extract.extractProxiedImageUrl):
  *  the wrapped { state, result: { image: "<url>" } } or the bare { image: "<url>" }. */
 export function extractProxiedImageUrl(result: unknown): string | null {
@@ -37,37 +70,60 @@ export function extractProxiedImageUrl(result: unknown): string | null {
   return null;
 }
 
-/** Prompt-only params per proxied provider (ported from proxied-image-params.buildProxiedImageParams).
- *  cast-image only uses the google (nano-banana) fallback today, but keep the shape faithful +
- *  provider-keyed so the other proxied models drop in cleanly. */
-export function proxiedParams(model: string, prompt: string): Record<string, unknown> {
-  if (model.startsWith("google/")) return { prompt, output_format: "png" };
-  if (model.startsWith("openai/")) return { prompt, quality: "high", size: "1024x1024" };
+/** Params per proxied provider (ported from proxied-image-params.buildProxiedImageParams), now with
+ *  reference images: google (nano-banana) takes image_input[] (<=3); openai takes images[] (<=16);
+ *  recraft has no documented ref input. cast-image only uses the google fallback today, but keep the
+ *  shape faithful + provider-keyed so the other proxied models drop in cleanly. imageInputs are
+ *  base64 data URIs (the form the image-edit models accept). */
+export function proxiedParams(model: string, prompt: string, imageInputs: string[] = []): Record<string, unknown> {
+  if (model.startsWith("google/")) {
+    const p: Record<string, unknown> = { prompt, output_format: "png" };
+    if (imageInputs.length) p.image_input = imageInputs.slice(0, PROXIED_MAX_REFS);
+    return p;
+  }
+  if (model.startsWith("openai/")) {
+    const p: Record<string, unknown> = { prompt, quality: "high", size: "1024x1024" };
+    if (imageInputs.length) p.images = imageInputs.slice(0, 16);
+    return p;
+  }
   if (model.startsWith("recraft/")) return { prompt, size: "1024x1024", style: "digital_illustration" };
   return { prompt };
 }
 
-/** Fetch the reference images (presigned URLs) into Blobs for FLUX-2's input_image_N form fields.
- *  Caps at 4 (FLUX-2's max); skips any that fail to fetch. */
-async function fetchRefBlobs(refUrls: string[]): Promise<Blob[]> {
-  const blobs: Blob[] = [];
-  for (const u of refUrls) {
-    if (blobs.length >= 4) break;
-    try {
-      const r = await fetch(u);
-      if (r.ok) blobs.push(await r.blob());
-    } catch {
-      /* skip a ref that fails to fetch */
-    }
+/** Fetch one reference image (a presigned URL) into a Blob, or null if it fails. */
+async function fetchRef(url: string): Promise<Blob | null> {
+  try {
+    const r = await fetch(url);
+    return r.ok ? await r.blob() : null;
+  } catch {
+    return null;
   }
-  return blobs;
 }
 
-/** Generate ONE image. FLUX-2: multipart-multiref, gateway-bypassed, base64 result. Proxied: prompt-
- *  only through the gateway, URL result. Returns image bytes + mime. Throws on no-image / a flagged
- *  generation so the caller can retry / fall back. */
+/** Downscale a reference blob to fit within REF_MAX_DIM (long edge), preserving aspect, never
+ *  upscaling (fit: scale-down). Best-effort: with no Images binding, or on a transform failure, the
+ *  original blob is returned (FLUX-2 may then reject an oversized ref -- that surfaces as a gen error
+ *  the caller already handles, rather than a crash here). */
+async function downscaleRef(images: ImagesBinding | undefined, blob: Blob): Promise<Blob> {
+  if (!images) return blob;
+  try {
+    const out = await images
+      .input(blob.stream())
+      .transform({ width: REF_MAX_DIM, height: REF_MAX_DIM, fit: "scale-down" })
+      .output({ format: "image/png" });
+    return await out.response().blob();
+  } catch {
+    return blob;
+  }
+}
+
+/** Generate ONE image. FLUX-2: multipart-multiref (refs downscaled to <=512px), gateway-bypassed,
+ *  base64 result. Proxied: refs as image_input[] base64 data URIs, through the gateway, URL result.
+ *  Returns image bytes + mime. Throws on no-image / a flagged generation so the caller can retry /
+ *  fall back. */
 export async function generateImage(
   ai: AiRun,
+  images: ImagesBinding | undefined,
   gatewayId: string | undefined,
   model: string,
   prompt: string,
@@ -79,8 +135,12 @@ export async function generateImage(
     form.append("width", "1024");
     form.append("height", "1024");
     let i = 0;
-    for (const blob of await fetchRefBlobs(refUrls)) {
-      form.append(`input_image_${i}`, blob, `ref-${i}.png`);
+    for (const url of refUrls) {
+      if (i >= FLUX2_MAX_REFS) break;
+      const blob = await fetchRef(url);
+      if (!blob) continue;
+      const small = await downscaleRef(images, blob); // <=512px (FLUX-2's hard input cap)
+      form.append(`input_image_${i}`, small, `ref-${i}.png`);
       i++;
     }
     // FLUX-2 needs multipart and is gateway-incompatible, so run the binding DIRECTLY (no gateway opt).
@@ -93,9 +153,19 @@ export async function generateImage(
     if (!b64 || typeof b64 !== "string") throw new Error("flux-2 returned no image");
     return { bytes: base64ToBytes(b64).buffer as ArrayBuffer, mime: "image/png" };
   }
-  // proxied (e.g. the nano-banana fallback): prompt-only, through the gateway, URL result.
+  // proxied (e.g. the nano-banana fallback): reference-condition via image_input[], through the gateway.
+  const cap = model.startsWith("openai/") ? 16 : PROXIED_MAX_REFS;
+  const imageInputs: string[] = [];
+  for (const url of refUrls) {
+    if (imageInputs.length >= cap) break;
+    const blob = await fetchRef(url);
+    if (!blob) continue;
+    const small = await downscaleRef(images, blob);
+    const bytes = new Uint8Array(await small.arrayBuffer());
+    imageInputs.push(`data:image/png;base64,${bytesToBase64(bytes)}`);
+  }
   const opts = gatewayId ? { gateway: { id: gatewayId } } : undefined;
-  const result = await ai.run(model, proxiedParams(model, prompt), opts);
+  const result = await ai.run(model, proxiedParams(model, prompt, imageInputs), opts);
   const url = extractProxiedImageUrl(result);
   if (!url) throw new Error("proxied image model returned no url");
   const v = await fetch(url);
