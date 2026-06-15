@@ -21,6 +21,12 @@ enabled = true
 [ai]
 binding = "AI"
 
+# Cloudflare Images: downscale reference images to <=512px before generation. FLUX-2 rejects inputs
+# larger than 512x512 per image; this also bounds the base64 nano-banana image_input payloads. The
+# code treats it as optional (refs pass through un-resized if absent), but it should stay bound in prod.
+[images]
+binding = "IMAGES"
+
 # Generated reference images + the async run-state docs land in the shared render bucket so the core
 # can register them onto the cast member's ref set.
 [[r2_buckets]]
