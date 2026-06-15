@@ -8,7 +8,7 @@
 import { discoverModules, modulesResponse, dispatchChain } from "./modules/registry";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
 import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
-import { startFilmJob, advanceFilmJob, summarizeFilm, type FilmScene } from "./film-orchestrator";
+import { startFilmJob, advanceFilmJob, summarizeFilm, type FilmScene, type FilmSummary } from "./film-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
 import { getUserEmail } from "./shared";
 import type { Env } from "./env";
@@ -356,21 +356,34 @@ const hPollClips: Handler = async (_req, env, _c, p) => {
 
 // Film orchestrator: the keyframe -> clip handoff. POST starts it (runs the keyframe module), GET
 // advances it across the keyframe -> clips phases. See film-orchestrator.ts.
+/** Attach a presigned download URL to a film summary once the film is assembled (phase "done").
+ *  film_key lives in the private R2 render bucket; a presigned GET (24h) lets a caller without CF
+ *  Access (e.g. the Slate Discord bot posting into a channel) fetch/share the mp4 directly, with no
+ *  size limit and no extra API surface. Absent until the film is done. */
+async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<FilmSummary & { download_url?: string }> {
+  if (summary.phase === "done" && summary.film_key) {
+    return { ...summary, download_url: await presignR2Get(env, summary.film_key, 86400) };
+  }
+  return summary;
+}
 const hStartFilm: Handler = async (req, env) => {
   const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>> }>(req);
-  if (!a.project || !a.bundle_key) throw badRequest("project and bundle_key required");
+  if (!a.bundle_key) throw badRequest("bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
+  // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
+  // only has a bundle (e.g. the Slate bot) lands in the same project namespace the monolith uses.
+  const project = a.project ?? deriveProjectFromBundleKey(a.bundle_key);
   const job = await startFilmJob(env, {
-    project: a.project, bundle_key: a.bundle_key, scenes: a.scenes,
+    project, bundle_key: a.bundle_key, scenes: a.scenes,
     motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
     finish_config: a.finish_config,
   });
-  return json({ ok: true, ...summarizeFilm(job, null) }, 201);
+  return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(job, null))) }, 201);
 };
 const hPollFilm: Handler = async (_req, env, _c, p) => {
   const r = await advanceFilmJob(env, p.id);
   if (!r) throw notFound("film job");
-  return json({ ok: true, ...summarizeFilm(r.job, r.clipJob) });
+  return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(r.job, r.clipJob))) });
 };
 
 const hEnhance: Handler = async (req, env) => {
