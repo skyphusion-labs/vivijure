@@ -139,6 +139,11 @@ export async function allocateCastSlug(env: Env, userEmail: string, base: string
   throw new Error(`Could not allocate cast slug after 200 attempts (base='${base}')`);
 }
 
+// Bound the per-user cast list so it can never scan unboundedly (issue #12). Generous -- well past
+// any realistic cast size -- so the newest-first list is effectively complete for real users while
+// the query stays capped.
+const CAST_LIST_LIMIT = 500;
+
 export async function listCastForUser(env: Env, userEmail: string): Promise<CastMember[]> {
   const result = await env.DB.prepare(
     `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
@@ -146,9 +151,10 @@ export async function listCastForUser(env: Env, userEmail: string): Promise<Cast
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at
        FROM cast_members
       WHERE user_email = ?
-      ORDER BY created_at DESC`
+      ORDER BY created_at DESC
+      LIMIT ?`
   )
-    .bind(userEmail)
+    .bind(userEmail, CAST_LIST_LIMIT)
     .all<CastRow>();
   return (result.results || []).map(rowToCast);
 }
@@ -279,31 +285,82 @@ export async function clearPortrait(
   return result ? rowToCast(result) : null;
 }
 
+// Full cast row column list returned by the CAS array-mutation helper (matches getCastById).
+const CAST_ROW_COLUMNS =
+  `id, user_email, slug, name, bible, portrait_key, portrait_mime,
+   ref_keys_json, source_keys_json, created_at, updated_at,
+   lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`;
+
+// Optimistic-concurrency update of one of a cast member's JSON-array image-key columns
+// (ref_keys_json / source_keys_json). The old code was read-modify-write across two statements, so
+// two concurrent addRef calls both read the same base array and the second clobbered the first --
+// a ref silently lost (issue #12). Here we read the RAW column text, apply a pure mutator in JS, then
+// write ONLY if the column still holds exactly what we read (a value-CAS in the WHERE clause; the
+// second-resolution updated_at is too coarse to guard on, so we compare the value itself). On a
+// concurrent write the CAS matches zero rows and we re-read + retry, so no update is silently lost.
+// Bounded; on pathological contention it warns and returns the current row WITHOUT applying -- rare,
+// and never a silent clobber. `column` is a fixed union (not caller input), so the interpolation is
+// injection-safe.
+type ImageListMutator = (current: CastRefImage[]) => { next: CastRefImage[]; changed: boolean };
+
+async function casUpdateImageList(
+  env: Env,
+  column: "ref_keys_json" | "source_keys_json",
+  id: number,
+  userEmail: string,
+  mutate: ImageListMutator,
+  maxAttempts = 6,
+): Promise<{ row: CastMember | null; changed: boolean; notFound: boolean }> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const cur = await env.DB.prepare(
+      `SELECT ${column} AS raw FROM cast_members WHERE id = ? AND user_email = ?`
+    )
+      .bind(id, userEmail)
+      .first<{ raw: string | null }>();
+    if (!cur) return { row: null, changed: false, notFound: true };
+
+    const { next, changed } = mutate(parseImageKeyList(cur.raw));
+    if (!changed) {
+      // Nothing to write (e.g. removing a key that is not present). Return the current row.
+      const row = await getCastById(env, id, userEmail);
+      return { row, changed: false, notFound: row === null };
+    }
+
+    // Value-CAS: apply only if the column is byte-for-byte what we read. `col IS ?` is null-safe,
+    // so a legacy NULL column matches a NULL guard. A concurrent writer changes the text -> 0 rows.
+    const updated = await env.DB.prepare(
+      `UPDATE cast_members
+          SET ${column} = ?, updated_at = datetime('now')
+        WHERE id = ? AND user_email = ? AND ${column} IS ?
+       RETURNING ${CAST_ROW_COLUMNS}`
+    )
+      .bind(JSON.stringify(next), id, userEmail, cur.raw)
+      .first<CastRow>();
+    if (updated) return { row: rowToCast(updated), changed: true, notFound: false };
+    // CAS miss: the column changed under us between read and write -> re-read and retry.
+  }
+  console.warn(
+    `cast ${column} update for id ${id} gave up after ${maxAttempts} CAS attempts under contention`
+  );
+  return { row: await getCastById(env, id, userEmail), changed: false, notFound: false };
+}
+
 export async function addRef(
   env: Env,
   id: number,
   userEmail: string,
   ref: CastRefImage,
 ): Promise<CastMember | null> {
-  const cur = await getCastById(env, id, userEmail);
-  if (!cur) return null;
-  const next = [...cur.ref_keys, ref];
-  const result = await env.DB.prepare(
-    `UPDATE cast_members
-        SET ref_keys_json = ?, updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
-               ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
-  )
-    .bind(JSON.stringify(next), id, userEmail)
-    .first<CastRow>();
-  return result ? rowToCast(result) : null;
+  const { row } = await casUpdateImageList(env, "ref_keys_json", id, userEmail, (cur) => ({
+    next: [...cur, ref],
+    changed: true,
+  }));
+  return row;
 }
 
-// Append a batch of refs in one UPDATE (read-modify-write once, not per ref). Used by the
-// cast-image orchestrator to register a whole generated training set onto the cast member at the
-// end of a run -- ten sequential addRef round-trips would be ten D1 writes and ten races.
+// Append a batch of refs in one CAS update (not per ref). Used by the cast-image orchestrator to
+// register a whole generated training set at the end of a run -- ten sequential addRef round-trips
+// would be ten writes; one batch is one CAS write that cannot lose a concurrent append.
 export async function addRefs(
   env: Env,
   id: number,
@@ -311,20 +368,11 @@ export async function addRefs(
   refs: CastRefImage[],
 ): Promise<CastMember | null> {
   if (refs.length === 0) return getCastById(env, id, userEmail);
-  const cur = await getCastById(env, id, userEmail);
-  if (!cur) return null;
-  const next = [...cur.ref_keys, ...refs];
-  const result = await env.DB.prepare(
-    `UPDATE cast_members
-        SET ref_keys_json = ?, updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
-               ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
-  )
-    .bind(JSON.stringify(next), id, userEmail)
-    .first<CastRow>();
-  return result ? rowToCast(result) : null;
+  const { row } = await casUpdateImageList(env, "ref_keys_json", id, userEmail, (cur) => ({
+    next: [...cur, ...refs],
+    changed: true,
+  }));
+  return row;
 }
 
 export async function removeRef(
@@ -333,23 +381,15 @@ export async function removeRef(
   userEmail: string,
   refKey: string,
 ): Promise<{ row: CastMember | null; removedKey: string | null }> {
-  const cur = await getCastById(env, id, userEmail);
-  if (!cur) return { row: null, removedKey: null };
-  const next = cur.ref_keys.filter((r) => r.key !== refKey);
-  if (next.length === cur.ref_keys.length) {
-    return { row: cur, removedKey: null };
-  }
-  const result = await env.DB.prepare(
-    `UPDATE cast_members
-        SET ref_keys_json = ?, updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
-               ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
-  )
-    .bind(JSON.stringify(next), id, userEmail)
-    .first<CastRow>();
-  return { row: result ? rowToCast(result) : null, removedKey: refKey };
+  const { row, changed, notFound } = await casUpdateImageList(
+    env, "ref_keys_json", id, userEmail,
+    (cur) => {
+      const next = cur.filter((r) => r.key !== refKey);
+      return { next, changed: next.length !== cur.length };
+    },
+  );
+  if (notFound) return { row: null, removedKey: null };
+  return { row, removedKey: changed ? refKey : null };
 }
 
 // v0.90.0: persisted source/reference photos. Mirror the addRef /
@@ -362,20 +402,11 @@ export async function addSource(
   userEmail: string,
   src: CastRefImage,
 ): Promise<CastMember | null> {
-  const cur = await getCastById(env, id, userEmail);
-  if (!cur) return null;
-  const next = [...cur.source_keys, src];
-  const result = await env.DB.prepare(
-    `UPDATE cast_members
-        SET source_keys_json = ?, updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
-               ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
-  )
-    .bind(JSON.stringify(next), id, userEmail)
-    .first<CastRow>();
-  return result ? rowToCast(result) : null;
+  const { row } = await casUpdateImageList(env, "source_keys_json", id, userEmail, (cur) => ({
+    next: [...cur, src],
+    changed: true,
+  }));
+  return row;
 }
 
 export async function removeSource(
@@ -384,23 +415,15 @@ export async function removeSource(
   userEmail: string,
   srcKey: string,
 ): Promise<{ row: CastMember | null; removedKey: string | null }> {
-  const cur = await getCastById(env, id, userEmail);
-  if (!cur) return { row: null, removedKey: null };
-  const next = cur.source_keys.filter((s) => s.key !== srcKey);
-  if (next.length === cur.source_keys.length) {
-    return { row: cur, removedKey: null };
-  }
-  const result = await env.DB.prepare(
-    `UPDATE cast_members
-        SET source_keys_json = ?, updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
-               ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
-  )
-    .bind(JSON.stringify(next), id, userEmail)
-    .first<CastRow>();
-  return { row: result ? rowToCast(result) : null, removedKey: srcKey };
+  const { row, changed, notFound } = await casUpdateImageList(
+    env, "source_keys_json", id, userEmail,
+    (cur) => {
+      const next = cur.filter((s) => s.key !== srcKey);
+      return { next, changed: next.length !== cur.length };
+    },
+  );
+  if (notFound) return { row: null, removedKey: null };
+  return { row, removedKey: changed ? srcKey : null };
 }
 
 // v0.57.0: standalone LoRA training fields. setLoraJob is called when

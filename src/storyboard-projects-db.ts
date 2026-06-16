@@ -87,6 +87,10 @@ export async function allocateProjectSlug(
   throw new Error(`Could not allocate project slug after 200 attempts (base='${base}')`);
 }
 
+// Bound the per-user project list so it can never scan unboundedly (issue #12). Generous, so the
+// newest-first list is effectively complete for real users while the query stays capped.
+const PROJECT_LIST_LIMIT = 500;
+
 export async function listProjectsForUser(
   env: Env,
   userEmail: string,
@@ -96,9 +100,10 @@ export async function listProjectsForUser(
             created_at, updated_at
        FROM storyboard_projects
       WHERE user_email = ?
-      ORDER BY created_at DESC`
+      ORDER BY created_at DESC
+      LIMIT ?`
   )
-    .bind(userEmail)
+    .bind(userEmail, PROJECT_LIST_LIMIT)
     .all<ProjectRow>();
   return (result.results || []).map(rowToProject);
 }

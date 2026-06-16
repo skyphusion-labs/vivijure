@@ -1002,11 +1002,19 @@ export async function setRenderTags(
 
 // v0.126.0: the distinct tags this user has applied across all their renders,
 // most-used first (then alphabetical), for the history tag-filter autocomplete.
+// Cap the tag-autocomplete scan to the most recent tagged renders instead of loading EVERY render's
+// tags_json (issue #12). Autocomplete only needs a representative set; the newest tagged renders are
+// the relevant ones, and the count-sort below still ranks within that window.
+const TAG_SCAN_LIMIT = 500;
+
 export async function listUserTags(env: Env, userEmail: string): Promise<string[]> {
   const result = await env.DB.prepare(
-    `SELECT tags_json FROM renders WHERE user_email = ? AND tags_json IS NOT NULL`,
+    `SELECT tags_json FROM renders
+      WHERE user_email = ? AND tags_json IS NOT NULL
+      ORDER BY submitted_at DESC
+      LIMIT ?`,
   )
-    .bind(userEmail)
+    .bind(userEmail, TAG_SCAN_LIMIT)
     .all();
   const rows = (result.results ?? []) as unknown as Array<{ tags_json: unknown }>;
   const counts = new Map<string, number>();
