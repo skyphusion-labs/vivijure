@@ -77,11 +77,6 @@ function parseImageKeyList(raw: string | null): CastRefImage[] {
   }
 }
 
-// Back-compat alias for any external caller that imported parseRefKeys.
-function parseRefKeys(raw: string | null): CastRefImage[] {
-  return parseImageKeyList(raw);
-}
-
 function normalizeLoraStatus(raw: string | null): LoraStatus {
   if (raw === "training" || raw === "ready" || raw === "failed") return raw;
   return "idle";

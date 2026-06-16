@@ -170,7 +170,7 @@ function sceneLabel(scene: Record<string, unknown>, index: number): string {
 function normalizeStyleNone(value: unknown): string {
   if (typeof value !== "string") return "None";
   const trimmed = value.trim();
-  return trimmed.length === 0 ? "None" : value;
+  return trimmed.length === 0 ? "None" : trimmed; // return the trimmed value, not the raw (issue #17)
 }
 
 export function validateStoryboard(input: unknown): ValidationResult {

@@ -34,19 +34,37 @@ function esc(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+  // Note: `'` is intentionally not escaped -- every interpolation here lands in a double-quoted
+  // attribute or in text, so it is safe. Locked by a test (issue #17).
+}
+
+// Keep notification fields bounded -- a runaway project name or error string must not bloat the
+// email (issue #17). Mirrors the spirit of the 300-char cap the submit path applies to opaque bodies.
+const MAX_EMAIL_FIELD = 200;
+function clampField(s: string): string {
+  return s.length > MAX_EMAIL_FIELD ? `${s.slice(0, MAX_EMAIL_FIELD)}...` : s;
+}
+
+// Encode an R2 key for the /api/artifact/*key catch-all route, which splits the path on "/" and
+// decodeURIComponent's each segment. Per-segment encoding keeps the slashes literal while escaping
+// "#?&" and spaces within a segment, so a key like "renders/a b#c.mp4" round-trips correctly instead
+// of producing a broken link (issue #17).
+function encodeArtifactKey(key: string): string {
+  return key.split("/").map(encodeURIComponent).join("/");
 }
 
 // baseUrl: the public origin (e.g. https://skyphusion.org), no trailing slash.
 export function buildRenderEmail(info: RenderNotifyInfo, baseUrl: string): BuiltEmail {
   const base = baseUrl.replace(/\/+$/, "");
   const done = info.status === "COMPLETED";
-  const proj = info.project && info.project.trim() ? info.project.trim() : "your project";
+  const proj = info.project && info.project.trim() ? clampField(info.project.trim()) : "your project";
+  const errMsg = info.error ? clampField(info.error) : null;
   const dur = humanDuration(info.executionTimeMs);
   const isPreview = info.mode === "keyframes-only";
   const kind = isPreview ? "keyframe preview" : "render";
   const historyUrl = `${base}/planner`;
   const watchUrl =
-    done && info.outputKey ? `${base}/api/artifact/${info.outputKey}` : null;
+    done && info.outputKey ? `${base}/api/artifact/${encodeArtifactKey(info.outputKey)}` : null;
 
   const subject = done
     ? `Your ${kind} "${proj}" is ready`
@@ -61,7 +79,7 @@ export function buildRenderEmail(info: RenderNotifyInfo, baseUrl: string): Built
     tLines.push(`Open it in your planner History: ${historyUrl}`);
   } else {
     tLines.push(`Your Vivijure ${kind} "${proj}" failed.`);
-    if (info.error) tLines.push(`Reason: ${info.error}`);
+    if (errMsg) tLines.push(`Reason: ${errMsg}`);
     tLines.push(`Check it in your planner History: ${historyUrl}`);
   }
   tLines.push("");
@@ -82,9 +100,9 @@ export function buildRenderEmail(info: RenderNotifyInfo, baseUrl: string): Built
       `<p style="margin:0 0 14px;font-size:14px;color:#a9a9be;">Render time: ${esc(dur)}.</p>`,
     );
   }
-  if (!done && info.error) {
+  if (!done && errMsg) {
     bodyRows.push(
-      `<p style="margin:0 0 14px;font-size:14px;color:#a9a9be;">Reason: ${esc(info.error)}</p>`,
+      `<p style="margin:0 0 14px;font-size:14px;color:#a9a9be;">Reason: ${esc(errMsg)}</p>`,
     );
   }
   const btn = (href: string, label: string, primary: boolean): string =>
