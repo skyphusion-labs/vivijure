@@ -136,12 +136,19 @@ export function modulesResponse(modules: RegisteredModule[]): ModulesResponse {
 
 /** Fetch + validate the manifest from one bound module worker. Returns the registered module or
  *  null (logged) on any failure, so one bad module never poisons the registry. */
+// One slow/hung module must not stall discovery for all the others (they are read together under
+// Promise.all). Bound the manifest read with a per-call timeout; on timeout the fetch aborts, the
+// catch below logs it, and the module is simply skipped (issue #17).
+const MANIFEST_READ_TIMEOUT_MS = 3000;
+
 export async function readManifest(
   binding: string,
   fetcher: FetcherLike,
 ): Promise<RegisteredModule | null> {
   try {
-    const res = await fetcher.fetch("https://module/module.json");
+    const res = await fetcher.fetch("https://module/module.json", {
+      signal: AbortSignal.timeout(MANIFEST_READ_TIMEOUT_MS),
+    });
     if (!res.ok) {
       console.warn(`module ${binding}: GET /module.json -> ${res.status}; skipping`);
       return null;

@@ -57,3 +57,19 @@ describe("duplicate shot ids", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("normalizeStyleNone trims the value (issue #17)", () => {
+  it("returns the TRIMMED style, not the raw padded value", () => {
+    const r = validateStoryboard(sb({ style_category: "  anime  ", style_preset: "\tcinematic\n" }));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.style_category).toBe("anime");
+      expect(r.value.style_preset).toBe("cinematic");
+    }
+  });
+  it("collapses whitespace-only / missing to the literal None", () => {
+    const r = validateStoryboard(sb({ style_category: "   " }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.style_category).toBe("None");
+  });
+});

@@ -16,6 +16,16 @@ export function renderLogKey(jobId: string): string {
   return `renders/logs/${jobId}.txt`;
 }
 
+// Bound free-text fields (an error string, an output blob) so a pathological GPU diagnostics dump
+// cannot produce an unbounded R2 log object (issue #17). Generous enough to keep real diagnostics
+// intact; a marker records how much was dropped.
+const MAX_LOG_FIELD = 4000;
+function clampLog(s: string): string {
+  return s.length > MAX_LOG_FIELD
+    ? `${s.slice(0, MAX_LOG_FIELD)}\n...[truncated ${s.length - MAX_LOG_FIELD} chars]`
+    : s;
+}
+
 // Pure: format a RunPod job view into a readable per-render log. Kept pure so it
 // is unit-testable; the caller supplies the timestamp.
 export function buildRenderLogText(view: RunpodJobView, generatedAtIso: string): string {
@@ -32,17 +42,17 @@ export function buildRenderLogText(view: RunpodJobView, generatedAtIso: string):
     lines.push(`Queue delay: ${(view.delayTimeMs / 1000).toFixed(1)}s`);
   }
   if (view.error) {
-    lines.push("", "Error:", view.error);
+    lines.push("", "Error:", clampLog(view.error));
   }
   if (view.output !== undefined && view.output !== null) {
     lines.push("", "Output / diagnostics:");
     if (typeof view.output === "string") {
-      lines.push(view.output);
+      lines.push(clampLog(view.output));
     } else {
       try {
-        lines.push(JSON.stringify(view.output, null, 2));
+        lines.push(clampLog(JSON.stringify(view.output, null, 2)));
       } catch {
-        lines.push(String(view.output));
+        lines.push(clampLog(String(view.output)));
       }
     }
   }
@@ -94,19 +104,19 @@ export function buildCloudAnimateLogText(
     lines.push(`Execution: ${(p.executionTimeMs / 1000).toFixed(1)}s`);
   }
   lines.push(`Shots: ${p.shots.length}`);
-  if (p.error) lines.push("", "Error:", p.error);
+  if (p.error) lines.push("", "Error:", clampLog(p.error));
   for (const s of p.shots) {
     lines.push("", `--- ${s.shot_id} (${s.status}) ---`);
     lines.push(`Model: ${s.model}`);
     lines.push(`AI Gateway log id: ${s.log_id ?? "(none captured)"}`);
     if (s.video_url) lines.push(`Provider clip URL: ${s.video_url}`);
-    if (s.error) lines.push(`Error: ${s.error}`);
+    if (s.error) lines.push(`Error: ${clampLog(s.error)}`);
     if (s.gateway_log !== undefined && s.gateway_log !== null) {
       lines.push("AI Gateway log:");
       try {
-        lines.push(JSON.stringify(s.gateway_log, null, 2));
+        lines.push(clampLog(JSON.stringify(s.gateway_log, null, 2)));
       } catch {
-        lines.push(String(s.gateway_log));
+        lines.push(clampLog(String(s.gateway_log)));
       }
     }
   }
