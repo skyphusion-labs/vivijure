@@ -302,10 +302,12 @@ const hFinalizeRender: Handler = async (req, env) => {
   });
   return json(r.view, 201);
 };
-const hPollRender: Handler = async (_req, env, _c, p) => {
+const hPollRender: Handler = async (_req, env, ctx, p) => {
   const r = await pollRenderJob(env, p.jobId);
   if (!r.ok) return json({ error: r.error }, r.status ?? 502);
-  await updateRenderFromView(env, r.view);
+  // Pass ctx so the best-effort R2 log write runs via waitUntil, off the poll hot
+  // path -- the poll response no longer waits on a D1 lookup + an R2 PUT (issue #15).
+  await updateRenderFromView(env, r.view, ctx);
   return json(r.view);
 };
 const hCancelRender: Handler = async (_req, env, _c, p) => {

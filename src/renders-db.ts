@@ -16,6 +16,15 @@ import type { Env } from "./env";
 import type { RunpodJobView } from "./runpod-submit";
 import { writeRenderLog } from "./render-log";
 
+// Surface a corrupted *_json column instead of swallowing it silently (issue #15).
+// The empty / NULL case is handled by a length guard BEFORE the parse, so this only
+// fires on a row whose column HAS content that will not parse -- a genuine anomaly
+// worth a log line. The caller keeps its own safe fallback; this just makes the
+// corruption diagnosable rather than invisible.
+function warnCorruptColumn(column: string, e: unknown): void {
+  console.warn(`renders: corrupt ${column} JSON in a row, using fallback: ${e instanceof Error ? e.message : String(e)}`);
+}
+
 // Fresh row at submit time.
 export interface NewRenderRow {
   userEmail: string;
@@ -194,7 +203,11 @@ export async function insertRender(env: Env, row: NewRenderRow): Promise<void> {
 // policy). Ownership is NOT checked here; the route handler enforces
 // authn via Cloudflare Access at the edge and authz via user_email at
 // the list endpoint.
-export async function updateRenderFromView(env: Env, view: RunpodJobView): Promise<void> {
+export async function updateRenderFromView(
+  env: Env,
+  view: RunpodJobView,
+  ctx?: ExecutionContext,
+): Promise<void> {
   const now = nowSeconds();
   const completed = TERMINAL_STATUSES.has(view.status) ? now : null;
 
@@ -259,21 +272,32 @@ export async function updateRenderFromView(env: Env, view: RunpodJobView): Promi
   // v0.141.0: on terminal status, persist a per-render log to R2 (conventional
   // key renders/logs/<jobId>.txt) so History can offer a "view logs" link. The
   // row now exists/updated, so read its owner for the artifact ownership stamp.
-  // Best-effort: writeRenderLog never throws, and we swallow lookup errors too,
-  // so logging can never block or break the render-resolve path.
+  // Best-effort: this never blocks or breaks the render-resolve path. When an
+  // ExecutionContext is supplied (the poll route) the owner lookup + R2 write run
+  // via ctx.waitUntil, OFF the poll hot path -- the caller's response no longer
+  // waits on a D1 round-trip + an R2 PUT (issue #15). Without ctx (tests / other
+  // callers) it falls back to awaiting so behavior is unchanged. A failure is
+  // logged rather than swallowed silently, so a persistently failing log write is
+  // diagnosable instead of invisible.
   if (completed !== null) {
-    try {
-      const owner = await env.DB.prepare(
-        `SELECT user_email FROM renders WHERE job_id = ?`,
-      )
-        .bind(view.jobId)
-        .first<{ user_email: string }>();
-      if (owner?.user_email) {
-        await writeRenderLog(env, view, owner.user_email);
+    const logTask = (async () => {
+      try {
+        const owner = await env.DB.prepare(
+          `SELECT user_email FROM renders WHERE job_id = ?`,
+        )
+          .bind(view.jobId)
+          .first<{ user_email: string }>();
+        if (owner?.user_email) {
+          await writeRenderLog(env, view, owner.user_email);
+        }
+      } catch (e) {
+        console.warn(
+          `render log write failed for job ${view.jobId}: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
-    } catch {
-      // logging is best-effort; ignore
-    }
+    })();
+    if (ctx) ctx.waitUntil(logTask);
+    else await logTask;
   }
 }
 
@@ -363,7 +387,8 @@ export async function getRenderForPoll(
   if (typeof opRaw === "string" && opRaw.length > 0) {
     try {
       output = JSON.parse(opRaw);
-    } catch {
+    } catch (e) {
+      warnCorruptColumn("output_json", e);
       output = opRaw;
     }
   }
@@ -774,7 +799,8 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         overrides = parsed as Record<string, unknown>;
       }
-    } catch {
+    } catch (e) {
+      warnCorruptColumn("render_overrides", e);
       overrides = null;
     }
   }
@@ -784,7 +810,8 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
   if (typeof opRaw === "string" && opRaw.length > 0) {
     try {
       output = JSON.parse(opRaw);
-    } catch {
+    } catch (e) {
+      warnCorruptColumn("output_json", e);
       output = opRaw;
     }
   }
@@ -796,7 +823,8 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
       const parsed = JSON.parse(kfRaw);
       const refs = normalizeKeyframes(parsed);
       if (refs.length > 0) keyframes = refs;
-    } catch {
+    } catch (e) {
+      warnCorruptColumn("keyframes_json", e);
       keyframes = null;
     }
   }
@@ -853,7 +881,8 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
         const parsed = JSON.parse(lsRaw);
         const arr = normalizeLockedShots(parsed);
         return arr.length > 0 ? arr : null;
-      } catch {
+      } catch (e) {
+        warnCorruptColumn("locked_shots_json", e);
         return null;
       }
     })(),
@@ -874,7 +903,8 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
       if (typeof tRaw !== "string" || tRaw.length === 0) return [];
       try {
         return normalizeTags(JSON.parse(tRaw));
-      } catch {
+      } catch (e) {
+        warnCorruptColumn("tags_json", e);
         return [];
       }
     })(),
@@ -985,7 +1015,8 @@ export async function listUserTags(env: Env, userEmail: string): Promise<string[
     let parsed: unknown;
     try {
       parsed = JSON.parse(row.tags_json);
-    } catch {
+    } catch (e) {
+      warnCorruptColumn("tags_json", e);
       continue;
     }
     for (const tag of normalizeTags(parsed)) {

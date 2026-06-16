@@ -128,24 +128,39 @@ export async function writeCloudAnimateLog(
         gateway?: (id: string) => { getLog: (logId: string) => Promise<unknown> };
       }
     ).gateway;
+    // Enrich each shot with its AI Gateway log object on a LOCAL COPY -- never mutate
+    // the caller's shot objects (issue #15). The lookups run CONCURRENTLY (one per
+    // shot) instead of serially, and each is individually guarded, so one slow or
+    // missing log id neither blocks the others nor drops the file; a failed lookup
+    // just leaves gateway_log undefined and is logged rather than swallowed silently.
+    let shots = input.shots;
     if (gw && env.GATEWAY_ID) {
-      for (const s of input.shots) {
-        if (!s.log_id) continue;
-        try {
-          s.gateway_log = await gw(env.GATEWAY_ID).getLog(s.log_id);
-        } catch {
-          /* log storage off / id expired / not found: leave undefined */
-        }
-      }
+      const gateway = gw(env.GATEWAY_ID);
+      shots = await Promise.all(
+        input.shots.map(async (s) => {
+          if (!s.log_id) return { ...s };
+          try {
+            return { ...s, gateway_log: await gateway.getLog(s.log_id) };
+          } catch (e) {
+            console.warn(
+              `cloud-animate log: AI Gateway getLog failed for shot ${s.shot_id} (log ${s.log_id}): ${e instanceof Error ? e.message : String(e)}`,
+            );
+            return { ...s };
+          }
+        }),
+      );
     }
     const key = renderLogKey(input.jobId);
-    const text = buildCloudAnimateLogText(input, new Date().toISOString());
+    const text = buildCloudAnimateLogText({ ...input, shots }, new Date().toISOString());
     await env.R2_RENDERS.put(key, text, {
       httpMetadata: { contentType: "text/plain; charset=utf-8" },
       customMetadata: { user_email: userEmail },
     });
     return key;
-  } catch {
+  } catch (e) {
+    console.warn(
+      `cloud-animate log write failed for job ${input.jobId}: ${e instanceof Error ? e.message : String(e)}`,
+    );
     return null;
   }
 }
@@ -165,7 +180,10 @@ export async function writeRenderLog(
       customMetadata: { user_email: userEmail },
     });
     return key;
-  } catch {
+  } catch (e) {
+    console.warn(
+      `render log write failed for job ${view.jobId}: ${e instanceof Error ? e.message : String(e)}`,
+    );
     return null;
   }
 }
