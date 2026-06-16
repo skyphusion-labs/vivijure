@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, type FilmScene, type FinishShot } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
+import type { Env } from "../src/env";
 
 const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
   shot_id: "shot_01", clip_key: "clips/shot_01.mp4", chain: ["MODULE_FINISH_RIFE"], idx: 0,
@@ -161,5 +162,111 @@ describe("coerceSceneIds (scene-id seam: caller ids -> bundle's canonical shot_N
   });
   it("handles empty input", () => {
     expect(coerceSceneIds([])).toEqual([]);
+  });
+});
+
+// Issue #82: the assemble cold-504 auto-recovery. callVideoFinish is driven by a MOCK VIDEO_FINISH_VPC
+// binding (no real container) with backoffMs=0 so retries do not wait; the live endpoint is never hit.
+
+// A VPC-binding double: returns each queued status in order (last repeats), recording every call.
+function mockVpc(statuses: number[]) {
+  const calls: string[] = [];
+  let i = 0;
+  const binding = {
+    fetch: async (input: Request | string): Promise<Response> => {
+      calls.push(typeof input === "string" ? input : input.url);
+      const status = statuses[Math.min(i, statuses.length - 1)];
+      i++;
+      return new Response(JSON.stringify({ ok: status === 200 }), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  };
+  const env = { VIDEO_FINISH_VPC: binding } as unknown as Env;
+  return { env, calls };
+}
+
+const finishPayload = { clips: [{ url: "https://r2/clip.mp4" }], outputUrl: "https://r2/film.mp4", outputKey: "renders/f/film.mp4" };
+
+describe("callVideoFinish transient retry (issue #82)", () => {
+  it("returns a 200 on the first try with no retry", async () => {
+    const { env, calls } = mockVpc([200]);
+    const resp = await callVideoFinish(env, finishPayload, { backoffMs: 0 });
+    expect(resp?.status).toBe(200);
+    expect(calls.length).toBe(1);
+  });
+
+  it("retries a 504 (cold-boot + concat over the window) then succeeds", async () => {
+    const { env, calls } = mockVpc([504, 200]);
+    const resp = await callVideoFinish(env, finishPayload, { backoffMs: 0 });
+    expect(resp?.status).toBe(200);
+    expect(calls.length).toBe(2);
+  });
+
+  it("still retries a 503 (port binding) -- unchanged behavior", async () => {
+    const { env, calls } = mockVpc([503, 200]);
+    const resp = await callVideoFinish(env, finishPayload, { backoffMs: 0 });
+    expect(resp?.status).toBe(200);
+    expect(calls.length).toBe(2);
+  });
+
+  it("returns the last 504 after exhausting retries (orchestrator then auto-recovers)", async () => {
+    const { env, calls } = mockVpc([504]);
+    const resp = await callVideoFinish(env, finishPayload, { retries: 3, backoffMs: 0 });
+    expect(resp?.status).toBe(504);
+    expect(calls.length).toBe(3);
+  });
+
+  it("does NOT retry a terminal 500 (real ffmpeg error)", async () => {
+    const { env, calls } = mockVpc([500, 200]);
+    const resp = await callVideoFinish(env, finishPayload, { backoffMs: 0 });
+    expect(resp?.status).toBe(500);
+    expect(calls.length).toBe(1);
+  });
+});
+
+describe("classifyAssembleTransport (issue #82 bounded auto-recover)", () => {
+  const CAP = 6;
+
+  it("a 504 under the cap stays in assemble (retry next poll)", () => {
+    const d = classifyAssembleTransport(504, 0, CAP);
+    expect(d.state).toBe("retry");
+    if (d.state === "retry") {
+      expect(d.attempts).toBe(1);
+      expect(d.error).toContain("gateway 504");
+      expect(d.error).toContain("clips intact");
+    }
+  });
+
+  it("treats unreachable (null status) as transient", () => {
+    const d = classifyAssembleTransport(null, 2, CAP);
+    expect(d.state).toBe("retry");
+    if (d.state === "retry") {
+      expect(d.attempts).toBe(3);
+      expect(d.error).toContain("container unreachable");
+    }
+  });
+
+  it("treats 502 and 503 as transient too", () => {
+    expect(classifyAssembleTransport(502, 0, CAP).state).toBe("retry");
+    expect(classifyAssembleTransport(503, 0, CAP).state).toBe("retry");
+  });
+
+  it("goes terminal (exhausted) once the cap is reached", () => {
+    const d = classifyAssembleTransport(504, CAP - 1, CAP);
+    expect(d.state).toBe("exhausted");
+    if (d.state === "exhausted") {
+      expect(d.attempts).toBe(CAP);
+      expect(d.error).toContain("reset phase");
+    }
+  });
+
+  it("is 'ok' for a terminal container error (500) -- caller surfaces it, no loop", () => {
+    expect(classifyAssembleTransport(500, 0, CAP).state).toBe("ok");
+  });
+
+  it("is 'ok' for a success (200)", () => {
+    expect(classifyAssembleTransport(200, 0, CAP).state).toBe("ok");
   });
 });

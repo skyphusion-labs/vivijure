@@ -49,6 +49,11 @@ export interface FilmJob {
   clip_job_id?: string;
   finish_shots?: FinishShot[];
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
+  // Bounded counter for transient assemble retries (issue #82). A cold or slow video-finish concat can
+  // 504 (or be briefly unreachable) on the last CPU-only step; rather than failing a fully-rendered
+  // film, enterAssemblePhase keeps phase="assemble" so the next poll re-attempts (the re-PUT to the same
+  // film key is idempotent), capped by MAX_ASSEMBLE_ATTEMPTS. Absent on pre-#82 jobs (reads as 0).
+  assemble_attempts?: number;
   error?: string;
   created_at: number;
   user_email?: string; // film owner; passed to the `notify` hook on done (e.g. for an email notifier)
@@ -225,10 +230,12 @@ interface FinishContainerResult {
   error?: string;
 }
 
-/** Call the video-finish container's POST /finish: warm the singleton, then post with a retry on a
- *  503 (a fully-cold container can 503 while its port is still binding -- same shape as callImagePrep
- *  in bundle-assembler). backoffMs is injectable so tests do not actually wait. Returns the Response
- *  or null on a network error. */
+/** Call the video-finish container's POST /finish, retrying on a transient gateway status -- 503 (a
+ *  cold container can 503 while its port is still binding -- same shape as callImagePrep in
+ *  bundle-assembler) or 504 (a cold-boot + ffmpeg concat that exceeds the request window; issue #82).
+ *  backoffMs is injectable so tests do not actually wait. Returns the Response or null on a network
+ *  error. The orchestrator (enterAssemblePhase) adds an outer, across-polls auto-recover on top of
+ *  this in-request retry, since a single request window may not outlast a fully-cold container. */
 export async function callVideoFinish(
   env: Env,
   payload: {
@@ -257,13 +264,52 @@ export async function callVideoFinish(
     } catch {
       resp = null;
     }
-    if (resp && resp.status !== 503) return resp;
-    if (attempt < retries - 1) await new Promise((r) => setTimeout(r, backoffMs)); // container still binding
+    if (resp && resp.status !== 503 && resp.status !== 504) return resp;
+    if (attempt < retries - 1) await new Promise((r) => setTimeout(r, backoffMs)); // container still binding / warming
   }
   return resp;
 }
 
 const filmOutKey = (filmId: string) => `renders/${filmId}/film.mp4`;
+
+// Cap on across-polls assemble re-attempts before a transient failure goes terminal (issue #82).
+const MAX_ASSEMBLE_ATTEMPTS = 6;
+
+/** Pure: classify a video-finish assemble attempt and advance the bounded retry counter (issue #82).
+ *  `status` is the HTTP status, or null when the container was unreachable (network error). A transient
+ *  gateway outcome -- unreachable, or 502/503/504 from a cold or slow ffmpeg concat exceeding the
+ *  request window -- auto-recovers: the film stays in "assemble" so the next poll re-attempts (re-PUTting
+ *  the same film key is idempotent), bounded by maxAttempts. Anything else is "ok" here -- the caller
+ *  then distinguishes a real success from the container's own terminal error (e.g. a 500 ffmpeg body),
+ *  which must NOT loop. A fully-rendered film therefore self-heals from a cold-container 504 instead of
+ *  failing on the last CPU-only step and needing a human phase-reset. */
+export type AssembleTransport =
+  | { state: "ok" } // not a transient gateway outcome; caller proceeds to read the response
+  | { state: "retry"; attempts: number; error: string } // stay in "assemble", re-attempt next poll
+  | { state: "exhausted"; attempts: number; error: string }; // cap hit -> terminal failed
+
+export function classifyAssembleTransport(
+  status: number | null,
+  priorAttempts: number,
+  maxAttempts: number,
+): AssembleTransport {
+  const transient = status === null || status === 502 || status === 503 || status === 504;
+  if (!transient) return { state: "ok" };
+  const attempts = priorAttempts + 1;
+  const reason = status === null ? "container unreachable" : `gateway ${status}`;
+  if (attempts < maxAttempts) {
+    return {
+      state: "retry",
+      attempts,
+      error: `assemble retry ${attempts}/${maxAttempts} (${reason}); clips intact, re-attempting next poll`,
+    };
+  }
+  return {
+    state: "exhausted",
+    attempts,
+    error: `video-finish ${reason} after ${attempts} assemble attempts; clips intact in R2 (reset phase to "assemble" to retry)`,
+  };
+}
 
 /** Internal: the assemble leg. Gather the final clips (in scene order), presign each as a fetchable
  *  GET + presign the film output as a PUT, and hand them to the video-finish container, which ffmpeg-
@@ -318,10 +364,30 @@ async function enterAssemblePhase(
   // Resolution/fps are left to the container default (it normalizes the clips); the motion output
   // does not carry width/height, so matching the source resolution is a later polish, not a gate.
   const resp = await callVideoFinish(env, { clips, outputUrl, outputKey });
+  // A transient gateway outcome (unreachable / 502 / 503 / 504) auto-recovers across polls instead of
+  // going terminal: the clips are intact in R2 and re-PUTting the same film key is idempotent, so keep
+  // phase="assemble" and let the next poll re-attempt against a (by then) warmer container -- bounded so
+  // a genuinely stuck assemble still fails loudly (issue #82).
+  const transport = classifyAssembleTransport(resp ? resp.status : null, job.assemble_attempts ?? 0, MAX_ASSEMBLE_ATTEMPTS);
+  if (transport.state === "retry") {
+    job.assemble_attempts = transport.attempts;
+    job.phase = "assemble"; // unchanged; next advanceFilmJob poll re-enters this leg
+    job.error = transport.error;
+    return;
+  }
+  if (transport.state === "exhausted") {
+    job.assemble_attempts = transport.attempts;
+    job.phase = "failed";
+    job.error = transport.error;
+    return;
+  }
+  // state === "ok": a transient status is never null, so resp is non-null here. The guard keeps the
+  // compiler happy and is a defensive backstop.
   if (!resp) { job.phase = "failed"; job.error = "video-finish container unreachable"; return; }
   if (!resp.ok) {
-    // Surface the container's own error body (it returns {ok:false,error}); an opaque "returned 500"
-    // is undiagnosable. The container's ffmpeg/assemble failures are the most useful signal here.
+    // A non-transient error status: the container's own failure (e.g. a 500 with an ffmpeg/assemble
+    // error body). Surface the body -- an opaque "returned 500" is undiagnosable -- and go terminal;
+    // retrying a real assemble error would only loop.
     let detail = "";
     try { detail = (await resp.text()).slice(0, 400); } catch { /* body unreadable */ }
     job.phase = "failed";
