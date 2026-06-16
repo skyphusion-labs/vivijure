@@ -165,14 +165,39 @@ export async function readManifest(
   }
 }
 
+// Per-isolate discovery cache for the /api/modules route (issue #17 follow-up). That route re-ran N
+// service-binding manifest fetches on EVERY request; with a short TTL it serves a cached registry
+// instead. Module bindings are static per deploy and a module only changes its manifest on its own
+// redeploy, so 60s of staleness is fine. This holds only module metadata (identical for every user),
+// so the module-scoped cache leaks nothing cross-request. OPT-IN: only the route passes a TTL; every
+// dispatch-path caller passes nothing and keeps the old always-fresh behavior.
+let discoveryCache: { modules: RegisteredModule[]; expiresAt: number } | null = null;
+
+/** Test-only: drop the per-isolate discovery cache so a suite starts clean. */
+export function _resetModuleDiscoveryCache(): void {
+  discoveryCache = null;
+}
+
 /** Discover every installed module from the env: read each `MODULE_*` binding's manifest in
- *  parallel, drop the ones that fail, and return the live registry. */
-export async function discoverModules(env: Record<string, unknown>): Promise<RegisteredModule[]> {
+ *  parallel, drop the ones that fail, and return the live registry. With `opts.cacheTtlMs > 0` the
+ *  result is cached per-isolate for that many ms (the /api/modules route uses this); without it the
+ *  discovery runs fresh (the dispatch paths). `opts.nowMs` is injectable for tests. */
+export async function discoverModules(
+  env: Record<string, unknown>,
+  opts: { cacheTtlMs?: number; nowMs?: number } = {},
+): Promise<RegisteredModule[]> {
+  const ttl = opts.cacheTtlMs ?? 0;
+  const now = opts.nowMs ?? Date.now();
+  if (ttl > 0 && discoveryCache && now < discoveryCache.expiresAt) {
+    return discoveryCache.modules;
+  }
   const names = moduleBindingNames(env);
   const read = await Promise.all(
     names.map((n) => readManifest(n, env[n] as FetcherLike)),
   );
-  return read.filter((m): m is RegisteredModule => m !== null);
+  const modules = read.filter((m): m is RegisteredModule => m !== null);
+  if (ttl > 0) discoveryCache = { modules, expiresAt: now + ttl };
+  return modules;
 }
 
 /** Look up the module binding that should answer a `pick_one` hook for a given choice (by module
