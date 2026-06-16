@@ -59,6 +59,31 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+/** Sniff the real image type from the leading magic bytes and return its `{ mime, ext }`. FLUX-2
+ *  klein returns JPEG bytes (not PNG), so the FLUX-2 path can't assume a type -- it reads it off the
+ *  buffer instead. Recognizes JPEG / PNG / WEBP; defaults to png for anything unrecognized (the
+ *  historical assumption, kept as the safe fallback). */
+export function sniffImageMime(bytes: ArrayBuffer | Uint8Array): { mime: string; ext: string } {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  // JPEG: FF D8 FF
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) {
+    return { mime: "image/jpeg", ext: "jpg" };
+  }
+  // PNG: 89 50 4E 47
+  if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+    return { mime: "image/png", ext: "png" };
+  }
+  // WEBP: "RIFF" (52 49 46 46) .... "WEBP" (57 45 42 50) at offset 8
+  if (
+    b.length >= 12 &&
+    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
+  ) {
+    return { mime: "image/webp", ext: "webp" };
+  }
+  return { mime: "image/png", ext: "png" };
+}
+
 /** Pull the URL out of a proxied image-gen response (ported from output-extract.extractProxiedImageUrl):
  *  the wrapped { state, result: { image: "<url>" } } or the bare { image: "<url>" }. */
 export function extractProxiedImageUrl(result: unknown): string | null {
@@ -151,7 +176,10 @@ export async function generateImage(
     });
     const b64 = (result as { image?: string })?.image;
     if (!b64 || typeof b64 !== "string") throw new Error("flux-2 returned no image");
-    return { bytes: base64ToBytes(b64).buffer as ArrayBuffer, mime: "image/png" };
+    // FLUX-2 klein returns JPEG (not PNG) -- sniff the actual type so the stored mime + R2 key
+    // suffix match the real bytes instead of a hardcoded "image/png".
+    const bytes = base64ToBytes(b64).buffer as ArrayBuffer;
+    return { bytes, mime: sniffImageMime(bytes).mime };
   }
   // proxied (e.g. the nano-banana fallback): reference-condition via image_input[], through the gateway.
   const cap = model.startsWith("openai/") ? 16 : PROXIED_MAX_REFS;
