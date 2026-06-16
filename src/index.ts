@@ -537,7 +537,9 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/health") return json({ ok: true, service: "vivijure-studio", phase: 1 });
     if (url.pathname === "/api/modules" && request.method === "GET") {
-      const modules = await discoverModules(env as unknown as Record<string, unknown>);
+      // Cache discovery for 60s per isolate so a refresh storm does not re-fetch every module's
+      // manifest each request (issue #17 follow-up). Only this route opts in; dispatch stays fresh.
+      const modules = await discoverModules(env as unknown as Record<string, unknown>, { cacheTtlMs: 60_000 });
       return json(modulesResponse(modules));
     }
     const hit = match(API_ROUTES, request.method, url.pathname);
