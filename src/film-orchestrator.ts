@@ -276,15 +276,20 @@ const filmOutKey = (filmId: string) => `renders/${filmId}/film.mp4`;
 const MAX_ASSEMBLE_ATTEMPTS = 6;
 
 /** Pure: classify a video-finish assemble attempt and advance the bounded retry counter (issue #82).
- *  `status` is the HTTP status, or null when the container was unreachable (network error). A transient
- *  gateway outcome -- unreachable, or 502/503/504 from a cold or slow ffmpeg concat exceeding the
- *  request window -- auto-recovers: the film stays in "assemble" so the next poll re-attempts (re-PUTting
- *  the same film key is idempotent), bounded by maxAttempts. Anything else is "ok" here -- the caller
- *  then distinguishes a real success from the container's own terminal error (e.g. a 500 ffmpeg body),
- *  which must NOT loop. A fully-rendered film therefore self-heals from a cold-container 504 instead of
- *  failing on the last CPU-only step and needing a human phase-reset. */
+ *  `status` is the HTTP status, or null when the container was unreachable (network error). The counter
+ *  tracks CONSECUTIVE transient failures, so the returned `attempts` is always the value to store:
+ *    - transient gateway outcome (unreachable, or 502/503/504 from a cold or slow ffmpeg concat
+ *      exceeding the request window) -> prior + 1; the film stays in "assemble" and the next poll
+ *      re-attempts (re-PUTting the same film key is idempotent), bounded by maxAttempts.
+ *    - any definitive answer from the container ("ok": a real success, OR the container's own terminal
+ *      error like a 500 ffmpeg body) -> 0, because the transient streak is broken. Resetting here is
+ *      what keeps a slow-but-successful finish from carrying stale attempts toward the cap, and gives a
+ *      later manual phase-reset a full retry budget. The caller then distinguishes success from the
+ *      container's terminal error (which must NOT loop).
+ *  A fully-rendered film therefore self-heals from a cold-container 504 instead of failing on the last
+ *  CPU-only step and needing a human phase-reset. */
 export type AssembleTransport =
-  | { state: "ok" } // not a transient gateway outcome; caller proceeds to read the response
+  | { state: "ok"; attempts: number } // definitive answer; streak reset to 0, caller reads the response
   | { state: "retry"; attempts: number; error: string } // stay in "assemble", re-attempt next poll
   | { state: "exhausted"; attempts: number; error: string }; // cap hit -> terminal failed
 
@@ -294,7 +299,7 @@ export function classifyAssembleTransport(
   maxAttempts: number,
 ): AssembleTransport {
   const transient = status === null || status === 502 || status === 503 || status === 504;
-  if (!transient) return { state: "ok" };
+  if (!transient) return { state: "ok", attempts: 0 };
   const attempts = priorAttempts + 1;
   const reason = status === null ? "container unreachable" : `gateway ${status}`;
   if (attempts < maxAttempts) {
@@ -369,14 +374,16 @@ async function enterAssemblePhase(
   // phase="assemble" and let the next poll re-attempt against a (by then) warmer container -- bounded so
   // a genuinely stuck assemble still fails loudly (issue #82).
   const transport = classifyAssembleTransport(resp ? resp.status : null, job.assemble_attempts ?? 0, MAX_ASSEMBLE_ATTEMPTS);
+  // One assignment for every outcome: the helper returns the next counter value (prior+1 on a transient
+  // failure, 0 once the container gives a definitive answer -- so a slow-but-successful finish never
+  // carries stale attempts toward the cap, and a manual phase-reset starts from a full budget).
+  job.assemble_attempts = transport.attempts;
   if (transport.state === "retry") {
-    job.assemble_attempts = transport.attempts;
     job.phase = "assemble"; // unchanged; next advanceFilmJob poll re-enters this leg
     job.error = transport.error;
     return;
   }
   if (transport.state === "exhausted") {
-    job.assemble_attempts = transport.attempts;
     job.phase = "failed";
     job.error = transport.error;
     return;

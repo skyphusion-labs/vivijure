@@ -269,4 +269,11 @@ describe("classifyAssembleTransport (issue #82 bounded auto-recover)", () => {
   it("is 'ok' for a success (200)", () => {
     expect(classifyAssembleTransport(200, 0, CAP).state).toBe("ok");
   });
+
+  it("resets the counter to 0 on a definitive answer, so a slow-but-successful finish never trips the cap", () => {
+    // had 4 prior transient failures, then the (slow) container finally answers 200 -> streak broken.
+    expect(classifyAssembleTransport(200, 4, CAP)).toEqual({ state: "ok", attempts: 0 });
+    // a terminal container 500 likewise breaks the streak (a later manual re-run gets a full budget).
+    expect(classifyAssembleTransport(500, 5, CAP)).toEqual({ state: "ok", attempts: 0 });
+  });
 });
