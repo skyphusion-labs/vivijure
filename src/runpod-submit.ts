@@ -419,327 +419,280 @@ export function normalizeRunpodResponse(raw: unknown): RunpodJobView | null {
   return view;
 }
 
+// ---------- Shared RunPod transport (retry + timeout) ----------
+//
+// All six RunPod call-sites (the four submitters + cancel + poll) used to be
+// byte-identical fetch dispatchers differing only in method/payload and an
+// error prefix -- exactly the copy-paste surface the v0.68.0 pretrained_loras
+// divergence slipped through (issue #13). They share ONE transport now, so a
+// reliability fix lands in a single place instead of six.
+//
+// Reliability: a transient failure (network error, per-attempt timeout, 429,
+// or 5xx) is retried with bounded, jittered exponential backoff; a terminal
+// 4xx is never retried (a malformed request will not get better). Each attempt
+// is bounded by AbortSignal.timeout so a hung call cannot burn the Worker
+// subrequest budget. Otherwise behavior is identical to the old per-call
+// dispatchers: never throws, returns the normalized view or { ok:false, ... }.
+
+// Default tunables. Three attempts total (two retries); 250ms base backoff
+// doubling per attempt with full jitter; 30s per-attempt timeout.
+const RUNPOD_MAX_ATTEMPTS = 3;
+const RUNPOD_BACKOFF_BASE_MS = 250;
+const RUNPOD_TIMEOUT_MS = 30_000;
+
+// Injection seam for tests: the defaults bind the Worker globals. Tests pass a
+// mock fetch + a no-op sleep (and a deterministic random) so the retry/backoff
+// logic runs without real network or wall-clock delay. Also lets a caller tune
+// attempts/timeout per call if it ever needs to.
+export interface RunpodTransportOpts {
+  fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
+  maxAttempts?: number;
+  backoffBaseMs?: number;
+  timeoutMs?: number;
+}
+
+export type RunpodResult =
+  | { ok: true; view: RunpodJobView }
+  | { ok: false; error: string; status?: number };
+
+interface RunpodRequestSpec {
+  method: "GET" | "POST";
+  url: string;
+  // JSON body for the POST submitters; omitted for cancel (POST, no body) and
+  // poll (GET). Its presence also gates the content-type header.
+  body?: string;
+  // Error-message prefix, e.g. "submit", "finalize submit", "poll" -- preserves
+  // the exact strings the old per-call dispatchers produced.
+  label: string;
+}
+
+// 429 (rate limited) and 5xx (server error) are worth retrying; everything
+// else (4xx) is the caller's fault and will not improve on retry.
+function isTransientStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+// Exponential backoff with full jitter: a random point in [0, base * 2^(n-1)]
+// for 1-based attempt n. Full jitter de-synchronizes a herd of retrying
+// Workers better than a fixed delay.
+function backoffDelayMs(attempt: number, baseMs: number, random: () => number): number {
+  const ceil = baseMs * 2 ** (attempt - 1);
+  return Math.floor(random() * ceil);
+}
+
+// The one transport every RunPod call goes through. Never throws: an env-config
+// miss, a network/timeout error, a non-JSON body, or an HTTP error all come
+// back as { ok:false, error, status? } for the route to translate. Retries a
+// transient failure up to maxAttempts with jittered backoff; returns a terminal
+// 4xx immediately.
+export async function runpodRequest(
+  env: Env,
+  spec: RunpodRequestSpec,
+  opts: RunpodTransportOpts = {},
+): Promise<RunpodResult> {
+  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
+    return {
+      ok: false,
+      error:
+        "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID must be set on the Worker (npx wrangler secret put ...)",
+    };
+  }
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const sleep = opts.sleep ?? defaultSleep;
+  const random = opts.random ?? Math.random;
+  const maxAttempts = opts.maxAttempts ?? RUNPOD_MAX_ATTEMPTS;
+  const backoffBaseMs = opts.backoffBaseMs ?? RUNPOD_BACKOFF_BASE_MS;
+  const timeoutMs = opts.timeoutMs ?? RUNPOD_TIMEOUT_MS;
+
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${env.RUNPOD_API_KEY}`,
+  };
+  if (spec.body !== undefined) headers["content-type"] = "application/json";
+
+  // Carried across attempts so a final transient HTTP failure surfaces the
+  // status the route maps to an HTTP code (not just a bare message).
+  let lastTransientError = `RunPod ${spec.label} failed`;
+  let lastTransientStatus: number | undefined;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetchImpl(spec.url, {
+        method: spec.method,
+        headers,
+        body: spec.body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      // Network error or a per-attempt timeout (AbortSignal fires a
+      // TimeoutError) -- both transient.
+      const m = err instanceof Error ? err.message : String(err);
+      lastTransientError = `RunPod ${spec.label} network error: ${m}`;
+      lastTransientStatus = undefined;
+      if (attempt < maxAttempts) {
+        await sleep(backoffDelayMs(attempt, backoffBaseMs, random));
+        continue;
+      }
+      return { ok: false, error: lastTransientError };
+    }
+
+    // Retry a transient HTTP status (when attempts remain) without reading the
+    // body. On the final attempt fall through so the real error envelope is
+    // parsed and returned.
+    if (!resp.ok && isTransientStatus(resp.status) && attempt < maxAttempts) {
+      lastTransientError = `RunPod ${spec.label} failed: HTTP ${resp.status}`;
+      lastTransientStatus = resp.status;
+      await sleep(backoffDelayMs(attempt, backoffBaseMs, random));
+      continue;
+    }
+
+    let raw: unknown;
+    try {
+      raw = await resp.json();
+    } catch {
+      const text = await resp.text().catch(() => "");
+      return {
+        ok: false,
+        error: `RunPod ${spec.label} returned non-JSON (status ${resp.status}): ${text.slice(0, 300)}`,
+        status: resp.status,
+      };
+    }
+    if (!resp.ok) {
+      const errStr =
+        raw && typeof raw === "object" && "error" in raw
+          ? String((raw as Record<string, unknown>).error)
+          : `HTTP ${resp.status}`;
+      return { ok: false, error: `RunPod ${spec.label} failed: ${errStr}`, status: resp.status };
+    }
+    const view = normalizeRunpodResponse(raw);
+    if (!view) {
+      return { ok: false, error: `RunPod ${spec.label} returned an unrecognized envelope` };
+    }
+    return { ok: true, view };
+  }
+
+  // Unreachable in practice (the loop always returns on its last iteration);
+  // present to satisfy the compiler and as a defensive fallback.
+  return { ok: false, error: lastTransientError, status: lastTransientStatus };
+}
+
 // Submit a job to the vivijure-serverless RunPod endpoint. Returns the
-// normalized view or a transport error string. Does not throw on HTTP
-// 4xx / 5xx; the caller decides how to translate to a Worker response.
-export async function submitRenderJob(
+// normalized view or a transport error. Does not throw on HTTP 4xx / 5xx; the
+// caller decides how to translate to a Worker response. Optional opts inject a
+// mock transport in tests.
+export function submitRenderJob(
   env: Env,
   args: RenderSubmitArgs,
-): Promise<{ ok: true; view: RunpodJobView } | { ok: false; error: string; status?: number }> {
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
-    return {
-      ok: false,
-      error:
-        "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID must be set on the Worker (npx wrangler secret put ...)",
-    };
-  }
-  const url = buildSubmitUrl(env.RUNPOD_ENDPOINT_ID);
-  const body = JSON.stringify(buildSubmitPayload(args));
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
+  opts?: RunpodTransportOpts,
+): Promise<RunpodResult> {
+  return runpodRequest(
+    env,
+    {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${env.RUNPOD_API_KEY}`,
-      },
-      body,
-    });
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `RunPod submit network error: ${m}` };
-  }
-  let raw: unknown;
-  try {
-    raw = await resp.json();
-  } catch {
-    const text = await resp.text().catch(() => "");
-    return {
-      ok: false,
-      error: `RunPod submit returned non-JSON (status ${resp.status}): ${text.slice(0, 300)}`,
-      status: resp.status,
-    };
-  }
-  if (!resp.ok) {
-    const errStr =
-      raw && typeof raw === "object" && "error" in raw
-        ? String((raw as Record<string, unknown>).error)
-        : `HTTP ${resp.status}`;
-    return { ok: false, error: `RunPod submit failed: ${errStr}`, status: resp.status };
-  }
-  const view = normalizeRunpodResponse(raw);
-  if (!view) {
-    return { ok: false, error: "RunPod submit returned an unrecognized envelope" };
-  }
-  return { ok: true, view };
+      url: buildSubmitUrl(env.RUNPOD_ENDPOINT_ID),
+      body: JSON.stringify(buildSubmitPayload(args)),
+      label: "submit",
+    },
+    opts,
+  );
 }
 
-// v0.42.0: submit a finalize job. Same transport contract as
-// submitRenderJob (never throws on HTTP; returns a normalized result).
-export async function submitFinalizeJob(
+// v0.42.0: submit a finalize job. Same transport contract as submitRenderJob.
+export function submitFinalizeJob(
   env: Env,
   args: FinalizeArgs,
-): Promise<{ ok: true; view: RunpodJobView } | { ok: false; error: string; status?: number }> {
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
-    return {
-      ok: false,
-      error:
-        "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID must be set on the Worker (npx wrangler secret put ...)",
-    };
-  }
-  const url = buildSubmitUrl(env.RUNPOD_ENDPOINT_ID);
-  const body = JSON.stringify(buildFinalizePayload(args));
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
+  opts?: RunpodTransportOpts,
+): Promise<RunpodResult> {
+  return runpodRequest(
+    env,
+    {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${env.RUNPOD_API_KEY}`,
-      },
-      body,
-    });
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `RunPod finalize submit network error: ${m}` };
-  }
-  let raw: unknown;
-  try {
-    raw = await resp.json();
-  } catch {
-    const text = await resp.text().catch(() => "");
-    return {
-      ok: false,
-      error: `RunPod finalize submit returned non-JSON (status ${resp.status}): ${text.slice(0, 300)}`,
-      status: resp.status,
-    };
-  }
-  if (!resp.ok) {
-    const errStr =
-      raw && typeof raw === "object" && "error" in raw
-        ? String((raw as Record<string, unknown>).error)
-        : `HTTP ${resp.status}`;
-    return { ok: false, error: `RunPod finalize submit failed: ${errStr}`, status: resp.status };
-  }
-  const view = normalizeRunpodResponse(raw);
-  if (!view) {
-    return { ok: false, error: "RunPod finalize submit returned an unrecognized envelope" };
-  }
-  return { ok: true, view };
+      url: buildSubmitUrl(env.RUNPOD_ENDPOINT_ID),
+      body: JSON.stringify(buildFinalizePayload(args)),
+      label: "finalize submit",
+    },
+    opts,
+  );
 }
 
-// v0.41.0: submit a per-shot regen job. Same transport contract as
-// submitRenderJob (never throws on HTTP errors; returns a normalized
-// result for the caller to shape into a Worker response). Hits the
-// same /v2/<endpointId>/run; the GPU side dispatches by action.
-export async function submitRegenShotJob(
+// v0.41.0: submit a per-shot regen job. Hits the same /v2/<endpointId>/run;
+// the GPU side dispatches by action.
+export function submitRegenShotJob(
   env: Env,
   args: RegenShotArgs,
-): Promise<{ ok: true; view: RunpodJobView } | { ok: false; error: string; status?: number }> {
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
-    return {
-      ok: false,
-      error:
-        "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID must be set on the Worker (npx wrangler secret put ...)",
-    };
-  }
-  const url = buildSubmitUrl(env.RUNPOD_ENDPOINT_ID);
-  const body = JSON.stringify(buildRegenShotPayload(args));
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
+  opts?: RunpodTransportOpts,
+): Promise<RunpodResult> {
+  return runpodRequest(
+    env,
+    {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${env.RUNPOD_API_KEY}`,
-      },
-      body,
-    });
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `RunPod regen submit network error: ${m}` };
-  }
-  let raw: unknown;
-  try {
-    raw = await resp.json();
-  } catch {
-    const text = await resp.text().catch(() => "");
-    return {
-      ok: false,
-      error: `RunPod regen submit returned non-JSON (status ${resp.status}): ${text.slice(0, 300)}`,
-      status: resp.status,
-    };
-  }
-  if (!resp.ok) {
-    const errStr =
-      raw && typeof raw === "object" && "error" in raw
-        ? String((raw as Record<string, unknown>).error)
-        : `HTTP ${resp.status}`;
-    return { ok: false, error: `RunPod regen submit failed: ${errStr}`, status: resp.status };
-  }
-  const view = normalizeRunpodResponse(raw);
-  if (!view) {
-    return { ok: false, error: "RunPod regen submit returned an unrecognized envelope" };
-  }
-  return { ok: true, view };
+      url: buildSubmitUrl(env.RUNPOD_ENDPOINT_ID),
+      body: JSON.stringify(buildRegenShotPayload(args)),
+      label: "regen submit",
+    },
+    opts,
+  );
 }
 
-// v0.57.0: submit a standalone LoRA training job. Same transport
-// shape as the render / finalize / regen submitters; differs only in
-// the payload builder.
-export async function submitTrainLoraJob(
+// v0.57.0: submit a standalone LoRA training job. Differs only in the payload
+// builder.
+export function submitTrainLoraJob(
   env: Env,
   args: TrainLoraArgs,
-): Promise<{ ok: true; view: RunpodJobView } | { ok: false; error: string; status?: number }> {
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
-    return {
-      ok: false,
-      error:
-        "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID must be set on the Worker (npx wrangler secret put ...)",
-    };
-  }
-  const url = buildSubmitUrl(env.RUNPOD_ENDPOINT_ID);
-  const body = JSON.stringify(buildTrainLoraPayload(args));
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
+  opts?: RunpodTransportOpts,
+): Promise<RunpodResult> {
+  return runpodRequest(
+    env,
+    {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${env.RUNPOD_API_KEY}`,
-      },
-      body,
-    });
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `RunPod train-lora submit network error: ${m}` };
-  }
-  let raw: unknown;
-  try {
-    raw = await resp.json();
-  } catch {
-    const text = await resp.text().catch(() => "");
-    return {
-      ok: false,
-      error: `RunPod train-lora submit returned non-JSON (status ${resp.status}): ${text.slice(0, 300)}`,
-      status: resp.status,
-    };
-  }
-  if (!resp.ok) {
-    const errStr =
-      raw && typeof raw === "object" && "error" in raw
-        ? String((raw as Record<string, unknown>).error)
-        : `HTTP ${resp.status}`;
-    return { ok: false, error: `RunPod train-lora submit failed: ${errStr}`, status: resp.status };
-  }
-  const view = normalizeRunpodResponse(raw);
-  if (!view) {
-    return { ok: false, error: "RunPod train-lora submit returned an unrecognized envelope" };
-  }
-  return { ok: true, view };
+      url: buildSubmitUrl(env.RUNPOD_ENDPOINT_ID),
+      body: JSON.stringify(buildTrainLoraPayload(args)),
+      label: "train-lora submit",
+    },
+    opts,
+  );
 }
 
-// Cancel one job. RunPod's cancel endpoint is POST /v2/<id>/cancel/<job>;
-// we expose it under our DELETE /api/storyboard/render/<jobId> route. Same
-// transport contract as submitRenderJob and pollRenderJob: never throws on
-// HTTP errors; returns a normalized result for the caller to shape into a
-// Worker response. Calling cancel on a job that is already terminal (or
-// never existed) returns RunPod's error envelope; we surface it verbatim.
-export async function cancelRenderJob(
+// Cancel one job. RunPod's cancel endpoint is POST /v2/<id>/cancel/<job>; we
+// expose it under our DELETE /api/storyboard/render/<jobId> route. Calling
+// cancel on a job that is already terminal (or never existed) returns RunPod's
+// error envelope, which we surface verbatim.
+export function cancelRenderJob(
   env: Env,
   jobId: string,
-): Promise<{ ok: true; view: RunpodJobView } | { ok: false; error: string; status?: number }> {
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
-    return {
-      ok: false,
-      error:
-        "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID must be set on the Worker (npx wrangler secret put ...)",
-    };
-  }
-  const url = buildCancelUrl(env.RUNPOD_ENDPOINT_ID, jobId);
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
+  opts?: RunpodTransportOpts,
+): Promise<RunpodResult> {
+  return runpodRequest(
+    env,
+    {
       method: "POST",
-      headers: { authorization: `Bearer ${env.RUNPOD_API_KEY}` },
-    });
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `RunPod cancel network error: ${m}` };
-  }
-  let raw: unknown;
-  try {
-    raw = await resp.json();
-  } catch {
-    const text = await resp.text().catch(() => "");
-    return {
-      ok: false,
-      error: `RunPod cancel returned non-JSON (status ${resp.status}): ${text.slice(0, 300)}`,
-      status: resp.status,
-    };
-  }
-  if (!resp.ok) {
-    const errStr =
-      raw && typeof raw === "object" && "error" in raw
-        ? String((raw as Record<string, unknown>).error)
-        : `HTTP ${resp.status}`;
-    return { ok: false, error: `RunPod cancel failed: ${errStr}`, status: resp.status };
-  }
-  const view = normalizeRunpodResponse(raw);
-  if (!view) {
-    return { ok: false, error: "RunPod cancel returned an unrecognized envelope" };
-  }
-  return { ok: true, view };
+      url: buildCancelUrl(env.RUNPOD_ENDPOINT_ID, jobId),
+      label: "cancel",
+    },
+    opts,
+  );
 }
 
-// Poll one job's status. Same transport contract as submitRenderJob: never
-// throws on HTTP errors; returns a normalized result for the caller to
-// shape into a Worker response.
-export async function pollRenderJob(
+// Poll one job's status.
+export function pollRenderJob(
   env: Env,
   jobId: string,
-): Promise<{ ok: true; view: RunpodJobView } | { ok: false; error: string; status?: number }> {
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
-    return {
-      ok: false,
-      error:
-        "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID must be set on the Worker (npx wrangler secret put ...)",
-    };
-  }
-  const url = buildStatusUrl(env.RUNPOD_ENDPOINT_ID, jobId);
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
+  opts?: RunpodTransportOpts,
+): Promise<RunpodResult> {
+  return runpodRequest(
+    env,
+    {
       method: "GET",
-      headers: { authorization: `Bearer ${env.RUNPOD_API_KEY}` },
-    });
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `RunPod poll network error: ${m}` };
-  }
-  let raw: unknown;
-  try {
-    raw = await resp.json();
-  } catch {
-    const text = await resp.text().catch(() => "");
-    return {
-      ok: false,
-      error: `RunPod poll returned non-JSON (status ${resp.status}): ${text.slice(0, 300)}`,
-      status: resp.status,
-    };
-  }
-  if (!resp.ok) {
-    const errStr =
-      raw && typeof raw === "object" && "error" in raw
-        ? String((raw as Record<string, unknown>).error)
-        : `HTTP ${resp.status}`;
-    return { ok: false, error: `RunPod poll failed: ${errStr}`, status: resp.status };
-  }
-  const view = normalizeRunpodResponse(raw);
-  if (!view) {
-    return { ok: false, error: "RunPod poll returned an unrecognized envelope" };
-  }
-  return { ok: true, view };
+      url: buildStatusUrl(env.RUNPOD_ENDPOINT_ID, jobId),
+      label: "poll",
+    },
+    opts,
+  );
 }
 
 // ---------- Audio beat-sync (CPU Cloudflare Container) ----------
