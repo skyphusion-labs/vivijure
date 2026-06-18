@@ -1,6 +1,6 @@
 // Shared topbar helper (v0.66.0, modernized v0.120.0).
 //
-// Loaded on the pages that do NOT pull in app.js (planner.html, cast.html).
+// Loaded on pages that do NOT pull in app.js (planner.html, cast.html, index.html).
 // Two jobs, both dependency-free and idempotent on element existence:
 //
 //   1. Fill the signed-in user's email. Supports both the new playground
@@ -9,8 +9,7 @@
 //      exactly once per page load; a failure leaves a graceful placeholder.
 //   2. Wire the .account-menu popover (open/close on the #account-toggle
 //      button, close on outside-click / Escape) for pages that have it but
-//      no app.js controller. The chat page (index.html) wires this in app.js
-//      and does not load topbar.js, so there is no double-binding.
+//      no app.js controller.
 
 (function () {
   // --- 1. user email ---
