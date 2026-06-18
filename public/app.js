@@ -12,10 +12,20 @@ const el = (tag, cls, text) => {
   return n;
 };
 
-// The order a render walks the hooks (logical pipeline order), independent of
-// the contract's HOOK_NAMES order. A hook the core does not yet serve simply
-// renders as an empty stage.
-const HOOK_ORDER = ["plan.enhance", "motion.backend", "finish", "score"];
+// Logical render order (independent of HOOK_NAMES in the contract). Hooks the
+// core does not yet serve simply render as empty stages; any catalog hook not
+// listed here is appended at the end.
+const HOOK_ORDER = [
+  "plan.enhance",
+  "cast.image",
+  "keyframe",
+  "motion.backend",
+  "finish",
+  "score",
+  "notify",
+];
+
+const CARDINALITY_LABEL = { pick_one: "single module", chain: "chain" };
 
 // In-memory pipeline state: the pick_one choice per hook and the per-module
 // config the user has set. Kept here so a later increment can submit it with a
@@ -90,7 +100,7 @@ function renderModuleConfig(host, mod) {
   const schema = mod && mod.config_schema;
   const keys = schema ? Object.keys(schema) : [];
   if (!keys.length) {
-    host.append(el("p", "mod-nosettings", "no settings"));
+    host.append(el("p", "mod-nosettings", "No settings exposed"));
     return;
   }
   const grid = el("div", "mod-fields");
@@ -100,18 +110,23 @@ function renderModuleConfig(host, mod) {
 
 // --- pipeline stages (the projection) ------------------------------------
 
-function stageCard(hook, servingNames, byName) {
-  const card = el("div", "stage");
+function stageCard(hook, step, servingNames, byName) {
+  const card = el("article", "stage");
+  card.dataset.hook = hook.name;
+
   const head = el("div", "stage-head");
-  head.append(el("span", "stage-name", hook.name));
-  head.append(el("span", "stage-badge", hook.cardinality === "pick_one" ? "pick one" : "chain"));
+  head.append(el("span", "stage-step", String(step)));
+  const titles = el("div", "stage-titles");
+  titles.append(el("h3", "stage-title", hook.blurb));
+  titles.append(el("span", "stage-name", hook.name));
+  head.append(titles);
+  head.append(el("span", "stage-badge", CARDINALITY_LABEL[hook.cardinality] || hook.cardinality));
   card.append(head);
-  card.append(el("p", "stage-blurb", hook.blurb));
 
   if (!servingNames.length) {
     card.classList.add("stage-off");
     card.append(el("p", "stage-empty", hook.cardinality === "pick_one"
-      ? "No module installed; the core's built-in path runs."
+      ? "No module installed; the core default runs."
       : "No module installed; this stage is skipped."));
     return card;
   }
@@ -122,6 +137,8 @@ function stageCard(hook, servingNames, byName) {
     pipeline.choice[hook.name] = servingNames[0];
     const cfgHost = el("div", "stage-config");
     if (servingNames.length > 1) {
+      const pick = el("label", "stage-pick-wrap");
+      pick.append(el("span", "mod-field-label", "Module"));
       const sel = el("select", "stage-pick");
       for (const name of servingNames) {
         const o = el("option", null, name);
@@ -132,7 +149,8 @@ function stageCard(hook, servingNames, byName) {
         pipeline.choice[hook.name] = sel.value;
         renderModuleConfig(cfgHost, byName[sel.value]);
       });
-      card.append(sel);
+      pick.append(sel);
+      card.append(pick);
     } else {
       card.append(el("div", "stage-single", servingNames[0]));
     }
@@ -158,13 +176,11 @@ function renderPipeline(catalog, serving, modules) {
   root.replaceChildren();
   const byHook = Object.fromEntries(catalog.map((h) => [h.name, h]));
   const byName = Object.fromEntries(modules.map((m) => [m.name, m]));
-  // Render in pipeline order, then any hooks the catalog adds that we have not
-  // ordered yet (so a new hook still surfaces without a frontend edit).
   const order = [...HOOK_ORDER.filter((n) => byHook[n]),
     ...catalog.map((h) => h.name).filter((n) => !HOOK_ORDER.includes(n))];
-  for (const name of order) {
-    root.append(stageCard(byHook[name], serving[name] || [], byName));
-  }
+  order.forEach((name, i) => {
+    root.append(stageCard(byHook[name], i + 1, serving[name] || [], byName));
+  });
 }
 
 // --- installed-modules summary -------------------------------------------
@@ -173,22 +189,30 @@ function renderModules(modules) {
   const root = document.getElementById("modules");
   root.replaceChildren();
   if (!modules.length) {
-    root.append(el("p", "empty", "No modules installed. The studio is a clean slate; bind a module worker to light it up."));
+    root.append(el("p", "empty", "No modules installed. The studio is a clean slate."));
     return;
   }
   for (const m of modules) {
-    const card = el("div", "module");
+    const card = el("div", "module module-compact");
     const head = el("div", "module-head");
     head.append(el("span", "module-name", m.name), el("span", "module-ver", "v" + m.version));
     card.append(head);
-    card.append(el("div", "module-hooks", m.hooks.join(" · ")));
+    const hooks = el("div", "module-hooks");
+    for (const h of m.hooks) hooks.append(el("span", "module-hook-tag", h));
+    card.append(hooks);
     if (m.provides && m.provides.length) {
-      const ul = el("ul", "provides");
-      for (const p of m.provides) ul.append(el("li", null, p.label));
-      card.append(ul);
+      const caps = el("p", "module-caps", m.provides.map((p) => p.label).join(" · "));
+      card.append(caps);
     }
     root.append(card);
   }
+}
+
+function setMeta(api, count) {
+  const meta = document.getElementById("studio-meta");
+  if (!meta) return;
+  meta.hidden = false;
+  meta.textContent = count + " module" + (count === 1 ? "" : "s") + " · contract " + api;
 }
 
 // --- boot ----------------------------------------------------------------
@@ -203,11 +227,14 @@ async function boot() {
     renderPipeline(data.catalog || [], data.hooks || {}, modules);
     renderModules(modules);
     const n = modules.length;
-    status.textContent = n + " module" + (n === 1 ? "" : "s") + " installed · " + data.api;
+    status.textContent = n ? "live" : "no modules";
+    status.classList.toggle("status-on", n > 0);
+    setMeta(data.api, n);
   } catch (e) {
     status.textContent = "offline";
+    status.classList.remove("status-on");
     const p = document.getElementById("pipeline");
-    if (p) p.textContent = "could not reach the registry: " + e.message;
+    if (p) p.textContent = "Could not reach the registry: " + e.message;
   }
 }
 

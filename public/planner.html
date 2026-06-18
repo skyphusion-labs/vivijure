@@ -4,34 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Storyboard Planner -- Vivijure Studio</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
-  <link rel="icon" href="/favicon-16.png" type="image/png" sizes="16x16">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
-  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="favicon-16.png" type="image/png" sizes="16x16">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#0E1730">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="styles.css">
 </head>
-<body class="planner-body">
-  <!-- v0.120.0: shared playground chrome (.topbar / .brand / .account-menu),
-       a full-width sticky sibling of <main> so the glass blur spans the
-       viewport instead of being clipped to the 960px .planner-layout column.
-       The page nav lives in the center; the signed-in user + page links sit
-       in the account popover (wired by topbar.js, no app.js on this page). -->
+<body class="planner-body" data-studio-page="planner">
   <header class="topbar">
-    <!-- Vivijure identity (this is its own product within the shared shell) -->
-    <a class="brand brand-vivijure" href="/planner.html" aria-label="Vivijure studio">
+    <a class="brand brand-vivijure" href="planner" aria-label="Vivijure studio">
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-name">Vivijure</span>
     </a>
+    <nav class="studio-nav" data-studio-nav aria-label="Studio pages"></nav>
     <span class="topbar-spacer"></span>
-    <!-- single branded link back to the skyphusion playground (matches the
-         modernized front-page brand). Cross-app nav (Cast) lives in
-         the account drawer, not as a duplicated top-nav row. -->
-    <a class="brand brand-home" href="/" aria-label="back to skyphusion" title="back to skyphusion">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span class="brand-name">skyphusion</span>
-    </a>
     <div class="account">
       <button id="account-toggle" type="button" class="icon-btn" aria-haspopup="true" aria-expanded="false" aria-label="Account &amp; tools">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>
@@ -52,16 +40,25 @@
             </span>
           </label>
         </div>
-        <a class="account-row account-link" href="/cast.html" role="menuitem">
-          <span class="account-name account-name-vivijure">Cast</span>
-          <span class="account-sub">Vivijure character references</span>
-        </a>
       </div>
     </div>
   </header>
   <main class="planner-layout">
+    <div id="planner-resume-banner" class="planner-resume-banner" hidden role="region" aria-label="Saved session">
+      <p id="planner-resume-text" class="planner-resume-text"></p>
+      <div class="planner-resume-actions">
+        <button id="planner-resume-btn" type="button" class="planner-primary">Resume saved session</button>
+        <button id="planner-discard-btn" type="button" class="planner-secondary">Start fresh</button>
+      </div>
+    </div>
     <header class="planner-header">
-      <h1>storyboard planner</h1>
+      <div class="planner-header-row">
+        <div>
+          <h1>Storyboard planner</h1>
+          <p class="lede">Plan a film, assemble the training bundle, and submit a GPU render. One step at a time.</p>
+        </div>
+        <button id="planner-new-session" type="button" class="planner-secondary planner-new-session" title="Clear this page and discard the saved browser session">New session</button>
+      </div>
     </header>
 
     <!-- v0.120.0: guided step rail. Each button switches the active step;
@@ -318,12 +315,9 @@
         <span id="planner-render-status" class="planner-status"></span>
       </header>
       <p class="planner-stage-hint">
-        submit the bundle to the vivijure-serverless RunPod endpoint. the
-        worker pulls it, trains LoRAs, renders SDXL keyframes plus Wan I2V
-        motion, exports a silent MP4 to R2. the status pane polls every 8
-        seconds until the job reaches COMPLETED, FAILED, CANCELLED, or
-        TIMED_OUT.
+        Submit the bundle to the RunPod worker. Status polls every 8 seconds until the job finishes.
       </p>
+      <div class="planner-render-options">
       <label class="planner-field">
         <span>quality tier</span>
         <select id="planner-quality-tier">
@@ -353,7 +347,8 @@
       <span id="planner-scatter-reason" class="planner-status planner-scatter-reason" hidden></span>
       <div class="planner-scatter-shard-row" id="planner-scatter-shard-wrap" hidden>
         <label class="planner-field-check" for="planner-scatter-shards">shards</label>
-        <input id="planner-scatter-shards" type="number" min="2" value="2" inputmode="numeric" style="width:5em" />
+        <input id="planner-scatter-shards" type="number" min="2" value="2" inputmode="numeric" />
+      </div>
       </div>
       <!-- v0.123.0: Phase 2 tiering. The five most-touched render knobs
            (quality tier + keyframes-only above; seed / lora scale /
@@ -629,12 +624,14 @@
           <textarea id="planner-refine-input" class="planner-refine-input" rows="2" placeholder="describe the change..."></textarea>
           <button id="planner-refine-send" type="button" class="planner-primary">send</button>
         </div>
+        <p class="sw-refine-input-hint">Describe the change; Enter to send, Shift+Enter for a new line.</p>
       </section>
       <p id="sw-empty" class="sw-empty">Draft a storyboard first, then I can help you revise it scene by scene.</p>
     </div>
   </aside>
 
-  <script src="/topbar.js"></script>
-  <script src="/planner.js"></script>
+  <script src="studio-chrome.js"></script>
+  <script src="topbar.js"></script>
+  <script src="planner.js"></script>
 </body>
 </html>
