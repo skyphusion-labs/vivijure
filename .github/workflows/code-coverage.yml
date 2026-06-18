@@ -1,0 +1,47 @@
+name: Test and Native Code Coverage
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write      # Required for GitHub Code Quality features
+      code-quality: write    # Grants the action permission to upload coverage data
+      pull-requests: write   # Allows the coverage engine to append the PR
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Create wrangler.toml before testing so environment types evaluate properly
+      - name: Bootstrap wrangler configuration
+        run: npm run bootstrap
+        continue-on-error: true # Prevents crash if wrangler.toml already exists in workspace
+
+      # Runs your vitest script with cobertura reporter enabled
+      - name: Run tests with coverage
+        run: npx vitest run --coverage.enabled=true --coverage.reporter=cobertura
+
+      # Upload to GitHub's native Enterprise code coverage engine
+      # Upload to GitHub's native Enterprise code coverage engine
+      - name: Upload coverage report
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-code-coverage@v1
+        with:
+          file: ./coverage/cobertura-coverage.xml
+          language: javascript

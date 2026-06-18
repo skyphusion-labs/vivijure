@@ -63,4 +63,19 @@ describe("fetch entrypoint (issue #9)", () => {
     expect(assetCalls).toEqual(["/api/modules"]);
     expect(await res.text()).toBe("ASSET");
   });
+
+  it("GET /modules serves the module-host page via ASSETS", async () => {
+    const { env, assetCalls } = makeEnv();
+    const res = await worker.fetch(req("/modules"), env, ctx);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ASSET");
+    expect(assetCalls).toEqual(["/modules.html"]);
+  });
+
+  it("GET /planner serves planner.html via ASSETS", async () => {
+    const { env, assetCalls } = makeEnv();
+    const res = await worker.fetch(req("/planner"), env, ctx);
+    expect(res.status).toBe(200);
+    expect(assetCalls).toEqual(["/planner.html"]);
+  });
 });
