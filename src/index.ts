@@ -532,6 +532,21 @@ const API_ROUTES: Route[] = [
   { method: "PUT",    pattern: "/api/prefs",                           handler: hPutPrefs },
 ];
 
+// Pretty studio page paths (vivijure.skyphusion.org/planner, /cast, /modules). Served
+// from public/*.html so nav works even before a deploy picks up new worker code.
+const STUDIO_PAGE_ASSETS: Record<string, string> = {
+  "/planner": "/planner.html",
+  "/planner/": "/planner.html",
+  "/cast": "/cast.html",
+  "/cast/": "/cast.html",
+  "/modules": "/modules.html",
+  "/modules/": "/modules.html",
+};
+
+function serveStudioAsset(env: Env, request: Request, url: URL, assetPath: string): Promise<Response> {
+  return env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -541,6 +556,10 @@ export default {
       // manifest each request (issue #17 follow-up). Only this route opts in; dispatch stays fresh.
       const modules = await discoverModules(env as unknown as Record<string, unknown>, { cacheTtlMs: 60_000 });
       return json(modulesResponse(modules));
+    }
+    const studioPage = STUDIO_PAGE_ASSETS[url.pathname];
+    if (studioPage && (request.method === "GET" || request.method === "HEAD")) {
+      return serveStudioAsset(env, request, url, studioPage);
     }
     const hit = match(API_ROUTES, request.method, url.pathname);
     if (hit) {

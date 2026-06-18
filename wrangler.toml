@@ -121,6 +121,5 @@ service = "vivijure-module-notify-email"
 
 # Vanity domain: vivijure.skyphusion.org is bound to this worker as a dashboard-managed CUSTOM
 # DOMAIN (auto DNS + cert), NOT a wrangler [[routes]] entry -- a route + custom domain for the same
-# hostname conflict on deploy, so the route block is intentionally omitted. The Access app
-# (3377c722 / aud be06bf47) gates it: crew service tokens bypass, Conrad is the only human auth.
-# Cutover done 2026-06-14. Studio also reachable at vivijure-studio.skyphusion.workers.dev.
+# hostname conflict on deploy, so the route block is intentionally omitted. Studio also reachable at
+# vivijure-studio.skyphusion.workers.dev.

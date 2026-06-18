@@ -115,6 +115,9 @@ function showStep(id) {
   if (!stepState.unlocked[id]) return;
   stepState.current = id;
   document.querySelectorAll("[data-step]").forEach((el) => {
+    // v0.164.0: refine lives in the fixed dock, not the step column; never
+    // collapse it when switching planner steps.
+    if (el.closest("#sw-dock")) return;
     el.classList.toggle("step-hidden", el.dataset.step !== id);
   });
   // v0.132.0: the audio section gates its own content on storyboard state, so
@@ -153,13 +156,24 @@ function paintStepper() {
   if (next) {
     const nextId = PLANNER_STEP_ORDER[curIdx + 1];
     next.disabled = !nextId || !stepState.unlocked[nextId];
+    if (stepState.current === "audio" && nextId === "render" && !stepState.unlocked.render) {
+      next.title = "Bundle on Cast & Bundle first";
+    } else {
+      next.title = "";
+    }
   }
 }
 
-// Move relative to the current step, skipping locked steps in the direction
-// of travel.
+// Move relative to the current step. Forward moves one step at a time (never
+// skips a locked Render into History). Backward skips locked steps.
 function stepDelta(dir) {
-  let i = PLANNER_STEP_ORDER.indexOf(stepState.current) + dir;
+  const curIdx = PLANNER_STEP_ORDER.indexOf(stepState.current);
+  if (dir > 0) {
+    const nextId = PLANNER_STEP_ORDER[curIdx + 1];
+    if (nextId && stepState.unlocked[nextId]) showStep(nextId);
+    return;
+  }
+  let i = curIdx + dir;
   while (i >= 0 && i < PLANNER_STEP_ORDER.length && !stepState.unlocked[PLANNER_STEP_ORDER[i]]) {
     i += dir;
   }
@@ -482,6 +496,108 @@ function loadPersistedState() {
   }
 }
 
+function clearPersistedStorage() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch {}
+}
+
+// True when the stash has planner work worth offering to resume.
+function hasPersistedWork(stash) {
+  if (!stash) return false;
+  if (stash.planResult && stash.planResult.storyboard) return true;
+  if (stash.bundleStage && stash.bundleStage.bundleKey) return true;
+  if (stash.renderStage && (stash.renderStage.jobId || stash.renderStage.bundleKey)) return true;
+  const brief = stash.planForm && typeof stash.planForm.brief === "string"
+    ? stash.planForm.brief.trim() : "";
+  if (brief) return true;
+  const cast = stash.planForm && Array.isArray(stash.planForm.cast) ? stash.planForm.cast : [];
+  if (cast.some((c) => c && c.checked && (c.name || c.bible))) return true;
+  const bindings = stash.planForm && stash.planForm.castBindings;
+  if (bindings && Object.keys(bindings).length > 0) return true;
+  return false;
+}
+
+// Reload / back-forward keeps the in-tab failsafe; cross-page navigation does not.
+function isSameTabReload() {
+  const nav = performance.getEntriesByType("navigation")[0];
+  return !!(nav && (nav.type === "reload" || nav.type === "back_forward"));
+}
+
+let pendingResumeStash = null;
+
+function hideResumeBanner() {
+  const banner = $("#planner-resume-banner");
+  if (banner) banner.hidden = true;
+  pendingResumeStash = null;
+}
+
+function formatResumeWhen(savedAt) {
+  if (!savedAt) return "a previous visit";
+  const d = new Date(savedAt * 1000);
+  if (Number.isNaN(d.getTime())) return "a previous visit";
+  return d.toLocaleString();
+}
+
+function showResumeBanner(stash) {
+  const banner = $("#planner-resume-banner");
+  const text = $("#planner-resume-text");
+  if (!banner || !text) return;
+  pendingResumeStash = stash;
+  text.textContent =
+    "You have a saved planner session from " + formatResumeWhen(stash.savedAt) +
+    ". Resume it, or start with a blank page.";
+  banner.hidden = false;
+}
+
+function resumePendingSession() {
+  if (!pendingResumeStash) return;
+  const stash = pendingResumeStash;
+  hideResumeBanner();
+  applyPersistedStash(stash);
+  afterPersistedStashApplied(stash);
+}
+
+function startNewSession(opts) {
+  const focusBrief = !opts || opts.focusBrief !== false;
+  if (!opts || !opts.skipConfirm) {
+    const hasWork = planState.storyboard || $("#planner-brief").value.trim() ||
+      bundleState.bundleKey || renderState.jobId;
+    if (hasWork && !window.confirm("Start a new session? Unsaved work on this page will be cleared.")) {
+      return;
+    }
+  }
+  clearPersistedStorage();
+  hideResumeBanner();
+  planState.storyboard = null;
+  planState.originalStoryboard = null;
+  planState.refineHistory = [];
+  planState.castBindings = {};
+  planState.audioKey = null;
+  planState.audioMime = null;
+  planState.audioSourceLabel = null;
+  planState.bpm = 120;
+  planState.beatsPerShot = 4;
+  planState.pendingMusicChatId = null;
+  planState.activeProjectId = null;
+  musicPromptAutoTried = false;
+  const briefEl = $("#planner-brief");
+  if (briefEl) briefEl.value = "";
+  const picker = $("#planner-project-picker");
+  if (picker) picker.value = "";
+  $("#planner-output").hidden = true;
+  $("#planner-scenes").hidden = true;
+  $("#planner-audio").hidden = true;
+  resetBundleStage();
+  resetRenderStage();
+  renderCast();
+  renderRefineTurns();
+  showAudioSection();
+  refreshProjectButtonGates();
+  refreshSteps();
+  showStep("plan");
+  savePersistedState();
+  if (focusBrief && briefEl) briefEl.focus();
+}
+
 // ---------- State collectors (read DOM + module state) ----------
 
 function collectPlanFormState() {
@@ -600,8 +716,7 @@ function lastKnownStatusFromPanel() {
 
 // ---------- Restorers ----------
 
-function restorePersistedState() {
-  const stash = loadPersistedState();
+function applyPersistedStash(stash) {
   if (!stash) return null;
 
   // Filters first so loadHistory's first render uses the restored view.
@@ -628,6 +743,40 @@ function restorePersistedState() {
   if (Array.isArray(stash.regenJobs)) restoreRegenJobs(stash.regenJobs);
 
   return stash;
+}
+
+function restorePersistedState() {
+  return applyPersistedStash(loadPersistedState());
+}
+
+function afterPersistedStashApplied(stash) {
+  buildStepper();
+  stepState.unlocked = computeStepUnlocked();
+  refreshSteps();
+  loadModels().then(() => {
+    if (stash && stash.planForm && stash.planForm.modelId) {
+      const select = $("#planner-model");
+      if (select) {
+        const found = Array.from(select.options).some(
+          (o) => o.value === stash.planForm.modelId,
+        );
+        if (found) select.value = stash.planForm.modelId;
+      }
+    }
+  });
+  loadCast().then(() => {
+    renderCastPickerOptions();
+    applyRestoredCastBindings();
+  });
+  loadProjects().then(() => {
+    if (planState.activeProjectId) {
+      const sel = $("#planner-project-picker");
+      if (sel) sel.value = String(planState.activeProjectId);
+      const p = findProject(planState.activeProjectId);
+      if (p) applyProjectPrefs(p.prefs);
+      refreshProjectButtonGates();
+    }
+  });
 }
 
 // v0.41.1: rebuild historyState.regenJobs from the persisted entries
@@ -6576,62 +6725,48 @@ function formatDuration(ms) {
 
 document.addEventListener("DOMContentLoaded", () => {
   renderCast();
-  // v0.38.0: restore form + result panels + render stream BEFORE async
-  // data loaders fire, so the user sees their work immediately on reload.
-  // The model picker value is set after loadModels resolves (its options
-  // are populated by an async fetch).
-  const stash = restorePersistedState();
-  // v0.120.0: build the step rail + collapse to the active step now that the
-  // restored pipeline state (planState / bundleState / renderState) determines
-  // which steps are unlocked.
+  const stash = loadPersistedState();
+  let appliedStash = null;
+  if (stash && hasPersistedWork(stash)) {
+    if (isSameTabReload()) {
+      appliedStash = applyPersistedStash(stash);
+    } else {
+      showResumeBanner(stash);
+    }
+  } else if (stash) {
+    clearPersistedStorage();
+  }
+
   buildStepper();
   stepState.unlocked = computeStepUnlocked();
   showStep("plan");
-  // v0.124.0: inject the per-option "?" help affordance into the render-step
-  // override fields (registry-backed, with auto-derived values/range/default).
   attachFieldHelp();
-  loadModels().then(() => {
-    if (stash && stash.planForm && stash.planForm.modelId) {
-      const select = $("#planner-model");
-      if (select) {
-        const found = Array.from(select.options).some(
-          (o) => o.value === stash.planForm.modelId,
-        );
-        if (found) select.value = stash.planForm.modelId;
-      }
-    }
-  });
-  // v0.48.0: fetch the user's cast catalog and rebuild the dropdown
-  // options on each row. After this resolves, any bindings stashed by
-  // restorePersistedState are reconciled against the live catalog so a
-  // deleted cast member does not leave a slot stuck in "bound" mode.
-  loadCast().then(() => {
-    renderCastPickerOptions();
-    applyRestoredCastBindings();
-  });
-  // v0.53.0: load the project catalog + reselect any persisted active
-  // project. The picker is always visible; loading the project's last
-  // storyboard happens inside selectProject().
-  loadProjects().then(() => {
-    if (planState.activeProjectId) {
-      const sel = $("#planner-project-picker");
-      if (sel) sel.value = String(planState.activeProjectId);
-      // Only re-apply prefs (not re-load the storyboard) on restore so
-      // we do not overwrite any in-flight transient edits with stale
-      // saved state. The user re-selects from the dropdown if they
-      // want the saved storyboard back.
-      const p = findProject(planState.activeProjectId);
-      if (p) applyProjectPrefs(p.prefs);
-      refreshProjectButtonGates();
-    }
-  });
+
+  if (appliedStash) {
+    afterPersistedStashApplied(appliedStash);
+  } else {
+    loadModels();
+    loadCast().then(() => {
+      renderCastPickerOptions();
+      applyRestoredCastBindings();
+    });
+    loadProjects();
+  }
+
+  const resumeBtn = $("#planner-resume-btn");
+  if (resumeBtn) resumeBtn.addEventListener("click", resumePendingSession);
+  const discardBtn = $("#planner-discard-btn");
+  if (discardBtn) discardBtn.addEventListener("click", () => startNewSession({ skipConfirm: true }));
+  const newSessionBtn = $("#planner-new-session");
+  if (newSessionBtn) newSessionBtn.addEventListener("click", () => startNewSession());
+
   loadHistory();
   initNotifications();
   // v0.49.0: scene editor discard button. The button itself is in
   // the markup at all times; toggled disabled based on dirty state by
   // refreshSceneDirtyBadge after every edit.
-  const discardBtn = $("#planner-scenes-discard");
-  if (discardBtn) discardBtn.addEventListener("click", discardSceneEdits);
+  const scenesDiscardBtn = $("#planner-scenes-discard");
+  if (scenesDiscardBtn) scenesDiscardBtn.addEventListener("click", discardSceneEdits);
   // v0.50.0: refinement chat send button + Cmd/Ctrl+Enter in the textarea.
   const refineSend = $("#planner-refine-send");
   if (refineSend) refineSend.addEventListener("click", sendRefine);
@@ -6639,33 +6774,13 @@ document.addEventListener("DOMContentLoaded", () => {
   // the brief, storyboard, audio, bundle, render, and persisted snapshot so
   // the next plan starts with a clean slate and no prior project bleeds in.
   const briefClear = $("#planner-brief-clear");
-  if (briefClear) {
-    briefClear.addEventListener("click", () => {
-      const briefEl = $("#planner-brief");
-      if (briefEl) briefEl.value = "";
-      planState.storyboard = null;
-      planState.originalStoryboard = null;
-      planState.refineHistory = [];
-      planState.audioKey = null;
-      planState.audioMime = null;
-      planState.audioSourceLabel = null;
-      planState.bpm = null;
-      planState.beatsPerShot = null;
-      planState.activeProjectId = null;
-      $("#planner-output").hidden = true;
-      resetBundleStage();
-      resetRenderStage();
-      savePersistedState();
-      if (briefEl) briefEl.focus();
-    });
-  }
+  if (briefClear) briefClear.addEventListener("click", () => startNewSession({ skipConfirm: true }));
   const refineInput = $("#planner-refine-input");
   if (refineInput) {
     refineInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        sendRefine();
-      }
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      sendRefine();
     });
   }
   // v0.51.0: audio bed + beat timing.
