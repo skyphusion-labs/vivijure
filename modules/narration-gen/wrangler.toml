@@ -1,5 +1,6 @@
-# narration-gen module worker (vivijure-module/1): MiniMax Speech 2.8 HD via Workers AI for the
-# `score` hook (music / narration / beat-sync chain). Bound as MODULE_NARRATION_GEN.
+# narration-gen module worker (vivijure-module/1): MiniMax Speech 02 HD on RunPod for the `score` hook.
+# Uses the same async submit+poll RunPod transport as seedance/kling (NOT Workers AI), so a multi-minute
+# synth never blocks a request and survives a worker recycle (#155).
 # account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
 
 name = "vivijure-module-narration-gen"
@@ -11,12 +12,10 @@ workers_dev = false
 [observability]
 enabled = true
 
-# Workers AI + AI Gateway (same pattern as music-gen / cast-image proxied models).
-#   ! npx wrangler secret put GATEWAY_ID -c modules/narration-gen/wrangler.toml
-[ai]
-binding = "AI"
+# RunPod hosted minimax-speech-02-hd endpoint (https://api.runpod.ai/v2/minimax-speech-02-hd).
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/narration-gen/wrangler.toml
 
-# Generated narration audio + async run state land in the shared render bucket.
+# Generated narration audio lands in the shared render bucket.
 [[r2_buckets]]
 binding = "R2_RENDERS"
 bucket_name = "vivijure"
