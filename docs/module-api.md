@@ -146,9 +146,17 @@ and a config, it:
 - degrades a missing pass to a no-op instead of erroring,
 - is idempotent under an empty config (returns the input unchanged).
 
-`npm run conformance -- --module finish-rife` runs it. Green means the module plugs into ANY
-Vivijure deployment. This is what keeps the ecosystem trustworthy: implementing the interface is
-not enough, you have to pass the contract.
+The conformance checks live in `src/modules/conformance.ts` (`checkManifest`,
+`checkInvokeResponse`); `npm run conformance` runs the suite (`tests/conformance.test.ts` for the
+shape checks, `tests/conformance.live.test.ts` for a live module). The live spec is opt-in: point
+it at a deployed module to verify its `module.json` + `invoke` end to end:
+
+```
+MODULE_URL=https://my-module.example.workers.dev npm run conformance
+```
+
+Green means the module plugs into ANY Vivijure deployment. This is what keeps the ecosystem
+trustworthy: implementing the interface is not enough, you have to pass the contract.
 
 ## The registry + the self-assembling frontend
 

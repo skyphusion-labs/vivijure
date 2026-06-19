@@ -12,7 +12,8 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "conformance": "vitest run tests/conformance.test.ts tests/conformance.live.test.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260606.1",
