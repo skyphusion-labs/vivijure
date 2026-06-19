@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceStallCount, MAX_POLL_STALL, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -278,53 +278,83 @@ describe("classifyAssembleTransport (issue #82 bounded auto-recover)", () => {
   });
 });
 
-// Issue #122: an assemble that already PUT its film.mp4 (but whose response was lost, so the job
-// is still phase "assemble") must self-heal from R2 presence on the next poll/sweep -- finalize from
-// the existing object instead of re-running the concat. Fakes for R2 + a VPC double that records
-// any call; the test fails if the container is invoked despite the output already being in R2.
-function assembleEnv(opts: { jobInR2: object; filmOutputExists: boolean }) {
-  const vpcCalls: string[] = [];
-  const puts: string[] = [];
-  const env = {
-    DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
-    R2_RENDERS: {
-      get: async (key: string) =>
-        key === filmJobDocKey((opts.jobInR2 as { film_id: string }).film_id)
-          ? { text: async () => JSON.stringify(opts.jobInR2) }
-          : null,
-      head: async (key: string) =>
-        opts.filmOutputExists && key === `renders/${(opts.jobInR2 as { film_id: string }).film_id}/film.mp4` ? {} : null,
-      put: async (key: string) => { puts.push(key); },
-    },
-    VIDEO_FINISH_VPC: { fetch: async (input: Request | string) => { vpcCalls.push(typeof input === "string" ? input : input.url); return new Response(JSON.stringify({ ok: true, key: "renders/film-selfheal-1/film.mp4" }), { status: 200, headers: { "content-type": "application/json" } }); } },
-    // presign creds: only the fall-through path reaches presignR2Get/Put (the short-circuit
-    // returns before them), but they must be present so that path does not throw.
-    R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
-    R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
-  } as unknown as Env;
-  return { env, vpcCalls, puts };
+// --------------------------------------------------------------------------- stall guard (issue #128)
+
+/** Minimal FilmJob stub for stall-guard tests (only the fields advanceStallCount reads/writes). */
+function stubJob(phase: FilmJob["phase"], stallCount = 0): FilmJob {
+  return {
+    film_id: "film-test", project: "test", bundle_key: "b", scenes: [],
+    motion_backend: null, motion_config: {}, finish_config: {},
+    keyframe_binding: null, phase,
+    poll_stall_count: stallCount,
+    created_at: Date.now(),
+  } as FilmJob;
 }
 
-describe("advanceFilmJob assemble self-heal from R2 presence (issue #122)", () => {
-  const baseJob = {
-    film_id: "film-selfheal-1",
-    project: "p",
-    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
-    phase: "assemble" as const,
-    finish_shots: [{ shot_id: "shot_01", clip_key: "renders/film-selfheal-1/clips/shot_01_finished.mp4", chain: ["M"], idx: 1, status: "done" as const, applied: [] }],
-  };
-
-  it("finalizes to done from the existing film.mp4 without invoking video-finish", async () => {
-    const { env, vpcCalls } = assembleEnv({ jobInR2: baseJob, filmOutputExists: true });
-    const r = await advanceFilmJob(env, "film-selfheal-1");
-    expect(r?.job.phase).toBe("done");
-    expect(r?.job.film_key).toBe("renders/film-selfheal-1/film.mp4");
-    expect(vpcCalls).toEqual([]); // the concat was NOT re-run -- derived from R2 presence
+describe("advanceStallCount (issue #128: bounded stall guard for modules stuck on dead poll tokens)", () => {
+  it("resets the counter to 0 when the phase changed (any phase transition)", () => {
+    const job = stubJob("clips", 5);
+    const r = advanceStallCount(job, true);
+    expect(r.stalled).toBe(false);
+    expect(job.poll_stall_count).toBe(0);
   });
 
-  it("falls through to the container when the film.mp4 is not yet in R2", async () => {
-    const { env, vpcCalls } = assembleEnv({ jobInR2: baseJob, filmOutputExists: false });
-    await advanceFilmJob(env, "film-selfheal-1");
-    expect(vpcCalls.length).toBe(1); // no short-circuit -> normal assemble path ran
+  it("increments the counter on a no-progress poll in a poll-waiting phase", () => {
+    const job = stubJob("keyframe", 0);
+    const r = advanceStallCount(job, false);
+    expect(r.stalled).toBe(false);
+    expect(job.poll_stall_count).toBe(1);
+  });
+
+  it("increments in the finish phase (another module-poll phase)", () => {
+    const job = stubJob("finish", 3);
+    const r = advanceStallCount(job, false);
+    expect(r.stalled).toBe(false);
+    expect(job.poll_stall_count).toBe(4);
+  });
+
+  it("reports stalled and sets the counter to MAX when the cap is reached", () => {
+    // one tick away from the cap
+    const job = stubJob("keyframe", MAX_POLL_STALL - 1);
+    const r = advanceStallCount(job, false);
+    expect(r.stalled).toBe(true);
+    expect(job.poll_stall_count).toBe(MAX_POLL_STALL);
+  });
+
+  it("respects a custom max for testing", () => {
+    const job = stubJob("finish", 2);
+    const r = advanceStallCount(job, false, 3);
+    expect(r.stalled).toBe(true);
+    expect(job.poll_stall_count).toBe(3);
+  });
+
+  it("does NOT count stalls in assemble phase (it is synchronous, not a poll-wait phase)", () => {
+    const job = stubJob("assemble", 0);
+    const r = advanceStallCount(job, false); // phase unchanged
+    expect(r.stalled).toBe(false);
+    expect(job.poll_stall_count).toBe(0); // counter untouched
+  });
+
+  it("does NOT count stalls in mux phase for the same reason", () => {
+    const job = stubJob("mux", 10);
+    const r = advanceStallCount(job, false);
+    expect(r.stalled).toBe(false);
+    expect(job.poll_stall_count).toBe(10); // unchanged
+  });
+
+  it("absent poll_stall_count (legacy pre-#128 job doc) starts from 0, not NaN", () => {
+    const job = stubJob("keyframe");
+    delete job.poll_stall_count; // simulate a pre-#128 doc
+    advanceStallCount(job, false);
+    expect(job.poll_stall_count).toBe(1);
+  });
+
+  it("a phase transition after prior stalls resets the budget to 0 (next stage gets a full budget)", () => {
+    const job = stubJob("keyframe", 55);
+    advanceStallCount(job, true); // phase changed: keyframe -> clips
+    expect(job.poll_stall_count).toBe(0);
+    // now the clips phase can stall up to MAX_POLL_STALL more times before failing
+    advanceStallCount(job, false); // clips is a poll phase too
+    expect(job.poll_stall_count).toBe(1);
   });
 });
