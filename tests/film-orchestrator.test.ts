@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, phaseAgeSeconds, listProjectKeyframes, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, listProjectClips, clipFileMatchesShot, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -451,6 +451,280 @@ describe("advanceFilmJob keyframe stall recovery (#129)", () => {
     const r = await advanceFilmJob(env, "film-stall-kf");
     expect(r?.job.keyframe_recovered).toBeUndefined();
     expect(r?.job.phase).not.toBe("done");
+  });
+});
+
+describe("clipFileMatchesShot (#139 clip-name matching)", () => {
+  it("matches the shot's motion clip at a digit boundary", () => {
+    expect(clipFileMatchesShot("shot_09_i2v.mp4", "shot_09")).toBe(true);
+    expect(clipFileMatchesShot("shot_01.mp4", "shot_01")).toBe(true);
+    expect(clipFileMatchesShot("shot_10_seedance.mov", "shot_10")).toBe(true);
+  });
+  it("does NOT let shot_1 swallow shot_10 (digit boundary)", () => {
+    expect(clipFileMatchesShot("shot_10_i2v.mp4", "shot_1")).toBe(false);
+  });
+  it("excludes finish-chain outputs (they are not the raw motion clip)", () => {
+    expect(clipFileMatchesShot("shot_06_finished.mp4", "shot_06")).toBe(false);
+    expect(clipFileMatchesShot("shot_06_i2v_finished.mp4", "shot_06")).toBe(false);
+  });
+  it("requires a video extension", () => {
+    expect(clipFileMatchesShot("shot_09_i2v.txt", "shot_09")).toBe(false);
+    expect(clipFileMatchesShot("shot_09", "shot_09")).toBe(false);
+  });
+});
+
+describe("listProjectClips (#139 R2 adoption)", () => {
+  const sc: FilmScene[] = [
+    { shot_id: "shot_01", prompt: "a", seconds: 4 },
+    { shot_id: "shot_10", prompt: "b", seconds: 4 },
+  ];
+  it("returns the motion clip per in-storyboard shot, boundary-safe and excluding _finished", async () => {
+    const env = r2ListEnv([
+      "renders/neon/clips/shot_01_i2v.mp4",
+      "renders/neon/clips/shot_01_finished.mp4", // finish output -- must NOT be chosen
+      "renders/neon/clips/shot_10_i2v.mp4",
+      "renders/neon/clips/shot_99_i2v.mp4",      // not in storyboard -- dropped
+    ]);
+    const out = await listProjectClips(env, "neon", sc);
+    expect(out).toEqual([
+      { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4" },
+      { shot_id: "shot_10", clip_key: "renders/neon/clips/shot_10_i2v.mp4" },
+    ]);
+  });
+  it("returns empty when no clips are in R2", async () => {
+    expect(await listProjectClips(r2ListEnv([]), "neon", sc)).toEqual([]);
+  });
+});
+
+// Env double that round-trips BOTH the film-job doc and the clip-job doc through R2, serves the clips
+// listing, and has NO module bindings (so enterFinishPhase finds an empty finish chain -> clips_only
+// shortcuts to done without touching any module). Lets the clips recovery be observed end-to-end.
+function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[]) {
+  const filmDoc = filmJobDocKey(job.film_id);
+  const clipDoc = clipJobDocKey(clipJob.job_id);
+  let filmStored = JSON.stringify(job);
+  let clipStored = JSON.stringify(clipJob);
+  const env = {
+    R2_RENDERS: {
+      get: async (key: string) =>
+        key === filmDoc ? { text: async () => filmStored }
+        : key === clipDoc ? { text: async () => clipStored }
+        : null,
+      put: async (key: string, body: string) => {
+        if (key === filmDoc) filmStored = body;
+        else if (key === clipDoc) clipStored = body;
+      },
+      list: async ({ prefix }: { prefix: string }) => ({
+        objects: clipKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        truncated: false,
+      }),
+    },
+    // motion.backend stub that always reports "still rendering" (pending) on /poll, so the normal clips
+    // leg leaves a not-yet-adopted shot pending (faithful to prod under the #142 module fix: a still-
+    // rendering shot is pending, not failed). Without this the unbound binding would falsely fail the shot.
+    MODULE_OWN_GPU: { fetch: async () => new Response(JSON.stringify({ ok: true, pending: true }), { headers: { "content-type": "application/json" } }) },
+  } as unknown as Env;
+  return { env, readFilm: () => JSON.parse(filmStored) as FilmJob, readClip: () => JSON.parse(clipStored) as ClipJobLike };
+}
+
+interface ClipJobLike {
+  job_id: string;
+  project: string;
+  motion_backend: string | null;
+  binding: string | null;
+  shots: { shot_id: string; status: string; clip_key?: string; poll?: string; error?: string }[];
+  created_at: number;
+}
+
+describe("advanceFilmJob clips stall recovery (#139)", () => {
+  const scenes: FilmScene[] = [
+    { shot_id: "shot_01", prompt: "a", seconds: 4 },
+    { shot_id: "shot_02", prompt: "b", seconds: 4 },
+    { shot_id: "shot_03", prompt: "c", seconds: 4 },
+  ];
+  const clipsJob = (): ClipJobLike => ({
+    job_id: "clips-stall-1",
+    project: "neon",
+    motion_backend: "own-gpu",
+    binding: "MODULE_OWN_GPU",
+    // shot_02 already collected; shot_01 + shot_03 wedged pending on dead poll tokens
+    shots: [
+      { shot_id: "shot_01", status: "pending", poll: "phantom-1" },
+      { shot_id: "shot_02", status: "done", clip_key: "renders/neon/clips/shot_02_i2v.mp4" },
+      { shot_id: "shot_03", status: "pending", poll: "phantom-3" },
+    ],
+    created_at: Date.now(),
+  });
+  // clips_only so the recovered completion shortcuts to done (no finish modules bound in the test env).
+  const stalledFilm = (over: Partial<FilmJob> = {}): FilmJob => ({
+    film_id: "film-stall-clips",
+    project: "neon",
+    bundle_key: "b",
+    scenes,
+    motion_backend: "own-gpu",
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: null,
+    phase: "clips",
+    clip_job_id: "clips-stall-1",
+    clips_only: true,
+    created_at: Date.now() - (KEYFRAME_STALL_SECONDS + 60) * 1000,
+    phase_started_at: Date.now() - (KEYFRAME_STALL_SECONDS + 60) * 1000,
+    ...over,
+  });
+
+  it("adopts the orphaned clips from R2, completes the clip job, and advances out of clips", async () => {
+    const { env, readFilm, readClip } = clipsRecoveryEnv(stalledFilm(), clipsJob(), [
+      "renders/neon/clips/shot_01_i2v.mp4",
+      "renders/neon/clips/shot_02_i2v.mp4",
+      "renders/neon/clips/shot_03_i2v.mp4",
+    ]);
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    expect(r?.job.clips_recovered).toBe(true);
+    expect(r?.job.phase).not.toBe("clips"); // advanced (clips_only -> done)
+    // the two stuck shots were filled from R2 in the persisted clip doc
+    const cj = readClip();
+    expect(cj.shots.find((s) => s.shot_id === "shot_01")?.clip_key).toBe("renders/neon/clips/shot_01_i2v.mp4");
+    expect(cj.shots.find((s) => s.shot_id === "shot_03")?.clip_key).toBe("renders/neon/clips/shot_03_i2v.mp4");
+    expect(cj.shots.every((s) => s.status === "done")).toBe(true);
+    expect(readFilm().clips_recovered).toBe(true);
+  });
+
+  it("does not run the R2 adoption when the stuck shots' clips are absent from R2", async () => {
+    const { env } = clipsRecoveryEnv(stalledFilm(), clipsJob(), [
+      "renders/neon/clips/shot_02_i2v.mp4", // only the already-done shot; the 2 stuck shots have nothing
+    ]);
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    // The clips-from-R2 adoption did NOT fire (no pending shot had an R2 clip to adopt). What the
+    // normal clips leg then does with the two unbound/phantom shots is orthogonal to this fix; the
+    // invariant under test is that recovery does not fabricate a clip it cannot find in R2.
+    expect(r?.job.clips_recovered).toBeUndefined();
+  });
+
+  it("does not fire before the stall deadline on a fresh clips phase", async () => {
+    const fresh = stalledFilm({ created_at: Date.now(), phase_started_at: Date.now() });
+    const { env } = clipsRecoveryEnv(fresh, clipsJob(), [
+      "renders/neon/clips/shot_01_i2v.mp4",
+      "renders/neon/clips/shot_03_i2v.mp4",
+    ]);
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    expect(r?.job.clips_recovered).toBeUndefined();
+  });
+
+  it("adopts a shot the module prematurely FAILED when its clip is in R2 (#141 interaction)", async () => {
+    // After the module 404-grace fix, a GC'd shot comes back status=failed -- but the GPU wrote the clip
+    // before the job aged out. The driver must reclaim it: artifact in R2 overrides the module's failure.
+    const failedJob: ClipJobLike = {
+      job_id: "clips-stall-1", project: "neon", motion_backend: "own-gpu", binding: "MODULE_OWN_GPU",
+      shots: [
+        { shot_id: "shot_01", status: "failed", error: "own-gpu job not found on RunPod (#141)" },
+        { shot_id: "shot_02", status: "done", clip_key: "renders/neon/clips/shot_02_i2v.mp4" },
+        { shot_id: "shot_03", status: "failed", error: "own-gpu job not found on RunPod (#141)" },
+      ],
+      created_at: Date.now(),
+    };
+    const { env, readClip } = clipsRecoveryEnv(stalledFilm(), failedJob, [
+      "renders/neon/clips/shot_01_i2v.mp4",
+      "renders/neon/clips/shot_02_i2v.mp4",
+      "renders/neon/clips/shot_03_i2v.mp4",
+    ]);
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    expect(r?.job.clips_recovered).toBe(true);
+    expect(r?.job.phase).not.toBe("clips");
+    const cj = readClip();
+    expect(cj.shots.every((s) => s.status === "done")).toBe(true);
+    // the premature failure error was cleared on the reclaimed shots
+    expect(cj.shots.find((s) => s.shot_id === "shot_01")?.error).toBeUndefined();
+  });
+
+  it("RE-FIRES across sweeps for STAGGERED stale clips (#143): adopts a subset, then the rest", async () => {
+    // shot_02 already done; shot_01 + shot_03 still pending (their clips land at different times).
+    const job = clipsJob();
+    // Mutable R2 key set: only shot_01's clip has landed at first; shot_03's lands before the 2nd sweep.
+    const r2 = ["renders/neon/clips/shot_01_i2v.mp4", "renders/neon/clips/shot_02_i2v.mp4"];
+    const { env, readFilm, readClip } = clipsRecoveryEnv(stalledFilm(), job, r2);
+
+    // Sweep 1: adopts shot_01 (in R2); shot_03 has no clip yet -> partial, stays in clips, NOT advanced,
+    // and the one-shot gate is NOT consumed (so the next sweep can finish the job).
+    const r1 = await advanceFilmJob(env, "film-stall-clips");
+    expect(r1?.job.phase).toBe("clips");
+    expect(r1?.job.clips_recovered).toBeUndefined();
+    const cj1 = readClip();
+    expect(cj1.shots.find((s) => s.shot_id === "shot_01")?.status).toBe("done");
+    expect(cj1.shots.find((s) => s.shot_id === "shot_03")?.status).toBe("pending");
+
+    // shot_03's clip lands in R2 between sweeps.
+    r2.push("renders/neon/clips/shot_03_i2v.mp4");
+
+    // Sweep 2: re-fires, adopts the now-present shot_03, job complete -> advances out of clips.
+    const r2res = await advanceFilmJob(env, "film-stall-clips");
+    expect(r2res?.job.clips_recovered).toBe(true);
+    expect(r2res?.job.phase).not.toBe("clips");
+    expect(readClip().shots.every((s) => s.status === "done")).toBe(true);
+    expect(readFilm().clips_recovered).toBe(true);
+  });
+});
+
+describe("advanceFinishPhase R2 reclaim (#141: finish output in R2 beats a finish-module fast-fail)", () => {
+  // Film at phase=finish; one finish shot already FAILED (finish-rife fast-failed its GC'd job), but the
+  // finished clip IS in R2. The reclaim must mark it done from R2 BEFORE the every-terminal -> advance
+  // judgment, so the film does not advance to assemble dropping a shot whose _finished.mp4 exists.
+  const finishFilm = (): FilmJob => ({
+    film_id: "film-finish-reclaim",
+    project: "neon",
+    bundle_key: "b",
+    scenes: [
+      { shot_id: "shot_01", prompt: "a", seconds: 4 },
+      { shot_id: "shot_02", prompt: "b", seconds: 4 },
+    ],
+    motion_backend: "own-gpu",
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: null,
+    phase: "finish",
+    clips_only: true, // shortcut to done when finish is complete (no assemble container needed in test)
+    finish_shots: [
+      { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4", chain: ["MODULE_FINISH_RIFE"], configs: [{}], idx: 0, status: "done", applied: [], poll: undefined, error: undefined },
+      { shot_id: "shot_02", clip_key: "renders/neon/clips/shot_02_i2v.mp4", chain: ["MODULE_FINISH_RIFE"], configs: [{}], idx: 0, status: "failed", applied: [], error: "finish-rife job not found on RunPod (#141)" },
+    ] as FinishShot[],
+    created_at: Date.now(),
+  });
+
+  function finishEnv(job: FilmJob, r2Keys: string[]) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        list: async ({ prefix }: { prefix: string }) => ({
+          objects: r2Keys.filter((x) => x.startsWith(prefix)).map((x) => ({ key: x })),
+          truncated: false,
+        }),
+      },
+    } as unknown as Env;
+    return { env, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  it("reclaims a finish shot whose _finished output is in R2 -> done, then advances", async () => {
+    const { env, read } = finishEnv(finishFilm(), [
+      "renders/neon/clips/shot_01_finished.mp4",
+      "renders/neon/clips/shot_02_finished.mp4", // the failed shot's finish output IS present
+    ]);
+    const r = await advanceFilmJob(env, "film-finish-reclaim");
+    const fs2 = read().finish_shots?.find((f) => f.shot_id === "shot_02");
+    expect(fs2?.status).toBe("done");
+    expect(fs2?.clip_key).toBe("renders/neon/clips/shot_02_finished.mp4");
+    expect(fs2?.error).toBeUndefined();
+    expect(r?.job.phase).not.toBe("finish"); // advanced (clips_only -> done)
+  });
+
+  it("leaves the finish shot FAILED when its _finished output is NOT in R2", async () => {
+    const { env, read } = finishEnv(finishFilm(), [
+      "renders/neon/clips/shot_01_finished.mp4", // only the already-done shot's output
+    ]);
+    await advanceFilmJob(env, "film-finish-reclaim");
+    expect(read().finish_shots?.find((f) => f.shot_id === "shot_02")?.status).toBe("failed");
   });
 });
 
