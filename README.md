@@ -7,6 +7,18 @@ Vivijure is a self-hosted AI film studio built on Cloudflare Workers. It runs fr
 Workers free tier and connects to whatever GPU backend you attach -- RunPod, your own box, or
 a cloud motion API. You own every artifact.
 
+## Ecosystem
+
+```
+slate  -->  vivijure  -->  vivijure-backend
+```
+
+| Repo | Role |
+|---|---|
+| [slate](https://github.com/skyphusion-labs/slate) | Collaborative AI screenwriter Discord bot -- shapes the film in-channel, then hands it to vivijure to render |
+| **[vivijure](https://github.com/skyphusion-labs/vivijure)** | **AI film studio control plane (Cloudflare Worker) -- planner, cast, render UI; orchestrates render jobs** |
+| [vivijure-backend](https://github.com/skyphusion-labs/vivijure-backend) | GPU render backend (RunPod serverless) -- SDXL keyframes, i2v, finish, assemble |
+
 <!-- Screenshots pending: capture against live planner (Access-gated).
      Drop PNGs into docs/screenshots/ -- see docs/screenshots/README.md for what to capture.
      Filenames: planner-storyboard.png, planner-render-history.png, cast-page.png, modules-page.png -->
