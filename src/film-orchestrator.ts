@@ -80,6 +80,10 @@ export interface FilmJob {
   // Set once the keyframe stall recovery has adopted orphaned keyframes from R2, so the (idempotent)
   // adoption is never retried in a loop -- after one adoption the job has moved to clips anyway.
   keyframe_recovered?: boolean;
+  // Set once the clips stall recovery has adopted orphaned clips from R2 (issue #139). Same idea as
+  // keyframe_recovered: the motion.backend (own-gpu) poll can return pending forever on a GC'd RunPod
+  // job while the finished clip already sits in R2; recovery collects them by shot name and advances.
+  clips_recovered?: boolean;
   error?: string;
   created_at: number;
   user_email?: string; // film owner; passed to the `notify` hook on done (e.g. for an email notifier)
@@ -823,6 +827,75 @@ async function recoverStalledKeyframePhase(env: Env, job: FilmJob): Promise<bool
   return true;
 }
 
+/** Pure: does an R2 clips-object filename belong to this shot? The clip stage writes a finished clip
+ *  per shot under `renders/<project>/clips/`, named with the shot id followed by a NON-digit separator
+ *  (e.g. `shot_09_i2v.mp4`). Match the shot id only at a digit boundary so `shot_1` never swallows
+ *  `shot_10`. `_finished*` outputs are the finish-chain results, not motion clips, so they are excluded
+ *  here (the clips phase adopts the raw motion clip; the finish phase has its own adoption). We do NOT
+ *  hardcode the backend's exact slug (`_i2v`) -- matching by shot-id boundary keeps this independent of
+ *  the backend's naming convention (same clean-room stance as listProjectKeyframes). */
+export function clipFileMatchesShot(file: string, shotId: string): boolean {
+  if (!file.startsWith(shotId)) return false;
+  const rest = file.slice(shotId.length);
+  if (rest.length === 0) return false; // need a separator + extension
+  if (/^\d/.test(rest)) return false; // digit boundary: shot_1 must not match shot_10...
+  if (/(^|[._-])finished([._-]|$)/i.test(rest)) return false; // finish-chain output, not a motion clip
+  return /\.(mp4|mov|webm|mkv)$/i.test(file); // a video file
+}
+
+/** List the motion clips the GPU wrote for a project, joined to the job's scenes by shot id. The
+ *  motion.backend (own-gpu) writes the finished clip to `renders/<project>/clips/` itself and reports
+ *  the key; when its poll never resolves (GC'd RunPod job), the clip is still in R2. List the prefix and
+ *  match by shot id (boundary-safe) so a stalled clips phase can be recovered straight from R2 presence,
+ *  no GPU re-run. Only shots in the storyboard are returned. */
+export async function listProjectClips(env: Env, project: string, scenes: FilmScene[]): Promise<{ shot_id: string; clip_key: string }[]> {
+  const prefix = `renders/${project}/clips/`;
+  const wanted = scenes.map((s) => s.shot_id);
+  const found = new Map<string, string>(); // shot_id -> clip_key (first match wins)
+  let cursor: string | undefined;
+  do {
+    const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
+    for (const o of listed.objects) {
+      const file = o.key.slice(prefix.length);
+      for (const shotId of wanted) {
+        if (!found.has(shotId) && clipFileMatchesShot(file, shotId)) found.set(shotId, o.key);
+      }
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+  return wanted.filter((s) => found.has(s)).map((s) => ({ shot_id: s, clip_key: found.get(s) as string }));
+}
+
+/** Recover a clips phase whose motion.backend poll has gone stale by adopting the clips already in R2.
+ *  Loads the clip job doc, fills any still-pending shot that HAS a clip in R2 (marking it done with that
+ *  key), re-PUTs the clip doc, and -- if every shot is now terminal -- advances to the finish chain
+ *  exactly as a normal clips completion would. Idempotent: only fills pending shots, and a shot with no
+ *  R2 clip is left pending (so a genuinely-failed shot is not faked). Returns true iff it advanced the
+ *  film phase out of "clips"; false if it could not complete the job (lets the hard ceiling decide). */
+async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean> {
+  if (!job.clip_job_id) return false;
+  const cjObj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
+  if (!cjObj) return false;
+  const clipJob = JSON.parse(await cjObj.text()) as ClipJob;
+  const inR2 = new Map((await listProjectClips(env, job.project, job.scenes)).map((c) => [c.shot_id, c.clip_key]));
+  let adopted = 0;
+  for (const shot of clipJob.shots) {
+    if (shot.status === "pending" && inR2.has(shot.shot_id)) {
+      shot.status = "done";
+      shot.clip_key = inR2.get(shot.shot_id);
+      shot.poll = undefined; // the phantom RunPod job is done with
+      adopted += 1;
+    }
+  }
+  if (!adopted) return false; // nothing recoverable from R2 -- let the ceiling handle a real stall
+  job.clips_recovered = true;
+  await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
+  console.warn(`film ${job.film_id}: clips poll stale, adopted ${adopted} orphaned clips from R2 (#139)`);
+  if (!summarizeJob(clipJob).complete) return false; // still some shot with neither a clip nor a terminal status
+  await enterFinishPhase(env, job, clipJob);
+  return true;
+}
+
 /** The stall-recovery pass, run after the normal phase advance. For a pollable phase that has not
  *  progressed within its deadline: try a same-phase recovery (keyframe adoption from R2), else, once
  *  past the absolute ceiling, fail loudly so a wedged render surfaces instead of hanging forever (#129).
@@ -836,8 +909,16 @@ async function recoverStalledPhase(env: Env, job: FilmJob, now: number = Date.no
     if (await recoverStalledKeyframePhase(env, job)) return true;
   }
 
-  // Absolute ceiling: a still-pollable phase this old is wedged (e.g. clips/finish whose GPU-assigned
-  // keys we cannot adopt, or a keyframe phase with nothing in R2 to adopt). Fail loudly, don't hang.
+  // Same-phase recovery: a clips (motion.backend) poll that never resolved, but the clips are in R2
+  // (issue #139). Symmetric to keyframe adoption -- collect the orphaned clips by shot name and advance
+  // to finish, so an own-gpu render whose GPU work completed does not loud-fail with its clips intact.
+  if (job.phase === "clips" && !job.clips_recovered && age >= KEYFRAME_STALL_SECONDS) {
+    if (await recoverStalledClipsPhase(env, job)) return true;
+  }
+
+  // Absolute ceiling: a still-pollable phase this old is genuinely wedged with nothing in R2 to adopt
+  // (keyframe/clips adoption above already rescued any phase whose artifacts landed; a finish phase has
+  // no adoption yet; or the GPU truly produced nothing). Fail loudly rather than hang.
   if (age >= PHASE_HARD_DEADLINE_SECONDS) {
     const stuckPhase = job.phase;
     job.phase = "failed";
