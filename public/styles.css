@@ -754,6 +754,8 @@ details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
 .planner-history-status-done { color: var(--on); border-color: color-mix(in srgb, var(--on) 40%, var(--line)); }
 .planner-history-status-failed,
 .planner-history-status-error { color: #ff7a8a; border-color: #5b2730; }
+/* v0.170.0: inline error snippet shown in the sub-line without expanding the row */
+.planner-history-error-inline { color: #ff7a8a; font-size: 11px; margin-top: 2px; display: block; word-break: break-word; }
 .planner-history-mode {
   font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
   border-radius: 999px; padding: 2px 7px; border: 1px solid var(--line); color: var(--muted);
