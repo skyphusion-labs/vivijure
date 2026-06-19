@@ -31,7 +31,9 @@ interface Env {
 const endpoint = (env: Env) => "https://api.runpod.ai/v2/" + env.RUNPOD_ENDPOINT_ID;
 const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
 
-const MANIFEST: ModuleManifest = {
+// Exported so the core's tier-drift guard (tests/quality-tier-drift.test.ts, issue #124) can assert
+// this module's quality_tier enum stays in lockstep with the core QUALITY_TIERS set.
+export const MANIFEST: ModuleManifest = {
   name: "keyframe",
   version: "0.1.0",
   api: MODULE_API,
