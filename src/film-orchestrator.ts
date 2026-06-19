@@ -856,6 +856,17 @@ export async function listProjectKeyframes(env: Env, project: string, scenes: Fi
   return out.filter((k) => (seen.has(k.shot_id) ? false : (seen.add(k.shot_id), true)));
 }
 
+/** True iff EVERY scene's keyframe is already in R2 (the full set, one per shot). Gate for adopting on a
+ *  pending poll (#129 envelope-freeze): a partial set means generation is still in flight, so we must NOT
+ *  advance early -- only adopt once the set is complete. (The 20min stall backstop is intentionally
+ *  lenient on partials, treating absent shots as genuine non-renders at the ceiling.) */
+export async function keyframeSetCompleteInR2(env: Env, job: FilmJob): Promise<boolean> {
+  if (!job.scenes.length) return false;
+  const present = await listProjectKeyframes(env, job.project, job.scenes);
+  const have = new Set(present.map((k) => k.shot_id));
+  return job.scenes.every((s) => have.has(s.shot_id));
+}
+
 /** Recover a keyframe phase whose module poll has gone stale (RunPod GC'd the finished job) by adopting
  *  the keyframes already in R2 and advancing exactly as a fresh keyframe completion would (afterKeyframe
  *  Output -> clips, or done for a keyframes-only preview). Idempotent: marks keyframe_recovered so it
@@ -981,6 +992,15 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
       if (!p.ok) { job.phase = "failed"; job.error = p.error; }
       else if (!(p as { pending?: boolean }).pending) {
         await afterKeyframeOutput(env, job, (p as { output: KeyframeOutput }).output);
+      } else if (await keyframeSetCompleteInR2(env, job)) {
+        // R2 PRESENCE IS AUTHORITATIVE, even on a *pending* poll (#129 sibling, mirrors #154 for finish):
+        // the keyframe job's RunPod envelope can freeze at IN_PROGRESS after the GPU already wrote every
+        // renders/<project>/keyframes/shot_NN.png to R2, so the poll reads pending forever. Don't wait for
+        // KEYFRAME_STALL_SECONDS (20min) to adopt -- once the FULL set is in R2, advance now. The
+        // completeness guard is essential: adopting a PARTIAL set (mid-generation) would advance to clips
+        // with keyframes missing. (recoverStalledKeyframePhase stays as the >20min backstop, which is
+        // lenient on partial = genuine non-renders.)
+        await recoverStalledKeyframePhase(env, job);
       }
     }
     await putFilm(env, job);

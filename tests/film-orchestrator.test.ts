@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -419,6 +419,36 @@ describe("listProjectKeyframes (#129 R2 adoption)", () => {
   });
   it("returns empty when no keyframes are in R2 yet", async () => {
     expect(await listProjectKeyframes(r2ListEnv([]), "neon", sc)).toEqual([]);
+  });
+});
+
+// keyframe phase: adopt on a *pending* poll only when the FULL set is in R2 (envelope-freeze, mirrors
+// #154 for finish; the completeness guard prevents advancing on a partial mid-generation set).
+describe("keyframeSetCompleteInR2 (pending-poll adoption guard)", () => {
+  const job = (scenes: FilmScene[]) => ({ project: "neon", scenes } as unknown as FilmJob);
+  const sc: FilmScene[] = [
+    { shot_id: "shot_01", prompt: "a", seconds: 4 },
+    { shot_id: "shot_02", prompt: "b", seconds: 4 },
+    { shot_id: "shot_03", prompt: "c", seconds: 4 },
+  ];
+  it("true when every scene has a keyframe in R2 (full set -> adopt now, do not wait 20min)", async () => {
+    const env = r2ListEnv([
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.png",
+      "renders/neon/keyframes/shot_03.png",
+    ]);
+    expect(await keyframeSetCompleteInR2(env, job(sc))).toBe(true);
+  });
+  it("false on a PARTIAL set (mid-generation -> must NOT advance early)", async () => {
+    const env = r2ListEnv([
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.png",
+    ]);
+    expect(await keyframeSetCompleteInR2(env, job(sc))).toBe(false);
+  });
+  it("false when none are in R2 and false for an empty storyboard", async () => {
+    expect(await keyframeSetCompleteInR2(r2ListEnv([]), job(sc))).toBe(false);
+    expect(await keyframeSetCompleteInR2(r2ListEnv([]), job([]))).toBe(false);
   });
 });
 
