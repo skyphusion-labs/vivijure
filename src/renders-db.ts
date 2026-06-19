@@ -540,6 +540,44 @@ export async function listUnresolvedNotifiableJobs(
   return rows.map((r) => String(r.job_id)).filter((s) => s.length > 0);
 }
 
+// Stranded post-clips film jobs the normal age-windowed sweep no longer picks up.
+// Once a film's clips are rendered (phase is finish/assemble/mux), the only work
+// left is the CPU-only ffmpeg concat in video-finish, which never expires -- so a
+// job that stalled at assemble (e.g. the client stopped polling, or a transient
+// container outage outlasted a poll) should self-heal even past SWEEP_MAX_AGE_SECONDS,
+// rather than abandoning a fully-rendered film over its final CPU step. The age cutoff
+// exists to stop chasing RunPod jobs the platform has GC'd; that does not apply here,
+// because the finished clips are already in R2 and addressable from the film-job doc.
+// We gate on the persisted poll phase (output_json) so we never re-drive a job that
+// never got past the GPU stage; the caller additionally confirms the film-job doc still
+// exists in R2 before advancing. Bounded + ordered oldest-first so one tick stays cheap.
+export async function listStrandedPostClipsFilmJobs(
+  env: Env,
+  maxAgeSeconds: number,
+  limit = 25,
+): Promise<string[]> {
+  const cutoff = nowSeconds() - Math.max(0, maxAgeSeconds);
+  const res = await env.DB.prepare(
+    `SELECT job_id FROM renders
+       WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+         AND notified_at IS NULL
+         AND COALESCE(mode, 'full') != 'keyframes-only'
+         AND parent_id IS NULL
+         AND submitted_at < ?
+         AND (
+           output_json LIKE '%"phase":"assemble"%'
+           OR output_json LIKE '%"phase":"finish"%'
+           OR output_json LIKE '%"phase":"mux"%'
+         )
+       ORDER BY submitted_at ASC
+       LIMIT ?`,
+  )
+    .bind(cutoff, Math.min(Math.max(1, limit), 100))
+    .all();
+  const rows = (res.results ?? []) as Array<{ job_id?: unknown }>;
+  return rows.map((r) => String(r.job_id)).filter((s) => s.length > 0);
+}
+
 export async function markFinishFailed(env: Env, jobId: string, error: string): Promise<void> {
   const now = nowSeconds();
   await env.DB.prepare(
