@@ -519,6 +519,10 @@ function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[]
         truncated: false,
       }),
     },
+    // motion.backend stub that always reports "still rendering" (pending) on /poll, so the normal clips
+    // leg leaves a not-yet-adopted shot pending (faithful to prod under the #142 module fix: a still-
+    // rendering shot is pending, not failed). Without this the unbound binding would falsely fail the shot.
+    MODULE_OWN_GPU: { fetch: async () => new Response(JSON.stringify({ ok: true, pending: true }), { headers: { "content-type": "application/json" } }) },
   } as unknown as Env;
   return { env, readFilm: () => JSON.parse(filmStored) as FilmJob, readClip: () => JSON.parse(clipStored) as ClipJobLike };
 }
@@ -631,6 +635,33 @@ describe("advanceFilmJob clips stall recovery (#139)", () => {
     expect(cj.shots.every((s) => s.status === "done")).toBe(true);
     // the premature failure error was cleared on the reclaimed shots
     expect(cj.shots.find((s) => s.shot_id === "shot_01")?.error).toBeUndefined();
+  });
+
+  it("RE-FIRES across sweeps for STAGGERED stale clips (#143): adopts a subset, then the rest", async () => {
+    // shot_02 already done; shot_01 + shot_03 still pending (their clips land at different times).
+    const job = clipsJob();
+    // Mutable R2 key set: only shot_01's clip has landed at first; shot_03's lands before the 2nd sweep.
+    const r2 = ["renders/neon/clips/shot_01_i2v.mp4", "renders/neon/clips/shot_02_i2v.mp4"];
+    const { env, readFilm, readClip } = clipsRecoveryEnv(stalledFilm(), job, r2);
+
+    // Sweep 1: adopts shot_01 (in R2); shot_03 has no clip yet -> partial, stays in clips, NOT advanced,
+    // and the one-shot gate is NOT consumed (so the next sweep can finish the job).
+    const r1 = await advanceFilmJob(env, "film-stall-clips");
+    expect(r1?.job.phase).toBe("clips");
+    expect(r1?.job.clips_recovered).toBeUndefined();
+    const cj1 = readClip();
+    expect(cj1.shots.find((s) => s.shot_id === "shot_01")?.status).toBe("done");
+    expect(cj1.shots.find((s) => s.shot_id === "shot_03")?.status).toBe("pending");
+
+    // shot_03's clip lands in R2 between sweeps.
+    r2.push("renders/neon/clips/shot_03_i2v.mp4");
+
+    // Sweep 2: re-fires, adopts the now-present shot_03, job complete -> advances out of clips.
+    const r2res = await advanceFilmJob(env, "film-stall-clips");
+    expect(r2res?.job.clips_recovered).toBe(true);
+    expect(r2res?.job.phase).not.toBe("clips");
+    expect(readClip().shots.every((s) => s.status === "done")).toBe(true);
+    expect(readFilm().clips_recovered).toBe(true);
   });
 });
 

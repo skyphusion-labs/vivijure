@@ -869,10 +869,17 @@ export async function listProjectClips(env: Env, project: string, scenes: FilmSc
 /** Recover a clips phase whose motion.backend poll has gone stale by adopting the clips already in R2.
  *  Loads the clip job doc, marks any not-yet-done shot whose clip IS in R2 done with that key (pending OR
  *  a shot the module prematurely failed -- artifact present in R2 is the source of truth and overrides a
- *  module's failure verdict; #141), re-PUTs the clip doc, and -- if every shot is now terminal -- advances
- *  to the finish chain exactly as a normal clips completion would. Idempotent; a shot with no R2 clip is
- *  left as-is (a genuine non-render is never faked). Returns true iff it advanced the film phase out of
- *  "clips"; false if it could not complete the job (lets the hard ceiling decide). */
+ *  module's failure verdict; #141), re-PUTs the clip doc, and -- only once every shot is terminal --
+ *  advances to the finish chain exactly as a normal clips completion would.
+ *
+ *  RE-FIRES across sweeps (issue #143): the 10 clips finish + go stale at DIFFERENT times, so one pass may
+ *  adopt only the shots whose clips have landed so far while others are still rendering. This must run
+ *  every stalled sweep until the job is complete -- so it does NOT set a one-shot `clips_recovered` gate on
+ *  a partial pass (unlike the keyframe batch, which completes all at once). `clips_recovered` is set ONLY
+ *  when the job is complete and we advance to finish -- a record that adoption closed the job, not a guard
+ *  that would block the next partial pass. Returns true iff it advanced the film phase out of "clips".
+ *  A partial pass returns false (phase stays "clips"; the next stalled sweep re-attempts the rest); a pass
+ *  that adopts nothing AND finds nothing already terminal also returns false (the hard ceiling decides). */
 async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean> {
   if (!job.clip_job_id) return false;
   const cjObj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
@@ -883,7 +890,8 @@ async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean
   for (const shot of clipJob.shots) {
     // Adopt any NOT-done shot whose clip is in R2 -- pending OR failed. The module fix (#141) now FAILS a
     // shot whose RunPod job was GC'd, but the GPU may have written the clip before the job aged out;
-    // "artifact present in R2" wins over a premature module failure. A shot with no R2 clip is untouched.
+    // "artifact present in R2" wins over a premature module failure. A shot with no R2 clip is untouched
+    // (still rendering, or a genuine non-render) and will be retried on the next stalled sweep.
     if (shot.status !== "done" && inR2.has(shot.shot_id)) {
       shot.status = "done";
       shot.clip_key = inR2.get(shot.shot_id);
@@ -892,11 +900,16 @@ async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean
       adopted += 1;
     }
   }
-  if (!adopted) return false; // nothing recoverable from R2 -- let the ceiling handle a real stall
+  // Persist any partial progress so a later sweep starts from it (the re-PUT is idempotent). Skip the PUT
+  // only when nothing changed this pass, to avoid a needless write while we wait for more clips to land.
+  if (adopted) {
+    await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
+    console.warn(`film ${job.film_id}: clips poll stale, adopted ${adopted} orphaned clips from R2 this pass (#143)`);
+  }
+  // Only advance once the WHOLE job is terminal -- otherwise stay in "clips" and let the next stalled sweep
+  // pick up the shots that have since landed. Do NOT set a one-shot gate on a partial pass.
+  if (!summarizeJob(clipJob).complete) return false;
   job.clips_recovered = true;
-  await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
-  console.warn(`film ${job.film_id}: clips poll stale, adopted ${adopted} orphaned clips from R2 (#139)`);
-  if (!summarizeJob(clipJob).complete) return false; // still some shot with neither a clip nor a terminal status
   await enterFinishPhase(env, job, clipJob);
   return true;
 }
@@ -917,7 +930,10 @@ async function recoverStalledPhase(env: Env, job: FilmJob, now: number = Date.no
   // Same-phase recovery: a clips (motion.backend) poll that never resolved, but the clips are in R2
   // (issue #139). Symmetric to keyframe adoption -- collect the orphaned clips by shot name and advance
   // to finish, so an own-gpu render whose GPU work completed does not loud-fail with its clips intact.
-  if (job.phase === "clips" && !job.clips_recovered && age >= KEYFRAME_STALL_SECONDS) {
+  // NO !clips_recovered guard (issue #143): clips finish + go stale at DIFFERENT times, so this must
+  // RE-FIRE every stalled sweep to pick up shots whose clips land after an earlier partial pass;
+  // recoverStalledClipsPhase only advances (and sets clips_recovered) once the whole job is complete.
+  if (job.phase === "clips" && age >= KEYFRAME_STALL_SECONDS) {
     if (await recoverStalledClipsPhase(env, job)) return true;
   }
 
