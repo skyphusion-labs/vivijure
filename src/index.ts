@@ -653,6 +653,9 @@ const hPreflight: Handler = async (req) => {
 const hPlan: Handler = async (req, env) => {
   const a = await readBody<PlanStoryboardArgs>(req);
   if (!a.brief || !a.model) throw badRequest("brief and model required");
+  // v0.165.0 (#143): a new project sends no characters field; default to []
+  // so buildPlanningUserMessage does not throw "characters is not iterable".
+  if (!Array.isArray(a.characters)) a.characters = [];
   const r = await planStoryboard(env, a);
   return json(r, r.ok ? 200 : 422);
 };

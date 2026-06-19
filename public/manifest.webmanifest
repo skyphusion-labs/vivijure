@@ -1,0 +1,14 @@
+{
+  "name": "Vivijure Studio",
+  "short_name": "Vivijure",
+  "description": "AI film studio -- planner, cast, render",
+  "start_url": "/planner",
+  "display": "standalone",
+  "background_color": "#0E1730",
+  "theme_color": "#0E1730",
+  "icons": [
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/favicon-16.png", "sizes": "16x16", "type": "image/png" }
+  ]
+}

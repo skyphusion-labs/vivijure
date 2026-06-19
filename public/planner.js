@@ -123,6 +123,12 @@ function showStep(id) {
   // v0.132.0: the audio section gates its own content on storyboard state, so
   // re-evaluate it on entry; otherwise landing on the Audio step with no
   // storyboard left it blank (the hidden attr was never cleared).
+  // v0.165.0 (#144): same pattern for cast -- showPreflightSection() and the
+  // bundle section are only revealed at plan-completion time; navigating back
+  // to Cast & Bundle must re-evaluate them so the sections appear.
+  if (id === "cast") {
+    showCastSection();
+  }
   if (id === "audio") {
     showAudioSection();
     // v0.137.6: the first time the user opens Audio for a plan, auto-suggest an
@@ -1267,6 +1273,19 @@ function showPreflightSection() {
   const section = $("#planner-preflight");
   if (!section) return;
   section.hidden = !planState.storyboard;
+}
+
+// v0.165.0 (#144): mirror showAudioSection -- when the user navigates to
+// Cast & Bundle, ensure the preflight and bundle sections are visible if a
+// storyboard exists. showStep only toggles the step-hidden class (not the
+// hidden attr), so sections that start with `hidden` in HTML stay invisible
+// unless their hidden attr is explicitly cleared here.
+function showCastSection() {
+  showPreflightSection();
+  if (planState.storyboard) {
+    const bundle = $("#planner-bundle");
+    if (bundle) bundle.hidden = false;
+  }
 }
 
 function preflightBlocksBundle() {

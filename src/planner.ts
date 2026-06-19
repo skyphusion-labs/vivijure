@@ -42,6 +42,8 @@ export type { PlannerCharacter, PlanningProvider };
 
 export interface PlanStoryboardArgs {
   brief: string;
+  // v0.165.0 (#143): optional so hPlan can safely default to [] when the
+  // client omits the field (new project with no cast assigned yet).
   characters: PlannerCharacter[];
   // PlanningModel.id from planner-catalog, e.g. "anthropic/claude-opus-4-7"
   // or "@cf/zai-org/glm-4.7-flash".
