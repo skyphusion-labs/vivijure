@@ -867,11 +867,12 @@ export async function listProjectClips(env: Env, project: string, scenes: FilmSc
 }
 
 /** Recover a clips phase whose motion.backend poll has gone stale by adopting the clips already in R2.
- *  Loads the clip job doc, fills any still-pending shot that HAS a clip in R2 (marking it done with that
- *  key), re-PUTs the clip doc, and -- if every shot is now terminal -- advances to the finish chain
- *  exactly as a normal clips completion would. Idempotent: only fills pending shots, and a shot with no
- *  R2 clip is left pending (so a genuinely-failed shot is not faked). Returns true iff it advanced the
- *  film phase out of "clips"; false if it could not complete the job (lets the hard ceiling decide). */
+ *  Loads the clip job doc, marks any not-yet-done shot whose clip IS in R2 done with that key (pending OR
+ *  a shot the module prematurely failed -- artifact present in R2 is the source of truth and overrides a
+ *  module's failure verdict; #141), re-PUTs the clip doc, and -- if every shot is now terminal -- advances
+ *  to the finish chain exactly as a normal clips completion would. Idempotent; a shot with no R2 clip is
+ *  left as-is (a genuine non-render is never faked). Returns true iff it advanced the film phase out of
+ *  "clips"; false if it could not complete the job (lets the hard ceiling decide). */
 async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean> {
   if (!job.clip_job_id) return false;
   const cjObj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
@@ -880,10 +881,14 @@ async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean
   const inR2 = new Map((await listProjectClips(env, job.project, job.scenes)).map((c) => [c.shot_id, c.clip_key]));
   let adopted = 0;
   for (const shot of clipJob.shots) {
-    if (shot.status === "pending" && inR2.has(shot.shot_id)) {
+    // Adopt any NOT-done shot whose clip is in R2 -- pending OR failed. The module fix (#141) now FAILS a
+    // shot whose RunPod job was GC'd, but the GPU may have written the clip before the job aged out;
+    // "artifact present in R2" wins over a premature module failure. A shot with no R2 clip is untouched.
+    if (shot.status !== "done" && inR2.has(shot.shot_id)) {
       shot.status = "done";
       shot.clip_key = inR2.get(shot.shot_id);
       shot.poll = undefined; // the phantom RunPod job is done with
+      shot.error = undefined; // clear a premature module failure now that the artifact is adopted
       adopted += 1;
     }
   }

@@ -528,7 +528,7 @@ interface ClipJobLike {
   project: string;
   motion_backend: string | null;
   binding: string | null;
-  shots: { shot_id: string; status: string; clip_key?: string; poll?: string }[];
+  shots: { shot_id: string; status: string; clip_key?: string; poll?: string; error?: string }[];
   created_at: number;
 }
 
@@ -605,6 +605,32 @@ describe("advanceFilmJob clips stall recovery (#139)", () => {
     ]);
     const r = await advanceFilmJob(env, "film-stall-clips");
     expect(r?.job.clips_recovered).toBeUndefined();
+  });
+
+  it("adopts a shot the module prematurely FAILED when its clip is in R2 (#141 interaction)", async () => {
+    // After the module 404-grace fix, a GC'd shot comes back status=failed -- but the GPU wrote the clip
+    // before the job aged out. The driver must reclaim it: artifact in R2 overrides the module's failure.
+    const failedJob: ClipJobLike = {
+      job_id: "clips-stall-1", project: "neon", motion_backend: "own-gpu", binding: "MODULE_OWN_GPU",
+      shots: [
+        { shot_id: "shot_01", status: "failed", error: "own-gpu job not found on RunPod (#141)" },
+        { shot_id: "shot_02", status: "done", clip_key: "renders/neon/clips/shot_02_i2v.mp4" },
+        { shot_id: "shot_03", status: "failed", error: "own-gpu job not found on RunPod (#141)" },
+      ],
+      created_at: Date.now(),
+    };
+    const { env, readClip } = clipsRecoveryEnv(stalledFilm(), failedJob, [
+      "renders/neon/clips/shot_01_i2v.mp4",
+      "renders/neon/clips/shot_02_i2v.mp4",
+      "renders/neon/clips/shot_03_i2v.mp4",
+    ]);
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    expect(r?.job.clips_recovered).toBe(true);
+    expect(r?.job.phase).not.toBe("clips");
+    const cj = readClip();
+    expect(cj.shots.every((s) => s.status === "done")).toBe(true);
+    // the premature failure error was cleared on the reclaimed shots
+    expect(cj.shots.find((s) => s.shot_id === "shot_01")?.error).toBeUndefined();
   });
 });
 
