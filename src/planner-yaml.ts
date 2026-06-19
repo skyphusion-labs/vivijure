@@ -56,6 +56,57 @@ function emitScene(scene: StoryboardScene): string[] {
   return lines;
 }
 
+export interface ParsedBundleScene {
+  shot_id: string;
+  prompt: string;
+  seconds: number;
+}
+
+/** Extract { shot_id, prompt, seconds } from an emitted storyboard.yaml. */
+export function parseStoryboardScenes(yaml: string, defaultSeconds = 4): ParsedBundleScene[] {
+  const out: ParsedBundleScene[] = [];
+  let inScenes = false;
+  let idx = 0;
+  let curId: string | null = null;
+  let curPrompt: string | null = null;
+  let curTarget: number | null = null;
+  const flush = (): void => {
+    if (idx === 0 || !curPrompt) return;
+    const shot = curId || `shot_${String(idx).padStart(2, "0")}`;
+    out.push({
+      shot_id: shot,
+      prompt: curPrompt,
+      seconds: curTarget !== null && curTarget > 0 ? curTarget : defaultSeconds,
+    });
+  };
+  for (const line of yaml.split(/\r?\n/)) {
+    if (!inScenes) {
+      if (/^scenes:\s*$/.test(line)) inScenes = true;
+      continue;
+    }
+    const promptM = line.match(/^ {2}- prompt: "((?:[^"\\]|\\.)*)"\s*$/);
+    if (promptM) {
+      flush();
+      idx++;
+      curId = null;
+      curTarget = null;
+      curPrompt = promptM[1].replace(/\\(.)/g, "$1");
+      continue;
+    }
+    const idM = line.match(/^ {4}id:\s*"((?:[^"\\]|\\.)*)"\s*$/);
+    if (idM) {
+      curId = idM[1].replace(/\\(.)/g, "$1");
+      continue;
+    }
+    const tsM = line.match(/^ {4}target_seconds:\s*([0-9]+(?:\.[0-9]+)?)\s*$/);
+    if (tsM) {
+      curTarget = parseFloat(tsM[1]);
+    }
+  }
+  flush();
+  return out;
+}
+
 // v0.154.0 (Phase 4 hybrid, slice-3): extract { shot_id -> target_seconds }
 // from a storyboard.yaml this module emitted. Used by the hybrid assembler to
 // beat-trim BOTH lanes' clips to the authored per-shot durations (beat-synced

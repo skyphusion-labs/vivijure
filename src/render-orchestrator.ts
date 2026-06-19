@@ -19,18 +19,21 @@ export interface ClipShotInput {
   keyframe_key?: string; // the underlying R2 key; an own-GPU backend that shares the bucket reads it
   prompt: string;
   seconds: number;
+  motion_backend?: string; // per-shot module name; falls back to the job default
 }
 export interface ClipShot extends ClipShotInput {
   status: "pending" | "done" | "failed";
   poll?: string;
   clip_key?: string;
   error?: string;
+  binding?: string | null; // resolved env binding for this shot's motion module
 }
 export interface ClipJob {
   job_id: string;
   project: string;
   motion_backend: string | null;
   binding: string | null;
+  module_configs?: Record<string, Record<string, unknown>>;
   shots: ClipShot[];
   created_at: number;
 }
@@ -70,23 +73,41 @@ export function applyPoll(shot: ClipShot, r: PollResponse<MotionBackendOutput>):
   shot.clip_key = (r as { output: MotionBackendOutput }).output.clip_key;
 }
 
-/** Start a clip job: resolve the motion.backend module, submit every shot, persist poll tokens. */
+/** Start a clip job: resolve the motion.backend module per shot, submit, persist poll tokens. */
 export async function startClipJob(
   env: Env,
-  args: { project: string; shots: ClipShotInput[]; motion_backend?: string; config?: Record<string, unknown> },
+  args: {
+    project: string;
+    shots: ClipShotInput[];
+    motion_backend?: string;
+    config?: Record<string, unknown>;
+    module_configs?: Record<string, Record<string, unknown>>;
+  },
 ): Promise<ClipJob> {
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
-  const serving = servingForHook(modules, "motion.backend"); // ui.order sorted (matches the resolver)
-  const mb = args.motion_backend ? serving.find((m) => m.name === args.motion_backend) ?? null : serving[0] ?? null;
-  const config = mb ? validateConfig(mb.config_schema, args.config) : {};
-  const binding = mb ? mb.binding : null;
+  const serving = servingForHook(modules, "motion.backend");
+  const defaultMb = args.motion_backend
+    ? serving.find((m) => m.name === args.motion_backend) ?? null
+    : serving[0] ?? null;
+  const moduleConfigs = args.module_configs ?? {};
+  const defaultConfig = defaultMb
+    ? validateConfig(defaultMb.config_schema, args.config ?? moduleConfigs[defaultMb.name])
+    : {};
 
   const job_id = "clips-" + crypto.randomUUID();
   const shots: ClipShot[] = [];
   for (const sh of args.shots) {
     const shot: ClipShot = { ...sh, status: "pending" };
+    const mbName = sh.motion_backend ?? args.motion_backend ?? defaultMb?.name;
+    const mb = mbName ? serving.find((m) => m.name === mbName) ?? null : defaultMb;
+    const binding = mb ? mb.binding : null;
+    shot.binding = binding;
+    shot.motion_backend = mb?.name ?? undefined;
     const fetcher = binding ? asFetcher(envRec[binding]) : null;
+    const config = mb
+      ? validateConfig(mb.config_schema, moduleConfigs[mb.name] ?? (mb.name === defaultMb?.name ? args.config : undefined) ?? args.config)
+      : defaultConfig;
     if (!mb || !fetcher) {
       shot.status = "failed";
       shot.error = mb ? `module ${mb.name} (${binding}) is not bound` : "no motion.backend module installed";
@@ -103,10 +124,10 @@ export async function startClipJob(
       shot.status = "failed";
       shot.error = r.error;
     } else if ((r as { pending?: boolean }).pending) {
-      shot.poll = (r as { poll: string }).poll; // stays pending; GET advances it
+      shot.poll = (r as { poll: string }).poll;
     } else if ("output" in r) {
       shot.status = "done";
-      shot.clip_key = (r.output as MotionBackendOutput).clip_key; // a synchronous module
+      shot.clip_key = (r.output as MotionBackendOutput).clip_key;
     } else {
       shot.status = "failed";
       shot.error = "module returned neither output nor a poll token";
@@ -117,8 +138,9 @@ export async function startClipJob(
   const job: ClipJob = {
     job_id,
     project: args.project,
-    motion_backend: mb ? mb.name : null,
-    binding,
+    motion_backend: defaultMb ? defaultMb.name : null,
+    binding: defaultMb ? defaultMb.binding : null,
+    module_configs: Object.keys(moduleConfigs).length ? moduleConfigs : undefined,
     shots,
     created_at: Date.now(),
   };
@@ -132,9 +154,10 @@ export async function advanceClipJob(env: Env, jobId: string): Promise<ClipJob |
   if (!obj) return null;
   const job = JSON.parse(await obj.text()) as ClipJob;
   const envRec = env as unknown as Record<string, unknown>;
-  const fetcher = job.binding ? asFetcher(envRec[job.binding]) : null;
   for (const shot of job.shots) {
     if (shot.status !== "pending" || !shot.poll) continue;
+    const binding = shot.binding ?? job.binding;
+    const fetcher = binding ? asFetcher(envRec[binding]) : null;
     if (!fetcher) {
       shot.status = "failed";
       shot.error = "module binding no longer bound";

@@ -9,7 +9,7 @@
 //                  -> validator errors + raw model output (re-prompt path).
 //   2. bundle  POST /api/storyboard/character-ref (per training image),
 //              then POST /api/storyboard/bundle (assemble the .tar.gz).
-//   3. render  POST /api/storyboard/render (submit job to RunPod), then
+//   3. render  POST /api/storyboard/render (module film pipeline), then
 //              GET /api/storyboard/render/<jobId> on an 8-second poll
 //              loop until the job hits a terminal status.
 //
@@ -194,37 +194,12 @@ function stepDelta(dir) {
 // (every pod config knob: default, range, behavior), expanded into plain
 // language. The popover auto-derives values/range/default, so each entry only
 // needs `what`. Empty on a control still means "use the bundle/pod default".
-const FIELD_HELP = {
-  // keyframe (render_overrides.keyframe)
-  "planner-ld-keyframe-model-id": { what: "SDXL base that renders each keyframe (the still Wan animates), so it sets the whole look. Blank = tier default." },
-  "planner-seed": { what: "Fixed RNG seed; the same seed + settings reproduces a render. Blank = fresh random." },
-  "planner-keyframe-sdxl-size": { what: "Keyframe render size as WxH, e.g. 1216x832. Blank = tier default." },
-  "planner-ld-keyframe-guidance-scale": { what: "Keyframe CFG (0-30); needs >1 for negative prompts to bite. Higher = more literal." },
-  "planner-ld-keyframe-steps": { what: "Keyframe denoise steps (1-128). More = cleaner, slower." },
-  "planner-face-lock-mode": { what: "How a face is pinned: ip_adapter (default), instantid (stronger, single-character), or both." },
-  "planner-fl-ip-scale": { what: "IP-Adapter identity strength (0-1). Higher = more on-model; too high looks pasted-on." },
-  "planner-fl-iid-cn-scale": { what: "InstantID face-ControlNet strength (0-1.5): how tightly structure follows the portrait." },
-  "planner-fl-iid-ip-scale": { what: "InstantID face image-prompt strength (0-1.5): how strongly the face resembles the portrait." },
-  // keyframe.multi_char (2+ characters in one frame)
-  "planner-mc-engine": { what: "Regional engine (one SDXL pass, per-region masks) vs composite_legacy (older panels + grabcut). Regional is the default." },
-  "planner-mc-pose": { what: "OpenPose conditioning that draws one body per skeleton so 2+ characters sit apart instead of merging." },
-  "planner-mc-lora-scale": { what: "Per-character LoRA strength in a shared frame (0-2); ~0.3 keeps identities from bleeding." },
-  "planner-mc-ip-scale": { what: "Per-character IP-Adapter strength in a shared frame (0-1); ~0.7 routes identities cleanly." },
-  "planner-mc-max-slots": { what: "Max characters composited into one keyframe (1-4); more is harder to keep distinct." },
-  "planner-mc-cn-scale": { what: "How firmly bodies follow the pose skeleton (0-1.5); ~0.55 places them without overriding the action." },
-  // i2v (render_overrides.i2v)
-  "planner-wd-i2v-model-id": { what: "Wan image-to-video model that animates each keyframe. Blank = tier default." },
-  "planner-wan-num-frames": { what: "Frames per Wan shot (1-256). More = longer clip, slower." },
-  "planner-wan-inference-steps": { what: "Wan denoise steps per shot (1-64). More = smoother motion, slower." },
-  "planner-wan-guidance-scale": { what: "Wan CFG (0-30). Low = freer motion, high = more literal to the prompt." },
-  "planner-fps": { what: "Wan output frame rate (1-120)." },
-  "planner-wd-flow-shift": { what: "Wan flow-matching shift (0-20); tunes motion timing and smoothness." },
-  // lora (render_overrides.lora; fresh Stage 1 training only)
-  "planner-lora-rank": { what: "Character LoRA rank (1-128). Higher captures more detail, bigger file, risks overfit." },
-  "planner-lora-steps": { what: "Character LoRA training steps (1-5000). More = better likeness, diminishing past ~1000." },
-  "planner-lora-lr": { what: "Character LoRA learning rate. Higher learns faster but can overfit." },
-  "planner-lora-resolution": { what: "LoRA training image resolution (512-1536). Higher = finer detail, slower." },
-};
+function collectRenderOverrides() {
+  if (!window.plannerRenderConfig) return undefined;
+  return window.plannerRenderConfig.collectForSubmit(readVal("#planner-render-overrides"));
+}
+
+const FIELD_HELP = {};
 
 let _fieldHelpPop = null;
 let _fieldHelpWired = false;
@@ -368,16 +343,17 @@ const planState = {
   // content: string, ts: number}. Display-only; not replayed to the model.
   refineHistory: [],
   // v0.51.0: audio bed + beat timing. audioKey is the R2 key (under
-  // audio/ for BYO uploads or out/ for MiniMax-generated tracks
-  // copied across buckets via the cast-style {from_chat_artifact}
-  // path). bpm + beatsPerShot drive the snap-to-beat math.
+  // audio/ for BYO uploads or out/ for score-module-generated tracks).
   audioKey: null,
   audioMime: null,
   audioSourceLabel: null,
   bpm: 120,
   beatsPerShot: 4,
-  // Workflow tracking for an in-flight MiniMax Music job.
+  // In-flight score-bed job (poll token + module name from registry).
   pendingMusicChatId: null,
+  pendingMusicModule: null,
+  pendingScoreBedKind: null,
+  pendingScoreBedLabel: null,
   // v0.53.0: persisted storyboard projects. projectCatalog is the
   // user's project list fetched from /api/storyboard/projects on page
   // load. activeProjectId is the picker's current selection (null =
@@ -645,6 +621,9 @@ function collectPlanResultState() {
     bpm: planState.bpm,
     beatsPerShot: planState.beatsPerShot,
     pendingMusicChatId: planState.pendingMusicChatId,
+    pendingMusicModule: planState.pendingMusicModule,
+    pendingScoreBedKind: planState.pendingScoreBedKind,
+    pendingScoreBedLabel: planState.pendingScoreBedLabel,
     // v0.53.0: persist the active project id so a tab reopen reselects.
     activeProjectId: planState.activeProjectId,
   };
@@ -676,21 +655,8 @@ function collectRenderStageState() {
     bundleKey: bundleState.bundleKey,
     qualityTier: tierEl ? tierEl.value : "final",
     renderOverridesText: overridesEl ? overridesEl.value : "",
-    // v0.40.0: persist the checkbox so a refresh-mid-flow does not
-    // silently flip an in-progress preview into a full render.
+    moduleOverrides: window.plannerRenderConfig ? window.plannerRenderConfig.collect() : null,
     keyframesOnly: kfOnlyEl ? kfOnlyEl.checked : false,
-    // v0.43.0: persist the structured render-settings fields so a
-    // refresh does not silently flip them back to defaults mid-flow.
-    // Each field stores its raw input string; the restorer writes
-    // them back verbatim, and the submit-time merge re-reads them.
-    seedText: readVal("#planner-seed"),
-    // v0.135.0: persist the promoted keyframe SDXL base (art-style picker)
-    // alongside the other common per-render controls.
-    keyframeBase: readVal("#planner-ld-keyframe-model-id"),
-    // v0.59.0: persist the named knobs migrated from the legacy "Make"
-    // panel. Same raw-string round-trip as the structured fields above;
-    // empty string == "use bundle default" and never lands on the wire.
-    faceLockMode: readVal("#planner-face-lock-mode"),
     // v0.44.0: persist the render start timestamp so an elapsed +
     // ETA computation survives a page refresh. null means "no in-
     // flight render observed yet"; the updater anchors it lazily.
@@ -892,8 +858,14 @@ function restorePlanResultPanel(saved) {
   planState.bpm = typeof saved.bpm === "number" && saved.bpm > 0 ? saved.bpm : 120;
   planState.beatsPerShot = typeof saved.beatsPerShot === "number" && saved.beatsPerShot > 0
     ? saved.beatsPerShot : 4;
-  planState.pendingMusicChatId = typeof saved.pendingMusicChatId === "number"
+  planState.pendingMusicChatId = typeof saved.pendingMusicChatId === "string"
     ? saved.pendingMusicChatId : null;
+  planState.pendingMusicModule = typeof saved.pendingMusicModule === "string"
+    ? saved.pendingMusicModule : null;
+  planState.pendingScoreBedKind = saved.pendingScoreBedKind === "music" || saved.pendingScoreBedKind === "narration"
+    ? saved.pendingScoreBedKind : null;
+  planState.pendingScoreBedLabel = typeof saved.pendingScoreBedLabel === "string"
+    ? saved.pendingScoreBedLabel : null;
   showAudioSection();
   if (planState.pendingMusicChatId) resumeMusicPolling();
   // v0.53.0: stash the active project id; the picker's options are
@@ -951,43 +923,19 @@ function restoreRenderStagePanel(saved) {
   if (typeof saved.renderOverridesText === "string") {
     $("#planner-render-overrides").value = saved.renderOverridesText;
     if (saved.renderOverridesText.trim().length > 0) {
-      // v0.123.0: the raw-overrides textarea now lives in the "expert: raw
-      // JSON" disclosure (was nested in "advanced settings"); open that one
-      // so restored raw text is visible on reload.
       const expert = $(".planner-overrides-expert");
       if (expert) expert.open = true;
     }
   }
-  // v0.40.0: restore the keyframes-only checkbox.
-  const kfOnlyEl = $("#planner-keyframes-only");
-  if (kfOnlyEl) kfOnlyEl.checked = !!saved.keyframesOnly;
-  // v0.44.0: restore the elapsed/ETA anchor. If a render was in
-  // flight at save time, the next updateRenderProgress will paint
-  // the bar against this baseline + start the tick timer; no
-  // dedicated kickoff needed here.
-  if (typeof saved.startedAt === "number" && saved.startedAt > 0) {
-    renderState.startedAt = saved.startedAt;
-  }
-  // v0.43.0: restore the structured render-settings fields. Any
-  // non-empty field also opens the outer details panel so the user
-  // can see what was carried across the reload.
-  const restored = [
-    ["#planner-seed", saved.seedText],
-    ["#planner-ld-keyframe-model-id", saved.keyframeBase],
-    ["#planner-face-lock-mode", saved.faceLockMode],
-  ];
-  let anyRestored = false;
-  for (const [sel, val] of restored) {
-    const el = $(sel);
-    if (!el) continue;
-    if (typeof val === "string" && val.length > 0) {
-      el.value = val;
-      anyRestored = true;
-    }
-  }
-  if (anyRestored) {
+  if (saved.moduleOverrides && window.plannerRenderConfig) {
+    window.plannerRenderConfig.restore(saved.moduleOverrides);
     const details = $(".planner-overrides-details");
     if (details) details.open = true;
+  }
+  const kfOnlyEl = $("#planner-keyframes-only");
+  if (kfOnlyEl) kfOnlyEl.checked = !!saved.keyframesOnly;
+  if (typeof saved.startedAt === "number" && saved.startedAt > 0) {
+    renderState.startedAt = saved.startedAt;
   }
 
   if (!saved.jobId) {
@@ -1819,18 +1767,132 @@ async function sendRefine() {
 
 // ---------- Audio bed + beat timing (v0.51.0) ----------
 //
-// Two paths to set planState.audioKey: generate via MiniMax Music 2.6
-// through the existing /api/chat music dispatcher (async via the
-// LongRunWorkflow; we poll /api/job/:id), or upload a BYO mp3/wav/aac/
-// m4a/ogg via POST /api/storyboard/audio-upload (binary, returns the
-// R2 key directly). Once set, BPM + beats-per-shot drive a pure-JS
-// snap that rounds each scene's target_seconds to a musical-phrase
-// multiple. Each snap goes through onSceneChanged so the YAML pane
-// refresh + dirty badge stay correct.
+// Two paths to set planState.audioKey: generate via an installed score module
+// (POST /api/storyboard/score-bed; poll GET /api/job/:id?module=...), or upload
+// a BYO mp3/wav/aac/m4a/ogg via POST /api/storyboard/audio-upload (binary,
+// returns the R2 key directly). Once set, BPM + beats-per-shot drive a pure-JS
+// snap that rounds each scene's target_seconds to a musical-phrase multiple.
 
-const MUSIC_MODEL_ID = "minimax/music-2.6";
 const MUSIC_POLL_MS = 5000;
 let musicPollTimer = null;
+
+// Score modules -- populated from GET /api/modules via plannerRegistry.
+let scoreMusicState = { modules: [] };
+let scoreNarrationState = { modules: [] };
+
+function activeScoreMusicModule() {
+  const sel = $("#planner-music-module");
+  if (sel && sel.value) return sel.value;
+  return scoreMusicState.modules.length ? scoreMusicState.modules[0].name : null;
+}
+
+function activeScoreMusicLabel() {
+  const name = activeScoreMusicModule();
+  const mod = scoreMusicState.modules.find((m) => m.name === name);
+  return mod ? mod.label : "music generator";
+}
+
+function activeScoreNarrationModule() {
+  const sel = $("#planner-narration-module");
+  if (sel && sel.value) return sel.value;
+  return scoreNarrationState.modules.length ? scoreNarrationState.modules[0].name : null;
+}
+
+function activeScoreNarrationLabel() {
+  const name = activeScoreNarrationModule();
+  const mod = scoreNarrationState.modules.find((m) => m.name === name);
+  return mod ? mod.label : "narration";
+}
+
+function setScoreBedStatus(kind, text, statusKind) {
+  const id = kind === "narration" ? "planner-narration-gen-status" : "planner-music-gen-status";
+  const el = $("#" + id);
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = "planner-status" + (statusKind ? " planner-" + statusKind : "");
+}
+
+function setScoreBedButtonDisabled(kind, disabled) {
+  const id = kind === "narration" ? "planner-narration-gen" : "planner-music-gen";
+  const btn = $("#" + id);
+  if (btn) btn.disabled = disabled;
+}
+
+function initScoreModulesFromRegistry() {
+  if (!window.plannerRegistry) return;
+  window.plannerRegistry.load().then(() => {
+    initScoreMusicFromRegistry();
+    initScoreNarrationFromRegistry();
+  }).catch(() => {});
+}
+
+function initScoreMusicFromRegistry() {
+  const block = $("#planner-music-gen-block");
+  const summary = $("#planner-music-gen-summary");
+  const wrap = $("#planner-music-module-wrap");
+  const sel = $("#planner-music-module");
+  if (!block || !window.plannerRegistry) return;
+
+  const mods = window.plannerRegistry.musicScoreModules();
+  scoreMusicState.modules = mods.map((m) => ({
+    name: m.name,
+    label: window.plannerRegistry.moduleLabel(m),
+  }));
+  if (!scoreMusicState.modules.length) return;
+
+  block.hidden = false;
+  if (summary) {
+    summary.textContent = scoreMusicState.modules.length === 1
+      ? ("generate music via " + scoreMusicState.modules[0].label)
+      : "generate music";
+  }
+  if (sel && wrap) {
+    sel.replaceChildren();
+    for (const mod of scoreMusicState.modules) {
+      const opt = document.createElement("option");
+      opt.value = mod.name;
+      opt.textContent = mod.label;
+      sel.append(opt);
+    }
+    wrap.hidden = scoreMusicState.modules.length <= 1;
+    if (planState.pendingMusicModule) sel.value = planState.pendingMusicModule;
+  }
+}
+
+function initScoreNarrationFromRegistry() {
+  const block = $("#planner-narration-gen-block");
+  const summary = $("#planner-narration-gen-summary");
+  const wrap = $("#planner-narration-module-wrap");
+  const sel = $("#planner-narration-module");
+  if (!block || !window.plannerRegistry) return;
+
+  const mods = window.plannerRegistry.narrationScoreModules();
+  scoreNarrationState.modules = mods.map((m) => ({
+    name: m.name,
+    label: window.plannerRegistry.moduleLabel(m),
+  }));
+  if (!scoreNarrationState.modules.length) return;
+
+  block.hidden = false;
+  if (summary) {
+    summary.textContent = scoreNarrationState.modules.length === 1
+      ? ("generate narration via " + scoreNarrationState.modules[0].label)
+      : "generate narration";
+  }
+  if (sel && wrap) {
+    sel.replaceChildren();
+    for (const mod of scoreNarrationState.modules) {
+      const opt = document.createElement("option");
+      opt.value = mod.name;
+      opt.textContent = mod.label;
+      sel.append(opt);
+    }
+    wrap.hidden = scoreNarrationState.modules.length <= 1;
+    if (planState.pendingMusicModule && scoreNarrationState.modules.some((m) => m.name === planState.pendingMusicModule)) {
+      sel.value = planState.pendingMusicModule;
+    }
+  }
+}
 
 // Pure helper. Given a duration in seconds, a BPM, and a beat count,
 // returns the duration rounded to the nearest multiple of
@@ -1847,10 +1909,7 @@ function snapToBeats(seconds, bpm, beatsPerShot) {
 }
 
 function setMusicGenStatus(text, kind) {
-  const el = $("#planner-music-gen-status");
-  if (!el) return;
-  el.textContent = text || "";
-  el.className = "planner-status" + (kind ? " planner-" + kind : "");
+  setScoreBedStatus("music", text, kind);
 }
 
 function setSnapStatus(text, kind) {
@@ -1936,7 +1995,7 @@ async function uploadAudioFile(file) {
   }
 }
 
-// v0.137.6: suggest an "ideal" MiniMax Music prompt that matches the planned
+// v0.137.6: suggest an ideal music prompt that matches the planned
 // video, so the generated track fits the mood/tempo/energy instead of being a
 // blind guess. One-shot /api/chat: feeds the storyboard's
 // concept + visual style + shot arc + duration (and the original brief, which
@@ -1976,7 +2035,7 @@ async function suggestMusicPrompt(opts) {
   );
   const instruction =
     "You are writing the single best text prompt for an AI music generator "
-    + "(MiniMax Music 2.6) to SCORE a short cinematic/anime video. Output ONE "
+    + "to SCORE a short cinematic/anime video. Output ONE "
     + "concise INSTRUMENTAL music prompt only: 2 to 4 sentences, no preamble, no "
     + "quotes, do not address me. Describe the MUSIC ONLY (genre/style, tempo in "
     + "BPM if the material implies one, mood, the key instruments, and how the "
@@ -2024,86 +2083,138 @@ async function suggestMusicPrompt(opts) {
   if (btn) btn.disabled = false;
 }
 
-async function generateMusic() {
+async function startScoreBedJob(kind, opts) {
   if (planState.pendingMusicChatId) {
-    setMusicGenStatus("a music job is already in flight; wait or refresh.", "error");
+    setScoreBedStatus(kind, "a score job is already in flight; wait or refresh.", "error");
     return;
   }
+  const moduleName = opts.moduleName;
+  const moduleLabel = opts.moduleLabel;
+  if (!moduleName) {
+    setScoreBedStatus(kind, "no " + kind + " score module installed.", "error");
+    return;
+  }
+  setScoreBedButtonDisabled(kind, true);
+  setScoreBedStatus(kind, "submitting to " + moduleLabel + "...", "loading");
+  try {
+    const scenes = planState.storyboard && Array.isArray(planState.storyboard.scenes)
+      ? planState.storyboard.scenes
+      : [];
+    const seconds = planState.storyboard
+      ? Math.round(
+          Number(planState.storyboard.duration_seconds)
+            || scenes.length * (Number(planState.storyboard.clip_seconds) || 4),
+        )
+      : undefined;
+    const body = {
+      kind: kind,
+      module: moduleName,
+      storyboard: planState.storyboard || undefined,
+      seconds,
+    };
+    if (kind === "music") body.prompt = opts.prompt;
+    else body.text = opts.text || "";
+
+    const resp = await fetch("/api/storyboard/score-bed", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setScoreBedStatus(kind, "submit failed: " + (data.error || "HTTP " + resp.status), "error");
+      setScoreBedButtonDisabled(kind, false);
+      return;
+    }
+    if (data.status !== "pending" || !data.id) {
+      setScoreBedStatus(kind, "unexpected response shape", "error");
+      setScoreBedButtonDisabled(kind, false);
+      return;
+    }
+    planState.pendingMusicChatId = data.id;
+    planState.pendingMusicModule = data.module || moduleName;
+    planState.pendingScoreBedKind = kind;
+    planState.pendingScoreBedLabel = data.label || moduleLabel;
+    persistSoon();
+    setScoreBedStatus(kind, "generating with " + planState.pendingScoreBedLabel + " (~30-90s)...", "loading");
+    pollScoreBedJob();
+  } catch (err) {
+    setScoreBedStatus(kind, "network error: " + err.message, "error");
+    setScoreBedButtonDisabled(kind, false);
+  }
+}
+
+async function generateMusic() {
   const prompt = ($("#planner-music-prompt").value || "").trim();
   if (!prompt) {
     setMusicGenStatus("describe the track first.", "error");
     return;
   }
-  $("#planner-music-gen").disabled = true;
-  setMusicGenStatus("submitting to MiniMax Music 2.6...", "loading");
-  try {
-    const resp = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: MUSIC_MODEL_ID, user_input: prompt }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      setMusicGenStatus("submit failed: " + (data.error || "HTTP " + resp.status), "error");
-      $("#planner-music-gen").disabled = false;
-      return;
-    }
-    if (data.status !== "pending" || !data.id) {
-      setMusicGenStatus("unexpected response shape", "error");
-      $("#planner-music-gen").disabled = false;
-      return;
-    }
-    planState.pendingMusicChatId = data.id;
-    persistSoon();
-    setMusicGenStatus("generating (this is async; ~30-90s)...", "loading");
-    pollMusicJob();
-  } catch (err) {
-    setMusicGenStatus("network error: " + err.message, "error");
-    $("#planner-music-gen").disabled = false;
-  }
+  await startScoreBedJob("music", {
+    moduleName: activeScoreMusicModule(),
+    moduleLabel: activeScoreMusicLabel(),
+    prompt,
+  });
+}
+
+async function generateNarration() {
+  const text = ($("#planner-narration-text").value || "").trim();
+  await startScoreBedJob("narration", {
+    moduleName: activeScoreNarrationModule(),
+    moduleLabel: activeScoreNarrationLabel(),
+    text,
+  });
 }
 
 function resumeMusicPolling() {
-  if (!planState.pendingMusicChatId) return;
-  setMusicGenStatus("resuming poll on prior MiniMax Music job...", "loading");
-  $("#planner-music-gen").disabled = true;
-  pollMusicJob();
+  if (!planState.pendingMusicChatId || !planState.pendingMusicModule) return;
+  const kind = planState.pendingScoreBedKind || "music";
+  const label = planState.pendingScoreBedLabel
+    || (kind === "narration" ? activeScoreNarrationLabel() : activeScoreMusicLabel());
+  setScoreBedStatus(kind, "resuming poll on prior " + label + " job...", "loading");
+  setScoreBedButtonDisabled(kind, true);
+  pollScoreBedJob();
 }
 
-async function pollMusicJob() {
-  if (!planState.pendingMusicChatId) return;
+async function pollScoreBedJob() {
+  if (!planState.pendingMusicChatId || !planState.pendingMusicModule) return;
+  const kind = planState.pendingScoreBedKind || "music";
   try {
-    const resp = await fetch("/api/job/" + planState.pendingMusicChatId);
+    const resp = await fetch(
+      "/api/job/" + encodeURIComponent(planState.pendingMusicChatId)
+      + "?module=" + encodeURIComponent(planState.pendingMusicModule),
+    );
     const data = await resp.json();
     if (data.status === "done" && data.output_artifact && data.output_artifact.key) {
-      // Adopt the music artifact as the audio bed. The artifact lives in
-      // env.R2 (out/<uuid>.<ext>) since /api/chat writes there; the
-      // artifact route handles cross-bucket reads via isRendersKey so
-      // <audio src="/api/artifact/out/..."> resolves correctly.
       planState.audioKey = data.output_artifact.key;
       planState.audioMime = data.output_artifact.mime || "audio/mpeg";
-      planState.audioSourceLabel = "MiniMax Music 2.6";
+      planState.audioSourceLabel = planState.pendingScoreBedLabel
+        || (kind === "narration" ? activeScoreNarrationLabel() : activeScoreMusicLabel());
       planState.pendingMusicChatId = null;
+      planState.pendingMusicModule = null;
+      planState.pendingScoreBedKind = null;
+      planState.pendingScoreBedLabel = null;
       renderAudioCurrent();
-      setMusicGenStatus("done.", "success");
-      $("#planner-music-gen").disabled = false;
+      setScoreBedStatus(kind, "done.", "success");
+      setScoreBedButtonDisabled(kind, false);
       persistSoon();
-      // v0.56.0: audio bed change triggers preflight HEAD re-check.
       schedulePreflight();
       return;
     }
     if (data.status === "failed") {
       planState.pendingMusicChatId = null;
-      setMusicGenStatus("model failed: " + (data.job_error || "(no detail)"), "error");
-      $("#planner-music-gen").disabled = false;
+      planState.pendingMusicModule = null;
+      planState.pendingScoreBedKind = null;
+      planState.pendingScoreBedLabel = null;
+      setScoreBedStatus(kind, "model failed: " + (data.job_error || "(no detail)"), "error");
+      setScoreBedButtonDisabled(kind, false);
       persistSoon();
       return;
     }
-    // Still pending. Re-arm.
-    musicPollTimer = setTimeout(pollMusicJob, MUSIC_POLL_MS);
+    musicPollTimer = setTimeout(pollScoreBedJob, MUSIC_POLL_MS);
   } catch (err) {
-    setMusicGenStatus("poll error: " + err.message + " (retrying)", "error");
-    musicPollTimer = setTimeout(pollMusicJob, MUSIC_POLL_MS);
+    setScoreBedStatus(kind, "poll error: " + err.message + " (retrying)", "error");
+    musicPollTimer = setTimeout(pollScoreBedJob, MUSIC_POLL_MS);
   }
 }
 
@@ -2143,10 +2254,10 @@ if (typeof window !== "undefined") window.__plannerHelpers = { snapToBeats };
 
 // ---------- Beat-sync (v0.106.0) ----------
 //
-// Server-side beat analysis: POST /api/audio/analyze runs librosa on the
-// AUDIO_BEAT_SYNC Cloudflare Container and returns the beat plan inline (one
-// synchronous request, no jobId/poll), then we apply its per-scene beat-aligned
-// target_seconds. See docs/audio-beat-sync-container.md.
+// Server-side beat analysis: POST /api/audio/analyze invokes the beat-sync score module
+// (librosa on the fleet audio-beat-sync container over Workers VPC) and returns the beat plan
+// inline (one synchronous request, no jobId/poll), then we apply its per-scene beat-aligned
+// target_seconds.
 const PLANNER_MAX_SCENES = 50; // mirrors STORYBOARD_MAX_SCENES in src/storyboard-validate.ts
 let lastBeatPlan = null;
 
@@ -2676,6 +2787,9 @@ function renderPlanResult(httpStatus, data, model, characters) {
     // pending music-gen chat id and re-renders the section so the
     // controls reflect the new storyboard's scene set.
     planState.pendingMusicChatId = null;
+    planState.pendingMusicModule = null;
+    planState.pendingScoreBedKind = null;
+    planState.pendingScoreBedLabel = null;
     // v0.137.6: a fresh storyboard is a new soundtrack target, so let the
     // music-prompt auto-suggestion fire again the next time Audio is opened.
     musicPromptAutoTried = false;
@@ -2811,6 +2925,26 @@ function sceneIdAt(scene, index) {
   return (scene && typeof scene.id === "string" && scene.id.trim())
     ? scene.id.trim()
     : "shot_" + String(index + 1).padStart(2, "0");
+}
+
+/** Scenes for POST /api/storyboard/render module path (film orchestrator). */
+function buildFilmScenes(storyboard) {
+  const scenes = Array.isArray(storyboard && storyboard.scenes) ? storyboard.scenes : [];
+  const clipSec =
+    storyboard && typeof storyboard.clip_seconds === "number" && storyboard.clip_seconds > 0
+      ? storyboard.clip_seconds
+      : 4;
+  return scenes
+    .map((scene, i) => {
+      const prompt = typeof scene.prompt === "string" ? scene.prompt.trim() : "";
+      if (!prompt) return null;
+      const seconds =
+        typeof scene.target_seconds === "number" && scene.target_seconds > 0
+          ? scene.target_seconds
+          : clipSec;
+      return { shot_id: sceneIdAt(scene, i), prompt, seconds };
+    })
+    .filter(Boolean);
 }
 
 // v0.149.0 (Phase 4b): build the optional per-scene start-keyframe section. One
@@ -3321,6 +3455,17 @@ async function renderFromKeyframes(bundleKey, btn, status) {
   )) return;
   const tierEl = $("#planner-quality-tier");
   const qualityTier = tierEl && tierEl.value ? tierEl.value : "final";
+  let renderOverrides;
+  try {
+    renderOverrides = collectRenderOverrides();
+  } catch (err) {
+    btn.disabled = false;
+    status.textContent = err.message;
+    return;
+  }
+  const body = { project: project, bundleKey: bundleKey, qualityTier: qualityTier };
+  if (renderOverrides) body.renderOverrides = renderOverrides;
+  if (planState.audioKey) body.audioKey = planState.audioKey;
   btn.disabled = true;
   status.textContent = "submitting i2v render...";
   let resp = null;
@@ -3329,7 +3474,7 @@ async function renderFromKeyframes(bundleKey, btn, status) {
     resp = await fetch("/api/storyboard/render-from-keyframes", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ project: project, bundleKey: bundleKey, qualityTier: qualityTier }),
+      body: JSON.stringify(body),
     });
     data = await resp.json();
   } catch (err) {
@@ -3378,53 +3523,23 @@ async function submitRender() {
     setRenderStatus("no bundleKey; run 'bundle' first", "error");
     return;
   }
-  // v0.35.3 + v0.43.0: build render_overrides from BOTH the structured
-  // fields (seed / adetailer / lora_scale / consistency_mode) and the
-  // raw JSON textarea. Either source can supply any field; on a key
-  // conflict the textarea wins (it is the explicit power-user escape
-  // hatch). buildRenderOverrides throws on a malformed textarea so a
-  // bad JSON does not leave the UI mid-flow.
+  if (!planState.storyboard || !Array.isArray(planState.storyboard.scenes) || planState.storyboard.scenes.length === 0) {
+    setRenderStatus("no storyboard scenes; plan first", "error");
+    return;
+  }
+  const filmScenes = buildFilmScenes(planState.storyboard);
+  if (filmScenes.length === 0) {
+    setRenderStatus("every scene needs a prompt before render", "error");
+    return;
+  }
+  // v0.35.3 + module config: collect registry-driven overrides + optional expert JSON.
   let renderOverrides;
   try {
-    renderOverrides = buildRenderOverrides({
-      // keyframe
-      seedText: readVal("#planner-seed"),
-      keyframeSdxlSize: readVal("#planner-keyframe-sdxl-size"),
-      keyframeModelId: readVal("#planner-ld-keyframe-model-id"),
-      keyframeGuidanceText: readVal("#planner-ld-keyframe-guidance-scale"),
-      keyframeStepsText: readVal("#planner-ld-keyframe-steps"),
-      identityMethod: readVal("#planner-face-lock-mode"),
-      ipScaleText: readVal("#planner-fl-ip-scale"),
-      iidCnScaleText: readVal("#planner-fl-iid-cn-scale"),
-      iidIpScaleText: readVal("#planner-fl-iid-ip-scale"),
-      // keyframe.multi_char
-      mcEngine: readVal("#planner-mc-engine"),
-      mcPose: readVal("#planner-mc-pose"),
-      mcLoraScaleText: readVal("#planner-mc-lora-scale"),
-      mcIpScaleText: readVal("#planner-mc-ip-scale"),
-      mcMaxSlotsText: readVal("#planner-mc-max-slots"),
-      mcCnScaleText: readVal("#planner-mc-cn-scale"),
-      // i2v
-      i2vModelId: readVal("#planner-wd-i2v-model-id"),
-      numFramesText: readVal("#planner-wan-num-frames"),
-      i2vStepsText: readVal("#planner-wan-inference-steps"),
-      i2vGuidanceText: readVal("#planner-wan-guidance-scale"),
-      fpsText: readVal("#planner-fps"),
-      flowShiftText: readVal("#planner-wd-flow-shift"),
-      // lora
-      loraRankText: readVal("#planner-lora-rank"),
-      loraStepsText: readVal("#planner-lora-steps"),
-      loraLrText: readVal("#planner-lora-lr"),
-      loraResolutionText: readVal("#planner-lora-resolution"),
-      // power-user escape hatch (raw namespaced JSON)
-      textareaText: readVal("#planner-render-overrides"),
-    });
+    renderOverrides = collectRenderOverrides();
   } catch (err) {
     setRenderStatus(err.message, "error");
-    if (/JSON|textarea/i.test(err.message)) {
-      const ta = $("#planner-render-overrides");
-      if (ta) ta.focus();
-    }
+    const ta = $("#planner-render-overrides");
+    if (ta) ta.focus();
     return;
   }
   // Stop any prior poll loop before starting a new render.
@@ -3440,7 +3555,7 @@ async function submitRender() {
   const kfOnlyEl = $("#planner-keyframes-only");
   const keyframesOnly = !!(kfOnlyEl && kfOnlyEl.checked);
   setRenderStatus(
-    keyframesOnly ? "submitting keyframes-only preview..." : "submitting to RunPod...",
+    keyframesOnly ? "submitting keyframes-only preview..." : "submitting render pipeline...",
     "loading",
   );
   $("#planner-render-btn").disabled = true;
@@ -3448,14 +3563,13 @@ async function submitRender() {
   const reqBody = {
     bundleKey: bundleState.bundleKey,
     qualityTier,
+    scenes: filmScenes,
   };
   // v0.43.0: buildRenderOverrides returns {} when nothing is set, so
   // gate on key count rather than truthiness; an empty object would
   // otherwise round-trip as `render_overrides: {}` and the Worker
   // would drop it anyway, but skipping it here keeps the wire clean.
-  if (renderOverrides && Object.keys(renderOverrides).length > 0) {
-    reqBody.renderOverrides = renderOverrides;
-  }
+  if (renderOverrides) reqBody.renderOverrides = renderOverrides;
   if (keyframesOnly) reqBody.keyframesOnly = true;
   // v0.52.0: forward the audio bed R2 key when one is set. The Worker
   // cross-bucket-copies MiniMax-generated keys (out/<uuid>.<ext>) into
@@ -3628,40 +3742,11 @@ async function submitScatterRender() {
 
   let renderOverrides;
   try {
-    renderOverrides = buildRenderOverrides({
-      seedText: readVal("#planner-seed"),
-      keyframeSdxlSize: readVal("#planner-keyframe-sdxl-size"),
-      keyframeModelId: readVal("#planner-ld-keyframe-model-id"),
-      keyframeGuidanceText: readVal("#planner-ld-keyframe-guidance-scale"),
-      keyframeStepsText: readVal("#planner-ld-keyframe-steps"),
-      identityMethod: readVal("#planner-face-lock-mode"),
-      ipScaleText: readVal("#planner-fl-ip-scale"),
-      iidCnScaleText: readVal("#planner-fl-iid-cn-scale"),
-      iidIpScaleText: readVal("#planner-fl-iid-ip-scale"),
-      mcEngine: readVal("#planner-mc-engine"),
-      mcPose: readVal("#planner-mc-pose"),
-      mcLoraScaleText: readVal("#planner-mc-lora-scale"),
-      mcIpScaleText: readVal("#planner-mc-ip-scale"),
-      mcMaxSlotsText: readVal("#planner-mc-max-slots"),
-      mcCnScaleText: readVal("#planner-mc-cn-scale"),
-      i2vModelId: readVal("#planner-wd-i2v-model-id"),
-      numFramesText: readVal("#planner-wan-num-frames"),
-      i2vStepsText: readVal("#planner-wan-inference-steps"),
-      i2vGuidanceText: readVal("#planner-wan-guidance-scale"),
-      fpsText: readVal("#planner-fps"),
-      flowShiftText: readVal("#planner-wd-flow-shift"),
-      loraRankText: readVal("#planner-lora-rank"),
-      loraStepsText: readVal("#planner-lora-steps"),
-      loraLrText: readVal("#planner-lora-lr"),
-      loraResolutionText: readVal("#planner-lora-resolution"),
-      textareaText: readVal("#planner-render-overrides"),
-    });
+    renderOverrides = collectRenderOverrides();
   } catch (err) {
     setRenderStatus(err.message, "error");
-    if (/JSON|textarea/i.test(err.message)) {
-      const ta = $("#planner-render-overrides");
-      if (ta) ta.focus();
-    }
+    const ta = $("#planner-render-overrides");
+    if (ta) ta.focus();
     return;
   }
 
@@ -3684,9 +3769,7 @@ async function submitScatterRender() {
     castLoras,
   };
   if (qualityTier) reqBody.qualityTier = qualityTier;
-  if (renderOverrides && Object.keys(renderOverrides).length > 0) {
-    reqBody.renderOverrides = renderOverrides;
-  }
+  if (renderOverrides) reqBody.renderOverrides = renderOverrides;
   if (planState.audioKey) reqBody.audioKey = planState.audioKey;
   if (planState.activeProjectId) reqBody.projectId = planState.activeProjectId;
 
@@ -4859,18 +4942,21 @@ function addNarrationToRender(r, btn) {
   if (text == null) return;
   const trimmed = text.trim();
   if (!trimmed) return;
+  const narrMods = window.plannerRegistry ? window.plannerRegistry.narrationScoreModules() : [];
+  const moduleName = narrMods.length ? narrMods[0].name : undefined;
+  const moduleLabel = narrMods.length ? window.plannerRegistry.moduleLabel(narrMods[0]) : "narration";
   const orig = btn.textContent;
   btn.disabled = true;
   btn.textContent = "narrating...";
   const status = setMuxStatus(
     btn,
-    "Synthesizing speech and muxing it onto the video (CPU container, ~10-30s)...",
+    "Synthesizing with " + moduleLabel + " and muxing onto the video (~30-90s)...",
     "working",
   );
   fetch("/api/storyboard/renders/" + encodeURIComponent(r.id) + "/add-narration", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: trimmed }),
+    body: JSON.stringify({ text: trimmed, module: moduleName }),
   })
     .then(async (resp) => {
       const data = await resp.json().catch(() => ({}));
@@ -4889,25 +4975,17 @@ function addNarrationToRender(r, btn) {
     });
 }
 
-// v0.147.0 (Phase 4a): the image-input cloud i2v catalog, hand-maintained like
-// the Wan model lists. Used by the default model dropdown AND the per-shot
-// override pickers in the keyframe strip. Kept in sync with the backend's
-// image-input video models (longrun-params.ts).
-const CLOUD_I2V_MODELS = [
-  ["bytedance/seedance-2.0-fast", "Seedance 2.0 Fast"],
-  ["bytedance/seedance-2.0", "Seedance 2.0"],
-  ["minimax/hailuo-2.3-fast", "Hailuo 2.3 Fast"],
-  ["minimax/hailuo-2.3", "Hailuo 2.3"],
-  ["runwayml/gen-4.5", "Runway Gen-4.5"],
-  ["alibaba/hh1-i2v", "HappyHorse 1.0 I2V"],
-];
-
-// Short display label for a cloud model id ("runwayml/gen-4.5" -> "Runway
-// Gen-4.5"; falls back to the trailing path segment for anything not in the
-// catalog).
+// Cloud motion.backend modules from the registry (replaces the old hand-maintained catalog).
 function cloudModelLabel(id) {
-  const hit = CLOUD_I2V_MODELS.find((p) => p[0] === id);
-  return hit ? hit[1] : (id ? String(id).split("/").pop() : "");
+  return window.plannerRegistry ? window.plannerRegistry.cloudModelLabel(id) : (id || "");
+}
+
+function cloudModelOptions() {
+  return window.plannerRegistry ? window.plannerRegistry.cloudModelOptions() : [];
+}
+
+function gpuMotionLabel() {
+  return window.plannerRegistry ? window.plannerRegistry.gpuMotionLabel() : "GPU i2v";
 }
 
 // v0.154.0 (Phase 4 hybrid, slice-3 #1): badge text for an in-flight animation.
@@ -4954,7 +5032,7 @@ function animationVersionLabel(r) {
       clips.map((c) => (c && typeof c.backend === "string" ? c.backend : "")).filter(Boolean),
     );
     if (usedBackends.has("gpu") && usedBackends.has("cloud")) return "hybrid";
-    if (usedBackends.size === 1 && usedBackends.has("gpu")) return "GPU · Wan";
+    if (usedBackends.size === 1 && usedBackends.has("gpu")) return gpuMotionLabel();
     // All-cloud run (hybrid returned above): clips carry per-shot models; more
     // than one distinct model -> "cloud · mixed".
     const distinct = Array.from(
@@ -4968,7 +5046,7 @@ function animationVersionLabel(r) {
     if (!model) return "cloud";
     return "cloud · " + model.split("/").pop();
   }
-  if (r.mode === "finalized") return "GPU · Wan";
+  if (r.mode === "finalized") return gpuMotionLabel();
   return "";
 }
 
@@ -5271,14 +5349,19 @@ function buildHistoryRow(r, childrenByParent) {
     addAudio.addEventListener("click", () => addAudioToRender(r, addAudio));
     actions.appendChild(addAudio);
 
-    // v0.137.0: spoken narration (TTS) over the finished video, off-GPU.
-    const narrate = document.createElement("button");
-    narrate.type = "button";
-    narrate.className = "planner-history-action";
-    narrate.textContent = "narrate";
-    narrate.title = "speak narration text over this finished video (TTS, no GPU, no re-render)";
-    narrate.addEventListener("click", () => addNarrationToRender(r, narrate));
-    actions.appendChild(narrate);
+    // v0.137.0: spoken narration via installed score module (config_schema.text).
+    if (
+      window.plannerRegistry
+      && window.plannerRegistry.narrationScoreModules().length > 0
+    ) {
+      const narrate = document.createElement("button");
+      narrate.type = "button";
+      narrate.className = "planner-history-action";
+      narrate.textContent = "narrate";
+      narrate.title = "synthesize narration with the installed score module and mux it onto this video";
+      narrate.addEventListener("click", () => addNarrationToRender(r, narrate));
+      actions.appendChild(narrate);
+    }
   }
 
   // v0.35.1: "re-render" with the same bundle. Skips plan + bundle stages.
@@ -5454,10 +5537,10 @@ function buildHistoryRow(r, childrenByParent) {
         // there instead.
         const gpuOpt = document.createElement("option");
         gpuOpt.value = "gpu";
-        gpuOpt.textContent = "GPU (Wan)";
+        gpuOpt.textContent = gpuMotionLabel();
         gpuOpt.hidden = true;
         modelSel.appendChild(gpuOpt);
-        CLOUD_I2V_MODELS.forEach((pair) => {
+        cloudModelOptions().forEach((pair) => {
           const o = document.createElement("option");
           o.value = pair[0];
           o.textContent = pair[1];
@@ -5550,17 +5633,26 @@ function buildHistoryRow(r, childrenByParent) {
       : r.keyframes.length + " keyframes ready; lock the shots you want in the movie, or finalize as-is to include all";
     finalizeRow.appendChild(summary);
 
-    // v0.145.0: motion backend selector. The keyframes can be animated two ways:
-    // GPU (the pod's Wan 2.2 I2V, via finalize) or CLOUD (a per-shot cloud
-    // image-to-video model, via animate-cloud). The cloud model dropdown only
-    // shows when Cloud is picked. Cloud models are the image-input video catalog
-    // (v0.143.0); kept in sync by hand here, like the Wan model option lists.
-    const GPU_LABEL = "finalize (Wan I2V + assemble)";
+    const cloudOpts = cloudModelOptions();
+    const gpuLbl = gpuMotionLabel();
+    const backendChoices = [];
+    if (window.plannerRegistry && window.plannerRegistry.ownGpuModule()) {
+      backendChoices.push(["gpu", gpuLbl]);
+    }
+    if (cloudOpts.length > 0) {
+      backendChoices.push(["cloud", "Cloud (per-shot i2v)"]);
+      backendChoices.push(["hybrid", "Hybrid (per-shot GPU/Cloud)"]);
+    }
+
+    if (backendChoices.length === 0) {
+      summary.textContent += " (no motion.backend modules installed)";
+    } else {
+    const GPU_LABEL = "finalize (" + gpuLbl + " + assemble)";
     const CLOUD_LABEL = "animate (cloud i2v)";
     const HYBRID_LABEL = "animate (hybrid)";
-    const GPU_TITLE = "run Wan I2V on every keyframe + assemble silent MP4 (about 20 to 30 minutes)";
-    const CLOUD_TITLE = "animate each keyframe with the selected cloud model + assemble a silent MP4 (no GPU pod; add a score after with add-audio)";
-    const HYBRID_TITLE = "animate per-shot across BOTH backends (GPU Wan + cloud i2v) and assemble one silent MP4; set each shot's backend below (unset = GPU)";
+    const GPU_TITLE = "run " + gpuLbl + " on every keyframe + assemble silent MP4 (about 20 to 30 minutes)";
+    const CLOUD_TITLE = "animate each keyframe with the selected cloud module + assemble a silent MP4";
+    const HYBRID_TITLE = "animate per-shot across BOTH backends (" + gpuLbl + " + cloud i2v) and assemble one silent MP4";
 
     const motion = document.createElement("div");
     motion.className = "planner-motion-backend";
@@ -5568,11 +5660,7 @@ function buildHistoryRow(r, childrenByParent) {
     const backendSel = document.createElement("select");
     backendSel.className = "planner-motion-backend-select";
     backendSel.title = "how to animate these keyframes into motion";
-    [
-      ["gpu", "GPU (Wan I2V)"],
-      ["cloud", "Cloud (per-shot i2v)"],
-      ["hybrid", "Hybrid (per-shot GPU/Cloud)"],
-    ].forEach((pair) => {
+    backendChoices.forEach((pair) => {
       const o = document.createElement("option");
       o.value = pair[0];
       o.textContent = pair[1];
@@ -5581,9 +5669,9 @@ function buildHistoryRow(r, childrenByParent) {
 
     const cloudModelSel = document.createElement("select");
     cloudModelSel.className = "planner-motion-model-select";
-    cloudModelSel.title = "default cloud image-to-video model (per-shot overrides below)";
+    cloudModelSel.title = "default cloud motion module (per-shot overrides below)";
     cloudModelSel.style.display = "none";
-    CLOUD_I2V_MODELS.forEach((pair) => {
+    cloudOpts.forEach((pair) => {
       const o = document.createElement("option");
       o.value = pair[0];
       o.textContent = pair[1];
@@ -5604,9 +5692,6 @@ function buildHistoryRow(r, childrenByParent) {
         mode === "cloud" ? CLOUD_LABEL : mode === "hybrid" ? HYBRID_LABEL : GPU_LABEL;
       finalizeBtn.title =
         mode === "cloud" ? CLOUD_TITLE : mode === "hybrid" ? HYBRID_TITLE : GPU_TITLE;
-      // v0.147.0 (Phase 4a) / v0.152.0 (hybrid): reveal the per-shot pickers for
-      // Cloud or Hybrid. The "GPU (Wan)" per-shot option shows only in Hybrid; a
-      // stale "gpu" pick is reset when switching to Cloud (cloud can't do GPU).
       li.querySelectorAll(".planner-keyframe-cloud-model").forEach((sel) => {
         sel.style.display = showPicker ? "" : "none";
         const gpuOpt = sel.querySelector('option[value="gpu"]');
@@ -5620,7 +5705,6 @@ function buildHistoryRow(r, childrenByParent) {
       ev.stopPropagation();
       const mode = backendSel.value;
       if (mode === "cloud") {
-        // v0.147.0 (Phase 4a): gather per-shot model overrides ({ shot_id: modelId }).
         const perShot = {};
         li.querySelectorAll(".planner-keyframe-cloud-model").forEach((sel) => {
           if (sel.value && sel.value !== "gpu" && sel.dataset.shotId) {
@@ -5629,9 +5713,6 @@ function buildHistoryRow(r, childrenByParent) {
         });
         animateCloudRender(r, finalizeBtn, cloudModelSel.value, perShot);
       } else if (mode === "hybrid") {
-        // v0.152.0 (Phase 4 hybrid): build the per-shot backend map. A cloud-model
-        // value -> { backend:"cloud", model }; "gpu" -> { backend:"gpu" }; an unset
-        // picker ("") falls through to defaultBackend ("gpu") on the server.
         const backends = {};
         li.querySelectorAll(".planner-keyframe-cloud-model").forEach((sel) => {
           const sid = sel.dataset.shotId;
@@ -5649,6 +5730,7 @@ function buildHistoryRow(r, childrenByParent) {
     motion.appendChild(cloudModelSel);
     finalizeRow.appendChild(motion);
     finalizeRow.appendChild(finalizeBtn);
+    }
     li.appendChild(finalizeRow);
   }
 
@@ -5779,136 +5861,6 @@ function pollRegenJob(regenKey) {
       console.warn("regen poll failed:", err);
       setTimeout(() => pollRegenJob(regenKey), 4000);
     });
-}
-
-// Build the namespaced render_overrides { keyframe, i2v, lora } the clean-room
-// backend reads (config.py RenderConfig.from_request) from the render-step
-// controls. Every key traces to a config.py field; controls without a home were
-// removed in the v0.158.0 namespaced-overrides rework. The raw-JSON textarea is
-// the power-user escape hatch -- it must itself be namespaced and deep-merges per
-// section (textarea wins). Throws on a malformed size / textarea so the caller
-// keeps its mid-flow status + focus contract.
-function buildRenderOverrides(inp) {
-  inp = inp || {};
-  const num = (t) => {
-    const x = (t || "").trim();
-    if (!x) return undefined;
-    const n = Number(x);
-    return Number.isFinite(n) ? n : undefined;
-  };
-  const intIn = (t, lo, hi) => {
-    const n = num(t);
-    return n !== undefined && Number.isInteger(n) && n >= lo && n <= hi ? n : undefined;
-  };
-  const floatIn = (t, lo, hi) => {
-    const n = num(t);
-    return n !== undefined && n >= lo && n <= hi ? n : undefined;
-  };
-  const str = (t, max) => {
-    const x = (t || "").trim();
-    return x && x.length <= max ? x : undefined;
-  };
-
-  // --- keyframe (SDXL keyframe stage) ---
-  const keyframe = {};
-  const seed = intIn(inp.seedText, 0, 2 ** 31 - 1);
-  if (seed !== undefined) keyframe.seed = seed;
-  if (typeof inp.keyframeSdxlSize === "string" && inp.keyframeSdxlSize.trim().length > 0) {
-    const m = inp.keyframeSdxlSize.trim().toLowerCase().match(/^(\d+)\s*x\s*(\d+)$/);
-    if (!m) throw new Error("keyframe size must be 'WxH' (e.g. 1216x832)");
-    keyframe.resolution = m[1] + "x" + m[2];
-  }
-  const kfModel = str(inp.keyframeModelId, 256);
-  if (kfModel) keyframe.base_model = kfModel;
-  const kfg = floatIn(inp.keyframeGuidanceText, 0, 30);
-  if (kfg !== undefined) keyframe.guidance_scale = kfg;
-  const kfs = intIn(inp.keyframeStepsText, 1, 128);
-  if (kfs !== undefined) keyframe.steps = kfs;
-  if (inp.identityMethod === "ip_adapter" || inp.identityMethod === "instantid" || inp.identityMethod === "both") {
-    keyframe.identity_method = inp.identityMethod;
-  }
-  const ips = floatIn(inp.ipScaleText, 0, 1);
-  if (ips !== undefined) keyframe.ip_adapter_scale = ips;
-  const iidCn = floatIn(inp.iidCnScaleText, 0, 1.5);
-  if (iidCn !== undefined) keyframe.instantid_controlnet_scale = iidCn;
-  const iidIp = floatIn(inp.iidIpScaleText, 0, 1.5);
-  if (iidIp !== undefined) keyframe.instantid_ip_adapter_scale = iidIp;
-
-  // keyframe.multi_char (regional multi-character anti-bleed)
-  const mc = {};
-  if (inp.mcEngine === "regional") mc.regional = true;
-  else if (inp.mcEngine === "composite_legacy") mc.regional = false;
-  if (inp.mcPose === "true") mc.pose_conditioning = true;
-  else if (inp.mcPose === "false") mc.pose_conditioning = false;
-  const mcLs = floatIn(inp.mcLoraScaleText, 0, 2);
-  if (mcLs !== undefined) mc.lora_scale_per_slot = mcLs;
-  const mcIp = floatIn(inp.mcIpScaleText, 0, 1);
-  if (mcIp !== undefined) mc.ip_adapter_scale_per_slot = mcIp;
-  const mcMax = intIn(inp.mcMaxSlotsText, 1, 4);
-  if (mcMax !== undefined) mc.max_slots = mcMax;
-  const mcCn = floatIn(inp.mcCnScaleText, 0, 1.5);
-  if (mcCn !== undefined) mc.controlnet_pose_scale = mcCn;
-  if (Object.keys(mc).length > 0) keyframe.multi_char = mc;
-
-  // --- i2v (Wan image-to-video) ---
-  const i2v = {};
-  const i2vModel = str(inp.i2vModelId, 256);
-  if (i2vModel) i2v.model = i2vModel;
-  const nf = intIn(inp.numFramesText, 1, 256);
-  if (nf !== undefined) i2v.num_frames = nf;
-  const ist = intIn(inp.i2vStepsText, 1, 64);
-  if (ist !== undefined) i2v.steps = ist;
-  const ig = floatIn(inp.i2vGuidanceText, 0, 30);
-  if (ig !== undefined) i2v.guidance_scale = ig;
-  const fps = intIn(inp.fpsText, 1, 120);
-  if (fps !== undefined) i2v.fps = fps;
-  const fsh = floatIn(inp.flowShiftText, 0, 20);
-  if (fsh !== undefined) i2v.flow_shift = fsh;
-
-  // --- lora (character LoRA training) ---
-  const lora = {};
-  const lr = intIn(inp.loraRankText, 1, 128);
-  if (lr !== undefined) lora.rank = lr;
-  const lms = intIn(inp.loraStepsText, 1, 5000);
-  if (lms !== undefined) lora.max_steps = lms;
-  const llr = floatIn(inp.loraLrText, 1e-6, 1e-2);
-  if (llr !== undefined) lora.learning_rate = llr;
-  const lres = intIn(inp.loraResolutionText, 512, 1536);
-  if (lres !== undefined) lora.resolution = lres;
-
-  const out = {};
-  if (Object.keys(keyframe).length > 0) out.keyframe = keyframe;
-  if (Object.keys(i2v).length > 0) out.i2v = i2v;
-  if (Object.keys(lora).length > 0) out.lora = lora;
-
-  // Power-user escape hatch: raw namespaced JSON, restricted to the in-spec
-  // sections + routing flags and deep-merged per section (textarea wins). A
-  // stray flat key the user types is dropped here, so the planner never emits
-  // anything outside the { keyframe, i2v, lora } + flags contract.
-  if (typeof inp.textareaText === "string" && inp.textareaText.trim().length > 0) {
-    let parsed;
-    try {
-      parsed = JSON.parse(inp.textareaText.trim());
-    } catch (err) {
-      throw new Error("raw JSON textarea is invalid: " + err.message);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error('raw JSON textarea must be a JSON object, e.g. {"keyframe": {"seed": 7}}');
-    }
-    for (const k of ["keyframe", "i2v", "lora"]) {
-      const v = parsed[k];
-      if (v && typeof v === "object" && !Array.isArray(v)) {
-        out[k] = (out[k] && typeof out[k] === "object" && !Array.isArray(out[k]))
-          ? Object.assign({}, out[k], v)
-          : v;
-      }
-    }
-    for (const k of ["keyframes_only", "finish_offloaded"]) {
-      if (typeof parsed[k] === "boolean") out[k] = parsed[k];
-    }
-  }
-
-  return out;
 }
 
 // v0.42.0: toggle a single shot's lock state on a row. Optimistic:
@@ -6193,7 +6145,7 @@ async function animateHybridRender(row, btnEl, backends) {
         body: JSON.stringify({
           backends: backends,
           defaultBackend: "gpu",
-          defaultCloudModel: "alibaba/hh1-i2v",
+          defaultCloudModel: (cloudModelOptions()[0] && cloudModelOptions()[0][0]) || "seedance",
         }),
       },
     );
@@ -6326,6 +6278,9 @@ function rerunBundle(row) {
     ) {
       overridesTextarea.value = JSON.stringify(row.render_overrides, null, 2);
       if (overridesDetails) overridesDetails.open = true;
+      if (window.plannerRenderConfig && row.render_overrides.config) {
+        window.plannerRenderConfig.restore(row.render_overrides);
+      }
     } else {
       overridesTextarea.value = "";
       if (overridesDetails) overridesDetails.open = false;
@@ -6784,8 +6739,15 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
   // v0.51.0: audio bed + beat timing.
+  if (window.plannerRegistry) {
+    initScoreModulesFromRegistry();
+  } else {
+    initScoreMusicFromRegistry();
+  }
   const musicGen = $("#planner-music-gen");
   if (musicGen) musicGen.addEventListener("click", generateMusic);
+  const narrationGen = $("#planner-narration-gen");
+  if (narrationGen) narrationGen.addEventListener("click", generateNarration);
   // v0.137.6: "suggest from video" forces a fresh AI-drafted music prompt.
   const musicSuggest = $("#planner-music-suggest");
   if (musicSuggest) musicSuggest.addEventListener("click", () => suggestMusicPrompt({ force: true }));
@@ -6857,19 +6819,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // v0.43.0: persist the structured render-settings fields. Each
   // listens for the appropriate event (input on text + number,
   // change on selects).
-  const seedEl = $("#planner-seed");
-  if (seedEl) seedEl.addEventListener("input", persistSoon);
-  // v0.43.0: randomize-seed button. Fills the seed input with a fresh
-  // 32-bit unsigned int and triggers persistSoon so the value survives
-  // a reload before the next render submission.
-  const randomizeBtn = $("#planner-seed-randomize");
-  if (randomizeBtn && seedEl) {
-    randomizeBtn.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      seedEl.value = String(Math.floor(Math.random() * 0x1_0000_0000));
-      persistSoon();
-    });
-  }
   $("#planner-plan").addEventListener("click", plan);
   $("#planner-reprompt").addEventListener("click", repromptWithErrors);
   $("#planner-bundle-btn").addEventListener("click", bundleNow);
@@ -6993,27 +6942,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
 // ---------- Auto-direct: the plan.enhance hook in the UI (v0.167.0) ----------
-// Self-assembling: the "auto-direct shots" control surfaces ONLY when a module
-// serves the plan.enhance hook (asked once via GET /api/modules). It sends the
-// current storyboard to POST /api/storyboard/enhance, which folds the
-// plan.enhance chain in the core, and applies the enriched storyboard back into
-// the editor exactly the way a refine does (json pane, scene editor, YAML,
-// persist, preflight). No module installed -> the control never appears.
 (function initAutoDirect() {
   const btn = document.getElementById("planner-autodirect");
   const sel = document.getElementById("planner-autodirect-intensity");
   if (!btn) return;
 
-  fetch("/api/modules")
-    .then((r) => (r.ok ? r.json() : null))
-    .then((d) => {
-      const serves = d && d.hooks && Array.isArray(d.hooks["plan.enhance"]) && d.hooks["plan.enhance"].length;
-      if (serves) {
-        btn.hidden = false;
-        if (sel) sel.hidden = false;
-      }
-    })
-    .catch(() => {});
+  function revealAutoDirect() {
+    if (window.plannerRegistry && window.plannerRegistry.planEnhanceInstalled()) {
+      btn.hidden = false;
+      if (sel) sel.hidden = false;
+    }
+  }
+  if (window.plannerRegistry) {
+    window.plannerRegistry.load().then(() => {
+      revealAutoDirect();
+      if (window.plannerRenderConfig) window.plannerRenderConfig.renderPanel();
+    }).catch(() => {});
+  }
 
   btn.addEventListener("click", async () => {
     const sb = planState.storyboard;

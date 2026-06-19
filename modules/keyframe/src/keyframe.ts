@@ -42,6 +42,9 @@ export function buildPreviewBody(input: KeyframeInput, cfg: Record<string, unkno
   const kf = keyframeOverrides(cfg);
   if (Object.keys(kf).length) body.render_overrides = { keyframe: kf };
   if (input.shot_ids && input.shot_ids.length) body.process_shot_ids = input.shot_ids;
+  if (input.pretrained_loras && Object.keys(input.pretrained_loras).length) {
+    body.pretrained_loras = { ...input.pretrained_loras };
+  }
   return { input: body };
 }
 

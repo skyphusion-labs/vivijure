@@ -198,6 +198,8 @@ export interface KeyframeInput {
   project: string;     // project id; also the R2 key prefix the keyframes land under
   bundle_key: string;  // R2 key of the project bundle tarball (storyboard + cast refs / LoRAs)
   shot_ids?: string[]; // optional subset to (re)generate; omitted = every shot in the bundle
+  /** slot -> R2 key of pretrained cast LoRAs; scatter shards reuse adapters trained once up front. */
+  pretrained_loras?: Record<string, string>;
 }
 /** One generated start keyframe, already stored in R2 by the backend. */
 export interface KeyframeShot {

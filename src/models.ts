@@ -1,9 +1,5 @@
-// Model catalog (v0.18.4).
-//
-// Extracted from src/index.ts for navigability. This file is the single
-// authoritative list of models the worker exposes; adding or removing
-// entries here flows automatically to GET /api/models and the frontend
-// model picker.
+// Model catalog for POST /api/chat image dispatch (findModel). Planning models live in
+// planner-catalog.ts and are served at GET /api/storyboard/models.
 //
 // Each entry's `id` is the routing key. The worker's dispatch logic uses
 // the `provider` field (defaulting to "workers-ai") plus the `byok_alias`
@@ -195,3 +191,7 @@ export const MODELS: ModelEntry[] = [
   { id: "vidu/q3-pro",                                  label: "Vidu Q3 Pro",                   group: "Video Gen", type: "video", capabilities: [], provider: "vidu" },
   { id: "vidu/q3-turbo",                                label: "Vidu Q3 Turbo",                 group: "Video Gen", type: "video", capabilities: [], provider: "vidu" },
 ];
+
+export function findModel(id: string): ModelEntry | undefined {
+  return MODELS.find((m) => m.id === id);
+}

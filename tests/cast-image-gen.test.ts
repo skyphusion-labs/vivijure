@@ -9,7 +9,7 @@ import {
   REF_MAX_DIM,
 } from "../modules/cast-image/src/image-gen";
 
-describe("cast-image image-gen helpers (ported from the playground)", () => {
+describe("cast-image image-gen helpers", () => {
   it("isFlux2 picks the @cf FLUX-2 family (the multipart-multiref path)", () => {
     expect(isFlux2("@cf/black-forest-labs/flux-2-klein-9b")).toBe(true);
     expect(isFlux2("@cf/black-forest-labs/flux-2-dev")).toBe(true);

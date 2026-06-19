@@ -1,6 +1,4 @@
-// Image generation for the cast-image module -- ported from the playground's proven path
-// (skyphusion-llm-public: src/index.ts `runImage` + proxied-image-params + output-extract), so the
-// studio OWNS cast-ref image gen instead of reaching back to the playground's /api/chat. Two shapes:
+// Image generation for the cast-image module. Two shapes:
 //   @cf FLUX-2 : multipart FormData (prompt + input_image_0..3 reference blobs), gateway-BYPASSED,
 //                returns { image: base64 } -> PNG bytes. The reference-conditioned path (the portrait).
 //   proxied    : env.AI.run THROUGH the gateway, returns a URL (the nano-banana fallback). Reference

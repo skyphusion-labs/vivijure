@@ -3,10 +3,8 @@
 // Loaded on pages that do NOT pull in app.js (planner.html, cast.html, index.html).
 // Two jobs, both dependency-free and idempotent on element existence:
 //
-//   1. Fill the signed-in user's email. Supports both the new playground
-//      chrome (#account-email inside the .account-menu popover) and the
-//      legacy Vivijure pill (#wv-topbar-user-email). Fetches /api/whoami
-//      exactly once per page load; a failure leaves a graceful placeholder.
+//   1. Fill the signed-in user's email (#account-email in the account menu, or the legacy
+//      #wv-topbar-user-email pill). Fetches /api/whoami once per page load.
 //   2. Wire the .account-menu popover (open/close on the #account-toggle
 //      button, close on outside-click / Escape) for pages that have it but
 //      no app.js controller.
@@ -69,8 +67,8 @@
     const setStatus = (on) => {
       if (!emailPrefStatus) return;
       emailPrefStatus.textContent = on
-        ? "on; emailed when a render finishes"
-        : "off; you will not get render emails";
+        ? "You'll get an email when renders finish"
+        : "No emails when renders finish";
     };
     fetch("/api/prefs", { headers: { accept: "application/json" } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))

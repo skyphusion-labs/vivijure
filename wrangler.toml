@@ -1,8 +1,7 @@
 # Vivijure studio core -- wrangler config.
 #
 # account_id is NOT hardcoded; it is read from CLOUDFLARE_ACCOUNT_ID (set in .dev.vars locally, or
-# injected as a secret in CI). Phase-1 render migration (epic #25): the render API bindings are wired
-# below. Mirror every binding change in src/env.ts (the hand-authored Env interface).
+# injected as a secret in CI). Mirror every binding change in src/env.ts (the hand-authored Env).
 
 name = "vivijure-studio"
 main = "src/index.ts"
@@ -21,6 +20,9 @@ assets = { directory = "./public", binding = "ASSETS" }
 [observability]
 enabled = true
 
+[triggers]
+crons = ["*/1 * * * *"]
+
 # AI Gateway (LLM storyboard planning + cloud-animate scoring). GATEWAY_ID is a SECRET, not a var:
 #   echo "<gateway-slug>" | npx wrangler secret put GATEWAY_ID
 [ai]
@@ -37,7 +39,7 @@ bucket_name = "vivijure"
 binding = "R2"
 bucket_name = "skyphusion-llm"
 
-# Fresh, dedicated D1 (Conrad: "use a clean db" -- no migration of the old playground data).
+# Fresh, dedicated D1 (no migration of legacy playground data).
 # Provision + apply the schema of record:
 #   npx wrangler d1 create vivijure-studio        # paste the returned id below
 #   npx wrangler d1 migrations apply vivijure-studio   # applies migrations/0001_init.sql
@@ -124,6 +126,21 @@ service = "vivijure-module-cast-image"
 [[services]]
 binding = "MODULE_NOTIFY_EMAIL"
 service = "vivijure-module-notify-email"
+
+# Music generation: MiniMax Music 2.6 via Workers AI + AI Gateway (planner audio bed).
+[[services]]
+binding = "MODULE_MUSIC_GEN"
+service = "vivijure-module-music-gen"
+
+# Narration: MiniMax Speech 2.8 HD via Workers AI + AI Gateway (score chain).
+[[services]]
+binding = "MODULE_NARRATION_GEN"
+service = "vivijure-module-narration-gen"
+
+# Beat sync: librosa analysis via fleet audio-beat-sync container (score chain, VPC).
+[[services]]
+binding = "MODULE_BEAT_SYNC"
+service = "vivijure-module-beat-sync"
 
 [[routes]]
 pattern = "vivijure.skyphusion.org"

@@ -326,3 +326,88 @@ export async function refineStoryboard(
     logId,
   };
 }
+
+// ---------- One-shot text completion (planner UI helpers) ------------------
+//
+// Same provider dispatch as plan/refine, but returns plain text instead of
+// parsing/validating storyboard JSON. Used by POST /api/chat for music-prompt
+// suggestion and other one-liner LLM calls from the planner frontend.
+
+export interface ChatCompleteArgs {
+  model: string;
+  user_input: string;
+  system_prompt?: string;
+}
+
+export type ChatCompleteResult =
+  | { ok: true; output: string; model: string; logId: string | null }
+  | { ok: false; error: string; model: string };
+
+export async function chatComplete(
+  env: Env,
+  args: ChatCompleteArgs,
+): Promise<ChatCompleteResult> {
+  const modelEntry = findPlanningModel(args.model);
+  if (!modelEntry) {
+    return {
+      ok: false,
+      error: `model "${args.model}" is not in the planning catalog`,
+      model: args.model,
+    };
+  }
+
+  const provider = plannerProviderFor(modelEntry);
+  const systemPrompt = args.system_prompt?.trim() || "You are a helpful assistant.";
+  const userMessage = args.user_input;
+
+  let result: unknown;
+  let logId: string | null = null;
+
+  try {
+    if (provider === "anthropic") {
+      const messages = [{ role: "user", content: userMessage }];
+      const r = await callAnthropic(env, modelEntry, systemPrompt, messages);
+      result = r.raw;
+      logId = r.logId;
+    } else if (provider === "xai") {
+      const messages = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ];
+      const r = await callXai(env, modelEntry, messages);
+      result = r.raw;
+      logId = r.logId;
+    } else if (provider === "google") {
+      const messages = [{ role: "user", content: userMessage }];
+      const r = await callGemini(env, modelEntry, systemPrompt, messages);
+      result = r.raw;
+      logId = r.logId;
+    } else {
+      const messages = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ];
+      result = await aiRun(env, modelEntry.id, { messages });
+      logId = aiLogId(env);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `provider call failed: ${message}`, model: args.model };
+  }
+
+  const providerFailure = detectProviderFailure(result);
+  if (providerFailure) {
+    return {
+      ok: false,
+      error: `model execution failed: ${providerFailure}`,
+      model: args.model,
+    };
+  }
+
+  const output = extractOutput(result).trim();
+  if (!output) {
+    return { ok: false, error: "model returned empty output", model: args.model };
+  }
+
+  return { ok: true, output, model: args.model, logId };
+}

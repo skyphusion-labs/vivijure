@@ -105,7 +105,7 @@ export function buildShardJobs(args: ScatterArgs): RenderSubmitArgs[] {
 // Falls back to the full map when we have no per-shot slot information (the safe
 // default: staging a spare adapter is wasteful, dropping a needed one renders
 // the wrong identity).
-function scopePretrainedToShard(
+export function scopePretrainedToShard(
   pretrainedLoras: Record<string, string>,
   shard: string[],
   shotSlots?: Record<string, string[]>,
@@ -120,6 +120,17 @@ function scopePretrainedToShard(
     if (used.has(slot)) scoped[slot] = key;
   }
   return scoped;
+}
+
+export function scatterShards(
+  args: Pick<ScatterArgs, "shotIds" | "shardCount" | "pretrainedLoras" | "shotSlots">,
+): Array<{ shots: string[]; pretrainedLoras: Record<string, string> }> {
+  return splitShots(args.shotIds, args.shardCount)
+    .filter((shard) => shard.length > 0)
+    .map((shots) => ({
+      shots,
+      pretrainedLoras: scopePretrainedToShard(args.pretrainedLoras, shots, args.shotSlots),
+    }));
 }
 
 // A shard's terminal RunPod statuses that mean "this slice will never produce

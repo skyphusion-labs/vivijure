@@ -132,16 +132,59 @@ body.sw-open .planner-layout { overflow-x: hidden; }
 .icon-btn { background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); border-radius: 10px; padding: 7px; cursor: pointer; display: inline-flex; }
 .icon-btn:hover { border-color: var(--accent); }
 .account { position: relative; }
-.account-menu { position: absolute; right: 0; top: 48px; width: 290px; background: var(--panel); border: 1px solid var(--line);
-  border-radius: 12px; padding: 8px; z-index: 40; box-shadow: 0 18px 50px rgba(0,0,0,0.5); display: grid; gap: 3px; }
-.account-row { display: grid; gap: 2px; text-align: left; background: transparent; border: 0; color: var(--ink);
-  padding: 10px 12px; border-radius: 9px; cursor: pointer; text-decoration: none; }
+.account-menu {
+  position: absolute; right: 0; top: calc(100% + 8px); width: 280px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 6px; z-index: 40; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  display: grid; gap: 0;
+}
+.account-row {
+  display: grid; gap: 2px; text-align: left; background: transparent; border: 0; color: var(--ink);
+  padding: 10px 12px; border-radius: 9px; cursor: pointer; text-decoration: none;
+}
 .account-row:hover { background: var(--panel-2); }
+.account-user {
+  display: flex; align-items: center; gap: 10px; cursor: default; padding: 10px;
+}
+.account-user:hover { background: transparent; }
+.account-ico {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 999px; background: var(--panel-2);
+  border: 1px solid var(--line); color: var(--muted);
+}
+.account-email {
+  min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .account-name { font-weight: 600; }
-.account-sub, .account-email { color: var(--muted); font-size: 12px; }
-.account-prefs { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 4px 0; padding: 8px 4px; }
-.account-prefs-head { color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; font-size: 11px; padding: 0 8px 6px; }
-.account-pref { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; cursor: pointer; }
+.account-sub { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.account-prefs {
+  border-top: 1px solid var(--line); margin: 2px 0 0; padding: 10px 6px 4px;
+}
+.account-prefs-head {
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em;
+  font-size: 10px; font-weight: 600; padding: 0 8px 8px;
+}
+.account-pref {
+  display: flex; gap: 11px; align-items: flex-start; padding: 8px;
+  border-radius: 8px; cursor: pointer;
+}
+.account-pref:hover { background: var(--panel-2); }
+.account-pref-text { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.account-pref .account-name { font-size: 13px; font-weight: 500; line-height: 1.35; }
+.account-pref input[type="checkbox"] {
+  appearance: none; position: relative; flex: 0 0 auto; width: 16px; height: 16px; margin: 2px 0 0;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2); cursor: pointer;
+}
+.account-pref input[type="checkbox"]:checked {
+  background: var(--accent); border-color: var(--accent);
+}
+.account-pref input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 4px; top: 1px; width: 5px; height: 9px;
+  border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.account-pref input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.account-pref input[type="checkbox"]:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* guided step rail */
 .planner-steps { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 0; }
@@ -503,7 +546,7 @@ details.planner-overrides-details, details.planner-overrides-domain, details.pla
 details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
   border: 1px solid var(--line); border-radius: 11px; padding: 10px 14px; background: var(--panel-2); }
 .planner-overrides-summary, .planner-layout summary, .cast-layout summary { cursor: pointer; color: var(--ink); font-weight: 600; font-size: 13px; }
-.planner-overrides-fields, .planner-overrides-common { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 10px; }
+.planner-overrides-fields, .planner-overrides-common, .planner-module-config { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 10px; }
 .planner-overrides-row { display: flex; gap: 8px; align-items: center; }
 
 /* output + code panes */

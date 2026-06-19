@@ -15,6 +15,7 @@ import {
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { presignR2Get, presignR2Put } from "./r2-presign";
+import { resolveStagedAudioKey } from "./audio-stage";
 import { coerceShotId } from "./storyboard-validate";
 
 export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
@@ -35,6 +36,11 @@ export interface FinishShot {
   error?: string;
 }
 
+export interface FilmKeyframeRef {
+  shot_id: string;
+  keyframe_key: string;
+}
+
 export interface FilmJob {
   film_id: string;
   project: string;
@@ -44,11 +50,24 @@ export interface FilmJob {
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>; // per finish module (keyed by module name), validated at enterFinishPhase
   keyframe_binding: string | null;
-  phase: "keyframe" | "clips" | "finish" | "assemble" | "done" | "failed";
+  phase: "keyframe" | "clips" | "finish" | "assemble" | "mux" | "done" | "failed";
   keyframe_poll?: string;
   clip_job_id?: string;
   finish_shots?: FinishShot[];
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
+  silent_film_key?: string; // silent concat output before optional audio mux
+  audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble
+  mux_output_key?: string; // deterministic mux destination for idempotent retries
+  mux_attempts?: number;
+  // keyframes-only preview: stop after the keyframe module, no i2v / assemble.
+  keyframes_only?: boolean;
+  /** Scatter shard: stop after finish (per-shot clips in R2), skip assemble. */
+  clips_only?: boolean;
+  keyframes?: FilmKeyframeRef[];
+  cancelled?: boolean;
+  /** Child animation from a keyframes-only preview (finalize / cloud / hybrid). */
+  derive_mode?: "finalized" | "cloud-finalized";
+  parent_render_id?: number;
   // Bounded counter for transient assemble retries (issue #82). A cold or slow video-finish concat can
   // 504 (or be briefly unreachable) on the last CPU-only step; rather than failing a fully-rendered
   // film, enterAssemblePhase keeps phase="assemble" so the next poll re-attempts (the re-PUT to the same
@@ -65,6 +84,38 @@ const asFetcher = (v: unknown): FetcherLike | null =>
 
 const filmKey = (id: string) => `renders/${id}/film-job.json`;
 const clipDocKey = (clipJobId: string) => `renders/${clipJobId}/clips-job.json`; // matches render-orchestrator
+
+export { filmKey as filmJobDocKey, clipDocKey as clipJobDocKey };
+
+/** Collect finished clip keys from a terminal clips_only (or full) film job doc. */
+export async function clipKeysFromFilmJob(
+  env: Env,
+  job: FilmJob,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (job.finish_shots?.length) {
+    for (const fs of job.finish_shots) {
+      if (fs.status === "done" && fs.clip_key) out.set(fs.shot_id, fs.clip_key);
+    }
+    if (out.size) return out;
+  }
+  if (!job.clip_job_id) return out;
+  const cjObj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
+  if (!cjObj) return out;
+  const clipJob = JSON.parse(await cjObj.text()) as ClipJob;
+  for (const sh of clipJob.shots) {
+    if (sh.status === "done" && sh.clip_key) out.set(sh.shot_id, sh.clip_key);
+  }
+  return out;
+}
+
+/** Map a film job phase to a shard status string for scatter gather decisions. */
+export function filmPhaseToShardStatus(job: FilmJob): string {
+  if (job.cancelled) return "CANCELLED";
+  if (job.phase === "done") return "COMPLETED";
+  if (job.phase === "failed") return "FAILED";
+  return "IN_PROGRESS";
+}
 
 /** Pure: join keyframe outputs to scenes by shot_id. A scene with no matching keyframe is dropped
  *  and reported in `missing` (so the caller knows which shots the keyframe stage did not produce). */
@@ -125,6 +176,27 @@ export function orderFinalClips(
   return out;
 }
 
+/** Internal: keyframes-only path -- record keys and mark done (no i2v / assemble). */
+function completeKeyframesOnly(job: FilmJob, kfOut: KeyframeOutput): void {
+  const kfs = kfOut.keyframes || [];
+  if (!kfs.length) {
+    job.phase = "failed";
+    job.error = "keyframe stage produced no keyframes";
+    return;
+  }
+  job.keyframes = kfs.map((k) => ({ shot_id: k.shot_id, keyframe_key: k.keyframe_key }));
+  job.phase = "done";
+}
+
+/** Internal: after keyframes, either stop (preview) or hand off to the clip orchestrator. */
+async function afterKeyframeOutput(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
+  if (job.keyframes_only) {
+    completeKeyframesOnly(job, kfOut);
+    return;
+  }
+  await advanceToClips(env, job, kfOut);
+}
+
 /** Internal: presign each matched keyframe -> start the clip job, advancing the film to phase=clips. */
 async function advanceToClips(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
   const { matched, missing } = joinKeyframesToScenes(job.scenes, kfOut.keyframes || []);
@@ -182,7 +254,10 @@ async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob): Promi
   const configs = resolveFinishConfigs(serving, job.finish_config);
   const doneClips = clipJob.shots.filter((s) => s.status === "done" && s.clip_key);
   if (!doneClips.length) { job.phase = "failed"; job.error = "no clips rendered to assemble"; return; }
-  if (!chain.length) { job.phase = "assemble"; return; } // no finish modules -> assemble raw clips
+  if (!chain.length) {
+    job.phase = job.clips_only ? "done" : "assemble";
+    return;
+  }
   job.finish_shots = doneClips.map((s) => ({
     shot_id: s.shot_id, clip_key: s.clip_key as string, chain, configs, idx: 0, status: "pending" as const, applied: [],
   }));
@@ -215,7 +290,9 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
       else if (!(p as { pending?: boolean }).pending) { applyFinishOutput(fs, (p as { output: FinishOutput }).output); }
     }
   }
-  if ((job.finish_shots || []).every((fs) => fs.status !== "pending")) job.phase = "assemble";
+  if ((job.finish_shots || []).every((fs) => fs.status !== "pending")) {
+    job.phase = job.clips_only ? "done" : "assemble";
+  }
 }
 
 // --------------------------------------------------------------------------- assemble (phase 4)
@@ -245,6 +322,8 @@ export async function callVideoFinish(
     width?: number;
     height?: number;
     fps?: number;
+    audioUrl?: string;
+    remuxAudioOnly?: boolean;
   },
   opts: { retries?: number; backoffMs?: number } = {},
 ): Promise<Response | null> {
@@ -351,6 +430,93 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
   }
 }
 
+async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
+  const silentKey = job.silent_film_key;
+  const audioKey = job.audio_key;
+  if (!silentKey || !audioKey) {
+    job.film_key = silentKey;
+    job.phase = "done";
+    await fireNotify(env, job);
+    return;
+  }
+  if (!env.VIDEO_FINISH_VPC) {
+    job.phase = "failed";
+    job.error = "video-finish VPC binding not configured";
+    return;
+  }
+
+  const outKey = job.mux_output_key
+    ?? silentKey.replace(/\.mp4$/i, "") + "-audio-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+  job.mux_output_key = outKey;
+
+  const [videoUrl, audioUrl, outputUrl] = await Promise.all([
+    presignR2Get(env, silentKey, 1800),
+    presignR2Get(env, audioKey, 1800),
+    presignR2Put(env, outKey, 1800),
+  ]);
+
+  const resp = await callVideoFinish(env, {
+    clips: [{ url: videoUrl }],
+    outputUrl,
+    outputKey: outKey,
+    audioUrl,
+    remuxAudioOnly: true,
+  });
+
+  const transport = classifyAssembleTransport(resp ? resp.status : null, job.mux_attempts ?? 0, MAX_ASSEMBLE_ATTEMPTS);
+  job.mux_attempts = transport.attempts;
+  if (transport.state === "retry") {
+    job.phase = "mux";
+    job.error = transport.error;
+    return;
+  }
+  if (transport.state === "exhausted") {
+    job.phase = "failed";
+    job.error = transport.error;
+    return;
+  }
+  if (!resp) {
+    job.phase = "failed";
+    job.error = "video-finish container unreachable";
+    return;
+  }
+  if (!resp.ok) {
+    let detail = "";
+    try { detail = (await resp.text()).slice(0, 400); } catch { /* body unreadable */ }
+    job.phase = "failed";
+    job.error = `video-finish mux returned ${resp.status}${detail ? `: ${detail}` : ""}`;
+    return;
+  }
+  let body: FinishContainerResult;
+  try {
+    body = (await resp.json()) as FinishContainerResult;
+  } catch {
+    job.phase = "failed";
+    job.error = "video-finish returned a non-JSON response";
+    return;
+  }
+  if (!body.ok) {
+    job.phase = "failed";
+    job.error = `video-finish mux failed: ${body.error || "unknown error"}`;
+    return;
+  }
+  job.film_key = outKey;
+  job.phase = "done";
+  await fireNotify(env, job);
+}
+
+async function finishAssembledFilm(env: Env, job: FilmJob, silentKey: string): Promise<void> {
+  job.silent_film_key = silentKey;
+  if (job.audio_key) {
+    job.phase = "mux";
+    await enterMuxPhase(env, job);
+  } else {
+    job.film_key = silentKey;
+    job.phase = "done";
+    await fireNotify(env, job);
+  }
+}
+
 async function enterAssemblePhase(
   env: Env,
   job: FilmJob,
@@ -408,9 +574,7 @@ async function enterAssemblePhase(
     job.phase = "failed"; job.error = "video-finish returned a non-JSON response"; return;
   }
   if (!body.ok) { job.phase = "failed"; job.error = `video-finish failed: ${body.error || "unknown error"}`; return; }
-  job.film_key = outputKey;
-  job.phase = "done";
-  await fireNotify(env, job); // best-effort notify chain; never fails the (already-assembled) render
+  await finishAssembledFilm(env, job, outputKey);
 }
 
 /** Pure: normalize caller scene ids to the canonical `shot_NN` the bundle uses. /api/storyboard/bundle
@@ -423,6 +587,75 @@ export function coerceSceneIds(scenes: FilmScene[]): FilmScene[] {
   return (scenes || []).map((s, i) => ({ ...s, shot_id: coerceShotId(s.shot_id, i) }));
 }
 
+/** Start a film at the clips phase using existing keyframe keys (finalize / cloud / hybrid). */
+export async function startFilmFromKeyframes(
+  env: Env,
+  args: {
+    project: string;
+    bundle_key: string;
+    scenes: FilmScene[];
+    keyframes: FilmKeyframeRef[];
+    motion_backend?: string;
+    per_shot_motion?: Record<string, string>;
+    motion_config?: Record<string, unknown>;
+    motion_configs?: Record<string, Record<string, unknown>>;
+    finish_config?: Record<string, Record<string, unknown>>;
+    derive_mode: "finalized" | "cloud-finalized";
+    parent_render_id?: number;
+    audio_key?: string;
+    user_email?: string;
+  },
+): Promise<FilmJob> {
+  const scenes = coerceSceneIds(args.scenes ?? []);
+  const stagedAudio = await resolveStagedAudioKey(env, args.audio_key);
+  const { matched, missing } = joinKeyframesToScenes(scenes, args.keyframes || []);
+  const job: FilmJob = {
+    film_id: "film-" + crypto.randomUUID(),
+    project: args.project,
+    bundle_key: args.bundle_key,
+    scenes,
+    motion_backend: args.motion_backend ?? null,
+    motion_config: args.motion_config ?? {},
+    finish_config: args.finish_config ?? {},
+    keyframe_binding: null,
+    phase: "failed",
+    created_at: Date.now(),
+    derive_mode: args.derive_mode,
+    parent_render_id: args.parent_render_id,
+    audio_key: stagedAudio,
+    user_email: args.user_email,
+  };
+  if (!matched.length) {
+    job.error = `no keyframes matched requested shots (missing: ${missing.join(", ")})`;
+    await putFilm(env, job);
+    return job;
+  }
+  const shots: ClipShotInput[] = [];
+  for (const m of matched) {
+    const keyframe_url = await presignR2Get(env, m.keyframe_key, 1800);
+    shots.push({
+      shot_id: m.shot_id,
+      keyframe_url,
+      keyframe_key: m.keyframe_key,
+      prompt: m.prompt,
+      seconds: m.seconds,
+      motion_backend: args.per_shot_motion?.[m.shot_id],
+    });
+  }
+  const clip = await startClipJob(env, {
+    project: args.project,
+    shots,
+    motion_backend: args.motion_backend,
+    config: args.motion_config,
+    module_configs: args.motion_configs,
+  });
+  job.clip_job_id = clip.job_id;
+  job.phase = summarizeJob(clip).failed === clip.shots.length ? "failed" : "clips";
+  if (job.phase === "failed") job.error = "every clip submission failed";
+  await putFilm(env, job);
+  return job;
+}
+
 /** Start a film job: resolve the keyframe module, submit the project preview, persist the poll token. */
 export async function startFilmJob(
   env: Env,
@@ -430,10 +663,15 @@ export async function startFilmJob(
     project: string; bundle_key: string; scenes: FilmScene[];
     motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
     finish_config?: Record<string, Record<string, unknown>>;
+    keyframes_only?: boolean;
+    clips_only?: boolean;
+    pretrained_loras?: Record<string, string>;
+    audio_key?: string;
     user_email?: string;
   },
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
+  const stagedAudio = args.clips_only ? undefined : await resolveStagedAudioKey(env, args.audio_key);
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
   const kf = servingForHook(modules, "keyframe")[0] ?? null;
@@ -442,6 +680,9 @@ export async function startFilmJob(
     project: args.project, bundle_key: args.bundle_key, scenes,
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
+    keyframes_only: !!args.keyframes_only,
+    clips_only: !!args.clips_only,
+    audio_key: stagedAudio,
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
     user_email: args.user_email,
   };
@@ -451,17 +692,38 @@ export async function startFilmJob(
     job.error = kf ? `keyframe module ${kf.name} (${kf.binding}) is not bound` : "no keyframe module installed";
   } else {
     const config = validateConfig(kf.config_schema, args.keyframe_config);
+    const keyframeInput: KeyframeInput = {
+      project: args.project,
+      bundle_key: args.bundle_key,
+      shot_ids: scenes.map((s) => s.shot_id),
+    };
+    if (args.pretrained_loras && Object.keys(args.pretrained_loras).length) {
+      keyframeInput.pretrained_loras = { ...args.pretrained_loras };
+    }
     const r = await invokeModule<KeyframeInput, KeyframeOutput>(fetcher, {
       hook: "keyframe",
-      input: { project: args.project, bundle_key: args.bundle_key, shot_ids: scenes.map((s) => s.shot_id) },
+      input: keyframeInput,
       config,
       context: { project: args.project, job_id: job.film_id },
     });
     if (!r.ok) { job.phase = "failed"; job.error = r.error; }
     else if ((r as { pending?: boolean }).pending) { job.keyframe_poll = (r as { poll: string }).poll; }
-    else if ("output" in r) { await advanceToClips(env, job, r.output as KeyframeOutput); } // sync (reuse) path
+    else if ("output" in r) { await afterKeyframeOutput(env, job, r.output as KeyframeOutput); }
     else { job.phase = "failed"; job.error = "keyframe module returned neither output nor a poll token"; }
   }
+  await putFilm(env, job);
+  return job;
+}
+
+/** Mark an in-flight film job cancelled. Terminal jobs are returned unchanged. */
+export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob | null> {
+  const obj = await env.R2_RENDERS.get(filmKey(filmId));
+  if (!obj) return null;
+  const job = JSON.parse(await obj.text()) as FilmJob;
+  if (job.phase === "done" || job.phase === "failed") return job;
+  job.cancelled = true;
+  job.phase = "failed";
+  job.error = "cancelled";
   await putFilm(env, job);
   return job;
 }
@@ -472,6 +734,7 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
   const obj = await env.R2_RENDERS.get(filmKey(filmId));
   if (!obj) return null;
   const job = JSON.parse(await obj.text()) as FilmJob;
+  if (job.cancelled) return { job, clipJob: null };
   const envRec = env as unknown as Record<string, unknown>;
 
   // Phase 1: poll the keyframe job; on completion, presign + hand off to the clip orchestrator.
@@ -482,7 +745,7 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
       const p = await pollModule<KeyframeOutput>(fetcher, { poll: job.keyframe_poll });
       if (!p.ok) { job.phase = "failed"; job.error = p.error; }
       else if (!(p as { pending?: boolean }).pending) {
-        await advanceToClips(env, job, (p as { output: KeyframeOutput }).output);
+        await afterKeyframeOutput(env, job, (p as { output: KeyframeOutput }).output);
       }
     }
     await putFilm(env, job);
@@ -518,6 +781,12 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
           .filter((s) => s.status === "done" && s.clip_key)
           .map((s) => ({ shot_id: s.shot_id, clip_key: s.clip_key as string }));
     await enterAssemblePhase(env, job, orderFinalClips(job.scenes, source));
+    await putFilm(env, job);
+  }
+
+  // Phase 5: mux the audio bed onto the silent film via video-finish (VPC remuxAudioOnly).
+  if (job.phase === "mux") {
+    await enterMuxPhase(env, job);
     await putFilm(env, job);
   }
 
