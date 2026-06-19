@@ -73,6 +73,13 @@ export interface FilmJob {
   // film, enterAssemblePhase keeps phase="assemble" so the next poll re-attempts (the re-PUT to the same
   // film key is idempotent), capped by MAX_ASSEMBLE_ATTEMPTS. Absent on pre-#82 jobs (reads as 0).
   assemble_attempts?: number;
+  // Wall-clock the job entered its CURRENT phase (issue #129). advanceFilmJob stamps this on every
+  // phase transition; the stall recovery measures how long a pollable phase has been stuck against it.
+  // Absent on pre-#129 jobs -> recovery falls back to created_at (still bounded, just more generous).
+  phase_started_at?: number;
+  // Set once the keyframe stall recovery has adopted orphaned keyframes from R2, so the (idempotent)
+  // adoption is never retried in a loop -- after one adoption the job has moved to clips anyway.
+  keyframe_recovered?: boolean;
   error?: string;
   created_at: number;
   user_email?: string; // film owner; passed to the `notify` hook on done (e.g. for an email notifier)
@@ -643,6 +650,7 @@ export async function startFilmFromKeyframes(
     keyframe_binding: null,
     phase: "failed",
     created_at: Date.now(),
+    phase_started_at: Date.now(),
     derive_mode: args.derive_mode,
     parent_render_id: args.parent_render_id,
     audio_key: stagedAudio,
@@ -707,6 +715,7 @@ export async function startFilmJob(
     clips_only: !!args.clips_only,
     audio_key: stagedAudio,
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
+    phase_started_at: Date.now(),
     user_email: args.user_email,
   };
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
@@ -751,6 +760,93 @@ export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob |
   return job;
 }
 
+// --------------------------------------------------------------------------- stall recovery (#129)
+
+// How long a phase may sit without progress before the driver tries to recover it, and the absolute
+// ceiling past which a still-pollable phase is failed loudly rather than left to hang forever. The
+// background sweep (crons */1) calls advanceFilmJob every minute, so a wedged job is rescued or failed
+// within KEYFRAME_STALL_SECONDS of the GPU finishing -- never the silent forever-IN_PROGRESS of #129.
+//   Cause: the keyframe / finish module poll() returns pending for any non-COMPLETED RunPod /status,
+//   so once RunPod garbage-collects a finished job the poll is pending with no deadline while the GPU
+//   output already sits in R2. The keyframe stage writes deterministic keys
+//   (renders/<project>/keyframes/<shot>.png), so the core CAN adopt those orphans without re-running
+//   the GPU; clips/finish keys are GPU-assigned (not guessable), so those phases get the loud-fail
+//   ceiling only (a stuck clips/finish poll is rarer and re-submitting is the human's call).
+export const KEYFRAME_STALL_SECONDS = 20 * 60; // 20min: a project-wide SDXL keyframe pass is well done by now
+export const PHASE_HARD_DEADLINE_SECONDS = 90 * 60; // 90min: absolute ceiling for any one pollable phase
+
+const POLLABLE_PHASES: ReadonlySet<FilmJob["phase"]> = new Set(["keyframe", "clips", "finish"]);
+
+/** Seconds the job has sat in its current phase. Falls back to created_at on pre-#129 jobs (no
+ *  phase_started_at stamp); `now` is injectable so tests do not depend on the wall clock. */
+export function phaseAgeSeconds(job: FilmJob, now: number = Date.now()): number {
+  const since = job.phase_started_at ?? job.created_at;
+  return Math.max(0, Math.floor((now - since) / 1000));
+}
+
+/** List the keyframe PNGs the GPU wrote for a project and join them to the job's scenes. The keyframe
+ *  stage writes `renders/<project>/keyframes/<shot_id>.png` itself (its own R2 creds; see the keyframe
+ *  module), so the core can recover an orphaned keyframe phase straight from R2 presence -- no GPU re-
+ *  run. Returns only keyframes whose shot_id is in the storyboard, so a stale PNG from an older render
+ *  of the same project can never inject a shot the film did not ask for. */
+export async function listProjectKeyframes(env: Env, project: string, scenes: FilmScene[]): Promise<FilmKeyframeRef[]> {
+  const prefix = `renders/${project}/keyframes/`;
+  const wanted = new Set(scenes.map((s) => s.shot_id));
+  const out: FilmKeyframeRef[] = [];
+  let cursor: string | undefined;
+  do {
+    const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
+    for (const o of listed.objects) {
+      const file = o.key.slice(prefix.length);
+      const shot_id = file.replace(/\.[^.]+$/, ""); // drop the extension (.png)
+      if (shot_id && wanted.has(shot_id)) out.push({ shot_id, keyframe_key: o.key });
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+  // De-dupe (a project could in principle hold .png + another ext for a shot); keep the first seen.
+  const seen = new Set<string>();
+  return out.filter((k) => (seen.has(k.shot_id) ? false : (seen.add(k.shot_id), true)));
+}
+
+/** Recover a keyframe phase whose module poll has gone stale (RunPod GC'd the finished job) by adopting
+ *  the keyframes already in R2 and advancing exactly as a fresh keyframe completion would (afterKeyframe
+ *  Output -> clips, or done for a keyframes-only preview). Idempotent: marks keyframe_recovered so it
+ *  runs once, and a fresh-completion advance on a later poll is unaffected (the phase has moved on).
+ *  Returns true iff it adopted keyframes and moved the phase. */
+async function recoverStalledKeyframePhase(env: Env, job: FilmJob): Promise<boolean> {
+  const adopted = await listProjectKeyframes(env, job.project, job.scenes);
+  if (!adopted.length) return false; // nothing in R2 to adopt -- not actually complete; let the ceiling handle it
+  console.warn(`film ${job.film_id}: keyframe poll stale, adopting ${adopted.length} orphaned keyframes from R2 (#129)`);
+  job.keyframe_recovered = true;
+  job.keyframe_poll = undefined; // the phantom RunPod job is done with
+  await afterKeyframeOutput(env, job, { project: job.project, keyframes: adopted });
+  return true;
+}
+
+/** The stall-recovery pass, run after the normal phase advance. For a pollable phase that has not
+ *  progressed within its deadline: try a same-phase recovery (keyframe adoption from R2), else, once
+ *  past the absolute ceiling, fail loudly so a wedged render surfaces instead of hanging forever (#129).
+ *  Returns true iff it changed the phase (so the caller re-stamps phase_started_at + persists). */
+async function recoverStalledPhase(env: Env, job: FilmJob, now: number = Date.now()): Promise<boolean> {
+  if (!POLLABLE_PHASES.has(job.phase)) return false;
+  const age = phaseAgeSeconds(job, now);
+
+  // Same-phase recovery: a keyframe poll that never resolved, but the keyframes are in R2.
+  if (job.phase === "keyframe" && !job.keyframe_recovered && age >= KEYFRAME_STALL_SECONDS) {
+    if (await recoverStalledKeyframePhase(env, job)) return true;
+  }
+
+  // Absolute ceiling: a still-pollable phase this old is wedged (e.g. clips/finish whose GPU-assigned
+  // keys we cannot adopt, or a keyframe phase with nothing in R2 to adopt). Fail loudly, don't hang.
+  if (age >= PHASE_HARD_DEADLINE_SECONDS) {
+    const stuckPhase = job.phase;
+    job.phase = "failed";
+    job.error = `render stalled in phase "${stuckPhase}" for ${Math.floor(age / 60)}min with no progress; failing so it does not hang (resubmit to retry) (#129)`;
+    return true;
+  }
+  return false;
+}
+
 /** Advance a film job across its two phases. Returns the job + the underlying clip job (for the
  *  summary), or null if no such film job exists. */
 export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: FilmJob; clipJob: ClipJob | null } | null> {
@@ -759,6 +855,13 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
   const job = JSON.parse(await obj.text()) as FilmJob;
   if (job.cancelled) return { job, clipJob: null };
   const envRec = env as unknown as Record<string, unknown>;
+  const entryPhase = job.phase;
+
+  // Stall recovery (#129): a pollable phase whose module poll never resolves (RunPod GC'd the finished
+  // job) would otherwise hang IN_PROGRESS forever. Run BEFORE the phase legs so an adopted keyframe
+  // phase advances to clips and the clips leg below drives it in the same tick. A persist happens at the
+  // end via the phase-transition stamp; the helper only mutates the in-memory job.
+  await recoverStalledPhase(env, job);
 
   // Phase 1: poll the keyframe job; on completion, presign + hand off to the clip orchestrator.
   if (job.phase === "keyframe" && job.keyframe_poll) {
@@ -810,6 +913,15 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
   // Phase 5: mux the audio bed onto the silent film via video-finish (VPC remuxAudioOnly).
   if (job.phase === "mux") {
     await enterMuxPhase(env, job);
+    await putFilm(env, job);
+  }
+
+  // On any phase transition this tick, stamp when the new phase began (the stall recovery measures
+  // against it) and persist. The phase legs above already persisted on the paths they took; this also
+  // covers a recovery that failed the job at the ceiling (no leg ran after it), so that verdict lands
+  // in R2. putFilm is an idempotent re-PUT, so the belt-and-suspenders double write is harmless.
+  if (job.phase !== entryPhase) {
+    job.phase_started_at = Date.now();
     await putFilm(env, job);
   }
 

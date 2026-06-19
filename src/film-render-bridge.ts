@@ -4,7 +4,7 @@
 
 import type { ClipJob } from "./render-orchestrator";
 import type { FilmJob } from "./film-orchestrator";
-import { summarizeFilm } from "./film-orchestrator";
+import { summarizeFilm, phaseAgeSeconds, KEYFRAME_STALL_SECONDS } from "./film-orchestrator";
 import type { FilmScene } from "./film-orchestrator";
 import type { RunpodJobView, RunpodStatus } from "./runpod-submit";
 import { resolveModuleRenderConfigs } from "./render-module-config";
@@ -45,10 +45,30 @@ export function filterScenesByShotIds(scenes: FilmScene[], shotIds: string[] | u
   return scenes.filter((s) => allow.has(s.shot_id));
 }
 
+/** Stall signal for the UI (#129 / Joan's render-status UX). Surfaced on an IN_PROGRESS render's
+ *  output_json so the history UI renders a real "needs attention" state instead of guessing from
+ *  updated_at:
+ *    last_progress_at -- epoch MILLIS the job entered its current phase (the true last-advanced time).
+ *    stalled          -- true once the current phase has sat past the stall threshold with no progress.
+ *    stall_seconds    -- how long it has been stalled (only when stalled), so the UI can say "stuck 34m".
+ *  The driver (advanceFilmJob) recovers or loud-fails a stalled job; this is the in-flight signal in the
+ *  window before it does. Pure + injectable `now` so it unit-tests without the wall clock. */
+export function stallSignal(job: FilmJob, now: number = Date.now()): Record<string, unknown> {
+  const lastProgressAt = job.phase_started_at ?? job.created_at;
+  const ageSeconds = phaseAgeSeconds(job, now);
+  const stalled = ageSeconds >= KEYFRAME_STALL_SECONDS;
+  const out: Record<string, unknown> = { last_progress_at: lastProgressAt };
+  if (stalled) {
+    out.stalled = true;
+    out.stall_seconds = ageSeconds;
+  }
+  return out;
+}
+
 function phaseProgress(job: FilmJob, clipJob: ClipJob | null): Record<string, unknown> {
   const total = job.scenes.length;
   const summary = summarizeFilm(job, clipJob);
-  const base = { scene_total: total, project: job.project };
+  const base = { scene_total: total, project: job.project, ...stallSignal(job) };
 
   switch (job.phase) {
     case "keyframe":

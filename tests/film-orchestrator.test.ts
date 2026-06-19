@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, phaseAgeSeconds, listProjectKeyframes, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -326,5 +326,169 @@ describe("advanceFilmJob assemble self-heal from R2 presence (issue #122)", () =
     const { env, vpcCalls } = assembleEnv({ jobInR2: baseJob, filmOutputExists: false });
     await advanceFilmJob(env, "film-selfheal-1");
     expect(vpcCalls.length).toBe(1); // no short-circuit -> normal assemble path ran
+  });
+});
+
+// Issue #129: a keyframe / finish module poll returns pending for any non-COMPLETED RunPod status, so a
+// GC'd-but-finished job pins the film IN_PROGRESS forever. The driver must recover (adopt the keyframes
+// already in R2) or fail loudly at an absolute ceiling -- never hang. Fakes for R2 (list + get + put).
+
+describe("phaseAgeSeconds (#129)", () => {
+  const base = { phase: "keyframe", created_at: 0 } as unknown as FilmJob;
+  it("measures against phase_started_at when present", () => {
+    expect(phaseAgeSeconds({ ...base, phase_started_at: 1000 } as FilmJob, 61_000)).toBe(60);
+  });
+  it("falls back to created_at on a pre-#129 job (no phase_started_at)", () => {
+    expect(phaseAgeSeconds({ ...base, created_at: 1000 } as FilmJob, 61_000)).toBe(60);
+  });
+  it("never returns negative for a future stamp", () => {
+    expect(phaseAgeSeconds({ ...base, phase_started_at: 10_000 } as FilmJob, 0)).toBe(0);
+  });
+});
+
+// R2 list double: serves objects whose keys start with the queried prefix, supporting a single page.
+function r2ListEnv(keys: string[]) {
+  return {
+    R2_RENDERS: {
+      list: async ({ prefix }: { prefix: string }) => ({
+        objects: keys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        truncated: false,
+      }),
+    },
+  } as unknown as Env;
+}
+
+describe("listProjectKeyframes (#129 R2 adoption)", () => {
+  const sc: FilmScene[] = [
+    { shot_id: "shot_01", prompt: "a", seconds: 4 },
+    { shot_id: "shot_02", prompt: "b", seconds: 4 },
+  ];
+  it("returns only keyframes for shots in the storyboard, keyed by R2 path", async () => {
+    const env = r2ListEnv([
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.png",
+      "renders/neon/keyframes/shot_99.png", // stale from an older render -- must be dropped
+    ]);
+    const out = await listProjectKeyframes(env, "neon", sc);
+    expect(out).toEqual([
+      { shot_id: "shot_01", keyframe_key: "renders/neon/keyframes/shot_01.png" },
+      { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.png" },
+    ]);
+  });
+  it("returns empty when no keyframes are in R2 yet", async () => {
+    expect(await listProjectKeyframes(r2ListEnv([]), "neon", sc)).toEqual([]);
+  });
+});
+
+// Env double that round-trips one film job through R2 (get -> mutate -> put) and serves the keyframe
+// listing, so advanceFilmJob's recovery can be observed end-to-end on the persisted job.
+function recoveryEnv(job: FilmJob, keyframeKeys: string[]) {
+  let stored = JSON.stringify(job);
+  const env = {
+    R2_RENDERS: {
+      get: async (key: string) => (key === filmJobDocKey(job.film_id) ? { text: async () => stored } : null),
+      put: async (key: string, body: string) => { if (key === filmJobDocKey(job.film_id)) stored = body; },
+      list: async ({ prefix }: { prefix: string }) => ({
+        objects: keyframeKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        truncated: false,
+      }),
+    },
+  } as unknown as Env;
+  return { env, read: () => JSON.parse(stored) as FilmJob };
+}
+
+describe("advanceFilmJob keyframe stall recovery (#129)", () => {
+  const scenes: FilmScene[] = [
+    { shot_id: "shot_01", prompt: "a", seconds: 4 },
+    { shot_id: "shot_02", prompt: "b", seconds: 4 },
+  ];
+  // keyframes_only so the adopted path completes WITHOUT touching motion modules / presign.
+  const stuckJob = (over: Partial<FilmJob> = {}): FilmJob => ({
+    film_id: "film-stall-kf",
+    project: "neon",
+    bundle_key: "bundles/neon.json",
+    scenes,
+    motion_backend: null,
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: "MODULE_KEYFRAME",
+    phase: "keyframe",
+    keyframe_poll: "phantom-token",
+    keyframes_only: true,
+    created_at: Date.now() - (KEYFRAME_STALL_SECONDS + 60) * 1000, // stale
+    phase_started_at: Date.now() - (KEYFRAME_STALL_SECONDS + 60) * 1000,
+    ...over,
+  });
+
+  it("adopts the orphaned keyframes from R2 and advances (keyframes_only -> done)", async () => {
+    const { env, read } = recoveryEnv(stuckJob(), [
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.png",
+    ]);
+    const r = await advanceFilmJob(env, "film-stall-kf");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.keyframe_recovered).toBe(true);
+    expect(r?.job.keyframes?.map((k) => k.shot_id)).toEqual(["shot_01", "shot_02"]);
+    // persisted, not just in-memory
+    expect(read().phase).toBe("done");
+  });
+
+  it("does NOT escalate a fresh keyframe phase that has not gone stale yet", async () => {
+    const fresh = stuckJob({
+      created_at: Date.now(),
+      phase_started_at: Date.now(),
+    });
+    const { env } = recoveryEnv(fresh, ["renders/neon/keyframes/shot_01.png"]);
+    // The phantom poll token routes through the keyframe module, which is not bound in this env, so the
+    // normal leg fails it; the point is recovery did NOT fire (no adoption from R2) before the deadline.
+    const r = await advanceFilmJob(env, "film-stall-kf");
+    expect(r?.job.keyframe_recovered).toBeUndefined();
+  });
+
+  it("does not adopt when no keyframes are in R2 (not actually complete)", async () => {
+    // Stale but nothing in R2 to adopt, and not yet past the hard ceiling -> stays in keyframe.
+    const { env } = recoveryEnv(stuckJob({ keyframe_binding: null }), []);
+    const r = await advanceFilmJob(env, "film-stall-kf");
+    expect(r?.job.keyframe_recovered).toBeUndefined();
+    expect(r?.job.phase).not.toBe("done");
+  });
+});
+
+describe("advanceFilmJob hard-deadline loud fail (#129)", () => {
+  const scenes: FilmScene[] = [{ shot_id: "shot_01", prompt: "a", seconds: 4 }];
+  const wedged = (phase: FilmJob["phase"]): FilmJob => ({
+    film_id: "film-wedged",
+    project: "neon",
+    bundle_key: "b",
+    scenes,
+    motion_backend: null,
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: null,
+    phase,
+    created_at: Date.now() - (PHASE_HARD_DEADLINE_SECONDS + 60) * 1000,
+    phase_started_at: Date.now() - (PHASE_HARD_DEADLINE_SECONDS + 60) * 1000,
+  });
+
+  it("fails a clips phase wedged past the ceiling, with a diagnostic, and persists it", async () => {
+    const { env, read } = recoveryEnv(wedged("clips"), []);
+    const r = await advanceFilmJob(env, "film-wedged");
+    expect(r?.job.phase).toBe("failed");
+    expect(r?.job.error).toMatch(/stalled in phase "clips"/);
+    expect(read().phase).toBe("failed");
+  });
+
+  it("fails a finish phase wedged past the ceiling", async () => {
+    const { env } = recoveryEnv(wedged("finish"), []);
+    const r = await advanceFilmJob(env, "film-wedged");
+    expect(r?.job.phase).toBe("failed");
+    expect(r?.job.error).toMatch(/stalled in phase "finish"/);
+  });
+
+  it("leaves a terminal phase untouched (no false ceiling fail)", async () => {
+    const done = wedged("done");
+    const { env } = recoveryEnv(done, []);
+    const r = await advanceFilmJob(env, "film-wedged");
+    expect(r?.job.phase).toBe("done");
   });
 });
