@@ -7,8 +7,9 @@ Vivijure is a self-hosted AI film studio built on Cloudflare Workers. It runs fr
 Workers free tier and connects to whatever GPU backend you attach -- RunPod, your own box, or
 a cloud motion API. You own every artifact.
 
-<!-- screenshots: planner storyboard editor, cast page, render history -->
-<!-- TODO(joan): add screenshots of the planner, cast, and a completed render card -->
+<!-- Screenshots pending: capture against live planner (Access-gated).
+     Drop PNGs into docs/screenshots/ -- see docs/screenshots/README.md for what to capture.
+     Filenames: planner-storyboard.png, planner-render-history.png, cast-page.png, modules-page.png -->
 
 ## What you can do
 
