@@ -764,7 +764,7 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   return summary;
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>> }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; audio_key?: string }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
@@ -773,7 +773,10 @@ const hStartFilm: Handler = async (req, env) => {
   const job = await startFilmJob(env, {
     project, bundle_key: a.bundle_key, scenes: a.scenes,
     motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
-    finish_config: a.finish_config, user_email: getUserEmail(req),
+    // audio_key: a staged bed (score-bed music/narration) to mux after assemble. startFilmJob runs it
+    // through resolveStagedAudioKey; without forwarding it here the mux phase is skipped and the film is
+    // silent even when the caller supplied a bed (the scored/narrated render path).
+    finish_config: a.finish_config, audio_key: a.audio_key, user_email: getUserEmail(req),
   });
   return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(job, null))) }, 201);
 };
