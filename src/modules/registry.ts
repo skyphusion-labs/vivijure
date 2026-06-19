@@ -24,6 +24,7 @@ import {
   type PollResponse,
   type ModuleManifest,
   type ModulesResponse,
+  type PublicModule,
   type RegisteredModule,
 } from "./types";
 
@@ -127,9 +128,23 @@ export function hookCatalog(): HookCatalogEntry[] {
   }));
 }
 
-/** The GET /api/modules payload the frontend renders itself from. */
+/** Strip a registered module down to its PUBLIC view: the manifest, minus the internal `binding`.
+ *  The /api/modules route is unauthenticated, so the env binding that serves a hook (internal
+ *  module-host topology) must not cross the wire; the frontend renders from the manifest alone (#18). */
+function toPublic({ binding: _binding, ...manifest }: RegisteredModule): PublicModule {
+  return manifest;
+}
+
+/** The GET /api/modules payload the frontend renders itself from. Modules are exposed as the PUBLIC
+ *  view (no `binding`); the hook index keeps using names, so dispatch (which needs the binding) stays
+ *  core-side off the registered modules, never the wire payload. */
 export function modulesResponse(modules: RegisteredModule[]): ModulesResponse {
-  return { api: MODULE_API, modules, hooks: indexByHook(modules), catalog: hookCatalog() };
+  return {
+    api: MODULE_API,
+    modules: modules.map(toPublic),
+    hooks: indexByHook(modules),
+    catalog: hookCatalog(),
+  };
 }
 
 // --------------------------------------------------------------------------- discovery (I/O)
