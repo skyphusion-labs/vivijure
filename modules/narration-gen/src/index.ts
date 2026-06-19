@@ -1,10 +1,13 @@
 // narration-gen: a `score` module worker (vivijure-module/1). Synthesizes narration via MiniMax
-// Speech 2.8 HD through Workers AI + the AI Gateway for the music / narration / beat-sync chain.
+// Speech 02 HD on RunPod's hosted endpoint, using the SAME async submit+poll transport as seedance/kling.
 //
-// ASYNC: synthesis can take tens of seconds, so:
+// ASYNC: a synth takes tens of seconds, longer than a Worker request can hold, so (NOT Workers AI /
+// ctx.waitUntil, which the runtime cancels ~30s after the response -> pending forever, #155):
 //   GET  /module.json -> manifest
-//   POST /invoke      -> validate ScoreInput, persist run state, kick off background synthesis, return poll
-//   POST /poll        -> read run state; pending until done -> ScoreOutput
+//   POST /invoke      -> submit the RunPod job, return { ok, pending, poll } IMMEDIATELY (no blocking)
+//   POST /poll        -> { poll } -> check the job; finalize (download + store to R2) on COMPLETED
+// Each /poll is fast (a status check; only the final one downloads), so nothing holds a multi-minute
+// request, and the durable poll (runpodJobGone + grace, #141) survives a worker recycle.
 //
 // Failures are DATA (ok:false), never thrown across the wire. Muxing onto the film is video-finish's job.
 
@@ -24,41 +27,36 @@ import {
   EMOTIONS,
   SAMPLE_RATES,
   FORMATS,
-  buildSpeechParams,
-  parseAudioUrl,
+  buildSpeechBody,
+  extractAudioUrl,
   mimeForFormat,
   encodePoll,
   decodePoll,
-  stateKey,
   audioKey,
   appliedTags,
-  readOutput,
   normalizeConfig,
   textFromScoreInput,
-  type RunState,
+  runpodJobGone,
+  classifyGoneState,
 } from "./narration-gen";
 
 interface R2Bucket {
-  put(key: string, value: ArrayBuffer | string, opts?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
-  get(key: string): Promise<{ text(): Promise<string> } | null>;
-}
-
-interface AiRun {
-  run(model: string, params: unknown, opts?: { gateway?: { id: string } }): Promise<unknown>;
+  put(key: string, value: ArrayBuffer, opts?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
 }
 
 interface Env {
-  AI: AiRun;
-  GATEWAY_ID: string;
+  RUNPOD_API_KEY: string;
   R2_RENDERS: R2Bucket;
 }
 
+const ENDPOINT = "https://api.runpod.ai/v2/" + MODEL;
+
 const MANIFEST: ModuleManifest = {
   name: "narration-gen",
-  version: "0.1.0",
+  version: "0.2.0",
   api: MODULE_API,
   hooks: ["score"],
-  provides: [{ id: "minimax-speech", label: "MiniMax Speech 2.8 HD (Workers AI)" }],
+  provides: [{ id: "minimax-speech", label: "MiniMax Speech 02 HD (RunPod)" }],
   config_schema: {
     text: {
       type: "string",
@@ -93,104 +91,94 @@ const MANIFEST: ModuleManifest = {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
+const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
 
-async function writeState(env: Env, jobId: string, state: RunState): Promise<void> {
-  await env.R2_RENDERS.put(stateKey(jobId), JSON.stringify(state), {
-    httpMetadata: { contentType: "application/json" },
-  });
-}
-
-async function readState(env: Env, jobId: string): Promise<RunState | null> {
-  const obj = await env.R2_RENDERS.get(stateKey(jobId));
-  if (!obj) return null;
-  try {
-    return JSON.parse(await obj.text()) as RunState;
-  } catch {
-    return null;
-  }
-}
-
-async function runSynthesis(
-  env: Env,
-  jobId: string,
-  input: ScoreInput,
-  config: ReturnType<typeof normalizeConfig>,
-): Promise<void> {
-  const format = config.format ?? "mp3";
-  const applied = appliedTags(format, config);
-  try {
-    if (!env.GATEWAY_ID) throw new Error("GATEWAY_ID not configured");
-    const text = textFromScoreInput(input, config);
-    const params = buildSpeechParams(text, config);
-    const result = await env.AI.run(MODEL, params, { gateway: { id: env.GATEWAY_ID } });
-    const url = parseAudioUrl(result);
-    if (!url) throw new Error("model completed but returned no audio URL");
-    const aresp = await fetch(url);
-    if (!aresp.ok) throw new Error(`audio fetch ${aresp.status}`);
-    const mime = aresp.headers.get("content-type")?.split(";")[0]?.trim() || mimeForFormat(format);
-    const bytes = await aresp.arrayBuffer();
-    const key = audioKey(jobId, format);
-    await env.R2_RENDERS.put(key, bytes, { httpMetadata: { contentType: mime } });
-    await writeState(env, jobId, {
-      status: "done",
-      film_key: input.film_key,
-      audio_key: key,
-      mime,
-      applied: [...applied, `audio:${key}`],
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await writeState(env, jobId, { status: "failed", error: msg.slice(0, 500), applied });
-  }
-}
-
-async function submit(
-  env: Env,
-  ctx: ExecutionContext,
-  req: InvokeRequest<ScoreInput>,
-): Promise<InvokeResponse<ScoreOutput>> {
+/** /invoke: validate, submit to RunPod, return a poll token immediately. No blocking. */
+async function submit(env: Env, req: InvokeRequest<ScoreInput>): Promise<InvokeResponse<ScoreOutput>> {
   const input = req.input;
   const filmKey = typeof input?.film_key === "string" ? input.film_key.trim() : "";
   if (!filmKey) return { ok: false, error: "score: input.film_key required" };
-  if (!env.GATEWAY_ID) return { ok: false, error: "score: GATEWAY_ID not configured" };
+  if (!env.RUNPOD_API_KEY) return { ok: false, error: "narration-gen: RUNPOD_API_KEY not configured" };
 
   const config = normalizeConfig(req.config ?? {});
-  const scoredInput = { ...input, film_key: filmKey };
+  let body: { input: Record<string, unknown> };
   try {
-    buildSpeechParams(textFromScoreInput(scoredInput, config), config);
+    body = buildSpeechBody(textFromScoreInput({ ...input, film_key: filmKey }, config), config);
   } catch (e) {
     return { ok: false, error: "score: " + (e as Error).message };
   }
 
   const jobId = req.context?.job_id || crypto.randomUUID();
-  const applied = appliedTags(config.format ?? "mp3", config);
+  const format = config.format ?? "mp3";
+  const applied = appliedTags(format, config);
   try {
-    await writeState(env, jobId, {
-      status: "running",
-      started_at: Math.floor(Date.now() / 1000),
-      film_key: filmKey,
-      applied,
+    const r = await fetch(ENDPOINT + "/run", {
+      method: "POST",
+      headers: { ...auth(env), "content-type": "application/json" },
+      body: JSON.stringify(body),
     });
+    if (!r.ok) return { ok: false, error: "narration-gen /run -> " + r.status };
+    const runpodJobId = ((await r.json()) as { id?: string }).id;
+    if (!runpodJobId) return { ok: false, error: "narration-gen /run returned no job id" };
+    return {
+      ok: true,
+      pending: true,
+      poll: encodePoll({ jobId: runpodJobId, job_id: jobId, film_key: filmKey, format, applied, submittedAt: Date.now() }),
+    };
   } catch (e) {
-    return { ok: false, error: "score: could not persist run state: " + (e as Error).message };
+    return { ok: false, error: "narration-gen submit failed: " + (e as Error).message };
   }
-
-  ctx.waitUntil(runSynthesis(env, jobId, { ...input, film_key: filmKey }, config));
-  return { ok: true, pending: true, poll: encodePoll({ job_id: jobId }) };
 }
 
+/** /poll: check the RunPod job; on COMPLETED download the audio + store it in R2 and return the output. */
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<ScoreOutput>> {
-  const token = decodePoll(body.poll);
-  if (!token) return { ok: false, error: "score: bad poll token" };
-  const state = await readState(env, token.job_id);
-  if (!state) return { ok: false, error: "score: run state not found (expired or bad token)" };
-  if (state.status === "running") return { ok: true, pending: true };
-  if (state.status === "failed") return { ok: false, error: state.error || "synthesis failed" };
-  return { ok: true, output: readOutput(state) };
+  const st = decodePoll(body.poll);
+  if (!st) return { ok: false, error: "narration-gen: bad poll token" };
+  if (!env.RUNPOD_API_KEY) return { ok: false, error: "narration-gen: RUNPOD_API_KEY not configured" };
+
+  let httpStatus: number;
+  let s: { status?: string; output?: unknown; error?: unknown };
+  try {
+    const resp = await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(env) });
+    httpStatus = resp.status;
+    s = (await resp.json()) as typeof s;
+  } catch {
+    return { ok: true, pending: true }; // transient; poll again
+  }
+  // RunPod GC'd the job (HTTP 404): would otherwise read as not-COMPLETED forever (#141). narration writes
+  // R2 only on COMPLETED, so a gone job has no recoverable artifact: fail past grace, keep polling inside it.
+  if (runpodJobGone(httpStatus, s)) {
+    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") {
+      return { ok: false, error: "narration-gen job not found on RunPod (GC'd or never ran) (#141)" };
+    }
+    return { ok: true, pending: true };
+  }
+  if (s.status === "FAILED") return { ok: false, error: "narration-gen job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
+  if (s.status !== "COMPLETED") return { ok: true, pending: true }; // IN_QUEUE / IN_PROGRESS
+
+  const url = extractAudioUrl(s.output);
+  if (!url) return { ok: false, error: "narration-gen output had no audio url" };
+  let bytes: ArrayBuffer;
+  let mime: string;
+  try {
+    const a = await fetch(url);
+    if (!a.ok) return { ok: false, error: "fetch narration audio -> " + a.status };
+    mime = a.headers.get("content-type")?.split(";")[0]?.trim() || mimeForFormat(st.format);
+    bytes = await a.arrayBuffer();
+  } catch (e) {
+    return { ok: false, error: "download narration audio failed: " + (e as Error).message };
+  }
+  const key = audioKey(st.job_id, st.format);
+  try {
+    await env.R2_RENDERS.put(key, bytes, { httpMetadata: { contentType: mime } });
+  } catch (e) {
+    return { ok: false, error: "R2 put failed: " + (e as Error).message };
+  }
+  return { ok: true, output: { film_key: st.film_key, applied: [...st.applied, `audio:${key}`] } };
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/module.json") return json(MANIFEST);
 
@@ -204,7 +192,7 @@ export default {
       if (req.hook !== "score") {
         return json({ ok: false, error: "unsupported hook " + String(req.hook) } as InvokeResponse);
       }
-      return json(await submit(env, ctx, req));
+      return json(await submit(env, req));
     }
 
     if (request.method === "POST" && url.pathname === "/poll") {

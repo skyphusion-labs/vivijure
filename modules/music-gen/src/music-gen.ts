@@ -25,8 +25,10 @@ export interface PollToken {
   job_id: string;
 }
 
+// `running` carries the workflow instance id so /poll can surface an errored/terminated workflow as a
+// failure instead of pending-forever, even though R2 presence remains the authoritative done-signal (#155).
 export type RunState =
-  | { status: "running"; started_at: number; film_key: string; applied: string[] }
+  | { status: "running"; started_at: number; film_key: string; applied: string[]; workflow_id?: string }
   | { status: "done"; film_key: string; audio_key: string; mime: string; applied: string[] }
   | { status: "failed"; error: string; applied: string[] };
 
