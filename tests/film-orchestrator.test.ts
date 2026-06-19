@@ -499,7 +499,7 @@ describe("listProjectClips (#139 R2 adoption)", () => {
 // Env double that round-trips BOTH the film-job doc and the clip-job doc through R2, serves the clips
 // listing, and has NO module bindings (so enterFinishPhase finds an empty finish chain -> clips_only
 // shortcuts to done without touching any module). Lets the clips recovery be observed end-to-end.
-function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[]) {
+function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[], moduleResp: unknown = { ok: true, pending: true }) {
   const filmDoc = filmJobDocKey(job.film_id);
   const clipDoc = clipJobDocKey(clipJob.job_id);
   let filmStored = JSON.stringify(job);
@@ -519,10 +519,9 @@ function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[]
         truncated: false,
       }),
     },
-    // motion.backend stub that always reports "still rendering" (pending) on /poll, so the normal clips
-    // leg leaves a not-yet-adopted shot pending (faithful to prod under the #142 module fix: a still-
-    // rendering shot is pending, not failed). Without this the unbound binding would falsely fail the shot.
-    MODULE_OWN_GPU: { fetch: async () => new Response(JSON.stringify({ ok: true, pending: true }), { headers: { "content-type": "application/json" } }) },
+    // motion.backend stub: returns moduleResp on /poll. Default = pending (still rendering); pass a fail
+    // envelope { ok:false, error } to simulate a #142 fast-fail of a GC'd job.
+    MODULE_OWN_GPU: { fetch: async () => new Response(JSON.stringify(moduleResp), { headers: { "content-type": "application/json" } }) },
   } as unknown as Env;
   return { env, readFilm: () => JSON.parse(filmStored) as FilmJob, readClip: () => JSON.parse(clipStored) as ClipJobLike };
 }
@@ -662,6 +661,34 @@ describe("advanceFilmJob clips stall recovery (#139)", () => {
     expect(r2res?.job.phase).not.toBe("clips");
     expect(readClip().shots.every((s) => s.status === "done")).toBe(true);
     expect(readFilm().clips_recovered).toBe(true);
+  });
+
+  it("FRESH render (<20min): module fast-fails 3 shots but their clips are in R2 -> finish gets all, not 7 (#141 regression)", async () => {
+    // The lead's decisive case. A brand-new render at ~2.5min: the 20min stall-recovery must NOT run, so
+    // only the clips-leg reclaim (before the complete-judgment) can save it. The module fast-fails all 3
+    // pending shots (simulating #142 on GC'd jobs), but all 3 clips ARE in R2. Without the fix, summarizeJob
+    // reads complete (0 done + 3 failed = 3) and the film advances DROPPING all 3.
+    const fresh = stalledFilm({ created_at: Date.now(), phase_started_at: Date.now() }); // FRESH, not stale
+    const allPending: ClipJobLike = {
+      job_id: "clips-stall-1", project: "neon", motion_backend: "own-gpu", binding: "MODULE_OWN_GPU",
+      shots: [
+        { shot_id: "shot_01", status: "pending", poll: "phantom-1" },
+        { shot_id: "shot_02", status: "pending", poll: "phantom-2" },
+        { shot_id: "shot_03", status: "pending", poll: "phantom-3" },
+      ],
+      created_at: Date.now(),
+    };
+    // module FAST-FAILS every poll (#142), but every clip is in R2.
+    const { env, readClip, readFilm } = clipsRecoveryEnv(fresh, allPending, [
+      "renders/neon/clips/shot_01_i2v.mp4",
+      "renders/neon/clips/shot_02_i2v.mp4",
+      "renders/neon/clips/shot_03_i2v.mp4",
+    ], { ok: false, error: "own-gpu job not found on RunPod (#141)" });
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    // all 3 reclaimed from R2 in the clips leg, BEFORE the complete-judgment -> film advanced with ALL 3
+    expect(readClip().shots.every((s) => s.status === "done")).toBe(true);
+    expect(readClip().shots.filter((s) => s.status === "done").length).toBe(3); // not a 0/partial drop
+    expect(r?.job.phase).not.toBe("clips"); // advanced (clips_only -> done)
   });
 });
 
