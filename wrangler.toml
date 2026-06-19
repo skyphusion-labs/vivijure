@@ -142,6 +142,14 @@ service = "vivijure-module-narration-gen"
 binding = "MODULE_BEAT_SYNC"
 service = "vivijure-module-beat-sync"
 
+# plan-enhance-py: the Python on-ramp PROOF module (plan.enhance, deterministic rule-based direction).
+# A CF Python Worker behind the same hook contract as the TS plan-enhance, discovered by the registry
+# exactly like any MODULE_* binding. EXPERIMENTAL (CF Python Workers is open beta) -- additive proof;
+# nothing critical depends on it. plan.enhance is a `chain` hook, so it coexists with the TS module.
+[[services]]
+binding = "MODULE_PLANENHANCE_PY"
+service = "vivijure-module-plan-enhance-py"
+
 [[routes]]
 pattern = "vivijure.skyphusion.org"
 custom_domain = true

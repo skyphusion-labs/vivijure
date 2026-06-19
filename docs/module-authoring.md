@@ -171,3 +171,44 @@ If that is green, your module will plug into the core cleanly.
 - [ ] Pure logic is split out and unit-tested; the worker is thin glue.
 - [ ] Conformance harness is green against the deployed worker.
 - [ ] A `[[services]]` binding named `MODULE_<NAME>` is added to the core and the core redeployed.
+
+## Writing a module in Python (second on-ramp)
+
+The contract is **language-agnostic** -- it is a typed JSON exchange over a service binding, so the
+core does not care what language answers a hook. A module can be **TypeScript OR Python**. Python is a
+good fit for **light control-plane logic** (`plan.enhance`, `score`, orchestration glue).
+
+> Cloudflare Python Workers run on Pyodide and have **no torch/CUDA**, so a Python module **cannot**
+> run the GPU render -- the heavy path stays on RunPod. CF Python Workers is currently **open beta**;
+> treat Python modules as experimental and keep critical paths off them until GA.
+
+The shape is identical: serve `GET /module.json` and `POST /invoke`. A minimal entrypoint:
+
+```python
+import json
+from workers import Response, WorkerEntrypoint
+
+MANIFEST = {"name": "my-module", "version": "0.1.0", "api": "vivijure-module/1", "hooks": ["plan.enhance"]}
+
+def _json(body, status=200):
+    return Response(json.dumps(body), status=status, headers={"content-type": "application/json"})
+
+class Default(WorkerEntrypoint):
+    async def fetch(self, request):
+        url, method = str(request.url), str(request.method)
+        if method == "GET" and url.endswith("/module.json"):
+            return _json(MANIFEST)
+        if method == "POST" and url.endswith("/invoke"):
+            req = (await request.json()).to_py()
+            # ... run the hook; failure is DATA: return _json({"ok": False, "error": ...})
+            return _json({"ok": True, "output": {}})
+        return _json({"ok": False, "error": "not found"}, status=404)
+```
+
+Tooling is [pywrangler](https://github.com/cloudflare/workers-py) (the Python Workers CLI, needs
+[`uv`](https://docs.astral.sh/uv/)): `uvx --from workers-py pywrangler dev` / `... deploy`. Declare
+deps in `pyproject.toml` (bundled into `python_modules/` on deploy). `wrangler.toml` needs
+`main = "src/entry.py"` and `compatibility_flags = ["python_workers"]`. The same conformance harness
+applies -- a Python module passes `MODULE_URL=<url> npx vitest run tests/conformance.live.test.ts`
+exactly like a TS one. See [`modules/plan-enhance-py/`](../modules/plan-enhance-py) for a worked
+example (the Python sibling of the TS `plan-enhance`).
