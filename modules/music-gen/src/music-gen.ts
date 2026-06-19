@@ -25,8 +25,12 @@ export interface PollToken {
   job_id: string;
 }
 
+// `pending` carries the input + config so /poll can run generation itself (the env.AI.run is too long
+// for submit's post-response budget -- see issue #155). `generating` is a claim flag so an overlapping
+// poll does not double-run the model. Mirrors cast-image's "poll does the work" model.
 export type RunState =
-  | { status: "running"; started_at: number; film_key: string; applied: string[] }
+  | { status: "pending"; started_at: number; film_key: string; applied: string[]; input: ScoreInput; config: MusicGenerateConfig }
+  | { status: "generating"; started_at: number; film_key: string; applied: string[] }
   | { status: "done"; film_key: string; audio_key: string; mime: string; applied: string[] }
   | { status: "failed"; error: string; applied: string[] };
 
