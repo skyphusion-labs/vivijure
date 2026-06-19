@@ -26,6 +26,7 @@ import {
   type ModulesResponse,
   type PublicModule,
   type RegisteredModule,
+  type RenderConfigProjection,
 } from "./types";
 
 /** A service-binding-shaped value: anything we can `.fetch()` like a Worker. */
@@ -138,12 +139,16 @@ function toPublic({ binding: _binding, ...manifest }: RegisteredModule): PublicM
 /** The GET /api/modules payload the frontend renders itself from. Modules are exposed as the PUBLIC
  *  view (no `binding`); the hook index keeps using names, so dispatch (which needs the binding) stays
  *  core-side off the registered modules, never the wire payload. */
-export function modulesResponse(modules: RegisteredModule[]): ModulesResponse {
+/** Build the GET /api/modules projection. `render` (core-owned render config, e.g. quality tiers) is
+ *  passed in by the route rather than imported here: it lives in render-module-config, which imports
+ *  the registry, so taking it as a param keeps this module free of that back-edge. */
+export function modulesResponse(modules: RegisteredModule[], render: RenderConfigProjection): ModulesResponse {
   return {
     api: MODULE_API,
     modules: modules.map(toPublic),
     hooks: indexByHook(modules),
     catalog: hookCatalog(),
+    render,
   };
 }
 

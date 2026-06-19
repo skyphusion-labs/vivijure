@@ -918,8 +918,13 @@ function restoreRenderStagePanel(saved) {
   bundleState.bundleKey = saved.bundleKey || bundleState.bundleKey;
 
   // Restore form fields first so the user sees the chosen tier and any
-  // overrides text even if there is no live render to attach to.
-  if (saved.qualityTier) $("#planner-quality-tier").value = saved.qualityTier;
+  // overrides text even if there is no live render to attach to. The tier
+  // <option>s are projected by planner-render-config.renderTierPicker (which may
+  // run after this restore), so also stash the desired value as data-pending-value
+  // -- the picker honors it once the options exist, surviving init ordering.
+  if (saved.qualityTier && window.plannerRenderConfig) {
+    window.plannerRenderConfig.selectTier(saved.qualityTier);
+  }
   if (typeof saved.renderOverridesText === "string") {
     $("#planner-render-overrides").value = saved.renderOverridesText;
     if (saved.renderOverridesText.trim().length > 0) {
@@ -1431,8 +1436,11 @@ function applyProjectPrefs(prefs) {
     planState.beatsPerShot = prefs.beatsPerShot;
     setVal("#planner-beats-per-shot", prefs.beatsPerShot);
   }
-  // v0.54.0 dial-in: render-form fields.
-  setVal("#planner-quality-tier", prefs.qualityTier);
+  // v0.54.0 dial-in: render-form fields. The tier <select> is projected, so route
+  // through selectTier (survives init ordering) rather than setVal on the bare element.
+  if (prefs.qualityTier && window.plannerRenderConfig) {
+    window.plannerRenderConfig.selectTier(prefs.qualityTier);
+  }
   setCheck("#planner-keyframes-only", prefs.keyframesOnly);
   setVal("#planner-seed", prefs.seed);
   setVal("#planner-face-lock-mode", prefs.faceLockMode);
@@ -6255,9 +6263,8 @@ function rerunBundle(row) {
   // Pre-select the same quality tier the original render used so a single
   // click matches the previous run; the user can still flip it before
   // hitting render.
-  const tierSelect = $("#planner-quality-tier");
-  if (tierSelect && row.quality_tier) {
-    tierSelect.value = row.quality_tier;
+  if (row.quality_tier && window.plannerRenderConfig) {
+    window.plannerRenderConfig.selectTier(row.quality_tier);
   }
 
   // v0.35.3: pre-fill the renderOverrides textarea from the row so a

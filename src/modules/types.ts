@@ -316,6 +316,15 @@ export interface HookCatalogEntry {
   cardinality: "pick_one" | "chain";
 }
 
+/** Core-owned render config the frontend projects (so the planner stops hand-authoring it in markup).
+ *  Distinct from module config_schema: these are cross-cutting choices the HOST owns (e.g. the quality
+ *  tier the core injects into the keyframe + motion modules), not knobs a single module declares.
+ *  Sourced from the one core constant (QUALITY_TIERS / DEFAULT_QUALITY_TIER in render-module-config). */
+export interface RenderConfigProjection {
+  quality_tiers: { value: string; label: string; blurb: string }[];
+  default_tier: string;
+}
+
 /** GET /api/modules: the merged registry the studio UI renders itself from. Carries the PUBLIC
  *  module view (no internal `binding`); the hook index maps each hook to the module NAMES serving
  *  it, so the frontend has everything it needs to project the pipeline without seeing topology. */
@@ -324,4 +333,5 @@ export interface ModulesResponse {
   modules: PublicModule[];
   hooks: Partial<Record<HookName, string[]>>; // hook -> module names serving it
   catalog: HookCatalogEntry[];                 // every hook (name + blurb + cardinality)
+  render: RenderConfigProjection;              // core-owned render config (tiers); additive (#projection)
 }
