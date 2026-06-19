@@ -9,9 +9,9 @@ a cloud motion API. You own every artifact.
 
 ## Showcase: the first full run
 
-[![NEON HALFLIFE, the first full Vivijure film, a 1080p anime cyberpunk render, ten shots, click to play the MP4](https://assets.skyphusion.net/neon-halflife-run1.jpg)](https://assets.skyphusion.net/neon-halflife-run1.mp4)
+[![NEON HALFLIFE, the first full Vivijure film, a 1080p anime cyberpunk render, ten shots, click to play the MP4](https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.jpg)](https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4)
 
-*[NEON HALFLIFE](https://assets.skyphusion.net/neon-halflife-run1.mp4): the first film rendered end to end on Vivijure. 1080p, ten shots, 30 seconds. Motion on a self-hosted GPU (the `own-gpu` Wan I2V backend). Click the frame above to play, or [download the MP4](https://assets.skyphusion.net/neon-halflife-run1.mp4) (29 MB).*
+*[NEON HALFLIFE](https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4): the first film rendered end to end on Vivijure. 1080p, ten shots, 30 seconds. Motion on a self-hosted GPU (the `own-gpu` Wan I2V backend). Click the frame above to play, or [download the MP4](https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4) (29 MB).*
 
 This clip is **silent on purpose.** Vivijure assembles a silent picture by default; scoring (a music bed, TTS narration, beat-synced cuts) is an opt-in Audio step you run after the picture locks. This is the picture straight off the pipeline, before any audio pass.
 
