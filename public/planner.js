@@ -5098,16 +5098,16 @@ function buildHistoryRow(r, childrenByParent) {
   meta.appendChild(tier);
 
   const status = document.createElement("span");
-  // v0.170.0: stalled rows get an amber badge instead of blue; the stall
-  // class overrides -running so the user sees needs-attention at a glance.
+  // v0.170.0: stall badge reads an explicit server-authored field (Rollins #27).
+  // updated_at is NOT a reliable signal (the cron sweep bumps it every minute
+  // regardless of real progress). isStalled() is a stub until #27 ships the
+  // field name and values; for now it always returns false so no false-positives.
   const stalled = isStalled(r);
   status.className =
     "planner-history-status planner-history-status-" +
     (stalled ? "stalled" : historyStatusKind(r.status));
   status.textContent = r.status + (stalled ? " !" : "");
-  status.title = stalled
-    ? "no server advance in >" + (STALL_THRESHOLD_S / 60) + " min -- may need attention"
-    : "";
+  status.title = stalled ? "render may need attention -- check logs" : "";
   meta.appendChild(status);
 
   // v0.40.0: keyframes-only badge. Marks rows that ran the SDXL preview
@@ -6498,19 +6498,14 @@ function historyStatusKind(status) {
   return "running";
 }
 
-// v0.170.0: an in-flight row is considered stalled when the server has not
-// advanced it (updated_at has not moved) for more than STALL_THRESHOLD_S.
-// 20 minutes is generous enough to avoid false-positives on a healthy long
-// GPU render while still catching genuinely dead jobs well inside the 24h
-// sweep window.
-const STALL_THRESHOLD_S = 20 * 60;
-
+// v0.170.0: stall detection stub. The sweep bumps updated_at every minute so
+// it is NOT a reliable signal for "job made real progress." Rollins' driver
+// (#27) will emit an explicit server-authored stall field (name/values TBD).
+// Replace this stub with a check on that field once #27 ships.
 function isStalled(r) {
-  const terminal = ["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"];
-  if (terminal.indexOf(r.status) >= 0) return false;
-  if (!r.updated_at) return false;
-  const nowSec = Math.floor(Date.now() / 1000);
-  return nowSec - Number(r.updated_at) > STALL_THRESHOLD_S;
+  // TODO(#27): replace with r.stalled_since check (or equivalent Rollins field).
+  void r;
+  return false;
 }
 
 // Load the render stage with the past render's stored state and resume
