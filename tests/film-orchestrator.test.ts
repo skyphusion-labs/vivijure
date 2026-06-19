@@ -665,6 +665,69 @@ describe("advanceFilmJob clips stall recovery (#139)", () => {
   });
 });
 
+describe("advanceFinishPhase R2 reclaim (#141: finish output in R2 beats a finish-module fast-fail)", () => {
+  // Film at phase=finish; one finish shot already FAILED (finish-rife fast-failed its GC'd job), but the
+  // finished clip IS in R2. The reclaim must mark it done from R2 BEFORE the every-terminal -> advance
+  // judgment, so the film does not advance to assemble dropping a shot whose _finished.mp4 exists.
+  const finishFilm = (): FilmJob => ({
+    film_id: "film-finish-reclaim",
+    project: "neon",
+    bundle_key: "b",
+    scenes: [
+      { shot_id: "shot_01", prompt: "a", seconds: 4 },
+      { shot_id: "shot_02", prompt: "b", seconds: 4 },
+    ],
+    motion_backend: "own-gpu",
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: null,
+    phase: "finish",
+    clips_only: true, // shortcut to done when finish is complete (no assemble container needed in test)
+    finish_shots: [
+      { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4", chain: ["MODULE_FINISH_RIFE"], configs: [{}], idx: 0, status: "done", applied: [], poll: undefined, error: undefined },
+      { shot_id: "shot_02", clip_key: "renders/neon/clips/shot_02_i2v.mp4", chain: ["MODULE_FINISH_RIFE"], configs: [{}], idx: 0, status: "failed", applied: [], error: "finish-rife job not found on RunPod (#141)" },
+    ] as FinishShot[],
+    created_at: Date.now(),
+  });
+
+  function finishEnv(job: FilmJob, r2Keys: string[]) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        list: async ({ prefix }: { prefix: string }) => ({
+          objects: r2Keys.filter((x) => x.startsWith(prefix)).map((x) => ({ key: x })),
+          truncated: false,
+        }),
+      },
+    } as unknown as Env;
+    return { env, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  it("reclaims a finish shot whose _finished output is in R2 -> done, then advances", async () => {
+    const { env, read } = finishEnv(finishFilm(), [
+      "renders/neon/clips/shot_01_finished.mp4",
+      "renders/neon/clips/shot_02_finished.mp4", // the failed shot's finish output IS present
+    ]);
+    const r = await advanceFilmJob(env, "film-finish-reclaim");
+    const fs2 = read().finish_shots?.find((f) => f.shot_id === "shot_02");
+    expect(fs2?.status).toBe("done");
+    expect(fs2?.clip_key).toBe("renders/neon/clips/shot_02_finished.mp4");
+    expect(fs2?.error).toBeUndefined();
+    expect(r?.job.phase).not.toBe("finish"); // advanced (clips_only -> done)
+  });
+
+  it("leaves the finish shot FAILED when its _finished output is NOT in R2", async () => {
+    const { env, read } = finishEnv(finishFilm(), [
+      "renders/neon/clips/shot_01_finished.mp4", // only the already-done shot's output
+    ]);
+    await advanceFilmJob(env, "film-finish-reclaim");
+    expect(read().finish_shots?.find((f) => f.shot_id === "shot_02")?.status).toBe("failed");
+  });
+});
+
 describe("advanceFilmJob hard-deadline loud fail (#129)", () => {
   const scenes: FilmScene[] = [{ shot_id: "shot_01", prompt: "a", seconds: 4 }];
   const wedged = (phase: FilmJob["phase"]): FilmJob => ({

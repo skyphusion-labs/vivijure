@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeJob, applyPoll, clipFileMatchesShot, listClipsByShotId, advanceClipJob } from "../src/render-orchestrator";
+import { summarizeJob, applyPoll, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, advanceClipJob } from "../src/render-orchestrator";
 import type { ClipJob, ClipShot } from "../src/render-orchestrator";
 import type { Env } from "../src/env";
 
@@ -43,6 +43,15 @@ describe("clipFileMatchesShot (#141/#143 shot-name matching)", () => {
     expect(clipFileMatchesShot("shot_10_i2v.mp4", "shot_1")).toBe(false); // boundary: shot_1 != shot_10
     expect(clipFileMatchesShot("shot_06_finished.mp4", "shot_06")).toBe(false);
     expect(clipFileMatchesShot("shot_09_i2v.txt", "shot_09")).toBe(false);
+  });
+});
+
+describe("finishedClipFileMatchesShot (#141 finish-output matching)", () => {
+  it("matches ONLY the _finished output at a digit boundary, with a video ext", () => {
+    expect(finishedClipFileMatchesShot("shot_06_finished.mp4", "shot_06")).toBe(true);
+    expect(finishedClipFileMatchesShot("shot_06_i2v.mp4", "shot_06")).toBe(false); // raw motion clip, not finish
+    expect(finishedClipFileMatchesShot("shot_10_finished.mp4", "shot_1")).toBe(false); // boundary
+    expect(finishedClipFileMatchesShot("shot_06_finished.txt", "shot_06")).toBe(false); // not a video
   });
 });
 

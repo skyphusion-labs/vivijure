@@ -88,20 +88,39 @@ export function clipFileMatchesShot(file: string, shotId: string): boolean {
   return /\.(mp4|mov|webm|mkv)$/i.test(file); // a video file
 }
 
-/** Map shot_id -> R2 clip key for the clips present under `renders/<project>/clips/`, matched by shot-id
- *  boundary (clipFileMatchesShot). Used to make R2 PRESENCE the authority on completion: a clip in R2
- *  beats a module's poll verdict (the backend wrote the clip even if its RunPod job was later GC'd and
- *  the module fast-failed the poll; issue #141). Only the requested shot ids are returned. */
-export async function listClipsByShotId(env: Env, project: string, shotIds: string[]): Promise<Map<string, string>> {
+/** Pure: does an R2 clips-object filename belong to this shot's FINISH-chain output? The finish modules
+ *  write `renders/<project>/clips/<shot_id>_finished.mp4`. Same shot-id digit boundary as the motion-clip
+ *  matcher, but here the `_finished` marker is REQUIRED (it is the finish output, not the raw motion clip)
+ *  and a video extension is required. Matches by boundary + the `finished` marker, not a hardcoded full
+ *  slug, so it stays independent of the backend convention. */
+export function finishedClipFileMatchesShot(file: string, shotId: string): boolean {
+  if (!file.startsWith(shotId)) return false;
+  const rest = file.slice(shotId.length);
+  if (/^\d/.test(rest)) return false; // digit boundary: shot_1 must not match shot_10...
+  if (!/(^|[._-])finished([._-]|$)/i.test(rest)) return false; // MUST be a finish-chain output
+  return /\.(mp4|mov|webm|mkv)$/i.test(file);
+}
+
+/** Map shot_id -> R2 key for the objects under `renders/<project>/clips/` that match `matches` (by shot-id
+ *  boundary). Makes R2 PRESENCE the authority on completion: an artifact in R2 beats a module's poll
+ *  verdict (the backend wrote it even if its RunPod job was later GC'd and the module fast-failed the
+ *  poll; issue #141). `matches` selects the raw motion clip (default) or the finish output. Only the
+ *  requested shot ids are returned. */
+export async function listClipsByShotId(
+  env: Env,
+  project: string,
+  shotIds: string[],
+  matches: (file: string, shotId: string) => boolean = clipFileMatchesShot,
+): Promise<Map<string, string>> {
   const prefix = `renders/${project}/clips/`;
-  const found = new Map<string, string>(); // shot_id -> clip_key (first match wins)
+  const found = new Map<string, string>(); // shot_id -> key (first match wins)
   let cursor: string | undefined;
   do {
     const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
     for (const o of listed.objects) {
       const file = o.key.slice(prefix.length);
       for (const shotId of shotIds) {
-        if (!found.has(shotId) && clipFileMatchesShot(file, shotId)) found.set(shotId, o.key);
+        if (!found.has(shotId) && matches(file, shotId)) found.set(shotId, o.key);
       }
     }
     cursor = listed.truncated ? listed.cursor : undefined;

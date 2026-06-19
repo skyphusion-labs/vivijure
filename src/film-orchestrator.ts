@@ -11,7 +11,7 @@ import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig } from "./modules/registry";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput } from "./modules/types";
 import {
-  startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, listClipsByShotId,
+  startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { presignR2Get, presignR2Put } from "./r2-presign";
@@ -311,7 +311,24 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
       else if (!(p as { pending?: boolean }).pending) { applyFinishOutput(fs, (p as { output: FinishOutput }).output); }
     }
   }
-  if ((job.finish_shots || []).every((fs) => fs.status !== "pending")) {
+  // R2 PRESENCE IS AUTHORITATIVE (issue #141), symmetric to the clips fail-time reclaim: a finish module
+  // can fast-fail a shot whose RunPod job was GC'd, but the finish output may already be in R2 at
+  // renders/<project>/clips/<shot>_finished.mp4. Reclaim any failed finish shot whose output is present
+  // BEFORE the every-terminal judgment below, so the finish phase never advances to assemble dropping a
+  // shot whose finished clip is actually in R2. Only one R2 list, only when a finish shot failed.
+  const finishShots = job.finish_shots || [];
+  if (finishShots.some((fs) => fs.status === "failed")) {
+    const present = await listClipsByShotId(env, job.project, finishShots.map((fs) => fs.shot_id), finishedClipFileMatchesShot);
+    for (const fs of finishShots) {
+      if (fs.status === "failed" && present.has(fs.shot_id)) {
+        fs.clip_key = present.get(fs.shot_id) as string;
+        fs.status = "done";
+        fs.poll = undefined;
+        fs.error = undefined; // the finished artifact in R2 overrides the premature failure
+      }
+    }
+  }
+  if (finishShots.every((fs) => fs.status !== "pending")) {
     job.phase = job.clips_only ? "done" : "assemble";
   }
 }
