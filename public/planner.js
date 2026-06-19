@@ -6972,15 +6972,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // v0.168.0 (#47): Enter submits the plan; Shift+Enter inserts a newline so
-  // multi-line briefs still work. Cmd/Ctrl+Enter also submits (power-user
-  // muscle memory from chat apps; was the only binding before v0.168.0).
+  // v0.168.0 (#47): mirrors the Screenwriter assistant's existing Enter-to-send
+  // pattern (planner-refine-input, line ~6813). Enter submits the plan;
+  // Shift+Enter inserts a newline so multi-line briefs still work;
+  // isComposing guard keeps IME (CJK) input safe.
   $("#planner-brief").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" && !ev.shiftKey) {
-      ev.preventDefault();
-      plan();
-    }
-    // Shift+Enter: browser default (newline) -- no preventDefault needed.
+    if (ev.key !== "Enter" || ev.shiftKey || ev.isComposing) return;
+    ev.preventDefault();
+    plan();
   });
 
   // v0.162.0: gate the scatter checkbox on page load (no storyboard yet,
