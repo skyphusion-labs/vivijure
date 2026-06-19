@@ -133,11 +133,18 @@ describe("narration-gen pure logic (RunPod transport)", () => {
     expect(classifyGoneState(now - 1000, now)).toBe("gone-grace");
   });
 
-  it("appliedTags carries model + format + voice", () => {
-    const tags = appliedTags("mp3", { voice_id: "Wise_Woman", emotion: "calm" });
+  it("appliedTags carries model + format + voice + a RunPod-valid emotion", () => {
+    const tags = appliedTags("mp3", { voice_id: "Wise_Woman", emotion: "neutral" });
     expect(tags).toContain(`narration:${MODEL}`);
     expect(tags).toContain("voice:Wise_Woman");
-    expect(tags).toContain("emotion:calm");
+    expect(tags).toContain("emotion:neutral");
+  });
+
+  it("buildSpeechBody drops an out-of-set emotion (e.g. the old Workers-AI `calm`) so RunPod does not 400", () => {
+    const { input } = buildSpeechBody("x", { emotion: "calm" as unknown as "neutral" });
+    expect(input.emotion).toBeUndefined();
+    const ok = buildSpeechBody("x", { emotion: "happy" });
+    expect(ok.input.emotion).toBe("happy");
   });
 
   it("normalizeConfig clamps invalid sample rate to default", () => {

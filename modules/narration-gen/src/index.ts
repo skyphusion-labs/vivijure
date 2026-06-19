@@ -71,7 +71,7 @@ const MANIFEST: ModuleManifest = {
     emotion: {
       type: "enum",
       values: [...EMOTIONS],
-      default: "calm",
+      default: "neutral",
       label: "emotion",
     },
     format: { type: "enum", values: [...FORMATS], default: "mp3", label: "audio format" },

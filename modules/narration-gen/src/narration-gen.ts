@@ -14,6 +14,9 @@ export const MODEL = "minimax-speech-02-hd";
 export const DEFAULT_VOICE = "Wise_Woman";
 export const MAX_TEXT = 10_000;
 
+// The RunPod minimax-speech-02-hd emotion enum (verified live: the endpoint 400s on anything else).
+// NOTE this differs from Workers AI speech-2.8 (which had calm/fluent) -- this module is on RunPod, so
+// "neutral" replaces "calm" and there is no "fluent". Sending an out-of-set value fails the job.
 export const EMOTIONS = [
   "happy",
   "sad",
@@ -21,8 +24,7 @@ export const EMOTIONS = [
   "fearful",
   "disgusted",
   "surprised",
-  "calm",
-  "fluent",
+  "neutral",
 ] as const;
 
 export const SAMPLE_RATES = [8000, 16000, 22050, 24000, 32000, 44100] as const;
