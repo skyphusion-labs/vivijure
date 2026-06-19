@@ -11,7 +11,7 @@ import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig } from "./modules/registry";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput } from "./modules/types";
 import {
-  startClipJob, advanceClipJob, summarizeJob,
+  startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, listClipsByShotId,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { presignR2Get, presignR2Put } from "./r2-presign";
@@ -827,42 +827,18 @@ async function recoverStalledKeyframePhase(env: Env, job: FilmJob): Promise<bool
   return true;
 }
 
-/** Pure: does an R2 clips-object filename belong to this shot? The clip stage writes a finished clip
- *  per shot under `renders/<project>/clips/`, named with the shot id followed by a NON-digit separator
- *  (e.g. `shot_09_i2v.mp4`). Match the shot id only at a digit boundary so `shot_1` never swallows
- *  `shot_10`. `_finished*` outputs are the finish-chain results, not motion clips, so they are excluded
- *  here (the clips phase adopts the raw motion clip; the finish phase has its own adoption). We do NOT
- *  hardcode the backend's exact slug (`_i2v`) -- matching by shot-id boundary keeps this independent of
- *  the backend's naming convention (same clean-room stance as listProjectKeyframes). */
-export function clipFileMatchesShot(file: string, shotId: string): boolean {
-  if (!file.startsWith(shotId)) return false;
-  const rest = file.slice(shotId.length);
-  if (rest.length === 0) return false; // need a separator + extension
-  if (/^\d/.test(rest)) return false; // digit boundary: shot_1 must not match shot_10...
-  if (/(^|[._-])finished([._-]|$)/i.test(rest)) return false; // finish-chain output, not a motion clip
-  return /\.(mp4|mov|webm|mkv)$/i.test(file); // a video file
-}
+// clipFileMatchesShot + the shot-id->clip-key R2 listing live in render-orchestrator (the layer that owns
+// the clip job + advanceClipJob), so the fail-time reclaim and the stall-recovery share ONE matcher (no
+// drift). listProjectClips here is the scenes-shaped wrapper the film recovery uses.
+export { clipFileMatchesShot };
 
-/** List the motion clips the GPU wrote for a project, joined to the job's scenes by shot id. The
- *  motion.backend (own-gpu) writes the finished clip to `renders/<project>/clips/` itself and reports
- *  the key; when its poll never resolves (GC'd RunPod job), the clip is still in R2. List the prefix and
- *  match by shot id (boundary-safe) so a stalled clips phase can be recovered straight from R2 presence,
- *  no GPU re-run. Only shots in the storyboard are returned. */
+/** List the motion clips the GPU wrote for a project, joined to the job's scenes by shot id (scene-shaped
+ *  wrapper over render-orchestrator's listClipsByShotId). When a motion.backend poll never resolves (GC'd
+ *  RunPod job), the clip is still in R2; matching by shot-id boundary recovers a stalled clips phase from
+ *  R2 presence, no GPU re-run. Only shots in the storyboard are returned. */
 export async function listProjectClips(env: Env, project: string, scenes: FilmScene[]): Promise<{ shot_id: string; clip_key: string }[]> {
-  const prefix = `renders/${project}/clips/`;
   const wanted = scenes.map((s) => s.shot_id);
-  const found = new Map<string, string>(); // shot_id -> clip_key (first match wins)
-  let cursor: string | undefined;
-  do {
-    const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
-    for (const o of listed.objects) {
-      const file = o.key.slice(prefix.length);
-      for (const shotId of wanted) {
-        if (!found.has(shotId) && clipFileMatchesShot(file, shotId)) found.set(shotId, o.key);
-      }
-    }
-    cursor = listed.truncated ? listed.cursor : undefined;
-  } while (cursor);
+  const found = await listClipsByShotId(env, project, wanted);
   return wanted.filter((s) => found.has(s)).map((s) => ({ shot_id: s, clip_key: found.get(s) as string }));
 }
 

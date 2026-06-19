@@ -73,6 +73,42 @@ export function applyPoll(shot: ClipShot, r: PollResponse<MotionBackendOutput>):
   shot.clip_key = (r as { output: MotionBackendOutput }).output.clip_key;
 }
 
+/** Pure: does an R2 clips-object filename belong to this shot? The backend writes a finished motion clip
+ *  per shot under `renders/<project>/clips/`, named with the shot id followed by a NON-digit separator
+ *  (e.g. `shot_09_i2v.mp4`, `shot_09_seedance.mp4`). Match the shot id only at a digit boundary so
+ *  `shot_1` never swallows `shot_10`; exclude `_finished*` (finish-chain outputs, not motion clips);
+ *  require a video extension. Matches by shot-id boundary, NOT the backend's exact slug, so it stays
+ *  independent of the backend naming convention (the core never hardcodes where the backend wrote). */
+export function clipFileMatchesShot(file: string, shotId: string): boolean {
+  if (!file.startsWith(shotId)) return false;
+  const rest = file.slice(shotId.length);
+  if (rest.length === 0) return false; // need a separator + extension
+  if (/^\d/.test(rest)) return false; // digit boundary: shot_1 must not match shot_10...
+  if (/(^|[._-])finished([._-]|$)/i.test(rest)) return false; // finish-chain output, not a motion clip
+  return /\.(mp4|mov|webm|mkv)$/i.test(file); // a video file
+}
+
+/** Map shot_id -> R2 clip key for the clips present under `renders/<project>/clips/`, matched by shot-id
+ *  boundary (clipFileMatchesShot). Used to make R2 PRESENCE the authority on completion: a clip in R2
+ *  beats a module's poll verdict (the backend wrote the clip even if its RunPod job was later GC'd and
+ *  the module fast-failed the poll; issue #141). Only the requested shot ids are returned. */
+export async function listClipsByShotId(env: Env, project: string, shotIds: string[]): Promise<Map<string, string>> {
+  const prefix = `renders/${project}/clips/`;
+  const found = new Map<string, string>(); // shot_id -> clip_key (first match wins)
+  let cursor: string | undefined;
+  do {
+    const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
+    for (const o of listed.objects) {
+      const file = o.key.slice(prefix.length);
+      for (const shotId of shotIds) {
+        if (!found.has(shotId) && clipFileMatchesShot(file, shotId)) found.set(shotId, o.key);
+      }
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+  return found;
+}
+
 /** Start a clip job: resolve the motion.backend module per shot, submit, persist poll tokens. */
 export async function startClipJob(
   env: Env,
@@ -154,6 +190,7 @@ export async function advanceClipJob(env: Env, jobId: string): Promise<ClipJob |
   if (!obj) return null;
   const job = JSON.parse(await obj.text()) as ClipJob;
   const envRec = env as unknown as Record<string, unknown>;
+  let anyFailed = false;
   for (const shot of job.shots) {
     if (shot.status !== "pending" || !shot.poll) continue;
     const binding = shot.binding ?? job.binding;
@@ -161,10 +198,29 @@ export async function advanceClipJob(env: Env, jobId: string): Promise<ClipJob |
     if (!fetcher) {
       shot.status = "failed";
       shot.error = "module binding no longer bound";
+      anyFailed = true;
       continue;
     }
     const p = await pollModule<MotionBackendOutput>(fetcher, { poll: shot.poll });
     applyPoll(shot, p);
+    if (!p.ok) anyFailed = true; // applyPoll set status=failed; a clip may still be in R2 (reclaim below)
+  }
+  // R2 PRESENCE IS AUTHORITATIVE (issue #141/#143): a module can fast-fail a shot whose RunPod job was
+  // GC'd, but the backend may have written the clip to R2 before the job aged out. Reclaim any just-failed
+  // shot whose clip is present in R2 -- BEFORE the caller's summarizeJob() complete/advance judgment, so a
+  // film never advances/assembles with a clip dropped that is actually sitting in R2. Only one R2 LIST,
+  // and only when a shot failed this pass (the happy path pays nothing). A shot with no R2 clip stays
+  // failed (a genuine non-render).
+  if (anyFailed) {
+    const present = await listClipsByShotId(env, job.project, job.shots.map((s) => s.shot_id));
+    for (const shot of job.shots) {
+      if (shot.status === "failed" && present.has(shot.shot_id)) {
+        shot.status = "done";
+        shot.clip_key = present.get(shot.shot_id);
+        shot.poll = undefined;
+        shot.error = undefined; // clear the premature failure; the artifact is the source of truth
+      }
+    }
   }
   await env.R2_RENDERS.put(jobKey(jobId), JSON.stringify(job), { httpMetadata: { contentType: "application/json" } });
   return job;
