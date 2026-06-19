@@ -73,6 +73,12 @@ export interface FilmJob {
   // film, enterAssemblePhase keeps phase="assemble" so the next poll re-attempts (the re-PUT to the same
   // film key is idempotent), capped by MAX_ASSEMBLE_ATTEMPTS. Absent on pre-#82 jobs (reads as 0).
   assemble_attempts?: number;
+  // Bounded counter for stalled polls (issue #128). A module that returns `pending` forever on a dead
+  // RunPod job ID will never advance the film phase; rather than spinning until SWEEP_MAX_AGE_SECONDS
+  // (24h), `poll_stall_count` is incremented each time advanceFilmJob runs and the phase does NOT
+  // change, and reset to 0 on every phase transition. Once it reaches MAX_POLL_STALL the film is
+  // failed with a clear diagnostic. Absent on pre-#128 jobs (reads as 0 -- safe start).
+  poll_stall_count?: number;
   error?: string;
   created_at: number;
   user_email?: string; // film owner; passed to the `notify` hook on done (e.g. for an email notifier)
@@ -86,16 +92,6 @@ const filmKey = (id: string) => `renders/${id}/film-job.json`;
 const clipDocKey = (clipJobId: string) => `renders/${clipJobId}/clips-job.json`; // matches render-orchestrator
 
 export { filmKey as filmJobDocKey, clipDocKey as clipJobDocKey };
-
-/** Cheap existence check for an R2 object (HEAD, no body). Used to derive assemble
- *  completion from R2 presence so a stalled-after-PUT concat self-heals (issue #122). */
-async function r2ObjectExists(env: Env, key: string): Promise<boolean> {
-  try {
-    return (await env.R2_RENDERS.head(key)) !== null;
-  } catch {
-    return false;
-  }
-}
 
 /** Collect finished clip keys from a terminal clips_only (or full) film job doc. */
 export async function clipKeysFromFilmJob(
@@ -533,26 +529,13 @@ async function enterAssemblePhase(
   finalClips: { shot_id: string; clip_key: string }[],
 ): Promise<void> {
   if (!finalClips.length) { job.phase = "failed"; job.error = "no clips to assemble"; return; }
-
-  // Derive completion from R2 presence: if the concat output is already in R2, a prior
-  // attempt's ffmpeg PUT succeeded even though its response was lost (the container 504'd
-  // after writing, or the poll window closed mid-PUT and the job was re-driven). Re-running
-  // the concat would be wasted CPU, so finalize straight from the existing object. This is
-  // what lets a stalled-after-PUT assemble self-heal on the next poll / sweep tick instead of
-  // looping. (issue #122)
-  const outputKey = filmOutKey(job.film_id);
-  if (await r2ObjectExists(env, outputKey)) {
-    job.assemble_attempts = 0;
-    await finishAssembledFilm(env, job, outputKey);
-    return;
-  }
-
   if (!env.VIDEO_FINISH_VPC) { job.phase = "failed"; job.error = "video-finish VPC binding not configured"; return; }
 
   const clips: { url: string }[] = [];
   for (const c of finalClips) {
     clips.push({ url: await presignR2Get(env, c.clip_key, 1800) }); // 30min: covers a multi-clip concat
   }
+  const outputKey = filmOutKey(job.film_id);
   const outputUrl = await presignR2Put(env, outputKey, 1800);
 
   // Resolution/fps are left to the container default (it normalizes the clips); the motion output
@@ -751,7 +734,48 @@ export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob |
   return job;
 }
 
-/** Advance a film job across its two phases. Returns the job + the underlying clip job (for the
+// --------------------------------------------------------------------------- stall guard (issue #128)
+
+/** How many consecutive no-progress polls before a film job is declared stuck and failed. At the
+ *  1-minute cron cadence this is approximately 1 hour -- long enough that a slow-but-running GPU
+ *  job is never falsely terminated, short enough that a job wedged by a misbehaving module (e.g.
+ *  a module returning `pending` forever on a stale RunPod job ID) fails with a clear diagnostic
+ *  rather than spinning invisibly until SWEEP_MAX_AGE_SECONDS (24 h). */
+export const MAX_POLL_STALL = 60;
+
+/** Pure: advance the stall counter for one advanceFilmJob tick.
+ *  - `phaseChanged`: true when any phase transition occurred this tick (keyframe->clips,
+ *    clips->finish, finish->assemble, etc.). A transition resets the counter to 0, giving the
+ *    next stage its full budget.
+ *  - When `phaseChanged` is false and the current phase is a polled/waiting phase (not an
+ *    instant-execute phase like assemble/mux which self-advance in a single tick), the counter
+ *    increments. Once it reaches `max` the job transitions to `failed`.
+ *  Returns `{ stalled: true }` when the cap is reached; the caller must set phase="failed" and
+ *  write the error. `stalled: false` means the counter was updated (or reset) normally. */
+export function advanceStallCount(
+  job: FilmJob,
+  phaseChanged: boolean,
+  max: number = MAX_POLL_STALL,
+): { stalled: boolean } {
+  if (phaseChanged) {
+    job.poll_stall_count = 0;
+    return { stalled: false };
+  }
+  // assemble and mux are synchronous with the request -- they always advance or fail in the same
+  // tick they run, so they can never truly stall here; only count stalls in phases that wait on
+  // an external module poll (keyframe, clips, finish) or are genuinely stuck (done/failed already
+  // terminal so the counter never reaches them).
+  const pollPhase = job.phase === "keyframe" || job.phase === "clips" || job.phase === "finish";
+  if (!pollPhase) return { stalled: false };
+  const count = (job.poll_stall_count ?? 0) + 1;
+  job.poll_stall_count = count;
+  if (count >= max) {
+    return { stalled: true };
+  }
+  return { stalled: false };
+}
+
+/** Advance a film job across its phases. Returns the job + the underlying clip job (for the
  *  summary), or null if no such film job exists. */
 export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: FilmJob; clipJob: ClipJob | null } | null> {
   const obj = await env.R2_RENDERS.get(filmKey(filmId));
@@ -759,6 +783,9 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
   const job = JSON.parse(await obj.text()) as FilmJob;
   if (job.cancelled) return { job, clipJob: null };
   const envRec = env as unknown as Record<string, unknown>;
+
+  // Snapshot the phase before any work so we can detect a transition (for the stall guard).
+  const phaseBefore = job.phase;
 
   // Phase 1: poll the keyframe job; on completion, presign + hand off to the clip orchestrator.
   if (job.phase === "keyframe" && job.keyframe_poll) {
@@ -811,6 +838,25 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
   if (job.phase === "mux") {
     await enterMuxPhase(env, job);
     await putFilm(env, job);
+  }
+
+  // Stall guard (issue #128): if the phase did not advance this tick, increment the stall counter.
+  // A module returning `pending` forever (e.g. on a dead RunPod job ID) will hit MAX_POLL_STALL
+  // and fail with a clear error rather than spinning until the 24h sweep window closes. The guard
+  // runs AFTER all phase work so a single tick that advances from keyframe->clips->finish counts as
+  // one phase change (the final phase is compared, not the intermediate ones).
+  if (job.phase !== "done" && job.phase !== "failed") {
+    const phaseChanged = job.phase !== phaseBefore;
+    const { stalled } = advanceStallCount(job, phaseChanged);
+    if (stalled) {
+      job.phase = "failed";
+      job.error = `render stalled: phase "${phaseBefore}" made no progress after ${MAX_POLL_STALL} polls (module returning pending on a dead job ID?); clips intact in R2 -- reset poll_stall_count and phase to retry`;
+    }
+    // Persist the updated stall counter (or the failed state) if we are in a polling phase.
+    // Terminal phases (done/failed) are already persisted by their respective handlers above.
+    if (job.phase === "keyframe" || job.phase === "clips" || job.phase === "finish" || job.phase === "failed") {
+      await putFilm(env, job);
+    }
   }
 
   return { job, clipJob };
