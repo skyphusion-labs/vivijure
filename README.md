@@ -19,9 +19,21 @@ slate  -->  vivijure  -->  vivijure-backend
 | **[vivijure](https://github.com/skyphusion-labs/vivijure)** | **AI film studio control plane (Cloudflare Worker) -- planner, cast, render UI; orchestrates render jobs** |
 | [vivijure-backend](https://github.com/skyphusion-labs/vivijure-backend) | GPU render backend (RunPod serverless) -- SDXL keyframes, i2v, finish, assemble |
 
-<!-- Screenshots pending: capture against live planner (Access-gated).
-     Drop PNGs into docs/screenshots/ -- see docs/screenshots/README.md for what to capture.
-     Filenames: planner-storyboard.png, planner-render-history.png, cast-page.png, modules-page.png -->
+**Storyboard planner** -- write scenes, edit shot prompts, and set per-shot cast assignments before bundling:
+
+![Storyboard planner scene editor showing shot cards with prompts, act labels, and character slots](docs/screenshots/planner-storyboard.png)
+
+**Cast** -- register characters with portraits and visual bibles; Slate syncs here directly from Discord:
+
+![Cast page showing character list with portraits and the Companion Robot detail panel](docs/screenshots/cast-page.png)
+
+**Module host** -- installed modules appear here; each stage (plan, cast, keyframe, motion, finish, score) is served by a swappable module worker:
+
+![Modules page showing installed modules panel and stage configuration](docs/screenshots/modules-page.png)
+
+**Render history** -- honest per-render status (in-flight, stalled, failed, done) with inline error snippets:
+
+![Render history tab showing neon_halflife and fur_and_circuits renders with live status badges](docs/screenshots/planner-render-history.png)
 
 ## What you can do
 
