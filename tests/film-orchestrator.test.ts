@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, type FilmScene, type FinishShot } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, type FilmScene, type FinishShot } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -275,5 +275,56 @@ describe("classifyAssembleTransport (issue #82 bounded auto-recover)", () => {
     expect(classifyAssembleTransport(200, 4, CAP)).toEqual({ state: "ok", attempts: 0 });
     // a terminal container 500 likewise breaks the streak (a later manual re-run gets a full budget).
     expect(classifyAssembleTransport(500, 5, CAP)).toEqual({ state: "ok", attempts: 0 });
+  });
+});
+
+// Issue #122: an assemble that already PUT its film.mp4 (but whose response was lost, so the job
+// is still phase "assemble") must self-heal from R2 presence on the next poll/sweep -- finalize from
+// the existing object instead of re-running the concat. Fakes for R2 + a VPC double that records
+// any call; the test fails if the container is invoked despite the output already being in R2.
+function assembleEnv(opts: { jobInR2: object; filmOutputExists: boolean }) {
+  const vpcCalls: string[] = [];
+  const puts: string[] = [];
+  const env = {
+    DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+    R2_RENDERS: {
+      get: async (key: string) =>
+        key === filmJobDocKey((opts.jobInR2 as { film_id: string }).film_id)
+          ? { text: async () => JSON.stringify(opts.jobInR2) }
+          : null,
+      head: async (key: string) =>
+        opts.filmOutputExists && key === `renders/${(opts.jobInR2 as { film_id: string }).film_id}/film.mp4` ? {} : null,
+      put: async (key: string) => { puts.push(key); },
+    },
+    VIDEO_FINISH_VPC: { fetch: async (input: Request | string) => { vpcCalls.push(typeof input === "string" ? input : input.url); return new Response(JSON.stringify({ ok: true, key: "renders/film-selfheal-1/film.mp4" }), { status: 200, headers: { "content-type": "application/json" } }); } },
+    // presign creds: only the fall-through path reaches presignR2Get/Put (the short-circuit
+    // returns before them), but they must be present so that path does not throw.
+    R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+    R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+  } as unknown as Env;
+  return { env, vpcCalls, puts };
+}
+
+describe("advanceFilmJob assemble self-heal from R2 presence (issue #122)", () => {
+  const baseJob = {
+    film_id: "film-selfheal-1",
+    project: "p",
+    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+    phase: "assemble" as const,
+    finish_shots: [{ shot_id: "shot_01", clip_key: "renders/film-selfheal-1/clips/shot_01_finished.mp4", chain: ["M"], idx: 1, status: "done" as const, applied: [] }],
+  };
+
+  it("finalizes to done from the existing film.mp4 without invoking video-finish", async () => {
+    const { env, vpcCalls } = assembleEnv({ jobInR2: baseJob, filmOutputExists: true });
+    const r = await advanceFilmJob(env, "film-selfheal-1");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_key).toBe("renders/film-selfheal-1/film.mp4");
+    expect(vpcCalls).toEqual([]); // the concat was NOT re-run -- derived from R2 presence
+  });
+
+  it("falls through to the container when the film.mp4 is not yet in R2", async () => {
+    const { env, vpcCalls } = assembleEnv({ jobInR2: baseJob, filmOutputExists: false });
+    await advanceFilmJob(env, "film-selfheal-1");
+    expect(vpcCalls.length).toBe(1); // no short-circuit -> normal assemble path ran
   });
 });
