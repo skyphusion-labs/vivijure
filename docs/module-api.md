@@ -1,7 +1,7 @@
 # Vivijure Module API
 
-> Status: DESIGN (v0). The contract everything else builds to. This document is the spec; the
-> registry, the hooks, and the first module (`finish`) are built against it.
+> Status: **IMPLEMENTED** (`vivijure-module/1`). The contract the core and modules share. This
+> document is the design spec; `src/modules/types.ts` is the canonical TypeScript shape.
 
 ## Why this exists
 
@@ -24,24 +24,26 @@ feature.
 
 | Noun | What it is |
 |---|---|
-| **Core** | The studio worker. Owns project/storyboard/cast/bundle/orchestration + the registry. This is today's render API in `skyphusion-llm-public`; it is the asset and is NOT rewritten. |
+| **Core** | This worker (`vivijure-studio`). Owns project/storyboard/cast/bundle/orchestration + the registry and the planner/cast UI. |
 | **Hook** | A named extension point in the pipeline with ONE typed input and ONE typed output. The core invokes hooks; it does not know who answers. |
 | **Module** | A worker that serves one or more hooks. Ships a manifest + an `invoke` entry point. |
 | **Manifest** | A module's self-description: which hooks it serves, what config it exposes, how it surfaces in the UI. |
 | **Registry** | The core's index of installed modules, built from their manifests. Drives the pipeline and feeds the frontend. |
 
-## The hooks (v1)
+## The hooks (vivijure-module/1)
 
 A hook is a contract, not a function. Each has a stable name, a typed input, and a typed output.
-Only `finish` is fully specified in v1 (it is the reference module); the others are reserved with
-their shapes sketched so the contract is forward-declared.
+Shapes live in `src/modules/types.ts`.
 
 | Hook | Purpose | Cardinality |
 |---|---|---|
-| `motion.backend` | Turn a keyframe (+ motion prompt) into a shot clip. GPU/RunPod and cloud providers are each modules. | pick one per shot |
-| `finish` | Post-process a finished clip: frame interpolation, upscale, face restore. | chain (0..n, ordered) |
-| `score` | Add audio to a finished film: music, narration, beat-sync. | chain (0..n) |
+| `keyframe` | Storyboard -> start keyframes (SDXL on GPU). | pick one |
+| `motion.backend` | Keyframe (+ motion prompt) -> shot clip. GPU/RunPod and cloud providers are modules. | pick one per shot |
+| `finish` | Post-process a clip: frame interpolation, upscale, face restore. | chain (0..n, ordered) |
+| `score` | Add audio to a film: music, narration, beat-sync. | chain (0..n) |
 | `plan.enhance` | Expand a storyboard before render: LLM auto-direction, camera/lighting enrichment. | chain (0..n) |
+| `cast.image` | Portrait + bible -> LoRA training reference images. | pick one |
+| `notify` | Film done -> deliver a render-complete notification (email, webhook, ...). | chain (0..n) |
 
 `pick one` hooks resolve to a single module (the user's chosen backend). `chain` hooks run every
 installed module in a declared order, each consuming the previous output.
@@ -178,18 +180,18 @@ That is the whole barrier to entry. One hook, one green suite.
 
 ## Rollout
 
-- **Phase 1 (now):** the contract + the registry + `finish` as reference module #1, attached by
-  service binding. Core stays exactly where it is.
-- **Phase 2:** carve `cloud-render` out of the core into a `motion.backend` module (proves the
-  extraction path for an existing capability).
-- **Phase 3:** Workers for Platforms / dynamic dispatch, so a module installs WITHOUT redeploying
-  the core. The frontend is already a projection of the registry, so it needs no change.
-- **Later:** extract the core into its own `vivijure-studio` worker/repo. The module contract makes
-  this a move, not a rewrite.
+- **Phase 0 (done, v0.1.0):** contract + registry + self-assembling UI shell.
+- **Phase 1 (done, v0.2.0):** render API migrated behind hooks; reference modules bound at deploy;
+  planner/cast/library routes live in this worker.
+- **Phase 2 (done for production cutover):** `vivijure.skyphusion.org` points here; render + planner
+  stripped from `skyphusion-llm-public`. Optional polish (render SSE stream, further core extraction)
+  remains fair game.
+- **Phase 3 (backlog):** Workers for Platforms / dynamic dispatch so a module installs without
+  redeploying the core. The frontend is already a projection of the registry, so it needs no change.
 
 ## Non-goals (v1)
 
 - No module-to-module calls. Modules talk only to the core, through hooks. (Keeps the graph a star,
   not a web.)
 - No dynamic install yet (Phase 3). v1 modules are bound at deploy.
-- The core does not rewrite the render API. The whole point is that it does not have to.
+- Capabilities beyond the render spine belong in modules, not inlined in the core.

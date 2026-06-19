@@ -14,9 +14,8 @@ workers_dev = false
 [observability]
 enabled = true
 
-# Image generation (ported from the playground's runImage): FLUX 2 (@cf) runs DIRECT on the binding
-# (gateway-bypassed, multipart multiref); the proxied nano-banana fallback runs THROUGH the AI Gateway,
-# so GATEWAY_ID must be set before that fallback path is exercised:
+# Image generation: FLUX 2 runs direct on the binding (multipart multiref); proxied models use the
+# AI Gateway. Set GATEWAY_ID before exercising the nano-banana fallback:
 #   ! npx wrangler secret put GATEWAY_ID -c modules/cast-image/wrangler.toml
 [ai]
 binding = "AI"

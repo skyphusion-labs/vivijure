@@ -7,11 +7,11 @@ Guidance for Claude Code (and the crew) working in this repo.
 Vivijure Studio: the **module host** for AI film production. A single Cloudflare Worker (no
 framework, no build step beyond TypeScript) that owns the core (project / storyboard / cast / render
 orchestration) and a **module registry**. Every capability beyond the core is an opt-in module
-worker plugged in through a typed hook contract. Read **docs/module-api.md** first -- it is the
+worker plugged in through a typed hook contract. Read **docs/module-api.md** first; it is the
 contract everything builds to.
 
-This worker was split out of `skyphusion-llm-public` (the AI Playground) so the studio has its own
-home. The GPU render backend is `vivijure-backend` (RunPod serverless).
+The GPU render backend is `vivijure-backend` (RunPod serverless). Production UI:
+`vivijure.skyphusion.org`.
 
 ## Commands
 
@@ -45,9 +45,11 @@ is not done.
 
 ## Roadmap (phases)
 
-0. Module host + registry + self-assembling UI. (done -- v0.1.0)
-1. Migrate the render routes in from `skyphusion-llm-public` behind the hooks; ship `finish` as
-   module #1; share D1 + R2 with the old worker (no data migration); split the dual-purpose Workflow.
-2. Point `vivijure.skyphusion.org` at this worker; strip render + the planner frontend out of
-   `skyphusion-llm-public`.
+0. Module host + registry + self-assembling UI. (**done**, v0.1.0)
+1. Migrate render routes behind hooks; ship reference modules; share D1 + R2 with the old worker.
+   (**done**, v0.2.0)
+2. Production DNS on `vivijure.skyphusion.org`; strip render + planner from `skyphusion-llm-public`.
+   (**done** for the team split; optional follow-ups: render SSE stream, further motion.backend
+   extraction from core orchestration)
 3. Workers for Platforms / dynamic dispatch (install a module without redeploying the core).
+   (**team backlog**)

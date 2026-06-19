@@ -1,5 +1,4 @@
-// Small shared helpers the render handlers lean on. Lifted verbatim from skyphusion-llm-public so
-// the moved handlers behave identically (move, do not rewrite). Kept tiny and dependency-free.
+// Small shared helpers the render handlers lean on. Kept tiny and dependency-free.
 
 /** JSON response with the content-type set; merges any extra init. */
 export function json(body: unknown, init: ResponseInit = {}): Response {
@@ -8,13 +7,18 @@ export function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { ...init, headers });
 }
 
-/** The owner key every render/cast/storyboard row is scoped to. Vivijure is a SINGLE-OPERATOR
- *  studio (not multi-user -- per-user identity was playground heritage), so there is one shared
- *  owner: everything is visible to everyone with access, and non-browser clients (the Discord bot /
- *  CF Access service tokens, which carry no user email) see the same data. Email is no longer an
- *  access gate. (If per-user provenance/notify is ever wanted, read the Access header separately --
- *  do not reintroduce it here as a visibility filter.) */
+/** The owner key every render/cast/storyboard row is scoped to. Vivijure is a single-operator
+ *  studio, so there is one shared owner: everything is visible to everyone with CF Access, and
+ *  non-browser clients (service tokens with no user email) see the same data. Email is provenance,
+ *  not an access gate. */
 export const STUDIO_OWNER = "studio";
 export function getUserEmail(_request: Request): string {
   return STUDIO_OWNER;
+}
+
+/** CF Access identity for provenance + per-user settings (whoami, prefs, notify). Not used as a
+ *  visibility filter -- studio data stays under STUDIO_OWNER. Service tokens / local dev may lack
+ *  the header; callers treat a missing email as anonymous. */
+export function getAccessUserEmail(request: Request): string {
+  return request.headers.get("cf-access-authenticated-user-email") ?? "anonymous";
 }

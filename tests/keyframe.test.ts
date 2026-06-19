@@ -49,6 +49,14 @@ describe("keyframe pure logic", () => {
     expect(none.input.process_shot_ids).toBeUndefined();
   });
 
+  it("buildPreviewBody passes pretrained_loras when provided", () => {
+    const { input } = buildPreviewBody(
+      { project: "p", bundle_key: "b", pretrained_loras: { A: "loras/a.safetensors" } },
+      {},
+    );
+    expect(input.pretrained_loras).toEqual({ A: "loras/a.safetensors" });
+  });
+
   it("parseKeyframes reads the backend result shape (keyframes[].key) into KeyframeShot", () => {
     const result = {
       project: "neon_film",

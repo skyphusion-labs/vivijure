@@ -12,9 +12,8 @@ const el = (tag, cls, text) => {
   return n;
 };
 
-// Logical render order (independent of HOOK_NAMES in the contract). Hooks the
-// core does not yet serve simply render as empty stages; any catalog hook not
-// listed here is appended at the end.
+// Logical render order (independent of HOOK_NAMES in the contract). Hooks without an installed
+// module render as empty stages; any catalog hook not listed here is appended at the end.
 const HOOK_ORDER = [
   "plan.enhance",
   "cast.image",

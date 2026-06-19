@@ -36,7 +36,7 @@
             <input type="checkbox" id="pref-email-notifications" />
             <span class="account-pref-text">
               <span class="account-name">Email me when a render finishes</span>
-              <span class="account-sub" id="pref-email-status">off; you will not get render emails</span>
+              <span class="account-sub" id="pref-email-status">No emails when renders finish</span>
             </span>
           </label>
         </div>
@@ -179,11 +179,11 @@
          audio set the render stays silent. When an audioKey IS set it
          flows to render + finalize as audio_key (v0.52.0) and the GPU
          muxes it onto the final MP4 via export_film(with_audio=True).
-         Generate via MiniMax Music 2.6 through the existing /api/chat
-         music dispatcher, or upload a BYO mp3/wav/aac/ogg/m4a via
-         /api/storyboard/audio-upload. BPM input + snap buttons mutate
-         scene target_seconds; the YAML pane refreshes automatically
-         through the v0.49.0 hook. -->
+         Generate via an installed score module (registry-driven;
+         POST /api/storyboard/score-bed, poll GET /api/job/:id), or upload
+         a BYO mp3/wav/aac/ogg/m4a via /api/storyboard/audio-upload. BPM
+         input + snap buttons mutate scene target_seconds; the YAML pane
+         refreshes automatically through the v0.49.0 hook. -->
     <section id="planner-audio" class="planner-stage" data-step="audio" hidden>
       <header class="planner-stage-header">
         <h2 class="planner-stage-title">audio bed + beat timing</h2>
@@ -201,14 +201,32 @@
         <button id="planner-audio-clear" type="button" class="planner-secondary">clear</button>
       </div>
 
-      <details class="planner-audio-block">
-        <summary>generate music via MiniMax 2.6</summary>
+      <details id="planner-music-gen-block" class="planner-audio-block" hidden>
+        <summary id="planner-music-gen-summary">generate music</summary>
+        <label id="planner-music-module-wrap" class="planner-field" hidden>
+          <span class="planner-field-label">score module</span>
+          <select id="planner-music-module"></select>
+        </label>
         <p class="planner-stage-hint">describe the track: genre, mood, instrumentation, era. duration is up to the model; expect ~30-60 seconds. "suggest from video" drafts a prompt matched to your storyboard's mood, tempo, and energy arc (auto-filled the first time you open this step).</p>
         <textarea id="planner-music-prompt" rows="3" placeholder="cinematic orchestral, slow build, strings + piano, melancholic, modern film score"></textarea>
         <div class="planner-audio-actions">
           <button id="planner-music-suggest" type="button" class="planner-secondary">suggest from video</button>
           <button id="planner-music-gen" type="button" class="planner-primary">generate</button>
           <span id="planner-music-gen-status" class="planner-status"></span>
+        </div>
+      </details>
+
+      <details id="planner-narration-gen-block" class="planner-audio-block" hidden>
+        <summary id="planner-narration-gen-summary">generate narration</summary>
+        <label id="planner-narration-module-wrap" class="planner-field" hidden>
+          <span class="planner-field-label">score module</span>
+          <select id="planner-narration-module"></select>
+        </label>
+        <p class="planner-stage-hint">spoken narration for the audio bed. leave blank to let the module derive a script from your storyboard, or write the lines to synthesize.</p>
+        <textarea id="planner-narration-text" rows="4" placeholder="optional narration script; blank = derive from storyboard"></textarea>
+        <div class="planner-audio-actions">
+          <button id="planner-narration-gen" type="button" class="planner-primary">generate</button>
+          <span id="planner-narration-gen-status" class="planner-status"></span>
         </div>
       </details>
 
@@ -315,7 +333,7 @@
         <span id="planner-render-status" class="planner-status"></span>
       </header>
       <p class="planner-stage-hint">
-        Submit the bundle to the RunPod worker. Status polls every 8 seconds until the job finishes.
+        Submit the bundle through the module film pipeline (keyframe, motion, finish). Status polls every 8 seconds until the job finishes.
       </p>
       <div class="planner-render-options">
       <label class="planner-field">
@@ -350,144 +368,25 @@
         <input id="planner-scatter-shards" type="number" min="2" value="2" inputmode="numeric" />
       </div>
       </div>
-      <!-- v0.123.0: Phase 2 tiering. The five most-touched render knobs
-           (quality tier + keyframes-only above; seed / lora scale /
-           consistency here) sit in an always-visible common row. Every
-           other knob lives in "advanced settings" below, and the two
-           raw-JSON escape hatches move to "expert" at the bottom. The
-           render_overrides payload shape is unchanged: each control still
-           feeds the same key, empty still means "use bundle default". -->
-      <div class="planner-overrides-common">
-        <!-- v0.135.0: promoted from the deep "image & SDXL" disclosure. The
-             keyframe SDXL base is the primary art-style lever (the keyframe is
-             the frame Wan animates), so it sits with the per-render creative
-             knobs. Value -> local_diffusion_overrides.keyframe_model_id; empty =
-             pod default (photoreal). Turbo excluded (refused as a keyframe base).
-             The img2img SDXL base stays in advanced. -->
-        <label class="planner-field">
-          <span>art style (keyframe SDXL base)</span>
-          <select id="planner-ld-keyframe-model-id">
-            <option value="">auto / pod default (photoreal, RealVisXL V5.0)</option>
-            <option value="cagliostrolab/animagine-xl-4.0">anime (Animagine XL 4.0)</option>
-            <option value="SG161222/RealVisXL_V5.0">photoreal (RealVisXL V5.0)</option>
-            <option value="stabilityai/stable-diffusion-xl-base-1.0">neutral (SDXL base 1.0)</option>
-          </select>
-        </label>
-        <label class="planner-field">
-          <span>seed</span>
-          <div class="planner-overrides-row">
-            <input id="planner-seed" type="number" inputmode="numeric" placeholder="(random per render)" />
-            <button id="planner-seed-randomize" type="button" class="planner-overrides-secondary" title="randomize seed" aria-label="randomize seed">&#127922;</button>
-          </div>
-        </label>
-      </div>
-      <details class="planner-overrides-details">
-        <summary class="planner-overrides-summary">advanced settings (optional)</summary>
+      <!-- Module render config: projected from GET /api/modules config_schema (keyframe / motion / finish). -->
+      <div id="planner-motion-backend-wrap" class="planner-overrides-common"></div>
+      <details class="planner-overrides-details" open>
+        <summary class="planner-overrides-summary">module settings (optional)</summary>
         <p class="planner-overrides-hint">
-          These map 1:1 to the render backend's namespaced render_overrides
-          contract (keyframe / i2v / lora). Empty fields use the quality-tier
-          baseline. The expert raw-JSON block below sends the shape directly.
+          Controls are rendered from installed modules' config_schema. Empty fields use each module's default.
+          Quality tier above is injected into keyframe and motion modules automatically.
         </p>
-        <details class="planner-overrides-domain">
-          <summary class="planner-overrides-summary">keyframe (SDXL)</summary>
-          <div class="planner-overrides-fields">
-            <label class="planner-field"><span>keyframe size "WxH"</span>
-              <input id="planner-keyframe-sdxl-size" type="text" placeholder="1024x1024" /></label>
-            <label class="planner-field"><span>guidance scale (0-30)</span>
-              <input id="planner-ld-keyframe-guidance-scale" type="number" step="0.5" placeholder="tier default" /></label>
-            <label class="planner-field"><span>steps (1-128)</span>
-              <input id="planner-ld-keyframe-steps" type="number" min="1" step="1" placeholder="tier default" /></label>
-            <label class="planner-field"><span>identity method</span>
-              <select id="planner-face-lock-mode">
-                <option value="">tier default</option>
-                <option value="ip_adapter">ip_adapter</option>
-                <option value="instantid">instantid</option>
-                <option value="both">both</option>
-              </select></label>
-            <label class="planner-field"><span>IP-Adapter scale (0-1)</span>
-              <input id="planner-fl-ip-scale" type="number" step="0.05" placeholder="0.65" /></label>
-            <label class="planner-field"><span>InstantID controlnet scale (0-1.5)</span>
-              <input id="planner-fl-iid-cn-scale" type="number" step="0.05" placeholder="0.8" /></label>
-            <label class="planner-field"><span>InstantID IP-Adapter scale (0-1.5)</span>
-              <input id="planner-fl-iid-ip-scale" type="number" step="0.05" placeholder="0.8" /></label>
-          </div>
-          <details class="planner-overrides-raw-details">
-            <summary class="planner-overrides-summary">multi-character (regional; 2+ characters in one frame)</summary>
-            <div class="planner-overrides-fields">
-              <label class="planner-field"><span>regional engine</span>
-                <select id="planner-mc-engine">
-                  <option value="">tier default</option>
-                  <option value="regional">regional (on)</option>
-                  <option value="composite_legacy">off (composite legacy)</option>
-                </select></label>
-              <label class="planner-field"><span>pose conditioning</span>
-                <select id="planner-mc-pose">
-                  <option value="">tier default</option>
-                  <option value="true">on</option>
-                  <option value="false">off</option>
-                </select></label>
-              <label class="planner-field"><span>LoRA scale per slot (0-2)</span>
-                <input id="planner-mc-lora-scale" type="number" step="0.05" placeholder="0.3" /></label>
-              <label class="planner-field"><span>IP-Adapter scale per slot (0-1)</span>
-                <input id="planner-mc-ip-scale" type="number" step="0.05" placeholder="0.7" /></label>
-              <label class="planner-field"><span>max slots (1-4)</span>
-                <input id="planner-mc-max-slots" type="number" min="1" max="4" step="1" placeholder="2" /></label>
-              <label class="planner-field"><span>controlnet pose scale (0-1.5)</span>
-                <input id="planner-mc-cn-scale" type="number" step="0.05" placeholder="0.55" /></label>
-            </div>
-          </details>
-        </details>
-        <details class="planner-overrides-domain">
-          <summary class="planner-overrides-summary">i2v (Wan video)</summary>
-          <div class="planner-overrides-fields">
-            <label class="planner-field"><span>i2v model</span>
-              <input id="planner-wd-i2v-model-id" type="text" placeholder="tier default" /></label>
-            <label class="planner-field"><span>num frames (1-256)</span>
-              <input id="planner-wan-num-frames" type="number" min="1" step="1" placeholder="tier default" /></label>
-            <label class="planner-field"><span>steps (1-64)</span>
-              <input id="planner-wan-inference-steps" type="number" min="1" step="1" placeholder="tier default" /></label>
-            <label class="planner-field"><span>guidance scale (0-30)</span>
-              <input id="planner-wan-guidance-scale" type="number" step="0.5" placeholder="tier default" /></label>
-            <label class="planner-field"><span>fps (1-120)</span>
-              <input id="planner-fps" type="number" min="1" step="1" placeholder="tier default" /></label>
-            <label class="planner-field"><span>flow shift (0-20)</span>
-              <input id="planner-wd-flow-shift" type="number" step="0.5" placeholder="tier default" /></label>
-          </div>
-        </details>
-        <details class="planner-overrides-domain">
-          <summary class="planner-overrides-summary">lora (character training)</summary>
-          <div class="planner-overrides-fields">
-            <label class="planner-field"><span>rank (1-128)</span>
-              <input id="planner-lora-rank" type="number" min="1" step="1" placeholder="tier default" /></label>
-            <label class="planner-field"><span>max steps (1-5000)</span>
-              <input id="planner-lora-steps" type="number" min="1" step="50" placeholder="tier default" /></label>
-            <label class="planner-field"><span>learning rate</span>
-              <input id="planner-lora-lr" type="number" step="0.00001" placeholder="tier default" /></label>
-            <label class="planner-field"><span>resolution (512-1536)</span>
-              <input id="planner-lora-resolution" type="number" min="512" step="64" placeholder="tier default" /></label>
-          </div>
-          <p class="planner-overrides-hint">
-            fresh Stage 1 LoRA training only; pre-trained cast LoRAs (via /cast)
-            are reused as-is and ignore these.
-          </p>
-        </details>
+        <div id="planner-module-config" class="planner-module-config"></div>
       </details>
-
-      <!-- Expert escape hatch: the raw namespaced render_overrides JSON, pulled
-           out of "advanced settings" so the structured knobs aren't buried under
-           free-form JSON. Restricted to { keyframe, i2v, lora } + routing flags;
-           wins over the structured fields above on a key conflict. -->
       <details class="planner-overrides-details planner-overrides-expert">
         <summary class="planner-overrides-summary">expert: raw JSON</summary>
         <div class="planner-overrides-expert-block">
           <span class="planner-overrides-expert-label">raw render_overrides JSON (wins on conflict)</span>
-          <textarea id="planner-render-overrides" rows="4" placeholder='{"keyframe": {"steps": 30, "guidance_scale": 6.5}, "i2v": {"steps": 40, "negative_prompt": "blurry"}}' spellcheck="false"></textarea>
+          <textarea id="planner-render-overrides" rows="4" placeholder='{"motion_backend":"own-gpu","config":{"keyframe":{"steps":30},"own-gpu":{"fps":16}}}' spellcheck="false"></textarea>
           <p class="planner-overrides-hint">
-            optional JSON in the backend's namespaced shape:
-            <code>{ "keyframe": {…}, "i2v": {…}, "lora": {…} }</code> plus the routing
-            flags <code>keyframes_only</code> / <code>finish_offloaded</code>. anything
-            outside those sections is dropped. wins over the structured fields above
-            on a key conflict. leave empty for the tier defaults.
+            optional JSON in the module wire shape:
+            <code>{ "motion_backend": "own-gpu", "config": { "keyframe": {…}, "own-gpu": {…} } }</code>.
+            wins over the structured fields above on conflict.
           </p>
         </div>
       </details>
@@ -632,6 +531,8 @@
 
   <script src="studio-chrome.js"></script>
   <script src="topbar.js"></script>
+  <script src="planner-registry.js"></script>
+  <script src="planner-render-config.js"></script>
   <script src="planner.js"></script>
 </body>
 </html>

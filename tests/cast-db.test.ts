@@ -155,9 +155,9 @@ describe("bounded list queries (issue #12)", () => {
 
   it("listUserTags scans only the most recent tagged renders (ORDER BY + LIMIT)", async () => {
     const { env, captured } = captureAll();
-    await listUserTags(env, "u@e.com");
+    await listUserTags(env);
     expect(captured.sql).toMatch(/ORDER BY submitted_at DESC/);
     expect(captured.sql).toMatch(/LIMIT \?/);
-    expect(captured.bound).toEqual(["u@e.com", 500]);
+    expect(captured.bound).toEqual([500]);
   });
 });

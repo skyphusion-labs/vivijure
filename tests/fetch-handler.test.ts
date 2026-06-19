@@ -79,3 +79,105 @@ describe("fetch entrypoint (issue #9)", () => {
     expect(assetCalls).toEqual(["/planner.html"]);
   });
 });
+
+function makePrefsEnv() {
+  const store = new Map<string, string>();
+  const env = {
+    ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
+    DB: {
+      prepare(sql: string) {
+        let bound: unknown[] = [];
+        const stmt = {
+          bind(...args: unknown[]) { bound = args; return stmt; },
+          async first() {
+            if (!sql.trimStart().toUpperCase().startsWith("SELECT")) return null;
+            const email = bound[0] as string;
+            const prefs = store.get(email);
+            return prefs ? { prefs_json: prefs } : null;
+          },
+          async run() {
+            if (!sql.trimStart().toUpperCase().startsWith("INSERT")) return { meta: { changes: 0 } };
+            const email = bound[0] as string;
+            const prefsJson = bound[1] as string;
+            store.set(email, prefsJson);
+            return { meta: { changes: 1 } };
+          },
+        };
+        return stmt;
+      },
+    },
+  } as unknown as Env;
+  return { env, store };
+}
+
+const reqWithAccess = (path: string, method = "GET", init: RequestInit = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set("accept", "application/json");
+  headers.set("cf-access-authenticated-user-email", "owner@example.com");
+  return new Request(`https://studio.example${path}`, { ...init, method, headers });
+};
+
+describe("whoami + user prefs", () => {
+  it("GET /api/whoami returns the CF Access email as user", async () => {
+    const { env } = makeEnv();
+    const res = await worker.fetch(reqWithAccess("/api/whoami"), env, ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ user: "owner@example.com" });
+  });
+
+  it("GET /api/whoami without Access header falls back to anonymous", async () => {
+    const { env } = makeEnv();
+    const res = await worker.fetch(req("/api/whoami"), env, ctx);
+    expect(await res.json()).toEqual({ user: "anonymous" });
+  });
+
+  it("GET /api/prefs returns defaults then PATCH persists", async () => {
+    const { env, store } = makePrefsEnv();
+    const getRes = await worker.fetch(reqWithAccess("/api/prefs"), env, ctx);
+    expect(await getRes.json()).toEqual({ ok: true, prefs: { emailNotifications: false } });
+
+    const patchRes = await worker.fetch(
+      reqWithAccess("/api/prefs", "PATCH", {
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ emailNotifications: true }),
+      }),
+      env,
+      ctx,
+    );
+    expect(patchRes.status).toBe(200);
+    expect(await patchRes.json()).toEqual({ ok: true, prefs: { emailNotifications: true } });
+    expect([...store.keys()]).toEqual(["owner@example.com"]);
+
+    const getAgain = await worker.fetch(reqWithAccess("/api/prefs"), env, ctx);
+    expect(await getAgain.json()).toEqual({ ok: true, prefs: { emailNotifications: true } });
+  });
+
+  it("PUT /api/prefs is not wired (falls through to ASSETS)", async () => {
+    const { env, assetCalls } = makeEnv();
+    const res = await worker.fetch(reqWithAccess("/api/prefs", "PUT"), env, ctx);
+    expect(await res.text()).toBe("ASSET");
+    expect(assetCalls).toEqual(["/api/prefs"]);
+  });
+
+  it("GET /api/storyboard/renders returns { renders: [...] }", async () => {
+    const env = {
+      ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
+      DB: {
+        prepare(sql: string) {
+          let bound: unknown[] = [];
+          const stmt = {
+            bind(...args: unknown[]) { bound = args; return stmt; },
+            async all() {
+              if (sql.includes("FROM renders")) return { results: [] };
+              return { results: [] };
+            },
+          };
+          return stmt;
+        },
+      },
+    } as unknown as Env;
+    const res = await worker.fetch(req("/api/storyboard/renders"), env, ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ renders: [] });
+  });
+});

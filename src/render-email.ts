@@ -1,7 +1,6 @@
-// v0.139.0: build the render-done notification email. Pure (no env, no I/O) so
-// vitest can assert subject/body without a binding. The caller
-// (maybeNotifyRenderDone) supplies the row facts + the public base URL and hands
-// the result to env.EMAIL.send. House style: no em-dashes / en-dashes.
+// v0.139.0: build the render-done notification email. Pure (no env, no I/O) so vitest can assert
+// subject/body without a binding. Used by legacy direct-mail paths; live render-complete delivery
+// goes through the `notify` hook (notify-email module). House style: no em-dashes / en-dashes.
 
 export interface RenderNotifyInfo {
   userEmail: string;

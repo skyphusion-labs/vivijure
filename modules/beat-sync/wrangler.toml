@@ -1,0 +1,18 @@
+# beat-sync module worker (vivijure-module/1): librosa beat analysis via the always-on
+# audio-beat-sync container on the Hetzner fleet (Workers VPC). Bound as MODULE_BEAT_SYNC.
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-beat-sync"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Workers VPC -> fleet audio-beat-sync (issue #83; off CF Containers, no cold start).
+[[vpc_services]]
+binding = "AUDIO_BEAT_SYNC_VPC"
+service_id = "019ecc06-3790-7403-9d8f-20f1287a513a"
+remote = true

@@ -1,0 +1,22 @@
+# music-gen module worker (vivijure-module/1): MiniMax Music 2.6 via Workers AI for the `score`
+# hook (music / narration / beat-sync chain). Bound as MODULE_MUSIC_GEN.
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-music-gen"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Workers AI + AI Gateway (same pattern as cast-image proxied models).
+#   ! npx wrangler secret put GATEWAY_ID -c modules/music-gen/wrangler.toml
+[ai]
+binding = "AI"
+
+# Generated audio + async run state land in the shared render bucket (out/<job>.mp3).
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
