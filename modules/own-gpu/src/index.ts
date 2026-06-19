@@ -29,7 +29,9 @@ interface Env {
   RUNPOD_ENDPOINT_ID: string;
 }
 
-const MANIFEST: ModuleManifest = {
+// Exported so the core's tier-drift guard (tests/quality-tier-drift.test.ts, issue #124) can assert
+// this module's `quality` enum stays in lockstep with the core QUALITY_TIERS set.
+export const MANIFEST: ModuleManifest = {
   name: "own-gpu",
   version: "0.1.0",
   api: MODULE_API,
