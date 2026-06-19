@@ -6972,11 +6972,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // v0.168.0 (#47): mirrors the Screenwriter assistant's existing Enter-to-send
+  // pattern (planner-refine-input, line ~6813). Enter submits the plan;
+  // Shift+Enter inserts a newline so multi-line briefs still work;
+  // isComposing guard keeps IME (CJK) input safe.
   $("#planner-brief").addEventListener("keydown", (ev) => {
-    if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
-      ev.preventDefault();
-      plan();
-    }
+    if (ev.key !== "Enter" || ev.shiftKey || ev.isComposing) return;
+    ev.preventDefault();
+    plan();
   });
 
   // v0.162.0: gate the scatter checkbox on page load (no storyboard yet,

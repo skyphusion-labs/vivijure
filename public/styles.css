@@ -526,7 +526,18 @@ body.sw-open .planner-layout { overflow-x: hidden; }
 .planner-danger, .planner-render-cancel { background: transparent; color: #ff7a8a; border-color: #5b2730; }
 .planner-danger:hover, .planner-render-cancel:hover { background: rgba(255,122,138,0.1); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
-.planner-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* v0.168.0 (#47): sticky plan bar -- keeps the Plan button + status line in view
+   even when the cast slots push the form content below the fold. Uses the same
+   frosted-glass pattern as the topbar (rgba bg + backdrop-filter). z-index 10
+   sits below the topbar (z-index 30) but above the form content. */
+.planner-actions {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  position: sticky; bottom: 0; z-index: 10;
+  padding: 12px 0 14px;
+  background: rgba(13, 15, 20, 0.88); backdrop-filter: blur(8px);
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+}
 .composer-send { padding: 9px; display: inline-flex; align-items: center; justify-content: center; }
 
 /* cast slots + bundle grid */
