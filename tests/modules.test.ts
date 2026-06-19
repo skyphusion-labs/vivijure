@@ -137,6 +137,16 @@ describe("modulesResponse", () => {
     expect(r.modules).toEqual([]);
     expect(r.hooks).toEqual({});
   });
+  it("strips the internal binding from the public module view (#18 info disclosure)", () => {
+    const mods = [
+      { name: "finish-rife", version: "0.1.0", api: MODULE_API, hooks: ["finish"], binding: "MODULE_FINISH_RIFE" },
+    ] as unknown as RegisteredModule[];
+    const r = modulesResponse(mods);
+    expect(r.modules[0]).not.toHaveProperty("binding");
+    expect(r.modules[0]).toMatchObject({ name: "finish-rife", hooks: ["finish"] });
+    // the hook index still maps the hook to the module NAME (no topology leaked)
+    expect(r.hooks.finish).toEqual(["finish-rife"]);
+  });
   it("serves the static hook catalog (name + blurb + cardinality), independent of installs", () => {
     const r = modulesResponse([]);
     expect(r.catalog.map((h) => h.name)).toEqual([

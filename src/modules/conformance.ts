@@ -11,7 +11,7 @@
 // .test.ts) drives them against a deployed module URL. This is the conformance half of the module
 // SDK: the contract is the law, and this is how a contributor proves they obey it.
 
-import { MODULE_API } from "./types";
+import { MODULE_API, type HookName } from "./types";
 import { validateManifest } from "./registry";
 
 export interface ConformanceCheck {
@@ -79,6 +79,83 @@ export function checkInvokeResponse(raw: unknown): ConformanceCheck {
   }
   if (r.ok === false) return typeof r.error === "string" ? ok("invoke-response", "ok:false + error") : bad("invoke-response", "ok:false but error is not a string");
   return bad("invoke-response", "missing boolean `ok`");
+}
+
+// --------------------------------------------------------------------------- hook output payloads
+
+const isRec = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
+
+/** Per-hook output validators: the typed payload each hook must return inside `{ ok:true, output }`.
+ *  Validating the envelope (checkInvokeResponse) is not enough -- a `finish` module that returns
+ *  `{ ok:true, output:{} }` is well-formed at the envelope but breaks the contract. Each returns a
+ *  reason string on a shape violation, or null when the payload honors the hook's contract. Only the
+ *  REQUIRED fields are enforced; optional contract fields are not demanded (mirrors the runtime,
+ *  which treats hint fields as optional). */
+const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => string | null> = {
+  keyframe: (o) => {
+    if (!isStr(o.project)) return "keyframe output needs a string project";
+    if (!Array.isArray(o.keyframes)) return "keyframe output needs a keyframes[]";
+    const bad = (o.keyframes as unknown[]).find(
+      (k) => !isRec(k) || !isStr(k.shot_id) || !isStr(k.keyframe_key),
+    );
+    return bad ? "each keyframe needs shot_id + keyframe_key" : null;
+  },
+  "motion.backend": (o) => {
+    if (!isStr(o.shot_id)) return "motion output needs a string shot_id";
+    if (!isStr(o.clip_key)) return "motion output needs a string clip_key";
+    if (!isNum(o.fps)) return "motion output needs a numeric fps";
+    if (!isNum(o.frames)) return "motion output needs a numeric frames";
+    return null;
+  },
+  finish: (o) => {
+    if (!isStr(o.shot_id)) return "finish output needs a string shot_id";
+    if (!isStr(o.clip_key)) return "finish output needs a string clip_key";
+    if (!isNum(o.out_fps)) return "finish output needs a numeric out_fps";
+    if (!isNum(o.frames)) return "finish output needs a numeric frames";
+    if (!isStrArr(o.applied)) return "finish output needs an applied string[]";
+    return null;
+  },
+  score: (o) => {
+    if (!isStr(o.film_key)) return "score output needs a string film_key";
+    if (!isStrArr(o.applied)) return "score output needs an applied string[]";
+    return null;
+  },
+  "plan.enhance": (o) => {
+    if (!isRec(o.storyboard)) return "plan.enhance output needs a storyboard object";
+    if (!Array.isArray((o.storyboard as Record<string, unknown>).scenes)) {
+      return "plan.enhance storyboard needs a scenes[]";
+    }
+    return null;
+  },
+  "cast.image": (o) => {
+    if (!isNum(o.cast_id)) return "cast.image output needs a numeric cast_id";
+    if (!Array.isArray(o.images)) return "cast.image output needs an images[]";
+    const bad = (o.images as unknown[]).find((i) => !isRec(i) || !isStr(i.key) || !isStr(i.mime));
+    if (bad) return "each cast.image needs key + mime";
+    if (!isStrArr(o.applied)) return "cast.image output needs an applied string[]";
+    return null;
+  },
+  notify: (o) => {
+    if (!isStrArr(o.delivered)) return "notify output needs a delivered string[]";
+    return null;
+  },
+};
+
+/** Validate that a hook's success output honors its typed contract shape (the payload inside
+ *  `{ ok:true, output }`). Use this AFTER checkInvokeResponse confirms the envelope: a module can be
+ *  envelope-correct yet return a payload that breaks the hook contract, which the core would then
+ *  hand downstream as garbage. An unknown hook name is itself a failure. */
+export function checkHookOutput(hook: string, output: unknown): ConformanceCheck {
+  const label = "output." + hook;
+  const validator = HOOK_OUTPUT_CHECKS[hook as HookName];
+  if (!validator) return bad(label, "unknown hook " + hook);
+  if (!isRec(output)) return bad(label, "output is not an object");
+  const reason = validator(output);
+  return reason ? bad(label, reason) : ok(label);
 }
 
 /** True iff every check passed. */

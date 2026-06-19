@@ -146,10 +146,16 @@ and a config, it:
 - degrades a missing pass to a no-op instead of erroring,
 - is idempotent under an empty config (returns the input unchanged).
 
-The conformance checks live in `src/modules/conformance.ts` (`checkManifest`,
-`checkInvokeResponse`); `npm run conformance` runs the suite (`tests/conformance.test.ts` for the
-shape checks, `tests/conformance.live.test.ts` for a live module). The live spec is opt-in: point
-it at a deployed module to verify its `module.json` + `invoke` end to end:
+The conformance checks live in `src/modules/conformance.ts`: `checkManifest` (the `module.json`),
+`checkInvokeResponse` (the `{ ok, ... }` envelope), and `checkHookOutput(hook, output)` (the typed
+PAYLOAD a success returns). The last one matters because the envelope and the payload are two
+different promises: a `finish` module can return a perfectly well-formed `{ ok: true, output: {} }`
+and still break the contract, because `{}` is not a `FinishOutput`. The harness validates the
+REQUIRED fields of each hook's output shape (optional hint fields are not demanded), so "envelope-ok"
+is not mistaken for "contract-ok". `npm run conformance` runs the suite (`tests/conformance.test.ts`
+for the shape checks, `tests/conformance.live.test.ts` for a live module). The live spec is opt-in:
+point it at a deployed module to verify its `module.json` + `invoke` (envelope AND payload) end to
+end:
 
 ```
 MODULE_URL=https://my-module.example.workers.dev npm run conformance

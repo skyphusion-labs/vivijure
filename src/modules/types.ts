@@ -296,10 +296,17 @@ export interface NotifyOutput {
 
 // --------------------------------------------------------------------------- registry view
 
-/** One registered module as the core exposes it to the frontend (the manifest minus internals). */
+/** One registered module, INTERNAL to the core: the manifest plus the env binding that serves it.
+ *  The binding is internal topology and never leaves the core (see PublicModule for the wire view). */
 export interface RegisteredModule extends ModuleManifest {
   binding: string; // the env binding that serves it (e.g. "MODULE_FINISH_RIFE")
 }
+
+/** One registered module as the core exposes it to the frontend over GET /api/modules: the manifest
+ *  ONLY, with the internal `binding` stripped. The unauthenticated registry route must not leak which
+ *  env binding serves a hook (internal module-host topology); the studio UI never needs it -- it
+ *  renders from the manifest, and dispatch happens core-side by binding. (Info disclosure, #18.) */
+export type PublicModule = ModuleManifest;
 
 /** One hook in the catalog the frontend renders the pipeline panel from, so the panel is a
  *  projection of the contract rather than a hardcoded list. */
@@ -309,10 +316,12 @@ export interface HookCatalogEntry {
   cardinality: "pick_one" | "chain";
 }
 
-/** GET /api/modules: the merged registry the studio UI renders itself from. */
+/** GET /api/modules: the merged registry the studio UI renders itself from. Carries the PUBLIC
+ *  module view (no internal `binding`); the hook index maps each hook to the module NAMES serving
+ *  it, so the frontend has everything it needs to project the pipeline without seeing topology. */
 export interface ModulesResponse {
   api: typeof MODULE_API;
-  modules: RegisteredModule[];
+  modules: PublicModule[];
   hooks: Partial<Record<HookName, string[]>>; // hook -> module names serving it
   catalog: HookCatalogEntry[];                 // every hook (name + blurb + cardinality)
 }
