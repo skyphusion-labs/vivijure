@@ -3,7 +3,37 @@
 
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
 import { servingForHook, validateConfig } from "./modules/registry";
-import type { RegisteredModule } from "./modules/types";
+import type { RegisteredModule, RenderConfigProjection } from "./modules/types";
+
+/** The render quality tier the core injects into the keyframe (as quality_tier) and motion (as
+ *  quality) modules. This is core render knowledge, NOT module config -- it is a cross-cutting choice
+ *  the host owns, so the single source of truth lives here next to injectQualityTier. The planner
+ *  projects the picker from QUALITY_TIERS (served on GET /api/modules) instead of hand-authoring the
+ *  <option>s in markup -- adding a tier here is automatically picked up by the UI. */
+export type RenderTier = "draft" | "standard" | "final";
+
+export interface QualityTierOption {
+  value: RenderTier;
+  label: string;
+  blurb: string;
+}
+
+export const QUALITY_TIERS: readonly QualityTierOption[] = [
+  { value: "draft", label: "draft", blurb: "33 frames, 8 steps; fastest, lowest quality" },
+  { value: "standard", label: "standard", blurb: "8-step keyframes + 20-step EasyCache i2v; balanced" },
+  { value: "final", label: "final", blurb: "97 frames, 22 steps; production quality" },
+];
+
+export const DEFAULT_QUALITY_TIER: RenderTier = "final";
+
+/** The core-owned render-config projection served on GET /api/modules, so the planner renders the
+ *  tier picker from the registry instead of hand-authoring <option>s. Single source = QUALITY_TIERS. */
+export function renderConfigProjection(): RenderConfigProjection {
+  return {
+    quality_tiers: QUALITY_TIERS.map((t) => ({ value: t.value, label: t.label, blurb: t.blurb })),
+    default_tier: DEFAULT_QUALITY_TIER,
+  };
+}
 
 /** Planner / API wire format for module render overrides (stored on render rows). */
 export interface ModuleRenderOverridesWire {
@@ -71,7 +101,7 @@ export function parseModuleRenderOverrides(raw: unknown): ModuleRenderOverridesW
 
 function injectQualityTier(
   config: Record<string, Record<string, unknown>>,
-  tier: "draft" | "standard" | "final",
+  tier: RenderTier,
   modules: RegisteredModule[],
 ): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {};
@@ -92,7 +122,7 @@ function injectQualityTier(
 /** Resolve render_overrides + quality tier into configs the film orchestrator consumes. */
 export function resolveModuleRenderConfigs(
   overrides: unknown,
-  tier: "draft" | "standard" | "final",
+  tier: RenderTier,
   modules: RegisteredModule[],
 ): ResolvedModuleRenderConfigs {
   const parsed = parseModuleRenderOverrides(overrides);

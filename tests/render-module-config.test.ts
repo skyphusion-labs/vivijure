@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   parseModuleRenderOverrides,
   resolveModuleRenderConfigs,
+  renderConfigProjection,
+  QUALITY_TIERS,
+  DEFAULT_QUALITY_TIER,
 } from "../src/render-module-config";
 import type { RegisteredModule } from "../src/modules/types";
 
@@ -68,5 +71,25 @@ describe("resolveModuleRenderConfigs", () => {
     expect(resolved.keyframe_config).toMatchObject({ quality_tier: "standard", steps: 25 });
     expect(resolved.motion_config).toMatchObject({ quality: "standard", fps: 24 });
     expect(resolved.motion_backend).toBe("own-gpu");
+  });
+});
+
+describe("renderConfigProjection (core-owned render config the planner projects)", () => {
+  it("serves every quality tier with value/label/blurb plus the default", () => {
+    const p = renderConfigProjection();
+    expect(p.quality_tiers.map((t) => t.value)).toEqual(["draft", "standard", "final"]);
+    expect(p.quality_tiers.every((t) => t.label.length > 0 && t.blurb.length > 0)).toBe(true);
+    expect(p.default_tier).toBe(DEFAULT_QUALITY_TIER);
+  });
+
+  it("the default tier is one of the served tiers (so the picker can always select it)", () => {
+    const p = renderConfigProjection();
+    expect(p.quality_tiers.some((t) => t.value === p.default_tier)).toBe(true);
+  });
+
+  it("is a faithful, decoupled copy of QUALITY_TIERS (mutating the projection cannot corrupt the source)", () => {
+    const p = renderConfigProjection();
+    p.quality_tiers.push({ value: "bogus", label: "b", blurb: "b" });
+    expect(QUALITY_TIERS.map((t) => t.value)).toEqual(["draft", "standard", "final"]);
   });
 });

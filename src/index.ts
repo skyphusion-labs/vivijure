@@ -50,6 +50,7 @@ import {
   isScatterJobId,
 } from "./scatter-orchestrator";
 import { sweepUnresolvedJobs } from "./render-sweep";
+import { renderConfigProjection } from "./render-module-config";
 import {
   coerceQualityTier, deriveProjectFromBundleKey,
   type AudioAnalyzeRequest,
@@ -945,7 +946,7 @@ export default {
       // Cache discovery for 60s per isolate so a refresh storm does not re-fetch every module's
       // manifest each request (issue #17 follow-up). Only this route opts in; dispatch stays fresh.
       const modules = await discoverModules(env as unknown as Record<string, unknown>, { cacheTtlMs: 60_000 });
-      return json(modulesResponse(modules));
+      return json(modulesResponse(modules, renderConfigProjection()));
     }
     const studioPage = STUDIO_PAGE_ASSETS[url.pathname];
     if (studioPage && (request.method === "GET" || request.method === "HEAD")) {

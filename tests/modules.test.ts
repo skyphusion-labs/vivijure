@@ -125,30 +125,35 @@ describe("indexByHook", () => {
 });
 
 describe("modulesResponse", () => {
+  const render = { quality_tiers: [{ value: "final", label: "final", blurb: "x" }], default_tier: "final" };
   it("wraps the registry with the api version and hook index", () => {
     const mods = [{ name: "x", hooks: ["finish"] }] as unknown as RegisteredModule[];
-    const r = modulesResponse(mods);
+    const r = modulesResponse(mods, render);
     expect(r.api).toBe(MODULE_API);
     expect(r.modules).toHaveLength(1);
     expect(r.hooks.finish).toEqual(["x"]);
   });
   it("is a clean, lean studio when nothing is installed", () => {
-    const r = modulesResponse([]);
+    const r = modulesResponse([], render);
     expect(r.modules).toEqual([]);
     expect(r.hooks).toEqual({});
+  });
+  it("carries the core-owned render projection (tiers) for the planner to render from", () => {
+    const r = modulesResponse([], render);
+    expect(r.render).toEqual(render);
   });
   it("strips the internal binding from the public module view (#18 info disclosure)", () => {
     const mods = [
       { name: "finish-rife", version: "0.1.0", api: MODULE_API, hooks: ["finish"], binding: "MODULE_FINISH_RIFE" },
     ] as unknown as RegisteredModule[];
-    const r = modulesResponse(mods);
+    const r = modulesResponse(mods, render);
     expect(r.modules[0]).not.toHaveProperty("binding");
     expect(r.modules[0]).toMatchObject({ name: "finish-rife", hooks: ["finish"] });
     // the hook index still maps the hook to the module NAME (no topology leaked)
     expect(r.hooks.finish).toEqual(["finish-rife"]);
   });
   it("serves the static hook catalog (name + blurb + cardinality), independent of installs", () => {
-    const r = modulesResponse([]);
+    const r = modulesResponse([], render);
     expect(r.catalog.map((h) => h.name)).toEqual([
       "keyframe", "motion.backend", "finish", "score", "plan.enhance", "cast.image", "notify",
     ]);

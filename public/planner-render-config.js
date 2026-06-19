@@ -113,6 +113,61 @@
     return details;
   }
 
+  // Populate the quality-tier <select> from the core-owned render projection
+  // (GET /api/modules `render`), so the options + blurbs are not hand-authored in
+  // markup. Preserves the current selection across re-renders; falls back to the
+  // server-declared default tier. The element itself stays in planner.html (it is a
+  // core-render control, not module config); we only fill its <option>s here.
+  // Last-resort fallback if GET /api/modules failed to return a render block, so the
+  // tier picker is never empty (the core is the source of truth; this just keeps the
+  // page usable offline / on a transient registry error).
+  var FALLBACK_RENDER = {
+    quality_tiers: [
+      { value: "draft", label: "draft", blurb: "fastest, lowest quality" },
+      { value: "standard", label: "standard", blurb: "balanced" },
+      { value: "final", label: "final", blurb: "production quality" },
+    ],
+    default_tier: "final",
+  };
+
+  function renderTierPicker(render) {
+    const sel = document.getElementById("planner-quality-tier");
+    if (!sel) return;
+    if (!render || !Array.isArray(render.quality_tiers) || !render.quality_tiers.length) {
+      render = FALLBACK_RENDER;
+    }
+    // Desired value, in priority order: a restore that ran before the options existed
+    // (data-pending-value, set by the planner's session restore), then the current
+    // selection (preserved across re-renders), then the server default. Because the
+    // <option>s are now projected (not in markup), a pre-population restore would
+    // otherwise be silently dropped -- data-pending-value is what makes restore survive
+    // regardless of init ordering.
+    const pending = sel.dataset.pendingValue || "";
+    const prev = sel.value;
+    sel.innerHTML = "";
+    for (const t of render.quality_tiers) {
+      const opt = document.createElement("option");
+      opt.value = t.value;
+      opt.textContent = t.blurb ? t.label + " (" + t.blurb + ")" : t.label;
+      sel.appendChild(opt);
+    }
+    const has = (v) => v && render.quality_tiers.some((t) => t.value === v);
+    const want = has(pending) ? pending : has(prev) ? prev : render.default_tier;
+    if (has(want)) sel.value = want;
+    delete sel.dataset.pendingValue;
+  }
+
+  // Select a quality tier robustly regardless of whether the projected <option>s
+  // exist yet: set .value (effective if the options are built) AND stash the desired
+  // value so renderTierPicker honors it once they are. The planner's restore/prefs/
+  // re-render paths call this instead of touching the <select> directly.
+  function selectTier(value) {
+    const sel = document.getElementById("planner-quality-tier");
+    if (!sel || !value) return;
+    sel.dataset.pendingValue = value;
+    sel.value = value;
+  }
+
   function renderMotionPicker(mods, selected) {
     if (mods.length <= 1) return null;
     const wrap = document.createElement("label");
@@ -141,6 +196,7 @@
     await global.plannerRegistry.load();
     const resp = await fetch("/api/modules");
     const data = resp.ok ? await resp.json() : { modules: [], hooks: {} };
+    renderTierPicker(data.render);
     const byName = Object.fromEntries((data.modules || []).map((m) => [m.name, m]));
     const cache = {};
     for (const h of HOOKS) {
@@ -260,5 +316,6 @@
     collectForSubmit,
     restore,
     mergeExpert,
+    selectTier,
   };
 })(window);
