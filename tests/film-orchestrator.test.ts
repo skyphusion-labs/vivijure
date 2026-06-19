@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, listProjectClips, clipFileMatchesShot, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -30,6 +30,48 @@ describe("applyFinishOutput (chain fold)", () => {
     expect(fs.status).toBe("done");
     expect(fs.applied).toEqual(["interpolate:2x", "face_restore:gfpgan"]);
     expect(fs.clip_key).toBe("clips/after_b.mp4");
+  });
+});
+
+describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifact in R2)", () => {
+  it("adopts a FAILED shot whose finished clip is in R2 (the GC'd-job path, #141)", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "failed", error: "GC'd" }))).toBe(true);
+  });
+
+  it("adopts a PENDING last-chain shot with a poll token (the frozen-IN_PROGRESS envelope path)", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: "tok", idx: 0, chain: ["MODULE_FINISH_RIFE"] }))).toBe(true);
+  });
+
+  it("does NOT adopt a PENDING shot mid-chain (its R2 key would be an intermediate module's output)", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: "tok", idx: 0, chain: ["MODULE_A", "MODULE_B"] }))).toBe(false);
+  });
+
+  it("does NOT adopt a PENDING shot with no poll token (never submitted -- nothing produced it yet)", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: undefined, idx: 0, chain: ["MODULE_FINISH_RIFE"] }))).toBe(false);
+  });
+
+  it("does NOT re-touch an already-done shot", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "done" }))).toBe(false);
+  });
+
+  it("reclaims a stuck PENDING shot from R2 presence: marks done, sets the clip key, clears the poll", () => {
+    const stuck = finishShot({ shot_id: "shot_02", status: "pending", poll: "frozen", idx: 0, chain: ["MODULE_FINISH_RIFE"] });
+    const ok = finishShot({ shot_id: "shot_01", status: "done", clip_key: "renders/p/clips/shot_01_finished.mp4" });
+    const shots = [ok, stuck];
+    const present = new Map([["shot_02", "renders/p/clips/shot_02_finished.mp4"]]);
+    const adopted = reclaimFinishShotsFromR2(shots, present);
+    expect(adopted).toBe(1);
+    expect(stuck.status).toBe("done");
+    expect(stuck.clip_key).toBe("renders/p/clips/shot_02_finished.mp4");
+    expect(stuck.poll).toBeUndefined();
+    expect(shots.every((s) => s.status !== "pending")).toBe(true); // phase can now advance to assemble
+  });
+
+  it("leaves a stuck PENDING shot pending when its clip is genuinely absent from R2 (no false adoption)", () => {
+    const stuck = finishShot({ shot_id: "shot_02", status: "pending", poll: "frozen", idx: 0, chain: ["MODULE_FINISH_RIFE"] });
+    const adopted = reclaimFinishShotsFromR2([stuck], new Map());
+    expect(adopted).toBe(0);
+    expect(stuck.status).toBe("pending");
   });
 });
 

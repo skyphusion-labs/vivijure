@@ -265,6 +265,38 @@ export function resolveFinishConfigs(
   return serving.map((m) => validateConfig(m.config_schema, finishConfig?.[m.name]));
 }
 
+/** Pure: is this finish shot eligible to be adopted from its R2 artifact? R2 PRESENCE IS AUTHORITATIVE
+ *  -- if <shot>_finished.mp4 is in R2 the work is done regardless of what the RunPod job envelope says.
+ *  Two cases are adoptable:
+ *    - `failed`: a module fast-failed a shot whose finished clip is actually in R2 (the GC'd-job path, #141).
+ *    - `pending` on its LAST chain module with a submitted poll token: a finish job whose RunPod envelope
+ *      froze at IN_PROGRESS (worker recycled, /status never flips to COMPLETED) so the poll reports
+ *      pending forever -- but the finish output already landed in R2. Without this the shot pends to the
+ *      90min hard-deadline and FALSE-FAILS a complete render (surfaced by RUN #29; sibling of #141/#142).
+ *  A `pending` shot mid-chain (idx < last) is NOT adopted: its R2 key would be an intermediate module's
+ *  output, not the chain's final artifact, so the remaining modules must still run. */
+export function finishShotAdoptableFromR2(fs: FinishShot): boolean {
+  if (fs.status === "failed") return true;
+  return fs.status === "pending" && !!fs.poll && fs.idx === fs.chain.length - 1;
+}
+
+/** Pure: adopt every adoptable finish shot whose finished clip is present in R2 (the artifact overrides
+ *  the module's verdict / a stuck envelope). Mutates `finishShots`, returns the number adopted. Mirrors
+ *  reclaimClipsFromR2 on the clips leg so the two phases recover symmetrically. */
+export function reclaimFinishShotsFromR2(finishShots: FinishShot[], present: Map<string, string>): number {
+  let adopted = 0;
+  for (const fs of finishShots) {
+    if (finishShotAdoptableFromR2(fs) && present.has(fs.shot_id)) {
+      fs.clip_key = present.get(fs.shot_id) as string;
+      fs.status = "done";
+      fs.poll = undefined;
+      fs.error = undefined; // the finished artifact in R2 is the source of truth
+      adopted += 1;
+    }
+  }
+  return adopted;
+}
+
 /** Internal: clips done -> set up the finish chain (one FinishShot per done clip). No finish modules
  *  installed -> skip straight to assemble (the raw clips). No clips rendered at all -> fail (nothing
  *  to assemble). */
@@ -311,22 +343,17 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
       else if (!(p as { pending?: boolean }).pending) { applyFinishOutput(fs, (p as { output: FinishOutput }).output); }
     }
   }
-  // R2 PRESENCE IS AUTHORITATIVE (issue #141), symmetric to the clips fail-time reclaim: a finish module
-  // can fast-fail a shot whose RunPod job was GC'd, but the finish output may already be in R2 at
-  // renders/<project>/clips/<shot>_finished.mp4. Reclaim any failed finish shot whose output is present
-  // BEFORE the every-terminal judgment below, so the finish phase never advances to assemble dropping a
-  // shot whose finished clip is actually in R2. Only one R2 list, only when a finish shot failed.
+  // R2 PRESENCE IS AUTHORITATIVE (issue #141), symmetric to the clips reclaim: the finish output may
+  // already be in R2 at renders/<project>/clips/<shot>_finished.mp4 even though the module verdict says
+  // otherwise -- a shot it fast-failed on a GC'd job (#141), OR a last-chain shot stuck `pending` because
+  // the RunPod envelope froze at IN_PROGRESS and the poll never sees COMPLETED (RUN #29). Reclaim any
+  // adoptable shot whose finished clip is present BEFORE the every-terminal judgment, so the finish phase
+  // never advances dropping a shot -- and never false-fails at the hard-deadline -- with the clip in R2.
+  // Only one R2 list, only when there is an adoptable shot to reclaim (the all-done happy path pays nothing).
   const finishShots = job.finish_shots || [];
-  if (finishShots.some((fs) => fs.status === "failed")) {
+  if (finishShots.some(finishShotAdoptableFromR2)) {
     const present = await listClipsByShotId(env, job.project, finishShots.map((fs) => fs.shot_id), finishedClipFileMatchesShot);
-    for (const fs of finishShots) {
-      if (fs.status === "failed" && present.has(fs.shot_id)) {
-        fs.clip_key = present.get(fs.shot_id) as string;
-        fs.status = "done";
-        fs.poll = undefined;
-        fs.error = undefined; // the finished artifact in R2 overrides the premature failure
-      }
-    }
+    reclaimFinishShotsFromR2(finishShots, present);
   }
   if (finishShots.every((fs) => fs.status !== "pending")) {
     job.phase = job.clips_only ? "done" : "assemble";
