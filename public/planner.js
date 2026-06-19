@@ -918,13 +918,8 @@ function restoreRenderStagePanel(saved) {
   bundleState.bundleKey = saved.bundleKey || bundleState.bundleKey;
 
   // Restore form fields first so the user sees the chosen tier and any
-  // overrides text even if there is no live render to attach to. The tier
-  // <option>s are projected by planner-render-config.renderTierPicker (which may
-  // run after this restore), so also stash the desired value as data-pending-value
-  // -- the picker honors it once the options exist, surviving init ordering.
-  if (saved.qualityTier && window.plannerRenderConfig) {
-    window.plannerRenderConfig.selectTier(saved.qualityTier);
-  }
+  // overrides text even if there is no live render to attach to.
+  if (saved.qualityTier) $("#planner-quality-tier").value = saved.qualityTier;
   if (typeof saved.renderOverridesText === "string") {
     $("#planner-render-overrides").value = saved.renderOverridesText;
     if (saved.renderOverridesText.trim().length > 0) {
@@ -1436,11 +1431,8 @@ function applyProjectPrefs(prefs) {
     planState.beatsPerShot = prefs.beatsPerShot;
     setVal("#planner-beats-per-shot", prefs.beatsPerShot);
   }
-  // v0.54.0 dial-in: render-form fields. The tier <select> is projected, so route
-  // through selectTier (survives init ordering) rather than setVal on the bare element.
-  if (prefs.qualityTier && window.plannerRenderConfig) {
-    window.plannerRenderConfig.selectTier(prefs.qualityTier);
-  }
+  // v0.54.0 dial-in: render-form fields.
+  setVal("#planner-quality-tier", prefs.qualityTier);
   setCheck("#planner-keyframes-only", prefs.keyframesOnly);
   setVal("#planner-seed", prefs.seed);
   setVal("#planner-face-lock-mode", prefs.faceLockMode);
@@ -5106,9 +5098,16 @@ function buildHistoryRow(r, childrenByParent) {
   meta.appendChild(tier);
 
   const status = document.createElement("span");
+  // v0.170.0: stalled rows get an amber badge instead of blue; the stall
+  // class overrides -running so the user sees needs-attention at a glance.
+  const stalled = isStalled(r);
   status.className =
-    "planner-history-status planner-history-status-" + historyStatusKind(r.status);
-  status.textContent = r.status;
+    "planner-history-status planner-history-status-" +
+    (stalled ? "stalled" : historyStatusKind(r.status));
+  status.textContent = r.status + (stalled ? " !" : "");
+  status.title = stalled
+    ? "no server advance in >" + (STALL_THRESHOLD_S / 60) + " min -- may need attention"
+    : "";
   meta.appendChild(status);
 
   // v0.40.0: keyframes-only badge. Marks rows that ran the SDXL preview
@@ -5308,7 +5307,38 @@ function buildHistoryRow(r, childrenByParent) {
   if (r.submitted_at) parts.push("submitted " + formatRelative(r.submitted_at));
   if (r.completed_at) parts.push("finished " + formatRelative(r.completed_at));
   if (r.execution_time_ms) parts.push("ran " + formatDuration(r.execution_time_ms));
+  // v0.170.0: for in-flight rows, show when the server last advanced the row
+  // (updated_at). A stalled row will show a large "last moved Xm ago" which is
+  // the signal the user needs to know something is wrong. We only append this
+  // when updated_at actually moved past submitted_at (i.e. at least one server
+  // touch has happened) so a brand-new submit does not show a redundant line.
+  const inFlightStatus = ["SUBMITTED", "IN_QUEUE", "IN_PROGRESS"];
+  if (
+    inFlightStatus.indexOf(r.status) >= 0 &&
+    r.updated_at &&
+    r.submitted_at &&
+    Number(r.updated_at) > Number(r.submitted_at)
+  ) {
+    parts.push("last moved " + formatRelative(r.updated_at));
+  }
   sub.textContent = parts.join(" · ");
+
+  // v0.170.0: inline error snippet for terminal-failed rows. Shows the first
+  // ~100 chars of the error in the sub-line without requiring the user to
+  // expand the row. Long errors are truncated with an ellipsis; the full text
+  // remains visible after clicking "view".
+  const isFailed2 = r.status === "FAILED" || r.status === "CANCELLED" || r.status === "TIMED_OUT";
+  if (isFailed2 && r.error) {
+    const errSnip = document.createElement("span");
+    errSnip.className = "planner-history-error-inline";
+    const maxLen = 100;
+    errSnip.textContent =
+      "error: " +
+      (r.error.length > maxLen ? r.error.slice(0, maxLen) + "..." : r.error);
+    errSnip.title = r.error;
+    sub.appendChild(errSnip);
+  }
+
   li.appendChild(sub);
 
   const actions = document.createElement("div");
@@ -6263,8 +6293,9 @@ function rerunBundle(row) {
   // Pre-select the same quality tier the original render used so a single
   // click matches the previous run; the user can still flip it before
   // hitting render.
-  if (row.quality_tier && window.plannerRenderConfig) {
-    window.plannerRenderConfig.selectTier(row.quality_tier);
+  const tierSelect = $("#planner-quality-tier");
+  if (tierSelect && row.quality_tier) {
+    tierSelect.value = row.quality_tier;
   }
 
   // v0.35.3: pre-fill the renderOverrides textarea from the row so a
@@ -6465,6 +6496,21 @@ function historyStatusKind(status) {
   if (status === "COMPLETED") return "done";
   if (status === "FAILED" || status === "CANCELLED" || status === "TIMED_OUT") return "error";
   return "running";
+}
+
+// v0.170.0: an in-flight row is considered stalled when the server has not
+// advanced it (updated_at has not moved) for more than STALL_THRESHOLD_S.
+// 20 minutes is generous enough to avoid false-positives on a healthy long
+// GPU render while still catching genuinely dead jobs well inside the 24h
+// sweep window.
+const STALL_THRESHOLD_S = 20 * 60;
+
+function isStalled(r) {
+  const terminal = ["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"];
+  if (terminal.indexOf(r.status) >= 0) return false;
+  if (!r.updated_at) return false;
+  const nowSec = Math.floor(Date.now() / 1000);
+  return nowSec - Number(r.updated_at) > STALL_THRESHOLD_S;
 }
 
 // Load the render stage with the past render's stored state and resume
