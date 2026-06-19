@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Vivijure: a self-hosted AI film studio</title>
+    <meta name="description" content="Write a storyboard, render it to video on your own GPU. A self-hosted AI film studio for the creative homelabber. Bring your own GPU and keys, own every artifact, no subscription, no account wall, no lock-in." />
+    <!-- No favicon links: they would point at gated-domain root paths outside /welcome*,
+         which a public visitor cannot fetch. Keeping the page to a single /welcome bypass
+         path is worth more than a favicon here. -->
+    <meta name="theme-color" content="#0E1730" />
+    <meta property="og:title" content="Vivijure: a self-hosted AI film studio" />
+    <meta property="og:description" content="Write a storyboard, render it to video on your own GPU. Bring your own GPU and keys, own every artifact, no subscription, no lock-in." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.jpg" />
+    <meta property="og:video" content="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4" />
+    <!-- Styles are inlined on purpose: the page is one self-contained file so the only
+         vivijure-domain path that needs a public Access bypass is /welcome itself. The
+         showcase film and poster live on assets.skyphusion.net (separate public domain). -->
+    <style>
+      :root {
+        --bg: #0d0f14;
+        --panel: #151922;
+        --panel-2: #1b2130;
+        --line: #28303f;
+        --ink: #e7ecf4;
+        --muted: #8b95a7;
+        --accent: #4fd6c7;
+        --accent-2: #7c8cff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: radial-gradient(1200px 600px at 80% -10%, #1a2030 0%, var(--bg) 55%);
+        color: var(--ink);
+        font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        min-height: 100vh;
+      }
+      a { color: var(--accent); }
+      .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+      /* Top bar */
+      .topbar { display: flex; align-items: center; gap: 14px; padding: 22px 0; }
+      .brand { display: flex; align-items: baseline; gap: 10px; text-decoration: none; }
+      .brand-mark {
+        width: 14px; height: 14px; border-radius: 4px; align-self: center;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        box-shadow: 0 0 16px rgba(79, 214, 199, 0.5);
+      }
+      .brand-name {
+        font-weight: 800; letter-spacing: 0.16em; font-size: 16px;
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      .topbar .spacer { flex: 1; }
+      .topbar nav a { color: var(--muted); text-decoration: none; font-size: 14px; margin-left: 18px; }
+      .topbar nav a:hover { color: var(--ink); }
+
+      /* Hero */
+      .hero { padding: 40px 0 28px; }
+      .hero h1 { font-size: clamp(28px, 5vw, 46px); line-height: 1.1; margin: 0 0 18px; letter-spacing: -0.01em; }
+      .hero h1 .grad {
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      .hero p.lede { color: var(--muted); font-size: 18px; max-width: 60ch; margin: 0 0 26px; }
+      .hero p.lede strong { color: var(--ink); font-weight: 600; }
+      .cta-row { display: flex; flex-wrap: wrap; gap: 12px; }
+      .btn {
+        display: inline-block; text-decoration: none; font-weight: 600; font-size: 15px;
+        padding: 11px 20px; border-radius: 10px; border: 1px solid var(--line);
+      }
+      .btn-primary {
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: #0a0f1e; border-color: transparent;
+      }
+      .btn-ghost { color: var(--ink); background: var(--panel); }
+      .btn-ghost:hover { border-color: var(--accent); }
+
+      /* Sections */
+      section { padding: 30px 0; border-top: 1px solid var(--line); }
+      section h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.16em; margin: 0 0 16px; }
+      section h3 { font-size: 22px; margin: 0 0 10px; }
+      .prose { color: var(--ink); max-width: 70ch; }
+      .prose p { margin: 0 0 14px; }
+      .prose .muted { color: var(--muted); }
+
+      /* Showcase */
+      figure.showcase { margin: 0; }
+      figure.showcase video {
+        width: 100%; border-radius: 12px; border: 1px solid var(--line);
+        background: #000; display: block;
+      }
+      figure.showcase figcaption { color: var(--muted); font-size: 14px; margin-top: 12px; }
+      .badge-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 18px; }
+      .badge {
+        font-size: 12px; color: var(--accent); background: var(--panel-2);
+        border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Feature cards */
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
+      .card h4 { margin: 0 0 8px; font-size: 16px; }
+      .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+      /* Ecosystem */
+      .flow { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); font-size: 15px; margin: 0 0 18px; }
+      table.eco { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+      table.eco th, table.eco td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      table.eco th { color: var(--muted); font-weight: 600; }
+      table.eco td.role { color: var(--muted); }
+
+      /* Footer */
+      footer { padding: 30px 0 50px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+      footer a { color: var(--muted); text-decoration: none; margin-right: 18px; }
+      footer a:hover { color: var(--ink); }
+      footer .lic { display: block; margin-top: 14px; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="topbar">
+        <a class="brand" href="/welcome" aria-label="Vivijure">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">VIVIJURE</span>
+        </a>
+        <span class="spacer"></span>
+        <nav aria-label="Primary">
+          <a href="#showcase">Showcase</a>
+          <a href="#why">Why</a>
+          <a href="https://github.com/skyphusion-labs/vivijure">Source</a>
+          <a href="/planner">Open the studio</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero" style="border-top: none;">
+          <h1>Write a storyboard.<br /><span class="grad">Render it to video on your own GPU.</span></h1>
+          <p class="lede">
+            Vivijure is a <strong>self-hosted AI film studio</strong>. No subscription, no account
+            wall, no lock-in. You bring the GPU and the keys; the studio brings the pipeline, and
+            you own every artifact it produces.
+          </p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="/planner">Open the studio</a>
+            <a class="btn btn-ghost" href="https://github.com/skyphusion-labs/vivijure">Source on GitHub</a>
+          </div>
+        </section>
+
+        <section id="showcase">
+          <h2>Showcase: the first full run</h2>
+          <figure class="showcase">
+            <video controls preload="metadata" playsinline
+                   poster="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.jpg">
+              <source src="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4" type="video/mp4" />
+              Your browser does not support embedded video.
+              <a href="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4">Download the MP4</a>.
+            </video>
+            <figcaption>
+              <em>NEON HALFLIFE</em>: the first film rendered end to end on Vivijure. 1080p, ten
+              shots, about thirty seconds, animated on a self-hosted GPU (the <code>own-gpu</code>
+              Wan I2V backend). Silent by design (see below).
+            </figcaption>
+          </figure>
+          <div class="badge-row" aria-hidden="false">
+            <span class="badge">1080p</span>
+            <span class="badge">10 shots</span>
+            <span class="badge">~30s</span>
+            <span class="badge">own-GPU i2v</span>
+            <span class="badge">silent by design</span>
+          </div>
+          <div class="prose">
+            <p>
+              <strong>This clip is silent on purpose.</strong> Vivijure assembles a silent picture
+              by default; scoring (a music bed, TTS narration, beat-synced cuts) is an opt-in Audio
+              step you run after the picture locks. This is the picture straight off the pipeline,
+              before any audio pass. The next showcase will be a scored one.
+            </p>
+            <p>
+              What makes it the proof and not just a demo: this was the first unattended full run,
+              and it came out clean. Zero clips dropped (ten of ten shots rendered). It also
+              recovered itself: the finish phase stalled partway through, the orchestrator
+              re-adopted the in-flight work, and the film finished, all of it across a session
+              restart with nobody watching. The system healing its own stall, unattended, is the
+              part we are actually proud of.
+            </p>
+          </div>
+        </section>
+
+        <section id="why">
+          <h2>Why Vivijure</h2>
+          <h3>Built for the creative homelabber, not a SaaS</h3>
+          <div class="prose">
+            <p class="muted">
+              Vivijure is for the person who already runs Proxmox at home and has a GPU sitting
+              there: priced out of subscription AI video tools, and happy to own the stack instead
+              of renting it. It is not a SaaS, and it never asks you to file a support ticket to
+              change a sampler.
+            </p>
+          </div>
+          <div class="grid">
+            <div class="card">
+              <h4>Bring your own GPU</h4>
+              <p>Render on a V100, an H100, your own box, or a cloud motion API. Point the studio at whatever endpoint you have; mix GPU and cloud per shot.</p>
+            </div>
+            <div class="card">
+              <h4>Bring your own keys</h4>
+              <p>Your provider keys, your accounts. The control plane runs free on Cloudflare; the expensive work hits endpoints you control and pay for directly.</p>
+            </div>
+            <div class="card">
+              <h4>Own every artifact</h4>
+              <p>Keyframes, clips, LoRAs, and the final MP4 land in your own R2 bucket. You are never renting storage from us, and nothing is locked behind an account.</p>
+            </div>
+            <div class="card">
+              <h4>No subscription, no lock-in</h4>
+              <p>No rent, no account wall, no per-second GPU bill paid to someone else. Self-hosted, AGPL, yours.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="modules">
+          <h2>Module host, not a monolith</h2>
+          <div class="prose">
+            <p>
+              The core worker owns what is always true: project, storyboard, cast, bundle assembly,
+              render orchestration, and a module registry. Every capability beyond that is an
+              opt-in <strong>module worker</strong> plugged into the pipeline through a typed hook
+              contract. Install only the modules you want; install none and you get a clean, empty
+              studio.
+            </p>
+            <p class="muted">
+              Because each stage (plan, cast, keyframe, motion, finish, score) is a swappable
+              module, you can trade an expensive cloud module for a free or local one: an Opus
+              planner for a local model, a paid cloud motion model for your own GPU. Swapping a
+              backend is a routing decision, not a rewrite.
+            </p>
+          </div>
+        </section>
+
+        <section id="ecosystem">
+          <h2>How it fits together</h2>
+          <p class="flow">slate&nbsp;&nbsp;--&gt;&nbsp;&nbsp;vivijure&nbsp;&nbsp;--&gt;&nbsp;&nbsp;vivijure-backend</p>
+          <table class="eco">
+            <thead>
+              <tr><th>Repo</th><th>Role</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><a href="https://github.com/skyphusion-labs/slate">slate</a></td>
+                <td class="role">Collaborative AI screenwriter Discord bot; shapes the film in-channel, then hands it to vivijure to render.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/skyphusion-labs/vivijure">vivijure</a></td>
+                <td class="role">AI film studio control plane (Cloudflare Worker); planner, cast, render UI; orchestrates render jobs.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/skyphusion-labs/vivijure-backend">vivijure-backend</a></td>
+                <td class="role">GPU render backend (RunPod serverless); SDXL keyframes, image-to-video, finish, assemble.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+
+      <footer>
+        <a href="/planner">Open the studio</a>
+        <a href="https://github.com/skyphusion-labs/vivijure">GitHub</a>
+        <a href="https://skyphusion.net/blog/vivijure-first-run/">Read the first-run writeup</a>
+        <span class="lic">Vivijure is AGPL-3.0. Free as in yours.</span>
+      </footer>
+    </div>
+  </body>
+</html>

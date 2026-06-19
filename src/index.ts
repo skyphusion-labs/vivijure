@@ -928,7 +928,12 @@ const API_ROUTES: Route[] = [
 
 // Pretty studio page paths (vivijure.skyphusion.org/planner, /cast, /modules). Served
 // from public/*.html so nav works even before a deploy picks up new worker code.
+// /welcome is the public marketing landing page (welcome.html); it is the only path here
+// meant to be reachable without CF Access (it gets a public Access bypass on the /welcome
+// prefix), so it carries no studio data and links into the gated app rather than embedding it.
 const STUDIO_PAGE_ASSETS: Record<string, string> = {
+  "/welcome": "/welcome.html",
+  "/welcome/": "/welcome.html",
   "/planner": "/planner.html",
   "/planner/": "/planner.html",
   "/cast": "/cast.html",
