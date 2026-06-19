@@ -19,7 +19,7 @@ import {
   type KeyframeInput,
   type KeyframeOutput,
 } from "./contract";
-import { buildPreviewBody, parseKeyframes, encodePoll, decodePoll } from "./keyframe";
+import { buildPreviewBody, parseKeyframes, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./keyframe";
 
 interface Env {
   RUNPOD_API_KEY: string;
@@ -76,7 +76,7 @@ async function submit(env: Env, req: InvokeRequest<KeyframeInput>): Promise<Invo
     if (!r.ok) return { ok: false, error: "keyframe /run -> " + r.status };
     const jobId = ((await r.json()) as { id?: string }).id;
     if (!jobId) return { ok: false, error: "keyframe /run returned no job id" };
-    return { ok: true, pending: true, poll: encodePoll({ jobId, project: input.project }) };
+    return { ok: true, pending: true, poll: encodePoll({ jobId, project: input.project, submittedAt: Date.now() }) };
   } catch (e) {
     return { ok: false, error: "keyframe submit failed: " + (e as Error).message };
   }
@@ -89,11 +89,23 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<KeyframeO
     return { ok: false, error: "keyframe: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
   }
 
+  let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    s = (await (await fetch(endpoint(env) + "/status/" + st.jobId, { headers: auth(env) })).json()) as typeof s;
+    const resp = await fetch(endpoint(env) + "/status/" + st.jobId, { headers: auth(env) });
+    httpStatus = resp.status;
+    s = (await resp.json()) as typeof s;
   } catch {
     return { ok: true, pending: true }; // transient; caller polls again
+  }
+  // RunPod GC'd the job (HTTP 404 / "job not found"): the numeric 404 status would otherwise read as
+  // "not COMPLETED" and the poll would report pending forever (issue #141). Past the grace window (or a
+  // legacy token) fail; inside it keep polling (post-submit race).
+  if (runpodJobGone(httpStatus, s)) {
+    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") {
+      return { ok: false, error: "keyframe job not found on RunPod (GC'd or never ran); failing (#141)" };
+    }
+    return { ok: true, pending: true };
   }
   if (s.status === "FAILED") return { ok: false, error: "keyframe job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
   if (s.status !== "COMPLETED") return { ok: true, pending: true };

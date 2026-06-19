@@ -22,6 +22,7 @@ import {
 } from "./contract";
 import {
   coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
+  runpodJobGone, classifyGoneState,
 } from "./finish";
 
 interface Env {
@@ -102,7 +103,7 @@ async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
     return {
       ok: true,
       pending: true,
-      poll: encodePoll({ jobId, shotId: input.shot_id, srcFps: input.src_fps, frames: input.frames }),
+      poll: encodePoll({ jobId, shotId: input.shot_id, srcFps: input.src_fps, frames: input.frames, submittedAt: Date.now() }),
     };
   } catch (e) {
     return passthrough(input, "exception", { detail: (e as Error).message });
@@ -114,10 +115,22 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<FinishOut
   if (!st) return { ok: false, error: "finish-rife: bad poll token" };
   if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) return { ok: false, error: "finish-rife: not configured" };
 
+  let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    s = await (await fetch(runpodBase(env) + "/status/" + st.jobId, { headers: auth(env) })).json() as typeof s;
+    const resp = await fetch(runpodBase(env) + "/status/" + st.jobId, { headers: auth(env) });
+    httpStatus = resp.status;
+    s = await resp.json() as typeof s;
   } catch {
+    return { ok: true, pending: true };
+  }
+  // RunPod GC'd the job (HTTP 404 / "job not found"): without this guard the numeric 404 status reads as
+  // "not COMPLETED" and the poll reports pending forever (issue #141). Past the grace window (or a legacy
+  // token) fail; inside it keep polling (post-submit race).
+  if (runpodJobGone(httpStatus, s)) {
+    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") {
+      return { ok: false, error: "finish-rife job not found on RunPod (GC'd or never ran); failing shot " + st.shotId + " (#141)" };
+    }
     return { ok: true, pending: true };
   }
   if (s.status === "FAILED") return { ok: false, error: "finish-rife job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
