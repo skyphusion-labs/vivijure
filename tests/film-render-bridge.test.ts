@@ -5,8 +5,10 @@ import {
   normalizeFilmScenes,
   filterScenesByShotIds,
   filmJobToPollView,
+  stallSignal,
 } from "../src/film-render-bridge";
 import type { FilmJob } from "../src/film-orchestrator";
+import { KEYFRAME_STALL_SECONDS } from "../src/film-orchestrator";
 import type { RegisteredModule } from "../src/modules/types";
 
 describe("isFilmJobId", () => {
@@ -145,5 +147,54 @@ describe("filmJobToPollView", () => {
   it("maps cancelled jobs", () => {
     const view = filmJobToPollView({ ...base, phase: "failed", cancelled: true, error: "cancelled" }, null);
     expect(view.status).toBe("CANCELLED");
+  });
+
+  it("surfaces the stall signal on an in-progress render (#129 / Joan's UX)", () => {
+    const stale: FilmJob = {
+      ...base,
+      phase: "keyframe",
+      created_at: Date.now() - (KEYFRAME_STALL_SECONDS + 120) * 1000,
+      phase_started_at: Date.now() - (KEYFRAME_STALL_SECONDS + 120) * 1000,
+    };
+    const view = filmJobToPollView(stale, null);
+    expect(view.status).toBe("IN_PROGRESS");
+    const out = view.output as Record<string, unknown>;
+    expect(out.stalled).toBe(true);
+    expect(out.stall_seconds as number).toBeGreaterThanOrEqual(KEYFRAME_STALL_SECONDS);
+    expect(typeof out.last_progress_at).toBe("number");
+  });
+
+  it("does not flag a healthy in-progress render as stalled", () => {
+    const fresh: FilmJob = { ...base, phase: "clips", phase_started_at: Date.now() };
+    const view = filmJobToPollView(fresh, null);
+    const out = view.output as Record<string, unknown>;
+    expect(out.stalled).toBeUndefined();
+    expect(out.last_progress_at).toBe(fresh.phase_started_at);
+  });
+});
+
+describe("stallSignal (#129 render-status contract)", () => {
+  const job = (over: Partial<FilmJob>): FilmJob => ({
+    film_id: "f", project: "p", bundle_key: "b", scenes: [], motion_backend: null,
+    motion_config: {}, finish_config: {}, keyframe_binding: null, phase: "keyframe",
+    created_at: 0, ...over,
+  });
+
+  it("reports last_progress_at = phase_started_at and no stall flag when fresh", () => {
+    const s = stallSignal(job({ phase_started_at: 1_000 }), 1_000 + 60_000);
+    expect(s).toEqual({ last_progress_at: 1_000 });
+  });
+
+  it("flags stalled + stall_seconds once past the threshold", () => {
+    const now = 1_000 + (KEYFRAME_STALL_SECONDS + 30) * 1000;
+    const s = stallSignal(job({ phase_started_at: 1_000 }), now);
+    expect(s.last_progress_at).toBe(1_000);
+    expect(s.stalled).toBe(true);
+    expect(s.stall_seconds as number).toBe(KEYFRAME_STALL_SECONDS + 30);
+  });
+
+  it("falls back to created_at on a pre-#129 job (no phase_started_at)", () => {
+    const s = stallSignal(job({ created_at: 5_000 }), 5_000 + 60_000);
+    expect(s.last_progress_at).toBe(5_000);
   });
 });
