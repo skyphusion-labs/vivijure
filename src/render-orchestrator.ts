@@ -209,7 +209,6 @@ export async function advanceClipJob(env: Env, jobId: string): Promise<ClipJob |
   if (!obj) return null;
   const job = JSON.parse(await obj.text()) as ClipJob;
   const envRec = env as unknown as Record<string, unknown>;
-  let anyFailed = false;
   for (const shot of job.shots) {
     if (shot.status !== "pending" || !shot.poll) continue;
     const binding = shot.binding ?? job.binding;
@@ -217,30 +216,40 @@ export async function advanceClipJob(env: Env, jobId: string): Promise<ClipJob |
     if (!fetcher) {
       shot.status = "failed";
       shot.error = "module binding no longer bound";
-      anyFailed = true;
       continue;
     }
     const p = await pollModule<MotionBackendOutput>(fetcher, { poll: shot.poll });
     applyPoll(shot, p);
-    if (!p.ok) anyFailed = true; // applyPoll set status=failed; a clip may still be in R2 (reclaim below)
   }
-  // R2 PRESENCE IS AUTHORITATIVE (issue #141/#143): a module can fast-fail a shot whose RunPod job was
-  // GC'd, but the backend may have written the clip to R2 before the job aged out. Reclaim any just-failed
-  // shot whose clip is present in R2 -- BEFORE the caller's summarizeJob() complete/advance judgment, so a
-  // film never advances/assembles with a clip dropped that is actually sitting in R2. Only one R2 LIST,
-  // and only when a shot failed this pass (the happy path pays nothing). A shot with no R2 clip stays
-  // failed (a genuine non-render).
-  if (anyFailed) {
-    const present = await listClipsByShotId(env, job.project, job.shots.map((s) => s.shot_id));
-    for (const shot of job.shots) {
-      if (shot.status === "failed" && present.has(shot.shot_id)) {
-        shot.status = "done";
-        shot.clip_key = present.get(shot.shot_id);
-        shot.poll = undefined;
-        shot.error = undefined; // clear the premature failure; the artifact is the source of truth
-      }
-    }
-  }
+  // R2 PRESENCE IS AUTHORITATIVE (issue #141): reclaim any FAILED shot whose clip is in R2 -- whether it
+  // failed this pass or a prior one -- so a #142 fast-fail can never drop a shot whose clip actually
+  // landed. Runs BEFORE the caller's summarizeJob() complete/advance judgment. (The caller also calls
+  // reclaimClipsFromR2 again right before its complete-check; both are idempotent + cheap.)
+  await reclaimClipsFromR2(env, job);
   await env.R2_RENDERS.put(jobKey(jobId), JSON.stringify(job), { httpMetadata: { contentType: "application/json" } });
   return job;
+}
+
+/** R2 PRESENCE IS THE SOURCE OF TRUTH for clip completion. Mutates the clip job in place: any shot that
+ *  is NOT done but whose motion clip is present in R2 (matched by shot-id boundary) is marked done with
+ *  that key (pending OR failed -- the artifact overrides a module's premature fast-fail; issue #141). A
+ *  shot with no R2 clip is left as-is (a genuine non-render). Only lists R2 when there is at least one
+ *  not-done shot to reclaim (the all-done happy path pays nothing). Returns the number adopted. This is
+ *  the single reclaim used both inside advanceClipJob AND by the film orchestrator before it judges the
+ *  clip job complete, so a fast-fail at 150s can never advance the film with a clip dropped. */
+export async function reclaimClipsFromR2(env: Env, job: ClipJob): Promise<number> {
+  const notDone = job.shots.filter((s) => s.status !== "done");
+  if (!notDone.length) return 0;
+  const present = await listClipsByShotId(env, job.project, notDone.map((s) => s.shot_id));
+  let adopted = 0;
+  for (const shot of notDone) {
+    if (present.has(shot.shot_id)) {
+      shot.status = "done";
+      shot.clip_key = present.get(shot.shot_id);
+      shot.poll = undefined;
+      shot.error = undefined; // clear a premature failure; the artifact is the source of truth
+      adopted += 1;
+    }
+  }
+  return adopted;
 }

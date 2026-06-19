@@ -11,7 +11,7 @@ import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig } from "./modules/registry";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput } from "./modules/types";
 import {
-  startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId,
+  startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { presignR2Get, presignR2Put } from "./r2-presign";
@@ -878,23 +878,10 @@ async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean
   const cjObj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
   if (!cjObj) return false;
   const clipJob = JSON.parse(await cjObj.text()) as ClipJob;
-  const inR2 = new Map((await listProjectClips(env, job.project, job.scenes)).map((c) => [c.shot_id, c.clip_key]));
-  let adopted = 0;
-  for (const shot of clipJob.shots) {
-    // Adopt any NOT-done shot whose clip is in R2 -- pending OR failed. The module fix (#141) now FAILS a
-    // shot whose RunPod job was GC'd, but the GPU may have written the clip before the job aged out;
-    // "artifact present in R2" wins over a premature module failure. A shot with no R2 clip is untouched
-    // (still rendering, or a genuine non-render) and will be retried on the next stalled sweep.
-    if (shot.status !== "done" && inR2.has(shot.shot_id)) {
-      shot.status = "done";
-      shot.clip_key = inR2.get(shot.shot_id);
-      shot.poll = undefined; // the phantom RunPod job is done with
-      shot.error = undefined; // clear a premature module failure now that the artifact is adopted
-      adopted += 1;
-    }
-  }
-  // Persist any partial progress so a later sweep starts from it (the re-PUT is idempotent). Skip the PUT
-  // only when nothing changed this pass, to avoid a needless write while we wait for more clips to land.
+  // Same R2-presence reclaim the clip leg uses (adopt any not-done shot whose clip is in R2 -- pending OR
+  // a module fast-fail; the artifact wins). Shared helper = one matcher, no drift. Persist partial progress
+  // so a later sweep starts from it (idempotent re-PUT); a shot with no R2 clip is left for the next sweep.
+  const adopted = await reclaimClipsFromR2(env, clipJob);
   if (adopted) {
     await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
     console.warn(`film ${job.film_id}: clips poll stale, adopted ${adopted} orphaned clips from R2 this pass (#143)`);
@@ -976,6 +963,15 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
   let clipJob: ClipJob | null = null;
   if (job.phase === "clips" && job.clip_job_id) {
     clipJob = await advanceClipJob(env, job.clip_job_id);
+    // R2 PRESENCE IS AUTHORITATIVE, BEFORE the complete-judgment (issue #141): a module fast-fail (#142)
+    // makes summarizeJob read complete (done+failed===total) at ~150s; without this, enterFinishPhase
+    // builds from done clips only and DROPS the failed shots -- even though their clips are in R2. Reclaim
+    // any not-done shot whose clip is in R2 (only lists when failed>0; idempotent with advanceClipJob's own
+    // reclaim) so the film never advances/assembles with a clip dropped that actually landed.
+    if (clipJob && summarizeJob(clipJob).failed > 0) {
+      const adopted = await reclaimClipsFromR2(env, clipJob);
+      if (adopted > 0) await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
+    }
     if (clipJob && summarizeJob(clipJob).complete) { await enterFinishPhase(env, job, clipJob); }
     await putFilm(env, job);
   } else if (job.clip_job_id) {
