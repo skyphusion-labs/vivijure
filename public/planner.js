@@ -5098,15 +5098,23 @@ function buildHistoryRow(r, childrenByParent) {
   meta.appendChild(tier);
 
   const status = document.createElement("span");
-  // v0.170.0: no client-side stall badge. Rollins' #131 makes the server
-  // self-heal a stuck keyframe phase or FAIL LOUDLY at a 90min ceiling with
-  // a diagnostic error. Every job resolves server-side within 90min; a client
-  // badge would contradict the server and false-alarm on legit-long finishes.
-  // The inline error snippet (below) surfaces the fail-loud reason -- that is
-  // the honest signal.
+  // v0.170.0: stall badge reads the explicit server-authored stall signal from
+  // Rollins' driver (#131). output_json on an IN_PROGRESS row carries:
+  //   stalled: true          -- driver's own verdict (present only when stalled)
+  //   stall_seconds: N       -- how long the current phase has been stuck
+  //   last_progress_at: T    -- epoch ms the job entered its current phase
+  // A client threshold is NOT used -- the server holds that logic (20min, same
+  // constant as KEYFRAME_STALL_SECONDS). Badge and behavior stay in lockstep.
+  const stalled = isStalled(r);
   status.className =
-    "planner-history-status planner-history-status-" + historyStatusKind(r.status);
-  status.textContent = r.status;
+    "planner-history-status planner-history-status-" +
+    (stalled ? "stalled" : historyStatusKind(r.status));
+  const stallSec = stalled && r.output && typeof r.output === "object"
+    ? r.output.stall_seconds : null;
+  status.textContent = r.status + (stalled
+    ? " ! (" + (stallSec != null ? Math.round(Number(stallSec) / 60) + "m" : "stalled") + ")"
+    : "");
+  status.title = stalled ? "render phase has not advanced -- may need attention" : "";
   meta.appendChild(status);
 
   // v0.40.0: keyframes-only badge. Marks rows that ran the SDXL preview
@@ -5306,19 +5314,19 @@ function buildHistoryRow(r, childrenByParent) {
   if (r.submitted_at) parts.push("submitted " + formatRelative(r.submitted_at));
   if (r.completed_at) parts.push("finished " + formatRelative(r.completed_at));
   if (r.execution_time_ms) parts.push("ran " + formatDuration(r.execution_time_ms));
-  // v0.170.0: for in-flight rows, show when the server last advanced the row
-  // (updated_at). A stalled row will show a large "last moved Xm ago" which is
-  // the signal the user needs to know something is wrong. We only append this
-  // when updated_at actually moved past submitted_at (i.e. at least one server
-  // touch has happened) so a brand-new submit does not show a redundant line.
-  const inFlightStatus = ["SUBMITTED", "IN_QUEUE", "IN_PROGRESS"];
+  // v0.170.0: for in-flight rows, show when the current render phase started
+  // (last_progress_at from Rollins' driver, epoch MILLIS in output_json). This
+  // is the true "last actually moved" signal -- updated_at heartbeats every
+  // sweep tick regardless of real progress, so it is NOT used here.
+  // Gate: only when last_progress_at is present and the row is IN_PROGRESS
+  // (SUBMITTED/IN_QUEUE have no phase yet; completed rows have completed_at).
   if (
-    inFlightStatus.indexOf(r.status) >= 0 &&
-    r.updated_at &&
-    r.submitted_at &&
-    Number(r.updated_at) > Number(r.submitted_at)
+    r.status === "IN_PROGRESS" &&
+    r.output && typeof r.output === "object" &&
+    typeof r.output.last_progress_at === "number"
   ) {
-    parts.push("last moved " + formatRelative(r.updated_at));
+    const lastProgressSec = Math.floor(r.output.last_progress_at / 1000);
+    parts.push("phase since " + formatRelative(lastProgressSec));
   }
   sub.textContent = parts.join(" · ");
 
@@ -6495,6 +6503,20 @@ function historyStatusKind(status) {
   if (status === "COMPLETED") return "done";
   if (status === "FAILED" || status === "CANCELLED" || status === "TIMED_OUT") return "error";
   return "running";
+}
+
+// v0.170.0: read the explicit stall signal Rollins' driver (#131) writes into
+// output_json on IN_PROGRESS film-job rows. The field is ABSENT on healthy rows
+// (treat missing as false) and present + true once the current phase has sat
+// >20min with no advance (same threshold as KEYFRAME_STALL_SECONDS on the server).
+// Source of truth: stallSignal() in src/film-render-bridge.ts.
+// Do NOT compute staleness client-side from updated_at -- the sweep bumps it
+// every minute regardless of real progress.
+function isStalled(r) {
+  const terminal = ["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"];
+  if (terminal.indexOf(r.status) >= 0) return false;
+  if (!r.output || typeof r.output !== "object") return false;
+  return r.output.stalled === true;
 }
 
 // Load the render stage with the past render's stored state and resume
