@@ -142,6 +142,21 @@ service = "vivijure-module-narration-gen"
 binding = "MODULE_BEAT_SYNC"
 service = "vivijure-module-beat-sync"
 
+# plan-enhance-py: the Python on-ramp PROOF module (plan.enhance, deterministic rule-based direction).
+# A CF Python Worker behind the same hook contract as the TS plan-enhance, discovered by the registry
+# exactly like any MODULE_* binding. EXPERIMENTAL (CF Python Workers is open beta) -- additive proof;
+# nothing critical depends on it. plan.enhance is a `chain` hook, so it coexists with the TS module.
+#
+# COMMENTED OUT until vivijure-module-plan-enhance-py is actually deployed: a [[services]] binding to a
+# service that does not exist makes `wrangler deploy` of THIS core worker FAIL, and CI (tests, not a
+# real prod deploy) would not catch it. The module needs the pywrangler/uv toolchain wired into CI to
+# deploy (follow-up). Uncomment this block in the SAME change that deploys the module, so the binding
+# never dangles. Until then the registry just does not discover an undeployed module (correct -- it is
+# not live yet). The module code, conformance test, and docs in this PR still prove the on-ramp.
+# [[services]]
+# binding = "MODULE_PLANENHANCE_PY"
+# service = "vivijure-module-plan-enhance-py"
+
 [[routes]]
 pattern = "vivijure.skyphusion.org"
 custom_domain = true

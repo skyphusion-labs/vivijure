@@ -1,0 +1,9 @@
+# Pywrangler / CF Python Workers project marker for the plan-enhance-py module.
+# Deps are bundled into a python_modules folder on deploy (pywrangler). This module is intentionally
+# dependency-free (stdlib only: json), so the list is empty -- the lighter the proof module, the better.
+[project]
+name = "vivijure-module-plan-enhance-py"
+version = "0.1.0"
+description = "Vivijure plan.enhance module (Python on-ramp proof; deterministic rule-based auto-direction)"
+requires-python = ">=3.12"
+dependencies = []
