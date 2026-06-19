@@ -42,7 +42,7 @@ import {
   type RunState,
   type MusicGenerateConfig,
 } from "./music-gen";
-import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep, type WorkflowStepConfig } from "cloudflare:workers";
 
 interface R2Bucket {
   put(key: string, value: ArrayBuffer | string, opts?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
@@ -166,14 +166,20 @@ async function runGeneration(
   });
 }
 
-/** The durable runner: a single step does the blocking gen. step.do retries transient failures with its
- *  own unlimited-wall budget and resumes after a worker recycle. If the step ultimately fails, persist a
- *  terminal `failed` R2 state so /poll surfaces it as ok:false rather than hanging. */
+/** The durable runner: a single step does the blocking gen. The step config OVERRIDES the Workflows
+ *  defaults (timeout 10min, retries 5) for a long, billed AI gen: MiniMax music can run ~20min, so the
+ *  10min default would time the gen out mid-flight; and 5 retries of a 20min billed call is a lot of
+ *  double-spend on a transient blip, so cap retries low. step.do still survives a worker recycle. If the
+ *  step ultimately fails, persist a terminal `failed` R2 state so /poll surfaces it as ok:false. */
+const GENERATE_STEP_CONFIG: WorkflowStepConfig = {
+  retries: { limit: 2, delay: "15 seconds", backoff: "exponential" },
+  timeout: "20 minutes",
+};
 export class MusicGenWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
   async run(event: WorkflowEvent<WorkflowParams>, step: WorkflowStep): Promise<void> {
     const { job_id, input, config } = event.payload;
     try {
-      await step.do("generate", async () => {
+      await step.do("generate", GENERATE_STEP_CONFIG, async () => {
         await runGeneration(this.env, job_id, input, config);
       });
     } catch (e) {
