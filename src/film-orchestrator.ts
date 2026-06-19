@@ -87,6 +87,16 @@ const clipDocKey = (clipJobId: string) => `renders/${clipJobId}/clips-job.json`;
 
 export { filmKey as filmJobDocKey, clipDocKey as clipJobDocKey };
 
+/** Cheap existence check for an R2 object (HEAD, no body). Used to derive assemble
+ *  completion from R2 presence so a stalled-after-PUT concat self-heals (issue #122). */
+async function r2ObjectExists(env: Env, key: string): Promise<boolean> {
+  try {
+    return (await env.R2_RENDERS.head(key)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** Collect finished clip keys from a terminal clips_only (or full) film job doc. */
 export async function clipKeysFromFilmJob(
   env: Env,
@@ -523,13 +533,26 @@ async function enterAssemblePhase(
   finalClips: { shot_id: string; clip_key: string }[],
 ): Promise<void> {
   if (!finalClips.length) { job.phase = "failed"; job.error = "no clips to assemble"; return; }
+
+  // Derive completion from R2 presence: if the concat output is already in R2, a prior
+  // attempt's ffmpeg PUT succeeded even though its response was lost (the container 504'd
+  // after writing, or the poll window closed mid-PUT and the job was re-driven). Re-running
+  // the concat would be wasted CPU, so finalize straight from the existing object. This is
+  // what lets a stalled-after-PUT assemble self-heal on the next poll / sweep tick instead of
+  // looping. (issue #122)
+  const outputKey = filmOutKey(job.film_id);
+  if (await r2ObjectExists(env, outputKey)) {
+    job.assemble_attempts = 0;
+    await finishAssembledFilm(env, job, outputKey);
+    return;
+  }
+
   if (!env.VIDEO_FINISH_VPC) { job.phase = "failed"; job.error = "video-finish VPC binding not configured"; return; }
 
   const clips: { url: string }[] = [];
   for (const c of finalClips) {
     clips.push({ url: await presignR2Get(env, c.clip_key, 1800) }); // 30min: covers a multi-clip concat
   }
-  const outputKey = filmOutKey(job.film_id);
   const outputUrl = await presignR2Put(env, outputKey, 1800);
 
   // Resolution/fps are left to the container default (it normalizes the clips); the motion output
