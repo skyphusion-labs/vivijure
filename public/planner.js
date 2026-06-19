@@ -6972,11 +6972,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // v0.168.0 (#47): Enter submits the plan; Shift+Enter inserts a newline so
+  // multi-line briefs still work. Cmd/Ctrl+Enter also submits (power-user
+  // muscle memory from chat apps; was the only binding before v0.168.0).
   $("#planner-brief").addEventListener("keydown", (ev) => {
-    if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+    if (ev.key === "Enter" && !ev.shiftKey) {
       ev.preventDefault();
       plan();
     }
+    // Shift+Enter: browser default (newline) -- no preventDefault needed.
   });
 
   // v0.162.0: gate the scatter checkbox on page load (no storyboard yet,
