@@ -13,7 +13,7 @@ import {
   type MotionBackendInput,
   type MotionBackendOutput,
 } from "./contract";
-import { buildKlingBody, extractVideoUrl, clipKey, clampDuration, encodePoll, decodePoll } from "./kling";
+import { buildKlingBody, extractVideoUrl, clipKey, clampDuration, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./kling";
 
 interface Env {
   RUNPOD_API_KEY: string;
@@ -60,7 +60,7 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
     return {
       ok: true,
       pending: true,
-      poll: encodePoll({ jobId, project: req.context.project, shotId: input.shot_id, seconds: clampDuration(input.seconds) }),
+      poll: encodePoll({ jobId, project: req.context.project, shotId: input.shot_id, seconds: clampDuration(input.seconds), submittedAt: Date.now() }),
     };
   } catch (e) {
     return { ok: false, error: "kling submit failed: " + (e as Error).message };
@@ -72,10 +72,23 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBac
   if (!st) return { ok: false, error: "kling: bad poll token" };
   if (!env.RUNPOD_API_KEY) return { ok: false, error: "kling: RUNPOD_API_KEY not configured" };
 
+  let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    s = (await (await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(env) })).json()) as typeof s;
+    const resp = await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(env) });
+    httpStatus = resp.status;
+    s = (await resp.json()) as typeof s;
   } catch {
+    return { ok: true, pending: true };
+  }
+  // RunPod GC'd the job (HTTP 404 / "job not found"): the numeric 404 status would otherwise read as
+  // "not COMPLETED" and the poll would report pending forever (issue #141). kling downloads + writes R2
+  // only on COMPLETED, so a never-completed job has no recoverable artifact: past the grace window (or a
+  // legacy token) fail the shot; inside it keep polling (post-submit race).
+  if (runpodJobGone(httpStatus, s)) {
+    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") {
+      return { ok: false, error: "kling job not found on RunPod (GC'd or never ran); failing shot " + st.shotId + " (#141)" };
+    }
     return { ok: true, pending: true };
   }
   if (s.status === "FAILED") return { ok: false, error: "kling job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
