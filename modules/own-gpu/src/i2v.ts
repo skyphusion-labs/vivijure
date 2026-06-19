@@ -71,10 +71,14 @@ export function readOutput(shotId: string, output: unknown): MotionBackendOutput
 
 // Everything /poll needs to finalize: the RunPod job id + which shot it is. The backend already
 // knows where the clip belongs (it wrote it), so unlike a cloud module we carry no R2 destination.
+// submittedAt (epoch ms) lets the stateless /poll measure a grace window before treating a RunPod
+// "job not found" as a real terminal GC vs a momentary post-submit propagation race (issue #141 root
+// cause). Optional for back-compat: tokens issued before this field read it as undefined.
 export interface PollState {
   jobId: string;
   project: string;
   shotId: string;
+  submittedAt?: number;
 }
 
 export function encodePoll(s: PollState): string {
@@ -85,10 +89,44 @@ export function decodePoll(token: string): PollState | null {
   try {
     const o = JSON.parse(atob(token)) as PollState;
     if (o && typeof o.jobId === "string" && typeof o.project === "string" && typeof o.shotId === "string") {
-      return { jobId: o.jobId, project: o.project, shotId: o.shotId };
+      return {
+        jobId: o.jobId, project: o.project, shotId: o.shotId,
+        submittedAt: typeof o.submittedAt === "number" ? o.submittedAt : undefined,
+      };
     }
   } catch {
     /* fall through */
   }
   return null;
+}
+
+// How long after submit a RunPod "job not found" is treated as a propagation race (keep polling)
+// rather than a real terminal GC. RunPod's /run can return an id before /status can see it; mirror the
+// control plane's PHANTOM_GRACE_SECONDS (150s) so a momentary 404 never false-fails a live job.
+export const RUNPOD_NOTFOUND_GRACE_MS = 150_000;
+
+/** Pure: did RunPod report this job as gone? A GC'd / unknown job returns HTTP 404 with a body like
+ *  {"status":404,"title":"Not Found","detail":"job not found"} -- where `status` is the NUMBER 404, not
+ *  a RunPod run state. Detect that shape (numeric/absent status + a not-found marker) so the caller can
+ *  stop polling it forever. A real run state ("IN_QUEUE"/"IN_PROGRESS"/"COMPLETED"/"FAILED") -> false. */
+export function runpodJobGone(httpStatus: number, body: { status?: unknown; title?: unknown } | null): boolean {
+  if (httpStatus === 404) return true;
+  if (!body) return false;
+  const st = body.status;
+  if (typeof st === "string" && st.length > 0) return false; // a real run state
+  if (typeof st === "number") return st === 404; // numeric status echoed from an error envelope
+  return typeof body.title === "string" && /not\s*found/i.test(body.title);
+}
+
+/** Pure: classify one /poll tick when RunPod reports the job gone. `submittedAt` is the token's stamp
+ *  (undefined on a legacy token). Returns "gone-failed" past the grace window (or for a legacy token,
+ *  where a 404 is necessarily a real GC not a fresh race) so the caller fails the shot instead of
+ *  polling a dead job forever (#141); "gone-grace" while still inside the window (post-submit race). */
+export function classifyGoneState(
+  submittedAt: number | undefined,
+  now: number,
+  graceMs: number = RUNPOD_NOTFOUND_GRACE_MS,
+): "gone-failed" | "gone-grace" {
+  if (submittedAt === undefined) return "gone-failed"; // legacy token: a 404 now is a real GC, not a race
+  return now - submittedAt >= graceMs ? "gone-failed" : "gone-grace";
 }

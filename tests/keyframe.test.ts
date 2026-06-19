@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampTier, buildPreviewBody, parseKeyframes, encodePoll, decodePoll } from "../modules/keyframe/src/keyframe";
+import { clampTier, buildPreviewBody, parseKeyframes, encodePoll, decodePoll, runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS } from "../modules/keyframe/src/keyframe";
 
 describe("keyframe pure logic", () => {
   it("clampTier accepts the known tiers and defaults to final", () => {
@@ -92,5 +92,26 @@ describe("keyframe pure logic", () => {
   it("decodePoll rejects garbage and incomplete tokens", () => {
     expect(decodePoll("not-base64-$$")).toBeNull();
     expect(decodePoll(encodePoll({ jobId: "x" } as never))).toBeNull();
+  });
+
+  it("round-trips submittedAt; legacy token decodes undefined (#141)", () => {
+    const s = { jobId: "abc-123", project: "neon_film", submittedAt: 1_700_000_000_000 };
+    expect(decodePoll(encodePoll(s))).toEqual(s);
+    expect(decodePoll(encodePoll({ jobId: "j", project: "p" }))?.submittedAt).toBeUndefined();
+  });
+
+  it("runpodJobGone detects 404 / numeric-404 / not-found, not a real run state (#141)", () => {
+    expect(runpodJobGone(404, { status: 404 })).toBe(true);
+    expect(runpodJobGone(200, { status: 404, title: "Not Found" } as never)).toBe(true);
+    expect(runpodJobGone(200, { title: "Not Found" })).toBe(true);
+    expect(runpodJobGone(200, { status: "COMPLETED" })).toBe(false);
+    expect(runpodJobGone(200, { status: "IN_QUEUE" })).toBe(false);
+  });
+
+  it("classifyGoneState: grace window vs fail vs legacy (#141)", () => {
+    const now = 3_000_000;
+    expect(classifyGoneState(now - (RUNPOD_NOTFOUND_GRACE_MS - 1), now)).toBe("gone-grace");
+    expect(classifyGoneState(now - (RUNPOD_NOTFOUND_GRACE_MS + 1), now)).toBe("gone-failed");
+    expect(classifyGoneState(undefined, now)).toBe("gone-failed");
   });
 });

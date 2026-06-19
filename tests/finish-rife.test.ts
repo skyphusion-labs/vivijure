@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
+  runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS,
 } from "../modules/finish-rife/src/finish";
 import { checkManifest, checkInvokeResponse, allPass, failures } from "../src/modules/conformance";
 import type { FinishInput } from "../modules/finish-rife/src/contract";
@@ -199,5 +200,27 @@ describe("finish-rife: passthroughOutput (degrade observability #77)", () => {
     expect(degraded.applied).not.toEqual(noop.applied);   // the old applied:[] ambiguity is gone
     expect(Boolean(degraded.degraded)).toBe(true);
     expect(Boolean(noop.degraded)).toBe(false);
+  });
+});
+
+describe("finish-rife RunPod gone-detection + grace (#141)", () => {
+  it("encodePoll/decodePoll round-trips submittedAt; legacy token decodes undefined", () => {
+    const s = { jobId: "j1", shotId: "shot_03", srcFps: 24, frames: 96, submittedAt: 1_700_000_000_000 };
+    expect(decodePoll(encodePoll(s))).toEqual(s);
+    const legacy = decodePoll(encodePoll({ jobId: "j", shotId: "s", srcFps: 16, frames: 0 }));
+    expect(legacy?.submittedAt).toBeUndefined();
+  });
+  it("runpodJobGone detects 404 / numeric-404 / not-found-title, not a real run state", () => {
+    expect(runpodJobGone(404, { status: 404 })).toBe(true);
+    expect(runpodJobGone(200, { status: 404, title: "Not Found" } as never)).toBe(true);
+    expect(runpodJobGone(200, { title: "Not Found" })).toBe(true);
+    expect(runpodJobGone(200, { status: "COMPLETED" })).toBe(false);
+    expect(runpodJobGone(200, { status: "IN_PROGRESS" })).toBe(false);
+  });
+  it("classifyGoneState: grace window vs fail vs legacy", () => {
+    const now = 2_000_000;
+    expect(classifyGoneState(now - (RUNPOD_NOTFOUND_GRACE_MS - 1), now)).toBe("gone-grace");
+    expect(classifyGoneState(now - (RUNPOD_NOTFOUND_GRACE_MS + 1), now)).toBe("gone-failed");
+    expect(classifyGoneState(undefined, now)).toBe("gone-failed");
   });
 });

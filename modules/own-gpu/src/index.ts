@@ -22,7 +22,7 @@ import {
   type MotionBackendInput,
   type MotionBackendOutput,
 } from "./contract";
-import { buildI2vBody, readOutput, encodePoll, decodePoll } from "./i2v";
+import { buildI2vBody, readOutput, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./i2v";
 
 interface Env {
   RUNPOD_API_KEY: string;
@@ -70,7 +70,7 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
     if (!r.ok) return { ok: false, error: "own-gpu /run -> " + r.status };
     const jobId = ((await r.json()) as { id?: string }).id;
     if (!jobId) return { ok: false, error: "own-gpu /run returned no job id" };
-    return { ok: true, pending: true, poll: encodePoll({ jobId, project: req.context.project, shotId: input.shot_id }) };
+    return { ok: true, pending: true, poll: encodePoll({ jobId, project: req.context.project, shotId: input.shot_id, submittedAt: Date.now() }) };
   } catch (e) {
     return { ok: false, error: "own-gpu submit failed: " + (e as Error).message };
   }
@@ -83,11 +83,24 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBac
   if (!st) return { ok: false, error: "own-gpu: bad poll token" };
   if (!configured(env)) return { ok: false, error: "own-gpu: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
 
+  let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    s = (await (await fetch(endpoint(env) + "/status/" + st.jobId, { headers: auth(env) })).json()) as typeof s;
+    const resp = await fetch(endpoint(env) + "/status/" + st.jobId, { headers: auth(env) });
+    httpStatus = resp.status;
+    s = (await resp.json()) as typeof s;
   } catch {
     return { ok: true, pending: true }; // transient; poll again
+  }
+  // RunPod GC'd the job (HTTP 404 / "job not found"): without this guard the poll below would treat the
+  // numeric 404 status as "not COMPLETED" and report pending forever (issue #141). Past the grace window
+  // (or for a legacy token with no submit stamp) fail the shot so it stops polling a dead job; inside the
+  // window keep polling (a momentary post-submit propagation race).
+  if (runpodJobGone(httpStatus, s)) {
+    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") {
+      return { ok: false, error: "own-gpu job not found on RunPod (GC'd or never ran); failing shot " + st.shotId + " (#141)" };
+    }
+    return { ok: true, pending: true }; // still inside the grace window
   }
   if (s.status === "FAILED") return { ok: false, error: "own-gpu job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
   if (s.status !== "COMPLETED") return { ok: true, pending: true }; // IN_QUEUE / IN_PROGRESS

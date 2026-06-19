@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { framesFor, buildI2vBody, readOutput, encodePoll, decodePoll } from "../modules/own-gpu/src/i2v";
+import { framesFor, buildI2vBody, readOutput, encodePoll, decodePoll, runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS } from "../modules/own-gpu/src/i2v";
 
 describe("own-gpu i2v pure logic", () => {
   it("framesFor derives a frame count from shot seconds * fps", () => {
@@ -55,9 +55,40 @@ describe("own-gpu i2v pure logic", () => {
     expect(readOutput("s", undefined)).toBeNull();
   });
 
-  it("encodePoll/decodePoll round-trip the async job state", () => {
-    const st = { jobId: "abc123", project: "My Proj", shotId: "shot_01" };
+  it("encodePoll/decodePoll round-trip the async job state, including submittedAt (#141)", () => {
+    const st = { jobId: "abc123", project: "My Proj", shotId: "shot_01", submittedAt: 1_700_000_000_000 };
     expect(decodePoll(encodePoll(st))).toEqual(st);
+    // legacy token (no submittedAt) decodes with submittedAt undefined
+    const legacy = decodePoll(encodePoll({ jobId: "j", project: "p", shotId: "s" }));
+    expect(legacy?.submittedAt).toBeUndefined();
     expect(decodePoll("not-valid-token")).toBeNull();
+  });
+});
+
+describe("own-gpu RunPod gone-detection + grace (#141)", () => {
+  it("runpodJobGone: HTTP 404 is gone", () => {
+    expect(runpodJobGone(404, { status: 404, title: "Not Found" })).toBe(true);
+  });
+  it("runpodJobGone: a numeric 404 status in a 200 envelope is gone", () => {
+    expect(runpodJobGone(200, { status: 404, title: "Not Found", detail: "job not found" } as never)).toBe(true);
+  });
+  it("runpodJobGone: a not-found title with no run state is gone", () => {
+    expect(runpodJobGone(200, { title: "Not Found" })).toBe(true);
+  });
+  it("runpodJobGone: a real run state is NOT gone", () => {
+    expect(runpodJobGone(200, { status: "IN_PROGRESS" })).toBe(false);
+    expect(runpodJobGone(200, { status: "COMPLETED" })).toBe(false);
+    expect(runpodJobGone(200, { status: "IN_QUEUE" })).toBe(false);
+  });
+  it("classifyGoneState: inside the grace window keeps polling", () => {
+    const now = 1_000_000;
+    expect(classifyGoneState(now - (RUNPOD_NOTFOUND_GRACE_MS - 1000), now)).toBe("gone-grace");
+  });
+  it("classifyGoneState: past the grace window fails", () => {
+    const now = 1_000_000;
+    expect(classifyGoneState(now - (RUNPOD_NOTFOUND_GRACE_MS + 1000), now)).toBe("gone-failed");
+  });
+  it("classifyGoneState: a legacy token (no submittedAt) fails immediately (a 404 now is a real GC)", () => {
+    expect(classifyGoneState(undefined, 1_000_000)).toBe("gone-failed");
   });
 });
