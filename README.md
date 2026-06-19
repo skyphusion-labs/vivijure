@@ -41,9 +41,9 @@ slate  -->  vivijure  -->  vivijure-backend
 
 ![Modules page showing installed modules panel and stage configuration](docs/screenshots/modules-page.png)
 
-**Render history** -- honest per-render status (in-flight, stalled, failed, done) with inline error snippets:
+**Render history** -- honest per-render status. The panel surfaces real failed attempts alongside completed renders (here, three failed runs and one completed), with inline error snippets; it shows what actually happened, not a curated success:
 
-![Render history tab showing neon_halflife and fur_and_circuits renders with live status badges](docs/screenshots/planner-render-history.png)
+![Render history tab showing the honest-status UX: three failed neon_halflife attempts and one completed fur_and_circuits render, each with a status badge](docs/screenshots/planner-render-history.png)
 
 ## What you can do
 
