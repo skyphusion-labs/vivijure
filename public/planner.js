@@ -5098,16 +5098,15 @@ function buildHistoryRow(r, childrenByParent) {
   meta.appendChild(tier);
 
   const status = document.createElement("span");
-  // v0.170.0: stall badge reads an explicit server-authored field (Rollins #27).
-  // updated_at is NOT a reliable signal (the cron sweep bumps it every minute
-  // regardless of real progress). isStalled() is a stub until #27 ships the
-  // field name and values; for now it always returns false so no false-positives.
-  const stalled = isStalled(r);
+  // v0.170.0: no client-side stall badge. Rollins' #131 makes the server
+  // self-heal a stuck keyframe phase or FAIL LOUDLY at a 90min ceiling with
+  // a diagnostic error. Every job resolves server-side within 90min; a client
+  // badge would contradict the server and false-alarm on legit-long finishes.
+  // The inline error snippet (below) surfaces the fail-loud reason -- that is
+  // the honest signal.
   status.className =
-    "planner-history-status planner-history-status-" +
-    (stalled ? "stalled" : historyStatusKind(r.status));
-  status.textContent = r.status + (stalled ? " !" : "");
-  status.title = stalled ? "render may need attention -- check logs" : "";
+    "planner-history-status planner-history-status-" + historyStatusKind(r.status);
+  status.textContent = r.status;
   meta.appendChild(status);
 
   // v0.40.0: keyframes-only badge. Marks rows that ran the SDXL preview
@@ -6498,16 +6497,6 @@ function historyStatusKind(status) {
   return "running";
 }
 
-// v0.170.0: stall detection stub. The sweep bumps updated_at every minute so
-// it is NOT a reliable signal for "job made real progress." Rollins' driver
-// (#27) will emit an explicit server-authored stall field (name/values TBD).
-// Replace this stub with a check on that field once #27 ships.
-function isStalled(r) {
-  // TODO(#27): replace with r.stalled_since check (or equivalent Rollins field).
-  void r;
-  return false;
-}
-
 // Load the render stage with the past render's stored state and resume
 // polling when the job is still in flight. Skips the plan + bundle stages
 // since the user is jumping straight to "see this render's status".
@@ -6954,7 +6943,6 @@ document.addEventListener("DOMContentLoaded", () => {
   updateScatterGate();
 });
 
-
 // ---------- Screenwriter's Assistant dock (v0.164.0) ----------
 // The storyboard-refinement chat lives in a fixed right-rail dock (#sw-dock
 // in planner.html) so it never reflows the page. Toggle via the edge tab or
@@ -6987,7 +6975,6 @@ document.addEventListener("DOMContentLoaded", () => {
     obs.observe(refine, { attributes: true, attributeFilter: ["hidden"] });
   }
 })();
-
 
 // ---------- Auto-direct: the plan.enhance hook in the UI (v0.167.0) ----------
 (function initAutoDirect() {
