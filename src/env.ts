@@ -1,19 +1,14 @@
 // Worker Env binding for the Vivijure studio core.
 //
-// Hand-authored interface mirroring wrangler.example.toml (the committed template; the real
-// wrangler.toml is gitignored). Adding a binding: update wrangler.example.toml, then mirror it here.
+// Hand-authored interface mirroring wrangler.toml. Adding a binding: update wrangler.toml, then
+// mirror it here.
 //
-// Phase 0 (current). The render island has been *staged* into src/ (cast-db, renders-db,
-// runpod-submit, scatter, r2-presign, render-*, storyboard-*, the three containers) but is NOT yet
-// wired: index.ts routes only /health + /api/modules, and nothing imports the island from the
-// entrypoint. These bindings are declared ahead of the Phase-1 migration that will wire those routes
-// in (tracked in #1); until then they are present in the interface but unused at runtime, so a deploy
-// stays a lean module host. R2_RENDERS is the existing `vivijure` bucket; R2 is the chat-side bucket
-// the render flow will cross-bucket-copy a staged audio bed from (both bound, same resources as the
-// Playground, no data migration). RUNPOD_* and R2_S3_* are secrets/vars.
+// R2_RENDERS is the `vivijure` bucket (bundles, keyframes, clips, MP4s, cast assets). R2 is the
+// chat-side bucket (`skyphusion-llm`); image chat outputs and cross-bucket audio staging still use
+// it. RUNPOD_* and R2_S3_* are secrets/vars.
 //
-// MODULE BINDINGS: opt-in module workers attach as service bindings named `MODULE_<NAME>` (Fetcher),
-// discovered by the registry (src/modules/registry.ts). Not statically listed: a deployment installs
+// MODULE bindings: opt-in module workers attach as service bindings named `MODULE_<NAME>` (Fetcher),
+// discovered by the registry (src/modules/registry.ts). Not statically listed; a deployment installs
 // only the modules it wants.
 
 // RPC surface of the skyphusion-email Worker's EmailService entrypoint (render-email.ts uses it to
@@ -36,7 +31,7 @@ export interface Env {
   // Static frontend (the studio UI), served via Workers Assets.
   ASSETS: Fetcher;
 
-  // AI Gateway (LLM storyboard planning + cloud-animate scoring prompts).
+  // AI Gateway (LLM storyboard planning + image chat + cloud-animate scoring prompts).
   AI: Ai;
   GATEWAY_ID: string;
   // Planner LLM auth: authenticated AI Gateway token + xAI BYOK (secrets, optional).
@@ -68,6 +63,9 @@ export interface Env {
 
   // Transactional mail (render-complete notification). Optional; guard with `if (env.EMAIL)`.
   EMAIL?: EmailServiceBinding;
+
+  // BYOK OpenAI image gen (transparent PNG for gpt-image-1.5). Optional.
+  OPENAI_API_KEY?: string;
 
   // Opt-in module workers: `MODULE_<NAME>` service bindings. Discovered by the registry.
   [key: `MODULE_${string}`]: Fetcher | undefined;

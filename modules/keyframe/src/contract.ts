@@ -61,6 +61,7 @@ export interface KeyframeInput {
   project: string;
   bundle_key: string;
   shot_ids?: string[];
+  pretrained_loras?: Record<string, string>;
 }
 export interface KeyframeShot {
   shot_id: string;

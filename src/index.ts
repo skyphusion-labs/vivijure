@@ -1,17 +1,18 @@
-// Vivijure studio core: the module host + render API router (Phase 1, epic #25 / PR 2a).
-//
-// Wires the render / library / cast / project surface (modules present in this repo). The
-// planning/authoring/bundle/beat routes (plan, yaml, markers, bundle, audio-upload, models) are NOT
-// here -- their modules are still in the playground (PR 2b / Stage 1.5). A few routes that need
-// scatter.ts's ScatterArgs or train-lora orchestration are marked TODO and return 501 for now.
+// Vivijure studio core: module host, render API router, planner/cast UI server.
 
-import { discoverModules, modulesResponse, dispatchChain } from "./modules/registry";
+import { discoverModules, modulesResponse, dispatchChain, servingForHook } from "./modules/registry";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
 import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
-import { startFilmJob, advanceFilmJob, summarizeFilm, type FilmScene, type FilmSummary } from "./film-orchestrator";
+import { startFilmJob, advanceFilmJob, cancelFilmJob, startFilmFromKeyframes, summarizeFilm, type FilmScene, type FilmSummary } from "./film-orchestrator";
+import {
+  filmJobToPollView, isFilmJobId, mapRenderOverridesToModuleConfigs,
+  normalizeFilmScenes, filterScenesByShotIds,
+} from "./film-render-bridge";
+import { animateFromPreview, clipAnimateProgress } from "./finalize-from-keyframes";
+import { normalizeHybridBackends } from "./storyboard-validate";
 import { startCastRefsJob, advanceCastRefsJob, summarizeCastRefs } from "./cast-image-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
-import { getUserEmail } from "./shared";
+import { getUserEmail, getAccessUserEmail } from "./shared";
 import type { Env } from "./env";
 
 import {
@@ -19,27 +20,54 @@ import {
 } from "./storyboard-projects-db";
 import {
   listCastForUser, getCastById, createCast, updateCast, deleteCast,
-  setPortrait, clearPortrait, addRef, removeRef, addSource, removeSource,
+  clearPortrait,
 } from "./cast-db";
+import { handleCastLoraStatus, handleCastTrainLora } from "./cast-lora-train";
+import { handleAdoptRender } from "./render-adopt";
+import {
+  handleCastPortraitUpload,
+  handleCastRefAdd,
+  handleCastRefRemove,
+  handleCastSourceAdd,
+  handleCastSourceRemove,
+} from "./cast-media";
+import { chatImage, type ChatImageArgs } from "./chat-image";
+import { findModel } from "./models";
 import {
   insertRender, updateRenderFromView, getRenderByIdForUser, listRendersForUser, listUserTags,
   setRenderLabel, setRenderLockedShots, setRenderFolder, setRenderTags, deleteRenderRow,
   normalizeProjectIdInput, normalizeLockedShots, normalizeFolderPath, normalizeTags,
+  setCloudAnimateProgress, setHybridProgress,
   type NewRenderRow,
 } from "./renders-db";
+import { stageBundleInjectedKeyframes } from "./bundle-keyframes";
+import { readBundleScenes } from "./bundle-storyboard";
 import {
-  submitRenderJob, submitFinalizeJob, pollRenderJob, cancelRenderJob,
-  coerceQualityTier, deriveProjectFromBundleKey, parseAudioBeatPlan,
-  type RenderSubmitArgs, type FinalizeArgs, type AudioAnalyzeRequest,
+  startScatterRender,
+  advanceScatterJob,
+  cancelScatterJob,
+  scatterJobToPollView,
+  isScatterJobId,
+} from "./scatter-orchestrator";
+import { sweepUnresolvedJobs } from "./render-sweep";
+import {
+  coerceQualityTier, deriveProjectFromBundleKey,
+  type AudioAnalyzeRequest,
 } from "./runpod-submit";
 import { validateStoryboard, type StoryboardValidated } from "./storyboard-validate";
-// authoring (PR 2b)
-import { planStoryboard, refineStoryboard, type PlanStoryboardArgs, type RefineStoryboardArgs } from "./planner";
+import {
+  planStoryboard, refineStoryboard, chatComplete,
+  type PlanStoryboardArgs, type RefineStoryboardArgs, type ChatCompleteArgs,
+} from "./planner";
 import { PLANNING_MODELS } from "./planner-catalog";
 import { serializeStoryboardYaml } from "./planner-yaml";
 import { emitMarkers, type MarkersFormat } from "./markers";
 import { assembleBundle, type AssembleBundleArgs } from "./bundle-assembler";
 import { presignR2Get } from "./r2-presign";
+import { getUserPrefs, setUserPrefs } from "./user-prefs";
+import { analyzeAudioBeats } from "./beat-analyze";
+import { startScoreBedGenerate, pollScoreBedGenerate } from "./score-bed";
+import { muxAudioOntoRender } from "./render-mux";
 
 // Container DOs -- exported so the runtime registers them (bound in wrangler.toml).
 
@@ -113,6 +141,13 @@ const hDeleteProject: Handler = async (req, env, _c, p) => {
   if (!row) throw notFound("project");
   return json({ ok: true, deleted: row.id });
 };
+const hSaveProjectStoryboard: Handler = async (req, env, _c, p) => {
+  const b = await readBody<{ storyboard?: unknown }>(req);
+  if (b.storyboard === undefined) throw badRequest("storyboard required");
+  const row = await setLastStoryboard(env, idParam(p.id), getUserEmail(req), b.storyboard);
+  if (!row) throw notFound("project");
+  return json({ project: row });
+};
 
 // --- cast ----------------------------------------------------------------
 // Wrapped by resource name ({cast}) -- the frontend reads data.cast (array for list, object for item).
@@ -138,47 +173,35 @@ const hDeleteCast: Handler = async (req, env, _c, p) => {
   if (!row) throw notFound("cast member");
   return json({ ok: true, deleted: row.id });
 };
-// portrait / ref / source accept an already-uploaded R2 key + mime (client presigns the PUT
-// separately via r2-presign). TODO(typecheck): confirm CastRefImage field names.
-const hSetPortrait: Handler = async (req, env, _c, p) => {
-  const b = await readBody<{ key?: string; mime?: string }>(req);
-  if (!b.key || !b.mime) throw badRequest("key and mime required");
-  const row = await setPortrait(env, idParam(p.id), getUserEmail(req), b.key, b.mime);
-  if (!row) throw notFound("cast member");
-  return json({ cast: row });
-};
+// portrait / ref / source: binary upload, staged {key,mime}, or {from_chat_artifact} copy.
+const hSetPortrait: Handler = async (req, env, _c, p) =>
+  handleCastPortraitUpload(req, env, idParam(p.id), getUserEmail(req));
 const hClearPortrait: Handler = async (req, env, _c, p) => {
-  const row = await clearPortrait(env, idParam(p.id), getUserEmail(req));
-  if (!row) throw notFound("cast member");
+  const email = getUserEmail(req);
+  const id = idParam(p.id);
+  const cur = await getCastById(env, id, email);
+  if (!cur) throw notFound("cast member");
+  if (cur.portrait_key) {
+    try { await env.R2_RENDERS.delete(cur.portrait_key); } catch { /* ignore */ }
+  }
+  const row = await clearPortrait(env, id, email);
   return json({ cast: row });
 };
-const hAddRef: Handler = async (req, env, _c, p) => {
-  const b = await readBody<{ key?: string; mime?: string }>(req);
-  if (!b.key || !b.mime) throw badRequest("key and mime required");
-  const row = await addRef(env, idParam(p.id), getUserEmail(req), { key: b.key, mime: b.mime });
-  if (!row) throw notFound("cast member");
-  return json({ cast: row });
-};
+const hAddRef: Handler = async (req, env, _c, p) =>
+  handleCastRefAdd(req, env, idParam(p.id), getUserEmail(req));
 const hRemoveRef: Handler = async (req, env, _c, p) => {
-  const b = await readBody<{ key?: string }>(req);
-  if (!b.key) throw badRequest("key required");
-  const res = await removeRef(env, idParam(p.id), getUserEmail(req), b.key);
-  if (!res.row) throw notFound("cast member or ref");
-  return json({ cast: res.row });
+  const b = await readBody<{ key?: string }>(req).catch(() => ({} as { key?: string }));
+  const key = b.key || p.refKey;
+  if (!key) throw badRequest("key required");
+  return handleCastRefRemove(env, idParam(p.id), getUserEmail(req), key);
 };
-const hAddSource: Handler = async (req, env, _c, p) => {
-  const b = await readBody<{ key?: string; mime?: string }>(req);
-  if (!b.key || !b.mime) throw badRequest("key and mime required");
-  const row = await addSource(env, idParam(p.id), getUserEmail(req), { key: b.key, mime: b.mime });
-  if (!row) throw notFound("cast member");
-  return json({ cast: row });
-};
+const hAddSource: Handler = async (req, env, _c, p) =>
+  handleCastSourceAdd(req, env, idParam(p.id), getUserEmail(req));
 const hRemoveSource: Handler = async (req, env, _c, p) => {
-  const b = await readBody<{ key?: string }>(req);
-  if (!b.key) throw badRequest("key required");
-  const res = await removeSource(env, idParam(p.id), getUserEmail(req), b.key);
-  if (!res.row) throw notFound("cast member or source");
-  return json({ cast: res.row });
+  const b = await readBody<{ key?: string }>(req).catch(() => ({} as { key?: string }));
+  const key = b.key || p.sourceKey;
+  if (!key) throw badRequest("key required");
+  return handleCastSourceRemove(env, idParam(p.id), getUserEmail(req), key);
 };
 
 // cast.image: generate a cast member's LoRA training reference set via the installed cast.image
@@ -208,6 +231,38 @@ const hPollCastRefs: Handler = async (req, env, _c, p) => {
 // at /api/artifact/<key> (the studio is CF Access-gated, so serving by key is safe single-tenant).
 const UPLOAD_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25MB -- portraits/refs are ~1-3MB; this is generous headroom
+const MAX_AUDIO_UPLOAD_BYTES = 32 * 1024 * 1024;
+const AUDIO_UPLOAD_EXT: Record<string, string> = {
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/aac": "aac",
+  "audio/mp4": "m4a",
+  "audio/x-m4a": "m4a",
+  "audio/ogg": "ogg",
+  "audio/webm": "webm",
+};
+const hStoryboardAudioUpload: Handler = async (req, env) => {
+  const mime = (req.headers.get("content-type") || "").split(";")[0].trim() || "audio/mpeg";
+  const ext = AUDIO_UPLOAD_EXT[mime] || "bin";
+  const bytes = await req.arrayBuffer();
+  if (!bytes.byteLength) throw badRequest("empty upload body");
+  if (bytes.byteLength > MAX_AUDIO_UPLOAD_BYTES) throw badRequest("upload too large (max 32MB)");
+  const key = `audio/${crypto.randomUUID()}.${ext}`;
+  await env.R2_RENDERS.put(key, bytes, { httpMetadata: { contentType: mime } });
+  return json({ key, mime, size: bytes.byteLength }, 201);
+};
+const hStoryboardCharacterRef: Handler = async (req, env) => {
+  const mime = (req.headers.get("content-type") || "").split(";")[0].trim() || "application/octet-stream";
+  const ext = UPLOAD_EXT[mime] || "bin";
+  const bytes = await req.arrayBuffer();
+  if (!bytes.byteLength) throw badRequest("empty upload body");
+  if (bytes.byteLength > MAX_UPLOAD_BYTES) throw badRequest("upload too large (max 25MB)");
+  const key = `character-refs/${crypto.randomUUID()}.${ext}`;
+  await env.R2_RENDERS.put(key, bytes, { httpMetadata: { contentType: mime } });
+  return json({ key, mime, size: bytes.byteLength }, 201);
+};
 const hUpload: Handler = async (req, env) => {
   const mime = (req.headers.get("content-type") || "").split(";")[0].trim() || "application/octet-stream";
   const ext = UPLOAD_EXT[mime] || "bin";
@@ -232,25 +287,119 @@ const hServeArtifact: Handler = async (_req, env, _c, p) => {
 
 // --- renders (library / metadata) ----------------------------------------
 const hListRenders: Handler = async (req, env) => {
-  const email = getUserEmail(req);
-  const projectId = normalizeProjectIdInput(new URL(req.url).searchParams.get("project_id"));
-  return json(await listRendersForUser(env, email, 100, projectId));
+  const url = new URL(req.url);
+  const projectId = normalizeProjectIdInput(url.searchParams.get("project_id"));
+  const limitRaw = Number(url.searchParams.get("limit"));
+  const limit = Number.isFinite(limitRaw) ? limitRaw : 100;
+  const renders = await listRendersForUser(env, limit, projectId);
+  return json({ renders });
 };
-const hListTags: Handler = async (req, env) => json(await listUserTags(env, getUserEmail(req)));
+const hListTags: Handler = async (_req, env) => json({ tags: await listUserTags(env) });
 const hPatchRender: Handler = async (req, env, _c, p) => {
-  const id = idParam(p.id), email = getUserEmail(req);
+  const id = idParam(p.id);
   const b = await readBody<{ label?: string | null; lockedShots?: unknown; folderPath?: unknown; tags?: unknown }>(req);
   let ok = false;
-  if ("label" in b) ok = (await setRenderLabel(env, id, email, b.label ?? null)) || ok;
-  if ("lockedShots" in b) ok = (await setRenderLockedShots(env, id, email, normalizeLockedShots(b.lockedShots))) || ok;
-  if ("folderPath" in b) ok = (await setRenderFolder(env, id, email, normalizeFolderPath(b.folderPath))) || ok;
-  if ("tags" in b) ok = (await setRenderTags(env, id, email, normalizeTags(b.tags))) || ok;
+  if ("label" in b) ok = (await setRenderLabel(env, id, b.label ?? null)) || ok;
+  if ("lockedShots" in b) ok = (await setRenderLockedShots(env, id, normalizeLockedShots(b.lockedShots))) || ok;
+  if ("folderPath" in b) ok = (await setRenderFolder(env, id, normalizeFolderPath(b.folderPath))) || ok;
+  if ("tags" in b) ok = (await setRenderTags(env, id, normalizeTags(b.tags))) || ok;
   if (!ok) throw notFound("render");
-  return json(await getRenderByIdForUser(env, id, email));
+  return json(await getRenderByIdForUser(env, id));
 };
-const hDeleteRender: Handler = async (req, env, _c, p) => {
-  if (!(await deleteRenderRow(env, idParam(p.id), getUserEmail(req)))) throw notFound("render");
+const hDeleteRender: Handler = async (_req, env, _c, p) => {
+  if (!(await deleteRenderRow(env, idParam(p.id)))) throw notFound("render");
   return json({ ok: true });
+};
+const hAddRenderAudio: Handler = async (req, env, _c, p) => {
+  const b = await readBody<{ audioKey?: string }>(req);
+  if (!b.audioKey?.trim()) throw badRequest("audioKey required");
+  const r = await muxAudioOntoRender(env, idParam(p.id), b.audioKey.trim());
+  if (!r.ok) return json({ error: r.error }, 422);
+  return json({ ok: true, output_key: r.output_key });
+};
+const hAddRenderNarration: Handler = async (req, env, _c, p) => {
+  const b = await readBody<{ text?: string; module?: string; config?: Record<string, unknown> }>(req);
+  if (!b.text?.trim()) throw badRequest("text required");
+  const started = await startScoreBedGenerate(env, {
+    kind: "narration",
+    text: b.text,
+    module: b.module,
+    config: b.config,
+  });
+  if (!started.ok) return json({ error: started.error }, 422);
+  // Poll inline (narration is typically shorter than music; bounded wait).
+  for (let i = 0; i < 40; i++) {
+    const polled = await pollScoreBedGenerate(env, started.id, started.module);
+    if (polled.status === "done" && polled.output_artifact?.key) {
+      const muxed = await muxAudioOntoRender(env, idParam(p.id), polled.output_artifact.key);
+      if (!muxed.ok) return json({ error: muxed.error }, 422);
+      return json({ ok: true, output_key: muxed.output_key, module: started.module, label: started.label });
+    }
+    if (polled.status === "failed") return json({ error: polled.job_error || "narration failed" }, 422);
+    await new Promise((res) => setTimeout(res, 3000));
+  }
+  return json({ error: "narration timed out; try again later" }, 504);
+};
+
+async function animatePreviewHandler(
+  env: Env,
+  renderId: number,
+  email: string,
+  args: Omit<import("./finalize-from-keyframes").AnimateFromPreviewArgs, "parent" | "userEmail">,
+): Promise<Response> {
+  const parent = await getRenderByIdForUser(env, renderId);
+  if (!parent) throw notFound("render");
+  const r = await animateFromPreview(env, { parent, userEmail: email, ...args });
+  if (!r.ok) return json({ ok: false, error: r.error }, r.status ?? 400);
+  return json({ ok: true, ...r.view }, 201);
+}
+
+const hFinalizePreview: Handler = async (req, env, _c, p) => {
+  const email = getUserEmail(req);
+  let audioKey: string | undefined;
+  try {
+    const b = await readBody<{ audioKey?: string; castLoras?: Record<string, string> }>(req);
+    audioKey = b.audioKey;
+  } catch { /* empty body ok */ }
+  return animatePreviewHandler(env, idParam(p.id), email, {
+    deriveMode: "finalized",
+    motionBackend: "own-gpu",
+    audioKey,
+  });
+};
+
+const hAnimateCloud: Handler = async (req, env, _c, p) => {
+  const email = getUserEmail(req);
+  const b = await readBody<{ model?: string; perShot?: Record<string, string>; audioKey?: string }>(req);
+  return animatePreviewHandler(env, idParam(p.id), email, {
+    deriveMode: "cloud-finalized",
+    motionBackend: b.model,
+    perShotModels: b.perShot,
+    audioKey: b.audioKey,
+  });
+};
+
+const hAnimateHybrid: Handler = async (req, env, _c, p) => {
+  const email = getUserEmail(req);
+  const b = await readBody<{
+    backends?: unknown;
+    defaultBackend?: "gpu" | "cloud";
+    defaultCloudModel?: string;
+    audioKey?: string;
+  }>(req);
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  const allowed = new Set(
+    servingForHook(modules, "motion.backend").map((m) => m.name).filter((n) => n !== "own-gpu"),
+  );
+  const normalized = normalizeHybridBackends(b.backends, allowed);
+  if (normalized.errors.length) throw badRequest(normalized.errors.join("; "));
+  return animatePreviewHandler(env, idParam(p.id), email, {
+    deriveMode: "cloud-finalized",
+    hybridBackends: normalized.backends,
+    defaultBackend: b.defaultBackend === "cloud" ? "cloud" : "gpu",
+    defaultCloudModel: b.defaultCloudModel,
+    audioKey: b.audioKey,
+  });
 };
 
 // --- render submission / lifecycle ---------------------------------------
@@ -259,66 +408,238 @@ const hSubmitRender: Handler = async (req, env) => {
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
     renderOverrides?: Record<string, unknown>; keyframesOnly?: boolean; audioKey?: string;
-    pretrainedLoras?: Record<string, string>; processShotIds?: string[]; projectId?: unknown;
+    processShotIds?: string[]; projectId?: unknown;
+    scenes?: unknown; motion_backend?: string;
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
-  const args: RenderSubmitArgs = {
-    bundleKey: b.bundleKey, project: b.project, qualityTier: coerceQualityTier(b.qualityTier),
-    renderOverrides: b.renderOverrides, keyframesOnly: b.keyframesOnly, audioKey: b.audioKey,
-    pretrainedLoras: b.pretrainedLoras, processShotIds: b.processShotIds, userEmail: email,
-  };
-  const r = await submitRenderJob(env, args);
-  if (!r.ok) return json({ error: r.error }, r.status ?? 502);
+  const tier = coerceQualityTier(b.qualityTier) ?? "final";
+  const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
+
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  if (servingForHook(modules, "keyframe").length === 0) {
+    return json({ error: "no keyframe module installed (bind MODULE_KEYFRAME)" }, 503);
+  }
+  const scenes = filterScenesByShotIds(normalizeFilmScenes(b.scenes), b.processShotIds);
+  if (!scenes.length) throw badRequest("scenes[] required (storyboard shots with prompt and duration)");
+  if (!b.keyframesOnly && servingForHook(modules, "motion.backend").length === 0) {
+    throw badRequest("no motion.backend module installed for full render");
+  }
+  const mapped = mapRenderOverridesToModuleConfigs(b.renderOverrides, tier, modules);
+  const motionBackend = b.keyframesOnly
+    ? undefined
+    : (b.motion_backend ?? mapped.motion_backend);
+  const job = await startFilmJob(env, {
+    project,
+    bundle_key: b.bundleKey,
+    scenes,
+    motion_backend: motionBackend,
+    keyframe_config: mapped.keyframe_config,
+    motion_config: mapped.motion_config,
+    finish_config: mapped.finish_config,
+    keyframes_only: !!b.keyframesOnly,
+    audio_key: b.keyframesOnly ? undefined : b.audioKey,
+    user_email: email,
+  });
+  const view = filmJobToPollView(job, null);
   const row: NewRenderRow = {
-    userEmail: email, jobId: r.view.jobId,
-    project: args.project ?? deriveProjectFromBundleKey(args.bundleKey),
-    bundleKey: args.bundleKey, qualityTier: args.qualityTier ?? "final",
-    renderOverrides: args.renderOverrides, status: r.view.status,
-    mode: args.keyframesOnly ? "keyframes-only" : "full",
+    userEmail: email,
+    jobId: view.jobId,
+    project,
+    bundleKey: b.bundleKey,
+    qualityTier: tier,
+    renderOverrides: b.renderOverrides,
+    status: view.status,
+    mode: b.keyframesOnly ? "keyframes-only" : "full",
     projectId: normalizeProjectIdInput(b.projectId),
   };
   await insertRender(env, row);
-  return json(r.view, 201);
+  return json(view, 201);
 };
-const hFinalizeRender: Handler = async (req, env) => {
+const hRenderFromKeyframes: Handler = async (req, env) => {
   const email = getUserEmail(req);
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
-    renderOverrides?: Record<string, unknown>; processShotIds?: string[]; audioKey?: string;
-    pretrainedLoras?: Record<string, string>; parentId?: number | null; projectId?: unknown;
+    renderOverrides?: Record<string, unknown>; audioKey?: string; projectId?: unknown;
+    motion_backend?: string;
   }>(req);
-  if (!b.project || !b.bundleKey) throw badRequest("project and bundleKey required");
-  const args: FinalizeArgs = {
-    project: b.project, bundleKey: b.bundleKey, qualityTier: coerceQualityTier(b.qualityTier),
-    renderOverrides: b.renderOverrides, processShotIds: b.processShotIds, audioKey: b.audioKey,
-    pretrainedLoras: b.pretrainedLoras, userEmail: email,
-  };
-  const r = await submitFinalizeJob(env, args);
-  if (!r.ok) return json({ error: r.error }, r.status ?? 502);
-  await insertRender(env, {
-    userEmail: email, jobId: r.view.jobId, project: b.project, bundleKey: b.bundleKey,
-    qualityTier: args.qualityTier ?? "final", renderOverrides: args.renderOverrides,
-    status: r.view.status, projectId: normalizeProjectIdInput(b.projectId), parentId: b.parentId ?? null,
+  if (!b.bundleKey) throw badRequest("bundleKey required");
+  const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
+  const tier = coerceQualityTier(b.qualityTier) ?? "final";
+
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  if (servingForHook(modules, "motion.backend").length === 0) {
+    return json({ error: "no motion.backend module installed" }, 503);
+  }
+
+  const parsedScenes = await readBundleScenes(env, b.bundleKey);
+  if (!parsedScenes.length) {
+    return json({ error: "bundle has no storyboard scenes" }, 400);
+  }
+  const scenes: FilmScene[] = parsedScenes.map((s) => ({
+    shot_id: s.shot_id,
+    prompt: s.prompt,
+    seconds: s.seconds,
+  }));
+
+  const staged = await stageBundleInjectedKeyframes(env, b.bundleKey, project);
+  if (!staged.length) {
+    return json({ error: "bundle has no injected keyframes (clips/<id>_keyframe.png)" }, 400);
+  }
+
+  const mapped = mapRenderOverridesToModuleConfigs(b.renderOverrides, tier, modules);
+  const motionBackend = b.motion_backend ?? mapped.motion_backend ?? "own-gpu";
+
+  const job = await startFilmFromKeyframes(env, {
+    project,
+    bundle_key: b.bundleKey,
+    scenes,
+    keyframes: staged,
+    motion_backend: motionBackend,
+    motion_config: mapped.motion_config,
+    finish_config: mapped.finish_config,
+    derive_mode: "finalized",
+    audio_key: b.audioKey,
+    user_email: email,
   });
-  return json(r.view, 201);
+  if (job.phase === "failed") {
+    return json({ error: job.error || "render from keyframes failed" }, 422);
+  }
+  const view = filmJobToPollView(job, null);
+  await insertRender(env, {
+    userEmail: email,
+    jobId: view.jobId,
+    project,
+    bundleKey: b.bundleKey,
+    qualityTier: tier,
+    renderOverrides: b.renderOverrides,
+    status: view.status,
+    mode: "finalized",
+    projectId: normalizeProjectIdInput(b.projectId),
+  });
+  return json(view, 201);
+};
+const hRegenShot: Handler = async (req, env, _c, p) => {
+  const email = getUserEmail(req);
+  const renderId = idParam(p.id);
+  const b = await readBody<{ shotId?: string }>(req);
+  const shotId = typeof b.shotId === "string" ? b.shotId.trim() : "";
+  if (!shotId) throw badRequest("shotId required");
+
+  const row = await getRenderByIdForUser(env, renderId);
+  if (!row) throw notFound("render");
+  if (row.status !== "COMPLETED") throw badRequest("render must be COMPLETED");
+  if (!row.bundle_key) throw badRequest("render has no bundle_key");
+
+  const scenes = await readBundleScenes(env, row.bundle_key);
+  const scene = scenes.find((s) => s.shot_id === shotId);
+  if (!scene) throw badRequest(`shot ${shotId} not in bundle storyboard`);
+
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  if (servingForHook(modules, "keyframe").length === 0) {
+    return json({ ok: false, error: "no keyframe module installed (bind MODULE_KEYFRAME)" }, 503);
+  }
+  const tier = coerceQualityTier(row.quality_tier) ?? "final";
+  const mapped = mapRenderOverridesToModuleConfigs(row.render_overrides, tier, modules);
+
+  const job = await startFilmJob(env, {
+    project: row.project,
+    bundle_key: row.bundle_key,
+    scenes: [{ shot_id: scene.shot_id, prompt: scene.prompt, seconds: scene.seconds }],
+    keyframe_config: mapped.keyframe_config,
+    keyframes_only: true,
+    user_email: email,
+  });
+  if (job.phase === "failed") {
+    return json({ ok: false, error: job.error || "regen submit failed" }, 422);
+  }
+  const view = filmJobToPollView(job, null);
+  return json({ ok: true, jobId: view.jobId, status: view.status });
 };
 const hPollRender: Handler = async (_req, env, ctx, p) => {
-  const r = await pollRenderJob(env, p.jobId);
-  if (!r.ok) return json({ error: r.error }, r.status ?? 502);
-  // Pass ctx so the best-effort R2 log write runs via waitUntil, off the poll hot
-  // path -- the poll response no longer waits on a D1 lookup + an R2 PUT (issue #15).
-  await updateRenderFromView(env, r.view, ctx);
-  return json(r.view);
+  if (isScatterJobId(p.jobId)) {
+    const view = await advanceScatterJob(env, p.jobId, ctx);
+    if (!view) throw notFound("render job");
+    return json(view);
+  }
+  if (!isFilmJobId(p.jobId)) {
+    return json({ error: "unknown or legacy render job id (film-* or scatter-* only)", jobId: p.jobId }, 404);
+  }
+  const r = await advanceFilmJob(env, p.jobId);
+  if (!r) throw notFound("render job");
+  const view = filmJobToPollView(r.job, r.clipJob);
+  await updateRenderFromView(env, view, ctx);
+  if (
+    r.job.derive_mode === "cloud-finalized"
+    && r.clipJob
+    && r.job.phase !== "done"
+    && r.job.phase !== "failed"
+    && !r.job.cancelled
+  ) {
+    const prog = clipAnimateProgress(r.clipJob);
+    if (prog.gpu.total > 0 && prog.cloud.total > 0) {
+      await setHybridProgress(env, p.jobId, { gpu: prog.gpu, cloud: prog.cloud });
+    } else if (prog.cloud.total > 0) {
+      await setCloudAnimateProgress(env, p.jobId, prog.done, prog.total);
+    }
+  }
+  return json(view);
 };
 const hCancelRender: Handler = async (_req, env, _c, p) => {
-  const r = await cancelRenderJob(env, p.jobId);
-  if (!r.ok) return json({ error: r.error }, r.status ?? 502);
-  return json(r.view);
+  if (isScatterJobId(p.jobId)) {
+    const view = await cancelScatterJob(env, p.jobId);
+    if (!view) throw notFound("render job");
+    await updateRenderFromView(env, view);
+    return json(view);
+  }
+  if (!isFilmJobId(p.jobId)) {
+    return json({ error: "unknown or legacy render job id (film-* or scatter-* only)", jobId: p.jobId }, 404);
+  }
+  const job = await cancelFilmJob(env, p.jobId);
+  if (!job) throw notFound("render job");
+  const view = filmJobToPollView(job, null);
+  await updateRenderFromView(env, view);
+  return json(view);
 };
-// TODO(PR 2a, needs scatter.ts ScatterArgs + parent/child row orchestration):
-const hScatterRender: Handler = async () => json({ error: "scatter wiring TODO" }, 501);
-// TODO(PR 2a): cast LoRA train (submitTrainLoraJob + setLoraJob) and renders/adopt.
-const hTodo: Handler = async () => json({ error: "TODO" }, 501);
+const hScatterRender: Handler = async (req, env) => {
+  const email = getUserEmail(req);
+  const b = await readBody<{
+    project?: string; bundleKey?: string; qualityTier?: string;
+    shotIds?: string[]; shardCount?: number; castLoras?: Record<string, unknown>;
+    renderOverrides?: Record<string, unknown>; audioKey?: string; projectId?: unknown;
+    motion_backend?: string;
+  }>(req);
+  if (!b.bundleKey) throw badRequest("bundleKey required");
+  if (!Array.isArray(b.shotIds) || b.shotIds.length < 2) throw badRequest("shotIds[] required (>= 2)");
+  const shardCount = typeof b.shardCount === "number" ? b.shardCount : 2;
+  const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
+  const tier = coerceQualityTier(b.qualityTier) ?? "final";
+  try {
+    const job = await startScatterRender(env, {
+      project,
+      bundle_key: b.bundleKey,
+      quality_tier: tier,
+      shot_ids: b.shotIds,
+      shard_count: shardCount,
+      cast_loras: b.castLoras ?? {},
+      render_overrides: b.renderOverrides,
+      motion_backend: b.motion_backend,
+      audio_key: b.audioKey,
+      user_email: email,
+      project_id: normalizeProjectIdInput(b.projectId),
+    });
+    const view = scatterJobToPollView(job);
+    return json({ ok: true, jobId: view.jobId, status: view.status }, 201);
+  } catch (e) {
+    const msg = (e as Error).message || "scatter submit failed";
+    return json({ ok: false, error: msg }, 422);
+  }
+};
+const hTrainCastLora: Handler = async (req, env, _c, p) =>
+  handleCastTrainLora(req, env, idParam(p.id), getUserEmail(req));
+const hCastLoraStatus: Handler = async (req, env, _c, p) =>
+  handleCastLoraStatus(env, idParam(p.id), getUserEmail(req));
+const hAdoptRender: Handler = async (req, env) =>
+  handleAdoptRender(req, env, getUserEmail(req));
 
 // --- validation ----------------------------------------------------------
 const hPreflight: Handler = async (req) => {
@@ -327,7 +648,7 @@ const hPreflight: Handler = async (req) => {
   return json(result, okFlag === false ? 400 : 200);
 };
 
-// --- authoring: planning / yaml / markers / bundle / audio (PR 2b) -------
+// --- authoring: planning / yaml / markers / bundle / audio ----------------
 const hPlan: Handler = async (req, env) => {
   const a = await readBody<PlanStoryboardArgs>(req);
   if (!a.brief || !a.model) throw badRequest("brief and model required");
@@ -339,6 +660,59 @@ const hRefine: Handler = async (req, env) => {
   if (a.storyboard === undefined || !a.message || !a.model) throw badRequest("storyboard, message, model required");
   const r = await refineStoryboard(env, a);
   return json(r, r.ok ? 200 : 422);
+};
+const hChat: Handler = async (req, env) => {
+  const a = await readBody<ChatCompleteArgs & ChatImageArgs>(req);
+  if (!a.model || !a.user_input) throw badRequest("model and user_input required");
+  const email = getUserEmail(req);
+  const modelEntry = findModel(a.model);
+  if (modelEntry?.type === "image") {
+    const r = await chatImage(env, a, email);
+    if (!r.ok) return json({ error: r.error, model: r.model }, 502);
+    return json({
+      model: r.model,
+      model_type: "image",
+      output: r.output,
+      output_artifact: r.output_artifact,
+      latency_ms: r.latency_ms,
+      ai_gateway_log_id: r.ai_gateway_log_id,
+    });
+  }
+  const r = await chatComplete(env, a);
+  if (!r.ok) return json({ error: r.error, model: r.model }, 422);
+  return json({ output: r.output, model: r.model, logId: r.logId });
+};
+const hScoreBedGenerate: Handler = async (req, env) => {
+  const a = await readBody<{
+    kind?: "music" | "narration";
+    prompt?: string;
+    text?: string;
+    module?: string;
+    storyboard?: PlanEnhanceStoryboard;
+    seconds?: number;
+    config?: Record<string, unknown>;
+  }>(req);
+  if (a.kind === "narration") {
+    if (!a.text?.trim() && !a.storyboard) throw badRequest("text or storyboard required");
+  } else if (!a.prompt?.trim()) {
+    throw badRequest("prompt required");
+  }
+  const r = await startScoreBedGenerate(env, {
+    kind: a.kind === "narration" ? "narration" : "music",
+    prompt: a.prompt,
+    text: a.text,
+    module: a.module,
+    storyboard: a.storyboard,
+    seconds: a.seconds,
+    config: a.config,
+  });
+  if (!r.ok) return json({ error: r.error }, 422);
+  return json({ status: r.status, id: r.id, module: r.module, label: r.label });
+};
+const hPollScoreBed: Handler = async (req, env, _c, p) => {
+  const module = new URL(req.url).searchParams.get("module")?.trim() || "";
+  if (!module) throw badRequest("module query param required");
+  return json(await pollScoreBedGenerate(env, p.id, module));
 };
 
 // --- module-host: run the plan.enhance chain over a storyboard (invoke-from-core). The core does
@@ -459,33 +833,34 @@ const hBundle: Handler = async (req, env) => {
   const r = await assembleBundle(env, a);
   return json(r, r.ok ? 201 : 400);
 };
-const hAudioUpload: Handler = async (req, env) => {
-  const a = await readBody<AudioAnalyzeRequest>(req);
+const hAudioAnalyze: Handler = async (req, env) => {
+  const a = await readBody<AudioAnalyzeRequest & { module?: string }>(req);
   if (!a.audioKey) throw badRequest("audioKey required");
-  const audioUrl = await presignR2Get(env, a.audioKey, 300);
-  // audio-beat-sync runs always-on on the fleet over a Workers VPC binding (issue #83).
-  const resp = await env.AUDIO_BEAT_SYNC_VPC.fetch("http://audio-beat-sync/analyze", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ audioUrl, clipSeconds: a.clipSeconds, mode: a.mode, minSceneS: a.minSceneS, maxSceneS: a.maxSceneS, forceShots: a.forceShots }),
-  });
-  const plan = parseAudioBeatPlan(await resp.json());
-  if (!plan) return json({ error: "beat-sync container returned an unrecognized plan" }, 502);
-  return json(plan);
+  const result = await analyzeAudioBeats(env, a, a.module?.trim() || undefined);
+  if (!result.ok) return json({ ok: false, error: result.error }, 502);
+  return json({ ok: true, output: result.plan, module: result.module });
 };
 
 // --- misc planner endpoints ----------------------------------------------
-const hWhoami: Handler = async (req) => json({ email: getUserEmail(req) });
-// user-prefs.ts not migrated yet -- stub so the planner falls back to defaults (follow-up).
-const hGetPrefs: Handler = async () => json({});
-const hPutPrefs: Handler = async () => json({ ok: true });
+const hWhoami: Handler = async (req) => json({ user: getAccessUserEmail(req) });
+const hGetPrefs: Handler = async (req, env) => {
+  const prefs = await getUserPrefs(env, getAccessUserEmail(req));
+  return json({ ok: true, prefs });
+};
+const hPatchPrefs: Handler = async (req, env) => {
+  const body = await readBody<Record<string, unknown>>(req);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw badRequest("body must be a prefs object");
+  const prefs = await setUserPrefs(env, getAccessUserEmail(req), body);
+  return json({ ok: true, prefs });
+};
 
-// --- route table (PR 2a) -------------------------------------------------
+// --- route table ---------------------------------------------------------
 const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/storyboard/projects",                        handler: hListProjects },
   { method: "POST",   pattern: "/api/storyboard/projects",                        handler: hCreateProject },
   { method: "GET",    pattern: "/api/storyboard/projects/:id",                    handler: hGetProject },
   { method: "PATCH",  pattern: "/api/storyboard/projects/:id",                    handler: hPatchProject },
+  { method: "POST",   pattern: "/api/storyboard/projects/:id/storyboard",         handler: hSaveProjectStoryboard },
   { method: "DELETE", pattern: "/api/storyboard/projects/:id",                    handler: hDeleteProject },
   { method: "GET",    pattern: "/api/cast",                            handler: hListCast },
   { method: "POST",   pattern: "/api/cast",                            handler: hCreateCast },
@@ -496,40 +871,55 @@ const API_ROUTES: Route[] = [
   { method: "DELETE", pattern: "/api/cast/:id/portrait",               handler: hClearPortrait },
   { method: "POST",   pattern: "/api/cast/:id/ref",                    handler: hAddRef },
   { method: "DELETE", pattern: "/api/cast/:id/ref",                    handler: hRemoveRef },
+  { method: "DELETE", pattern: "/api/cast/:id/refs/*refKey",           handler: hRemoveRef },
   { method: "POST",   pattern: "/api/cast/:id/source",                 handler: hAddSource },
   { method: "DELETE", pattern: "/api/cast/:id/source",                 handler: hRemoveSource },
+  { method: "DELETE", pattern: "/api/cast/:id/source/*sourceKey",      handler: hRemoveSource },
   { method: "POST",   pattern: "/api/cast/:id/generate-refs",          handler: hGenerateCastRefs },
   { method: "GET",    pattern: "/api/cast/:id/refs-job/:jobId",        handler: hPollCastRefs },
-  { method: "POST",   pattern: "/api/cast/:id/lora",                   handler: hTodo },
+  { method: "POST",   pattern: "/api/cast/:id/train-lora",             handler: hTrainCastLora },
+  { method: "GET",    pattern: "/api/cast/:id/lora-status",            handler: hCastLoraStatus },
   { method: "POST",   pattern: "/api/upload",                          handler: hUpload },
   { method: "GET",    pattern: "/api/artifact/*key",                   handler: hServeArtifact },
   { method: "POST",   pattern: "/api/storyboard/preflight",            handler: hPreflight },
   { method: "POST",   pattern: "/api/storyboard/plan",                 handler: hPlan },
   { method: "POST",   pattern: "/api/storyboard/refine",               handler: hRefine },
+  { method: "POST",   pattern: "/api/chat",                            handler: hChat },
+  { method: "POST",   pattern: "/api/storyboard/score-bed",            handler: hScoreBedGenerate },
+  { method: "POST",   pattern: "/api/storyboard/music-generate",       handler: hScoreBedGenerate },
+  { method: "GET",    pattern: "/api/job/:id",                         handler: hPollScoreBed },
   { method: "POST",   pattern: "/api/storyboard/enhance",              handler: hEnhance },
   { method: "GET",    pattern: "/api/storyboard/models",               handler: hModels },
   { method: "POST",   pattern: "/api/storyboard/yaml",                 handler: hYaml },
   { method: "POST",   pattern: "/api/storyboard/markers",              handler: hMarkers },
   { method: "POST",   pattern: "/api/storyboard/bundle",               handler: hBundle },
-  { method: "POST",   pattern: "/api/audio/analyze",                   handler: hAudioUpload },
+  { method: "POST",   pattern: "/api/storyboard/audio-upload",         handler: hStoryboardAudioUpload },
+  { method: "POST",   pattern: "/api/storyboard/character-ref",        handler: hStoryboardCharacterRef },
+  { method: "POST",   pattern: "/api/audio/analyze",                   handler: hAudioAnalyze },
   { method: "POST",   pattern: "/api/storyboard/render",               handler: hSubmitRender },
   { method: "POST",   pattern: "/api/storyboard/render-plan",          handler: hRenderPlan },
   { method: "POST",   pattern: "/api/render/clips",                     handler: hStartClips },
   { method: "GET",    pattern: "/api/render/clips/:id",                 handler: hPollClips },
   { method: "POST",   pattern: "/api/render/film",                      handler: hStartFilm },
   { method: "GET",    pattern: "/api/render/film/:id",                  handler: hPollFilm },
+  { method: "POST",   pattern: "/api/storyboard/renders/:id/regen-shot", handler: hRegenShot },
   { method: "POST",   pattern: "/api/storyboard/render/scatter",       handler: hScatterRender },
-  { method: "POST",   pattern: "/api/storyboard/render-from-keyframes", handler: hFinalizeRender },
+  { method: "POST",   pattern: "/api/storyboard/render-from-keyframes", handler: hRenderFromKeyframes },
   { method: "GET",    pattern: "/api/storyboard/render/:jobId",        handler: hPollRender },
   { method: "DELETE", pattern: "/api/storyboard/render/:jobId",        handler: hCancelRender },
   { method: "GET",    pattern: "/api/storyboard/renders",              handler: hListRenders },
   { method: "GET",    pattern: "/api/storyboard/renders/tags",         handler: hListTags },
   { method: "PATCH",  pattern: "/api/storyboard/renders/:id",          handler: hPatchRender },
   { method: "DELETE", pattern: "/api/storyboard/renders/:id",          handler: hDeleteRender },
-  { method: "POST",   pattern: "/api/storyboard/renders/adopt",        handler: hTodo },
+  { method: "POST",   pattern: "/api/storyboard/renders/:id/add-audio", handler: hAddRenderAudio },
+  { method: "POST",   pattern: "/api/storyboard/renders/:id/add-narration", handler: hAddRenderNarration },
+  { method: "POST",   pattern: "/api/storyboard/renders/:id/finalize", handler: hFinalizePreview },
+  { method: "POST",   pattern: "/api/storyboard/renders/:id/animate-cloud", handler: hAnimateCloud },
+  { method: "POST",   pattern: "/api/storyboard/renders/:id/animate-hybrid", handler: hAnimateHybrid },
+  { method: "POST",   pattern: "/api/storyboard/renders/adopt",        handler: hAdoptRender },
   { method: "GET",    pattern: "/api/whoami",                          handler: hWhoami },
   { method: "GET",    pattern: "/api/prefs",                           handler: hGetPrefs },
-  { method: "PUT",    pattern: "/api/prefs",                           handler: hPutPrefs },
+  { method: "PATCH",  pattern: "/api/prefs",                           handler: hPatchPrefs },
 ];
 
 // Pretty studio page paths (vivijure.skyphusion.org/planner, /cast, /modules). Served
@@ -572,5 +962,8 @@ export default {
       }
     }
     return env.ASSETS.fetch(request);
+  },
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(sweepUnresolvedJobs(env, ctx));
   },
 };

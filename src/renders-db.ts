@@ -1,16 +1,16 @@
 // Storyboard render history persistence (v0.34.0).
 //
-// One row per RunPod job submitted via POST /api/storyboard/render. The
-// row is inserted at submit time and updated by the poll + cancel handlers
-// with the latest status, output, error, and timing fields. GET /api/
-// storyboard/renders lists the authenticated user's rows newest first.
+// One row per RunPod job submitted via POST /api/storyboard/render. The row is
+// inserted at submit time and updated by the poll + cancel handlers with the
+// latest status, output, error, and timing fields. GET /api/storyboard/renders
+// lists rows newest first.
 //
-// Ownership: user_email comes from cf-access-authenticated-user-email at
-// submit time and is the filter key for the list endpoint. Poll / cancel
-// proxy to RunPod regardless of DB state (so jobs submitted before
-// v0.34.0 are still pollable directly via their jobId); the row UPDATE is
-// a no-op when no row exists for that jobId. This keeps the existing
-// stateless /api/storyboard/render flow working unchanged.
+// Ownership: user_email is provenance (who submitted / who to notify), not an
+// access gate. The studio is single-operator; list/get/patch/delete are scoped
+// by row id (and optional project_id on list) only. Edge auth is Cloudflare Access.
+// Poll / cancel proxy to RunPod regardless of DB state (so jobs submitted before
+// v0.34.0 are still pollable directly via their jobId); the row UPDATE is a no-op
+// when no row exists for that jobId.
 
 import type { Env } from "./env";
 import type { RunpodJobView } from "./runpod-submit";
@@ -37,7 +37,7 @@ export interface NewRenderRow {
   // v0.40.0: 'full' = the train + keyframes + I2V + assemble pipeline;
   // 'keyframes-only' = preview pass producing SDXL keyframes only.
   // Stored verbatim. Defaults to 'full' when omitted.
-  mode?: "full" | "keyframes-only" | "cloud-finalized";
+  mode?: "full" | "keyframes-only" | "finalized" | "cloud-finalized";
   // v0.55.0: optional FK to storyboard_projects(id). NULL on rows
   // submitted without an active project (the transient v0.42.0 flow).
   projectId?: number | null;
@@ -638,18 +638,14 @@ export function normalizeKeyframes(raw: unknown): KeyframeRef[] {
   return out;
 }
 
-// Fetch one row by D1 PK, scoped to the caller's user_email. Returns null
-// when the row does not exist OR when it belongs to another user (we do
-// not distinguish so a guessed id cannot enumerate other users' rows).
+// Fetch one row by D1 PK. Returns null when the row does not exist.
 // v0.136.4: point a finished render at a new MP4 that has audio muxed in
 // (produced off-GPU by the video-finish container). Updates output_key plus the
 // output_json's output_key / has_audio / seconds so the History download link
-// and the audio badge reflect the muxed version. Scoped to user_email; returns
-// true iff a row owned by the caller was updated.
+// and the audio badge reflect the muxed version.
 export async function setRenderAudioOutput(
   env: Env,
   id: number,
-  userEmail: string,
   outputKey: string,
   seconds: number | null,
 ): Promise<boolean> {
@@ -664,9 +660,9 @@ export async function setRenderAudioOutput(
          '$.seconds', ?
        ),
        updated_at = ?
-     WHERE id = ? AND user_email = ?`,
+     WHERE id = ?`,
   )
-    .bind(outputKey, outputKey, seconds, now, id, userEmail)
+    .bind(outputKey, outputKey, seconds, now, id)
     .run();
   return ((res.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
 }
@@ -674,7 +670,6 @@ export async function setRenderAudioOutput(
 export async function getRenderByIdForUser(
   env: Env,
   id: number,
-  userEmail: string,
 ): Promise<RenderRow | null> {
   const r = await env.DB.prepare(
     `SELECT
@@ -684,28 +679,25 @@ export async function getRenderByIdForUser(
       submitted_at, updated_at, completed_at, label, keyframes_json, mode,
       locked_shots_json, project_id, folder_path, tags_json, parent_id
     FROM renders
-    WHERE id = ? AND user_email = ?`,
+    WHERE id = ?`,
   )
-    .bind(id, userEmail)
+    .bind(id)
     .first<Record<string, unknown>>();
   if (!r) return null;
   return normalizeRow(r);
 }
 
-// Update one row's label. Empty / null clears it. Returns true when the
-// row existed and was owned by the caller; false otherwise (so a caller
-// can distinguish "not yours" from "saved" if it wants to).
+// Update one row's label. Empty / null clears it.
 export async function setRenderLabel(
   env: Env,
   id: number,
-  userEmail: string,
   label: string | null,
 ): Promise<boolean> {
   const now = Math.floor(Date.now() / 1000);
   const result = await env.DB.prepare(
-    `UPDATE renders SET label = ?, updated_at = ? WHERE id = ? AND user_email = ?`,
+    `UPDATE renders SET label = ?, updated_at = ? WHERE id = ?`,
   )
-    .bind(label, now, id, userEmail)
+    .bind(label, now, id)
     .run();
   const changes = (result.meta as { changes?: number } | undefined)?.changes ?? 0;
   return changes > 0;
@@ -729,17 +721,15 @@ export async function countOtherRowsWithOutputKey(
   return Number(r?.n ?? 0);
 }
 
-// Delete one row by D1 PK + user_email. Returns true when a row was
-// actually removed (i.e., the row existed and the caller owned it).
+// Delete one row by D1 PK. Returns true when a row was removed.
 export async function deleteRenderRow(
   env: Env,
   id: number,
-  userEmail: string,
 ): Promise<boolean> {
   const result = await env.DB.prepare(
-    `DELETE FROM renders WHERE id = ? AND user_email = ?`,
+    `DELETE FROM renders WHERE id = ?`,
   )
-    .bind(id, userEmail)
+    .bind(id)
     .run();
   const changes = (result.meta as { changes?: number } | undefined)?.changes ?? 0;
   return changes > 0;
@@ -747,14 +737,11 @@ export async function deleteRenderRow(
 
 export async function listRendersForUser(
   env: Env,
-  userEmail: string,
   limit = 50,
   projectId: number | null = null,
 ): Promise<RenderRow[]> {
   // Clamp limit so a runaway client cannot drain the DB binding.
   const cap = Math.min(Math.max(1, Math.floor(limit)), 200);
-  // v0.55.0: optional project filter. The (user_email, project_id,
-  // submitted_at DESC) partial index serves this lookup directly.
   const baseSelect = `SELECT
       id, user_email, job_id, project, bundle_key, quality_tier,
       render_overrides, status, output_key, output_json AS output,
@@ -764,24 +751,16 @@ export async function listRendersForUser(
     FROM renders`;
   const stmt = projectId !== null && projectId > 0
     ? env.DB.prepare(
-        // v0.138.0: include project-less rows (project_id IS NULL) alongside the
-        // active project. Renders submitted outside the UI (the contract API, a
-        // headless curl, or an adopted RunPod job) have no project_id, so a strict
-        // `project_id = ?` hid them whenever any project was selected. Unioning
-        // the loose rows keeps them discoverable without the user having to clear
-        // their active project first. In practice the loose set is small (API
-        // renders), so it does not crowd out the project's own rows under LIMIT.
         `${baseSelect}
-         WHERE user_email = ? AND (project_id = ? OR project_id IS NULL)
+         WHERE project_id = ? OR project_id IS NULL
          ORDER BY submitted_at DESC
          LIMIT ?`
-      ).bind(userEmail, projectId, cap)
+      ).bind(projectId, cap)
     : env.DB.prepare(
         `${baseSelect}
-         WHERE user_email = ?
          ORDER BY submitted_at DESC
          LIMIT ?`
-      ).bind(userEmail, cap);
+      ).bind(cap);
   const result = await stmt.all();
   const rows = (result.results ?? []) as unknown as Array<Record<string, unknown>>;
   return rows.map(normalizeRow);
@@ -917,20 +896,18 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
   };
 }
 
-// v0.42.0: PATCH locked_shots on a row, scoped to the caller's
-// user_email. Same return-bool semantics as setRenderLabel.
+// v0.42.0: PATCH locked_shots on a row.
 export async function setRenderLockedShots(
   env: Env,
   id: number,
-  userEmail: string,
   lockedShots: string[],
 ): Promise<boolean> {
   const now = Math.floor(Date.now() / 1000);
   const json = lockedShots.length > 0 ? JSON.stringify(lockedShots) : null;
   const result = await env.DB.prepare(
-    `UPDATE renders SET locked_shots_json = ?, updated_at = ? WHERE id = ? AND user_email = ?`,
+    `UPDATE renders SET locked_shots_json = ?, updated_at = ? WHERE id = ?`,
   )
-    .bind(json, now, id, userEmail)
+    .bind(json, now, id)
     .run();
   const changes = (result.meta as { changes?: number } | undefined)?.changes ?? 0;
   return changes > 0;
@@ -963,38 +940,34 @@ export async function getScatterChildren(
   return (rs.results ?? []).map((r) => ({ job_id: String(r.job_id), status: String(r.status) }));
 }
 
-// v0.126.0: PATCH the folder_path on a row, scoped to user_email. null / ''
-// clears it (unfiled). Same return-bool semantics as setRenderLabel.
+// v0.126.0: PATCH the folder_path on a row. null / '' clears it (unfiled).
 export async function setRenderFolder(
   env: Env,
   id: number,
-  userEmail: string,
   folderPath: string | null,
 ): Promise<boolean> {
   const now = Math.floor(Date.now() / 1000);
   const result = await env.DB.prepare(
-    `UPDATE renders SET folder_path = ?, updated_at = ? WHERE id = ? AND user_email = ?`,
+    `UPDATE renders SET folder_path = ?, updated_at = ? WHERE id = ?`,
   )
-    .bind(folderPath, now, id, userEmail)
+    .bind(folderPath, now, id)
     .run();
   const changes = (result.meta as { changes?: number } | undefined)?.changes ?? 0;
   return changes > 0;
 }
 
-// v0.126.0: PATCH the tags on a row, scoped to user_email. An empty list
-// stores NULL (untagged). Same return-bool semantics as setRenderLabel.
+// v0.126.0: PATCH the tags on a row. An empty list stores NULL (untagged).
 export async function setRenderTags(
   env: Env,
   id: number,
-  userEmail: string,
   tags: string[],
 ): Promise<boolean> {
   const now = Math.floor(Date.now() / 1000);
   const json = tags.length > 0 ? JSON.stringify(tags) : null;
   const result = await env.DB.prepare(
-    `UPDATE renders SET tags_json = ?, updated_at = ? WHERE id = ? AND user_email = ?`,
+    `UPDATE renders SET tags_json = ?, updated_at = ? WHERE id = ?`,
   )
-    .bind(json, now, id, userEmail)
+    .bind(json, now, id)
     .run();
   const changes = (result.meta as { changes?: number } | undefined)?.changes ?? 0;
   return changes > 0;
@@ -1007,14 +980,14 @@ export async function setRenderTags(
 // the relevant ones, and the count-sort below still ranks within that window.
 const TAG_SCAN_LIMIT = 500;
 
-export async function listUserTags(env: Env, userEmail: string): Promise<string[]> {
+export async function listUserTags(env: Env): Promise<string[]> {
   const result = await env.DB.prepare(
     `SELECT tags_json FROM renders
-      WHERE user_email = ? AND tags_json IS NOT NULL
+      WHERE tags_json IS NOT NULL
       ORDER BY submitted_at DESC
       LIMIT ?`,
   )
-    .bind(userEmail, TAG_SCAN_LIMIT)
+    .bind(TAG_SCAN_LIMIT)
     .all();
   const rows = (result.results ?? []) as unknown as Array<{ tags_json: unknown }>;
   const counts = new Map<string, number>();

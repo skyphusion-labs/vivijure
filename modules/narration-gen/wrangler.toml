@@ -1,0 +1,22 @@
+# narration-gen module worker (vivijure-module/1): MiniMax Speech 2.8 HD via Workers AI for the
+# `score` hook (music / narration / beat-sync chain). Bound as MODULE_NARRATION_GEN.
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-narration-gen"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Workers AI + AI Gateway (same pattern as music-gen / cast-image proxied models).
+#   ! npx wrangler secret put GATEWAY_ID -c modules/narration-gen/wrangler.toml
+[ai]
+binding = "AI"
+
+# Generated narration audio + async run state land in the shared render bucket.
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
