@@ -1,47 +1,49 @@
-name: Test and Native Code Coverage
+name: coverage
+
+# Produces real, inspectable coverage and uploads it as a build artifact. The
+# previous version used actions/upload-code-coverage@v1 and a code-quality:write
+# permission, both GitHub Enterprise only; on github.com those steps were green
+# no-ops, so "coverage" reflected nothing. It also ran `npm run bootstrap`, a
+# script this repo does not define (wrangler.toml is committed here), so that
+# step always errored under continue-on-error. This runs the real suite with the
+# v8 provider and keeps the report as a downloadable artifact.
 
 on:
-  pull_request:
-    branches: [ main, master ]
   push:
-    branches: [ main, master ]
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   coverage:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write      # Required for GitHub Code Quality features
-      code-quality: write    # Grants the action permission to upload coverage data
-      pull-requests: write   # Allows the coverage engine to append the PR
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v6
         with:
           node-version: '22'
-          cache: 'npm'
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      # Create wrangler.toml before testing so environment types evaluate properly
-      - name: Bootstrap wrangler configuration
-        run: npm run bootstrap
-        continue-on-error: true # Prevents crash if wrangler.toml already exists in workspace
-
-      # Runs your vitest script with cobertura reporter enabled
       - name: Run tests with coverage
-        run: npx vitest run --coverage.enabled=true --coverage.reporter=cobertura
+        run: npx vitest run --coverage.enabled=true --coverage.provider=v8 --coverage.reporter=cobertura --coverage.reporter=text
 
-      # Upload to GitHub's native Enterprise code coverage engine
-      # Upload to GitHub's native Enterprise code coverage engine
       - name: Upload coverage report
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/upload-code-coverage@v1
+        uses: actions/upload-artifact@v4
         with:
-          file: ./coverage/cobertura-coverage.xml
-          language: javascript
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: warn
+          retention-days: 14
