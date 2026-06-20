@@ -11,8 +11,18 @@
 // R2_S3_BUCKET (the R2_RENDERS bucket name). Region is always "auto" for R2.
 
 import type { Env } from "./env";
+import { isPresignSafeKey } from "./shared";
 
 const ENC = new TextEncoder();
+
+// S3/R2 caps a presigned URL's lifetime at 7 days; clamp the caller's request into [1, 604800]s so a
+// bad or hostile value can never sign a longer-lived (or malformed) URL. (security #6)
+const MAX_EXPIRES_SECONDS = 604800;
+function clampExpires(seconds: number): number {
+  const n = Math.floor(Number(seconds));
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(MAX_EXPIRES_SECONDS, Math.max(1, n));
+}
 
 function toHex(buf: ArrayBuffer): string {
   const b = new Uint8Array(buf);
@@ -80,6 +90,14 @@ export async function presignR2WithConfig(
   expiresSeconds = 300,
   nowMs?: number,
 ): Promise<string> {
+  // Reject an unsafe key BEFORE signing: a "..", an absolute "/...", a "://" scheme, or control/
+  // non-ASCII bytes must never be minted into a credentialed URL. Benign specials (space, "#") are
+  // still allowed and uriEncode'd below. (security #6)
+  if (!isPresignSafeKey(key)) {
+    throw new Error("R2 presign: refusing to sign an unsafe object key");
+  }
+  expiresSeconds = clampExpires(expiresSeconds);
+
   const url = new URL(cfg.endpoint);
   const host = url.host;
   const region = "auto";
