@@ -1,7 +1,12 @@
 name: CI
 
-# Typecheck + test on every push and PR; deploy to Cloudflare on main.
-# Runs on the fleet self-hosted runner (damaged, skyphusion-labs/vivijure).
+# Two jobs:
+#   test   -- typecheck + vitest, on a GitHub-hosted runner. This is the PR gate, so it must NOT
+#             depend on the fleet being up. (Previously the whole job ran on the self-hosted `damaged`
+#             runner, which made the gate a fleet SPOF: if that runner was down/slow the required check
+#             registered late or not at all.) coverage.yml already proves the suite runs clean here.
+#   deploy -- modules then core, main only, on the fleet self-hosted runner (it needs docker buildx for
+#             the video-finish container image build + the VPC bindings). Gated behind `test`.
 on:
   push:
     branches: [main]
@@ -17,12 +22,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    runs-on: [self-hosted, fleet]
-    container: node:22-alpine
+  test:
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
@@ -33,6 +43,18 @@ jobs:
       - name: Test
         run: npm test
 
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, fleet]
+    container: node:22-alpine
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
       # wrangler builds the video-finish container image at deploy time, which needs `docker build`.
       # The job runs in node:22-alpine (no docker), but the host docker.sock is bind-mounted in, so
       # the CLI reaches the daemon. docker-cli alone is NOT enough: Docker 29 routes `docker build`
@@ -40,7 +62,6 @@ jobs:
       # install`, which wires `docker build` -> `docker buildx build` (the plugin binary present but
       # un-installed still falls through to the legacy builder). See issue #68.
       - name: Docker setup (buildx for the video-finish container image build)
-        if: github.ref == 'refs/heads/main'
         run: |
           apk add --no-cache docker-cli docker-cli-buildx
           docker buildx install
@@ -49,8 +70,7 @@ jobs:
       # [[services]] binding to a not-yet-deployed service makes the core `wrangler deploy` fail.
       # Deploying modules first keeps every MODULE_* binding pointing at a live service, so adding a
       # new module + its core binding in one change no longer orphans it (the minimax-hailuo gap).
-      - name: Deploy module workers (main only)
-        if: github.ref == 'refs/heads/main'
+      - name: Deploy module workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -60,8 +80,7 @@ jobs:
             npx wrangler deploy -c modules/${module}/wrangler.toml
           done
 
-      - name: Deploy core worker (main only)
-        if: github.ref == 'refs/heads/main'
+      - name: Deploy core worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
