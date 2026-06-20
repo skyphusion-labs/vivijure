@@ -7,12 +7,22 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PORT=8000
 
-# ffmpeg ships ffprobe too; that is the only system dependency. Unlike the
-# audio (librosa/numba) and image-prep (rembg/pymatting) containers there is no
-# JIT warmup to bake -- ffmpeg is a plain subprocess, so /finish has no cold
-# compile penalty and the bind is immediate.
+# ffmpeg ships ffprobe too. fonts-dejavu-core provides DejaVu Sans at
+# /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf, which ffmpeg drawtext
+# needs for the /overlay route added in #190. fontconfig supplies the
+# runtime alias resolution that lets drawtext resolve font names (the
+# text-overlay module passes font=<name> not fontfile=<path>, so fontconfig
+# must be present so the name lookup does not fail).
+#
+# NOTE: the text-overlay module default is font=Arial. Debian fontconfig
+# includes a metric-alias that maps Arial -> DejaVu Sans / Liberation Sans,
+# so font=Arial resolves correctly here. If that alias is ever absent,
+# drawtext will error; the fix is to change the module default to
+# "DejaVu Sans" or switch to fontfile= with an explicit path.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
+        fonts-dejavu-core \
+        fontconfig \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -35,6 +45,17 @@ RUN ffmpeg -y -f lavfi -i testsrc=size=320x240:rate=24:duration=0.1 \
     && ffprobe -v error -show_entries stream=codec_name -of csv=p=0 /tmp/warm.mp4 | grep -q h264 \
     && rm -f /tmp/warm.mp4 \
     && echo "libx264 sanity-encode OK"
+
+# Build-time drawtext sanity-check: prove DejaVuSans.ttf is reachable at
+# the expected path and that ffmpeg drawtext can burn text. Fails fast if
+# fonts-dejavu-core is ever dropped or moves its files. Uses fontfile= here
+# (explicit path) rather than font= so the check is path-exact, independent
+# of fontconfig alias resolution.
+RUN ffmpeg -y -f lavfi -i testsrc=size=320x240:rate=24:duration=0.1 \
+        -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='vivijure':fontsize=24:fontcolor=white:x=10:y=10" \
+        -c:v libx264 -preset ultrafast -pix_fmt yuv420p /tmp/drawtext_warm.mp4 \
+    && rm -f /tmp/drawtext_warm.mp4 \
+    && echo "drawtext sanity-encode OK"
 
 EXPOSE 8000
 CMD ["python", "app.py"]
