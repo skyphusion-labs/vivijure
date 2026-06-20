@@ -1,7 +1,7 @@
 # plan-enhance module worker (vivijure-module/1).
 #
-# The first opt-in Vivijure module: an LLM director pass over a storyboard's shot prompts. Bound into
-# the core as the MODULE_PLANENHANCE service binding (see the core wrangler.toml); the registry
+# The first opt-in Vivijure module: an Opus director pass over a storyboard's shot prompts. Bound
+# into the core as the MODULE_PLANENHANCE service binding (see the core wrangler.toml); the registry
 # discovers it from GET /module.json and the studio UI renders the plan.enhance stage from it.
 #
 # account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
@@ -15,7 +15,18 @@ workers_dev = false
 [observability]
 enabled = true
 
-# Workers AI for the director pass. No BYOK: an open-weight model on the account, so the module is
-# self-contained (a clean first reference module).
+# Workers AI binding. Used two ways:
+#   1. .gateway(GATEWAY_ID).getUrl("anthropic") -> Opus through the AI Gateway (the primary director).
+#   2. .run(<local model>) -> the free Workers AI fallback when no Opus token is set, or Opus errors.
 [ai]
 binding = "AI"
+
+# The Opus model id (latest by default). Override to pin a different Claude (e.g. claude-opus-4-7).
+[vars]
+ENHANCE_MODEL = "claude-opus-4-8"
+
+# --- Secrets (set per-module, NOT shared with the core, so a leak's blast radius is this module):
+# ---   echo "<gateway-slug>"  | npx wrangler secret put GATEWAY_ID    --config modules/plan-enhance/wrangler.toml
+# ---   echo "<aig-token>"      | npx wrangler secret put CF_AIG_TOKEN  --config modules/plan-enhance/wrangler.toml
+# --- CF_AIG_TOKEN is a Unified-Billing AI Gateway token scoped to THIS module. Without both secrets,
+# --- the module runs entirely on the free local Workers AI model (no Opus, still functional).
