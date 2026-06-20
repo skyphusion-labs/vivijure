@@ -172,13 +172,50 @@ def _probe_duration(path):
     return max(0.1, float(proc.stdout.strip()))
 
 
-def _normalize(src, dst, *, width, height, fps, crf, preset, cap):
+def _probe_audio(path):
+    """Probe the first audio stream of path.
+    Returns (has_audio, sample_rate, channel_layout).
+    sample_rate and channel_layout are None when has_audio is False.
+    Falls back to stereo/44100 if the layout string is absent or unknown.
+    """
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=sample_rate,channel_layout",
+         "-of", "default=noprint_wrappers=1", path],
+        capture_output=True, text=True, check=True,
+    )
+    out = proc.stdout.strip()
+    if not out:
+        return False, None, None
+    info = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            info[k.strip()] = v.strip()
+    sample_rate = int(info.get("sample_rate") or 44100)
+    layout = info.get("channel_layout", "") or "stereo"
+    if layout in ("unknown", "0 channels", ""):
+        layout = "stereo"
+    return True, sample_rate, layout
+
+
+def _normalize(src, dst, *, width, height, fps, crf, preset, cap, keep_audio=False):
+    """Scale/pad/fps-normalize src to dst.
+    keep_audio=False (default): strip audio (-an). Used by _assemble and the
+    silent-film path of _assemble_film_titles.
+    keep_audio=True: re-encode audio to AAC (192k). Used by _assemble_film_titles
+    when the input film has a score or narration that must be preserved.
+    """
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps={fps}"
     )
-    cmd = ["ffmpeg", "-y", "-i", src, "-vf", vf, "-an",
-           "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+    cmd = ["ffmpeg", "-y", "-i", src, "-vf", vf]
+    if keep_audio:
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
+    else:
+        cmd += ["-an"]
+    cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
     if cap and cap > 0.15:
         cmd += ["-t", f"{cap:.3f}"]
     cmd.append(dst)
@@ -453,27 +490,62 @@ def _credits_card_filter(lines, duration, *, font="DejaVu Sans",
     return ",".join(filters)
 
 
-def _make_card(dst, *, width, height, fps, crf, preset, duration, vf_filter):
+def _make_card(dst, *, width, height, fps, crf, preset, duration, vf_filter,
+               audio_sample_rate=None, audio_channel_layout=None):
     """Generate a title or credit card MP4: black lavfi background + drawtext.
-    Output: libx264/yuv420p, no audio -- matches _normalize output for concat.
+
+    audio_sample_rate / audio_channel_layout: when both are provided the card
+    gets a matching silent AAC audio track (anullsrc) so it can be hard-concat'd
+    with an audio-bearing film without stream-count mismatch.
+    When absent, the card is video-only (-an), matching a silent film.
     """
     lavfi_src = f"color=c=black:s={width}x{height}:r={fps}:d={duration:.3f}"
-    _run([
-        "ffmpeg", "-y", "-f", "lavfi", "-i", lavfi_src,
-        "-vf", vf_filter,
-        "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-        "-pix_fmt", "yuv420p",
-        dst,
-    ])
+    if audio_sample_rate is not None and audio_channel_layout is not None:
+        anull_src = f"anullsrc=r={audio_sample_rate}:cl={audio_channel_layout}"
+        _run([
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", lavfi_src,
+            "-f", "lavfi", "-i", anull_src,
+            "-vf", vf_filter,
+            "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k",
+            "-t", f"{duration:.3f}",   # cap the infinite anullsrc to card duration
+            dst,
+        ])
+    else:
+        _run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i", lavfi_src,
+            "-vf", vf_filter,
+            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+            "-pix_fmt", "yuv420p",
+            dst,
+        ])
 
 
 def _assemble_film_titles(work, film_path, title_spec, credits_spec,
                            width, height, fps, crf, preset):
     """Assemble [title_card?, film_norm, credits_card?] into a single MP4.
-    All segments are normalized to (width x height, fps, libx264, yuv420p, -an)
-    so _concat_hard can join them with -c copy.
+
+    Audio handling:
+    - Probes the input film for an audio stream.
+    - If the film HAS audio (score / narration): each card gets a matching
+      silent AAC track (anullsrc at the same rate/layout) so all three
+      segments have video+audio and _concat_hard (-c copy) works cleanly.
+      The film is normalized with keep_audio=True so its audio is preserved.
+    - If the film has NO audio (silent picture): all segments are video-only
+      (-an), the original path.
+
     Returns (out_path, duration_seconds).
     """
+    # Probe the input film's audio before generating any segment.
+    has_audio, aud_rate, aud_layout = _probe_audio(film_path)
+    card_audio = (
+        {"audio_sample_rate": aud_rate, "audio_channel_layout": aud_layout}
+        if has_audio else {}
+    )
+    log.info("/film-titles audio probe: has_audio=%s rate=%s layout=%s",
+             has_audio, aud_rate, aud_layout)
+
     segments = []
 
     if title_spec:
@@ -488,12 +560,13 @@ def _assemble_film_titles(work, film_path, title_spec, credits_spec,
             card = os.path.join(work, "title_card.mp4")
             _make_card(card, width=width, height=height, fps=fps, crf=crf,
                        preset=preset, duration=secs,
-                       vf_filter=_title_card_filter(text, subtitle=subtitle))
+                       vf_filter=_title_card_filter(text, subtitle=subtitle),
+                       **card_audio)
             segments.append(card)
 
     film_norm = os.path.join(work, "film_norm.mp4")
     _normalize(film_path, film_norm, width=width, height=height, fps=fps,
-               crf=crf, preset=preset, cap=None)
+               crf=crf, preset=preset, cap=None, keep_audio=has_audio)
     segments.append(film_norm)
 
     if credits_spec:
@@ -507,7 +580,8 @@ def _assemble_film_titles(work, film_path, title_spec, credits_spec,
             card = os.path.join(work, "credits_card.mp4")
             _make_card(card, width=width, height=height, fps=fps, crf=crf,
                        preset=preset, duration=secs,
-                       vf_filter=_credits_card_filter(lines, secs))
+                       vf_filter=_credits_card_filter(lines, secs),
+                       **card_audio)
             segments.append(card)
 
     out = os.path.join(work, "with_titles.mp4")
