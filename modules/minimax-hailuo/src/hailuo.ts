@@ -5,12 +5,11 @@
 
 import type { MotionBackendInput } from "./contract";
 
-// Hailuo 2.3 Fast accepts a bounded shot length; clamp the storyboard's per-shot seconds in. The
-// snippet in #171 uses 6s; exact allowed values should be confirmed against a live render before we
-// rely on arbitrary durations (some MiniMax tiers only accept discrete lengths).
+// Hailuo 2.3 Fast only accepts the discrete values [6, 10]. Snap to nearest; midpoint 8 goes to 6
+// (confirmed by live render: the API rejects any value outside [6, 10]).
 export function clampDuration(seconds: number): number {
   const n = Math.round(Number(seconds) || 6);
-  return Math.max(3, Math.min(10, n));
+  return n <= 8 ? 6 : 10;
 }
 
 /** The RunPod /run body for Hailuo 2.3 Fast, mapped from the hook input + the clamped module config.
