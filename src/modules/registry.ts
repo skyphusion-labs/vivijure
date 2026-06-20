@@ -350,6 +350,10 @@ export interface ChainResult<O> {
   output: O | null;
   applied: string[];
   errors: string[];
+  // Modules that returned ok:true but reported a SOFT-DEGRADE (passed their input through because they
+  // could not do the work, e.g. a container was unreachable). Format "<module>: <reason>". A module
+  // reporting ok must not hide a no-op: `applied` says it ran, `degraded` says it did nothing useful.
+  degraded: string[];
 }
 
 /** Dispatch a `chain` hook: fold every serving module in `ui.order`, each consuming the previous
@@ -369,6 +373,7 @@ export async function dispatchChain<I = unknown, O = unknown>(
 ): Promise<ChainResult<O>> {
   const applied: string[] = [];
   const errors: string[] = [];
+  const degraded: string[] = [];
   let current: I = seed;
   let last: O | null = null;
   for (const module of servingForHook(modules, hook)) {
@@ -383,9 +388,18 @@ export async function dispatchChain<I = unknown, O = unknown>(
       last = r.output;
       current = opts.nextInput(r.output, seed);
       applied.push(module.name);
+      // A module can return ok:true yet report a SOFT-DEGRADE via the `output.degraded` convention (a
+      // reason string) -- it passed its input through because it could not do its work. Without this, a
+      // degrade is binned in `applied` and only surfaces if the caller happens to inspect the output (the
+      // film.finish-ships-uncarded bug). Record + log it centrally so EVERY chain hook gets the signal.
+      const deg = (r.output as { degraded?: unknown } | null)?.degraded;
+      if (typeof deg === "string" && deg.length > 0) {
+        degraded.push(`${module.name}: ${deg}`);
+        console.warn(`chain ${hook}: ${module.name} degraded (${deg})`);
+      }
     } else {
       errors.push(`${module.name}: ${r.error}`);
     }
   }
-  return { output: last, applied, errors };
+  return { output: last, applied, errors, degraded };
 }

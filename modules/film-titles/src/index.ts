@@ -67,7 +67,11 @@ async function invoke(env: Env, req: InvokeRequest<FilmFinishInput>): Promise<In
 
   let resp: Response;
   try {
-    resp = await env.VIDEO_FINISH_VPC.fetch("/film-titles", {
+    // Absolute URL (host is the VPC service, ignored by the binding). A bare "/film-titles" is not a
+    // valid URL and throws in the Workers runtime, which the catch below would mask as
+    // "container-unreachable", silently passing the film through UNCARDED. Matches the core convention
+    // env.VIDEO_FINISH_VPC.fetch("http://video-finish/finish").
+    resp = await env.VIDEO_FINISH_VPC.fetch("http://video-finish/film-titles", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(spec),

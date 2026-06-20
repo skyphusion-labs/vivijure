@@ -865,3 +865,101 @@ describe("advanceFilmJob hard-deadline loud fail (#129)", () => {
     expect(r?.job.phase).toBe("done");
   });
 });
+
+
+// #207 follow-up: the film.finish chain is FAIL-SAFE -- the film always survives -- so a degraded run
+// (e.g. the video-finish container unreachable) reaches phase="done" with NO cards. The orchestrator
+// must RECORD that outcome on the job (film_finish) instead of shipping a silent green. Drives the real
+// mux -> done transition through advanceFilmJob with a stubbed film.finish module.
+describe("applyFilmFinish observability (#207: degraded film.finish must not ship silent green)", () => {
+  const FILM_TITLES_MANIFEST = {
+    name: "film-titles",
+    version: "0.1.0",
+    api: "vivijure-module/1",
+    hooks: ["film.finish"],
+    provides: [{ id: "film-titles", label: "Title + credit cards" }],
+    config_schema: {},
+    ui: { section: "film.finish", order: 10 },
+  };
+
+  function filmFinishEnv(job: object, invokeResponse: unknown, opts: { withModule?: boolean } = {}) {
+    const filmId = (job as { film_id: string }).film_id;
+    let stored = JSON.stringify(job);
+    const jsonResp = (b: unknown) =>
+      new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    const env: Record<string, unknown> = {
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey(filmId) ? { text: async () => stored } : null),
+        head: async () => null,
+        put: async (key: string, val: string) => { if (key === filmJobDocKey(filmId)) stored = val; },
+      },
+      // mux container (callVideoFinish) -- returns the muxed film key
+      VIDEO_FINISH_VPC: { fetch: async () => jsonResp({ ok: true, key: `renders/${filmId}/film-audio.mp4` }) },
+      R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+    };
+    if (opts.withModule !== false) {
+      env.MODULE_FILM_TITLES = {
+        fetch: async (input: Request | string) => {
+          const url = typeof input === "string" ? input : input.url;
+          if (url.endsWith("/module.json")) return jsonResp(FILM_TITLES_MANIFEST);
+          return jsonResp(invokeResponse); // /invoke
+        },
+      };
+    }
+    return { env: env as unknown as Env, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  const muxJob = (over: object = {}) => ({
+    film_id: "film-finish-obs",
+    project: "p",
+    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+    phase: "mux" as const,
+    silent_film_key: "renders/film-finish-obs/film-silent.mp4",
+    audio_key: "renders/film-finish-obs/audio.mp4",
+    mux_output_key: "renders/film-finish-obs/film-audio.mp4",
+    film_titles: { title: { text: "NEON HALFLIFE" } },
+    created_at: 0,
+    ...over,
+  });
+
+  it("records degraded + keeps the muxed (uncarded) film when the module passes through", async () => {
+    const degraded = { ok: true, output: { film_key: "renders/film-finish-obs/film-audio.mp4", applied: ["passthrough:container-unreachable"], degraded: "passthrough:container-unreachable" } };
+    const { env, read } = filmFinishEnv(muxJob(), degraded);
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).toBe("done");
+    // the degrade is OBSERVABLE, not a silent green
+    expect(r?.job.film_finish?.degraded).toBe("film-titles: passthrough:container-unreachable");
+    expect(r?.job.film_finish?.steps).toEqual(["passthrough:container-unreachable"]);
+    // film kept the muxed key (no cards applied)
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio.mp4");
+    expect(read().film_finish?.degraded).toBe("film-titles: passthrough:container-unreachable"); // persisted
+  });
+
+  it("records applied + swaps to the carded film when the module succeeds", async () => {
+    const ok = { ok: true, output: { film_key: "renders/film-finish-obs/film-audio-titled-abc.mp4", applied: ["film-titles"] } };
+    const { env } = filmFinishEnv(muxJob(), ok);
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_finish?.applied).toEqual(["film-titles"]);
+    expect(r?.job.film_finish?.degraded).toBeUndefined();
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-titled-abc.mp4");
+  });
+
+  it("records a chain error (no film_finish drop) when the module invoke fails", async () => {
+    const failed = { ok: false, error: "module /invoke -> 500" };
+    const { env } = filmFinishEnv(muxJob(), failed);
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_finish?.errors?.some((e) => e.includes("film-titles"))).toBe(true);
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio.mp4"); // film survives
+  });
+
+  it("leaves film_finish unset when no film.finish module is installed (no-op)", async () => {
+    const { env } = filmFinishEnv(muxJob(), {}, { withModule: false });
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_finish).toBeUndefined();
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio.mp4");
+  });
+});

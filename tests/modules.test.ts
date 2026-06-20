@@ -289,5 +289,24 @@ describe("dispatchChain", () => {
     expect(res.applied).toEqual(["a", "c"]); // b skipped (500)
     expect(res.output).toEqual({ n: 101 });  // a: 0 -> 1, c: 1 -> 101
     expect(res.errors).toHaveLength(1);
+    expect(res.degraded).toEqual([]); // no soft-degrade reported
+  });
+
+  it("records a soft-degrade (ok:true with output.degraded) without treating it as a failure", async () => {
+    // A module that returns ok:true but reports `degraded` passed its input through (e.g. its container
+    // was unreachable). It counts as `applied` (it ran) AND `degraded` (it did nothing useful); it must
+    // NOT be binned in `errors`. This is the generalized version of the film.finish-ships-uncarded fix.
+    const a = { name: "a", binding: "MODULE_A", hooks: ["finish"], ui: { order: 10 } } as unknown as RegisteredModule;
+    const b = { name: "b", binding: "MODULE_B", hooks: ["finish"], ui: { order: 20 } } as unknown as RegisteredModule;
+    const env = {
+      MODULE_A: invoker((req) => ({ ok: true, output: { n: req.input.n + 1, degraded: "passthrough:container-unreachable" } })),
+      MODULE_B: invoker((req) => ({ ok: true, output: { n: req.input.n + 100 } })),
+    };
+    const res = await dispatchChain<{ n: number }, { n: number; degraded?: string }>(
+      env, [a, b], "finish", { n: 0 }, ctx, { nextInput: (prev) => ({ n: prev.n }) });
+    expect(res.applied).toEqual(["a", "b"]); // both ran
+    expect(res.errors).toEqual([]);          // a degrade is NOT an error
+    expect(res.degraded).toEqual(["a: passthrough:container-unreachable"]); // surfaced, module-prefixed
+    expect(res.output).toEqual({ n: 101 });  // chain still threaded through
   });
 });
