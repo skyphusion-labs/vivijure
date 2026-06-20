@@ -152,16 +152,16 @@
         </section>
 
         <section id="showcase">
-          <h2>Showcase: the first film, rendered end to end</h2>
+          <h2>Showcase: three films, three audio modes, three backends</h2>
           <div class="prose" style="margin-bottom: 28px;">
             <p>
-              A real film rendered end to end on Vivijure, an unedited render straight off the
-              pipeline. (The scored and narrated films on the cloud i2v backends are being
-              re-rendered after an aspect-ratio fix and will return to the showcase shortly.)
+              Three real films rendered end to end on Vivijure, unedited renders straight off the
+              pipeline. Silent picture, scored with a music bed, and narrated with TTS -- on three
+              different motion backends (own-GPU Wan, Seedance cloud, Kling cloud).
             </p>
           </div>
 
-          <h3>NEON HALFLIFE (silent)</h3>
+          <h3>NEON HALFLIFE (silent, own-GPU Wan i2v)</h3>
           <figure class="showcase">
             <video controls preload="metadata" playsinline
                    poster="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.jpg">
@@ -172,7 +172,7 @@
             <figcaption>
               <em>NEON HALFLIFE</em>: the first film rendered end to end on Vivijure. 1080p, ten
               shots, about thirty seconds, animated on a self-hosted GPU (the <code>own-gpu</code>
-              Wan I2V backend). Silent by design (see below).
+              Wan I2V backend). Silent by design.
             </figcaption>
           </figure>
           <div class="badge-row" aria-hidden="false">
@@ -196,6 +196,66 @@
               re-adopted the in-flight work, and the film finished, all of it across a session
               restart with nobody watching. The system healing its own stall, unattended, is the
               part we are actually proud of.
+            </p>
+          </div>
+
+          <h3 style="margin-top: 32px;">FUR AND CIRCUITS (scored, Seedance cloud i2v)</h3>
+          <figure class="showcase">
+            <video controls preload="metadata" playsinline
+                   poster="https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.jpg">
+              <source src="https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4" type="video/mp4" />
+              Your browser does not support embedded video.
+              <a href="https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4">Download the MP4</a>.
+            </video>
+            <figcaption>
+              <em>FUR AND CIRCUITS</em>: eight shots, scored with a generated music bed
+              (MiniMax Music module). Motion on Seedance cloud i2v; two character LoRAs trained
+              from cast portraits.
+            </figcaption>
+          </figure>
+          <div class="badge-row" aria-hidden="false">
+            <span class="badge">1080p</span>
+            <span class="badge">8 shots</span>
+            <span class="badge">~55s</span>
+            <span class="badge">Seedance cloud i2v</span>
+            <span class="badge">scored (music bed)</span>
+          </div>
+          <div class="prose">
+            <p>
+              The scored mode: the picture locks and the Audio step attaches a generated music bed,
+              beat-synced to the edit. The music is generated, not licensed -- produced by the
+              MiniMax Music module and staged to R2, then muxed into the final MP4. The whole
+              pipeline, including scoring, ran unattended.
+            </p>
+          </div>
+
+          <h3 style="margin-top: 32px;">RUST (narrated, Kling cloud i2v)</h3>
+          <figure class="showcase">
+            <video controls preload="metadata" playsinline
+                   poster="https://assets.skyphusion.net/vivijure/showcase/rust-narrated.jpg">
+              <source src="https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4" type="video/mp4" />
+              Your browser does not support embedded video.
+              <a href="https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4">Download the MP4</a>.
+            </video>
+            <figcaption>
+              <em>RUST</em>: three shots, narrated with TTS (MiniMax Speech module). Motion on
+              Kling cloud i2v; two character LoRAs (Salvage Robot and Companion Robot) trained
+              from cast portraits.
+            </figcaption>
+          </figure>
+          <div class="badge-row" aria-hidden="false">
+            <span class="badge">1080p</span>
+            <span class="badge">3 shots</span>
+            <span class="badge">~30s</span>
+            <span class="badge">Kling cloud i2v</span>
+            <span class="badge">narrated (TTS)</span>
+          </div>
+          <div class="prose">
+            <p>
+              The narrated mode: TTS reads the script over the cut, no music bed. Generated by the
+              MiniMax Speech module directly from the storyboard text, staged to R2, and muxed into
+              the final MP4. Narration is a drop-in alternative to the music bed in the same scoring
+              chain.
             </p>
           </div>
 
