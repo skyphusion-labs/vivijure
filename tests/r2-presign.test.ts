@@ -17,7 +17,7 @@ describe("uriEncode (RFC3986)", () => {
     expect(uriEncode("@?&=", true)).toBe("%40%3F%26%3D");
   });
   it("UTF-8 encodes multi-byte characters", () => {
-    expect(uriEncode("é", true)).toBe("%C3%A9"); // e-acute
+    expect(uriEncode(String.fromCharCode(0xe9), true)).toBe("%C3%A9"); // e-acute
   });
 });
 
@@ -66,5 +66,31 @@ describe("presignR2WithConfig (SigV4 query presign)", () => {
     expect(await sig({ key: "other.mp4" })).not.toBe(base);
     expect(await sig({ exp: 600 })).not.toBe(base);
     expect(await sig({ now: FIXED + 86_400_000 })).not.toBe(base);
+  });
+});
+
+describe("presign hardening (security #6)", () => {
+  it("refuses to sign an unsafe key (traversal, absolute, scheme, control, non-ASCII, empty)", async () => {
+    const ctrl = "ctrl" + String.fromCharCode(1) + "x.mp4"; // control byte
+    const nonAscii = "uni" + String.fromCharCode(0xe9) + ".mp4"; // e-acute, non-ASCII
+    const bad = ["../secret.mp4", "a/../b.mp4", "..", "/abs.mp4", "http://evil/x", ctrl, nonAscii, ""];
+    for (const k of bad) {
+      await expect(presignR2WithConfig(cfg, "GET", k, 300, FIXED)).rejects.toThrow(/unsafe object key/);
+    }
+  });
+
+  it("still signs a safe relative key, and benign specials (space, #) stay signable", async () => {
+    expect(await presignR2WithConfig(cfg, "GET", "renders/proj/clips/shot_01.mp4", 300, FIXED)).toContain("X-Amz-Signature=");
+    expect(await presignR2WithConfig(cfg, "GET", "renders/a b#c.mp4", 300, FIXED)).toContain("X-Amz-Signature=");
+  });
+
+  it("clamps the expiry into [1, 604800]s", async () => {
+    const exp = async (e: number) =>
+      new URL(await presignR2WithConfig(cfg, "GET", "out.mp4", e, FIXED)).searchParams.get("X-Amz-Expires");
+    expect(await exp(99_999_999)).toBe("604800"); // above the 7-day cap -> clamped down
+    expect(await exp(0)).toBe("1"); // below the floor -> clamped up
+    expect(await exp(-5)).toBe("1");
+    expect(await exp(Number.NaN)).toBe("1");
+    expect(await exp(3600)).toBe("3600"); // in range -> untouched
   });
 });

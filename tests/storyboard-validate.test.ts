@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   validateStoryboard,
+  normalizeProjectName,
   SCENE_MAX_SECONDS,
   STORYBOARD_MAX_SECONDS,
 } from "../src/storyboard-validate";
@@ -71,5 +72,46 @@ describe("normalizeStyleNone trims the value (issue #17)", () => {
     const r = validateStoryboard(sb({ style_category: "   " }));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.style_category).toBe("None");
+  });
+});
+
+describe("path/key injection hardening (security #6)", () => {
+  it("normalizeProjectName yields a path-safe single segment", () => {
+    expect(normalizeProjectName("My Film")).toBe("My_Film"); // ordinary title: unchanged transform
+    expect(normalizeProjectName("a/b")).toBe("a_b"); // a slash cannot create a nested key
+    expect(normalizeProjectName("..")).toBe("project"); // bare traversal collapses to the fallback
+    expect(normalizeProjectName("")).toBe("project");
+    expect(normalizeProjectName("   ")).toBe("project");
+    const traversal = normalizeProjectName("../../etc/passwd");
+    expect(traversal).not.toContain("..");
+    expect(traversal).not.toContain("/");
+    // placed into the real bundle key, it can never escape the prefix
+    expect(`bundles/${traversal}.tar.gz`.includes("..")).toBe(false);
+  });
+
+  it("rejects a scene start_image with traversal / absolute / scheme", () => {
+    for (const bad of ["../x.png", "a/../b.png", "/abs.png", "http://evil/x.png"]) {
+      const r = validateStoryboard(sb({ scenes: [{ prompt: "x", start_image: bad }] }));
+      expect(r.ok).toBe(false);
+      expect(errs(r)).toMatch(/start_image/);
+    }
+  });
+
+  it("accepts a safe relative start_image", () => {
+    const r = validateStoryboard(sb({ scenes: [{ prompt: "x", start_image: "refs/start_image.png" }] }));
+    expect(r.ok).toBe(true);
+  });
+
+  it("rejects a refs_dir with traversal / absolute", () => {
+    for (const bad of ["../refs", "/abs/refs", "refs/../../x"]) {
+      const r = validateStoryboard(sb({ refs_dir: bad }));
+      expect(r.ok).toBe(false);
+      expect(errs(r)).toMatch(/refs_dir/);
+    }
+  });
+
+  it("accepts a safe relative refs_dir", () => {
+    const r = validateStoryboard(sb({ refs_dir: "refs/my_project" }));
+    expect(r.ok).toBe(true);
   });
 });

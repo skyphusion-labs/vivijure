@@ -15,6 +15,8 @@
 // Minimal-dep convention (matches src/env.ts, src/longrun-params.ts):
 // hand-authored interfaces, no zod / ajv at runtime, no codegen.
 
+import { isSafeRelKey, sanitizeKeySegment } from "./shared";
+
 export type SlotId = "A" | "B" | "C" | "D";
 export const SLOT_IDS: readonly SlotId[] = ["A", "B", "C", "D"] as const;
 
@@ -133,7 +135,10 @@ export type ValidationResult =
 export function normalizeProjectName(title: string | undefined | null): string {
   const raw = typeof title === "string" ? title : "";
   const slug = raw.trim().replace(/\s+/g, "_");
-  return slug || "project";
+  // Guarantee a path-safe single segment: a hostile title (".." , "a/b", "x://y") otherwise reaches
+  // bundles/<projectName>.tar.gz and could steer the key off-bucket. Normal titles (letters, digits,
+  // _ . -) are unchanged, so the value stays in sync with the backend `project` field. (security #6)
+  return sanitizeKeySegment(slug, "project");
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -391,13 +396,18 @@ export function validateStoryboard(input: unknown): ValidationResult {
         );
       }
 
-      // act / start_image: optional strings
+      // act / start_image: optional strings. start_image is a path/key consumed downstream as an R2
+      // object, so it must be a safe relative key (no traversal / absolute / scheme). (security #6)
       for (const key of ["act", "start_image"] as const) {
         const v = scene[key];
         if (v !== undefined) {
           if (typeof v !== "string") {
             errors.push(
               `${label} ${key} must be a string if provided (got ${describeType(v)})`,
+            );
+          } else if (key === "start_image" && !isSafeRelKey(v)) {
+            errors.push(
+              `${label} start_image must be a safe relative path (letters, digits, . _ - /, no "..", no leading "/")`,
             );
           } else {
             out[key] = v;
@@ -515,6 +525,11 @@ export function validateStoryboard(input: unknown): ValidationResult {
     ) {
       errors.push(
         "refs_dir must be a non-empty string if provided",
+      );
+    } else if (!isSafeRelKey(input.refs_dir)) {
+      // refs_dir is used downstream as an R2 key prefix; reject traversal / absolute / scheme. (security #6)
+      errors.push(
+        'refs_dir must be a safe relative path (letters, digits, . _ - /, no "..", no leading "/")',
       );
     } else {
       refsDir = input.refs_dir;
