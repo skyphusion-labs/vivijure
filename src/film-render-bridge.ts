@@ -9,9 +9,31 @@ import type { FilmScene } from "./film-orchestrator";
 import type { RunpodJobView, RunpodStatus } from "./runpod-submit";
 import { resolveModuleRenderConfigs } from "./render-module-config";
 import type { RegisteredModule } from "./modules/types";
+import type { NewRenderRow } from "./renders-db";
 
 export function isFilmJobId(jobId: string): boolean {
   return typeof jobId === "string" && jobId.startsWith("film-");
+}
+
+/** Reconstruct a renders-table row from a FilmJob doc (#164). The `POST /api/render/film`
+ *  endpoint, unlike `POST /api/storyboard/render`, carries no quality tier or renderOverrides,
+ *  so those default ("final" tier, no overrides) -- everything else reads straight off the job.
+ *  Used at film START (insert the row) and on POLL as an insert-if-missing (insertRender is
+ *  ON CONFLICT(job_id) DO NOTHING) so a film already in flight before history unification
+ *  self-surfaces on its next poll/sweep tick. Pure so the mapping is unit-testable. */
+export function filmRowFromJob(job: FilmJob): NewRenderRow {
+  // Same mode derivation filmJobToPollView uses, so the row + the poll view never disagree.
+  const mode = job.derive_mode ?? (job.keyframes_only ? "keyframes-only" : "full");
+  return {
+    userEmail: job.user_email ?? "",
+    jobId: job.film_id,
+    project: job.project,
+    bundleKey: job.bundle_key,
+    qualityTier: "final",
+    status: filmJobToPollView(job, null).status,
+    mode,
+    parentId: job.parent_render_id ?? null,
+  };
 }
 
 /** Map planner render_overrides + quality tier into module config_schema fields. */

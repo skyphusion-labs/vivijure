@@ -5,6 +5,7 @@ import {
   normalizeFilmScenes,
   filterScenesByShotIds,
   filmJobToPollView,
+  filmRowFromJob,
   stallSignal,
 } from "../src/film-render-bridge";
 import type { FilmJob } from "../src/film-orchestrator";
@@ -196,5 +197,57 @@ describe("stallSignal (#129 render-status contract)", () => {
   it("falls back to created_at on a pre-#129 job (no phase_started_at)", () => {
     const s = stallSignal(job({ created_at: 5_000 }), 5_000 + 60_000);
     expect(s.last_progress_at).toBe(5_000);
+  });
+});
+
+describe("filmRowFromJob (#164 -- film jobs in render history)", () => {
+  const base: FilmJob = {
+    film_id: "film-abc",
+    project: "demo",
+    bundle_key: "bundles/demo.tar.gz",
+    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 5 }],
+    motion_backend: "own-gpu",
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: "MODULE_KEYFRAME",
+    phase: "clips",
+    created_at: Date.now() - 60_000,
+    user_email: "joan@skyphusion.org",
+  };
+
+  it("maps a full render job to a renders row (tier defaults to final)", () => {
+    const row = filmRowFromJob(base);
+    expect(row).toEqual({
+      userEmail: "joan@skyphusion.org",
+      jobId: "film-abc",
+      project: "demo",
+      bundleKey: "bundles/demo.tar.gz",
+      qualityTier: "final",
+      status: "IN_PROGRESS",
+      mode: "full",
+      parentId: null,
+    });
+  });
+
+  it("derives mode keyframes-only for a preview job", () => {
+    const row = filmRowFromJob({ ...base, keyframes_only: true });
+    expect(row.mode).toBe("keyframes-only");
+  });
+
+  it("carries derive_mode + parent_render_id for a cloud-finalized child", () => {
+    const row = filmRowFromJob({ ...base, derive_mode: "cloud-finalized", parent_render_id: 42 });
+    expect(row.mode).toBe("cloud-finalized");
+    expect(row.parentId).toBe(42);
+  });
+
+  it("reflects the job phase in the row status (terminal + cancelled)", () => {
+    expect(filmRowFromJob({ ...base, phase: "done" }).status).toBe("COMPLETED");
+    expect(filmRowFromJob({ ...base, phase: "failed" }).status).toBe("FAILED");
+    expect(filmRowFromJob({ ...base, phase: "failed", cancelled: true }).status).toBe("CANCELLED");
+  });
+
+  it("defaults userEmail to an empty string when the job has no owner", () => {
+    const { user_email: _omit, ...noOwner } = base;
+    expect(filmRowFromJob(noOwner as FilmJob).userEmail).toBe("");
   });
 });
