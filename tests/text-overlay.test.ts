@@ -25,7 +25,7 @@ const SAMPLE_INPUT: FinishInput = {
 describe("coerceConfig", () => {
   it("returns sane defaults for an empty config", () => {
     const c = defaultConfig();
-    expect(c.font).toBe("Arial");
+    expect(c.font).toBe("DejaVu Sans");
     expect(c.size).toBe(48);
     expect(c.color).toBe("white");
     expect(c.safe_margin).toBe(50);

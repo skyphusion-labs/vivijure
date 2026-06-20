@@ -50,7 +50,7 @@ const MANIFEST: ModuleManifest = {
   hooks: ["finish"],
   provides: [{ id: "text-overlay", label: "Text overlay (titles / credits / subtitles)" }],
   config_schema: {
-    font:        { type: "string", default: "Arial",  label: "default font" },
+    font:        { type: "string", default: "DejaVu Sans",  label: "default font (must be installed in the video-finish container)" },
     size:        { type: "int",    default: 48, min: 8, max: 400, label: "default font size (px)" },
     color:       { type: "string", default: "white",  label: "default font color (name or #rrggbb)" },
     safe_margin: { type: "int",    default: 50, min: 0, max: 500, label: "safe margin (px from edge)" },

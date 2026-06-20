@@ -41,7 +41,10 @@ export interface OverlayConfig {
 // Config coercion
 
 export function defaultConfig(): OverlayConfig {
-  return { font: "Arial", size: 48, color: "white", safe_margin: 50 };
+  // "DejaVu Sans" is the family the video-finish container actually installs
+  // (fonts-dejavu-core + fontconfig). A Windows/Mac family like "Arial" does
+  // not exist on the Linux container and drawtext fails to resolve it.
+  return { font: "DejaVu Sans", size: 48, color: "white", safe_margin: 50 };
 }
 
 const SAFE_COLOR_RE = /^[a-zA-Z0-9#@]{1,32}$/; // ffmpeg color names + hex + @alpha suffix
