@@ -117,6 +117,12 @@ service = "vivijure-module-keyframe"
 binding = "MODULE_FINISH_RIFE"
 service = "vivijure-module-finish-rife"
 
+# Text overlay: a finish-chain module (titles / credits / lower-thirds / subtitles) that burns text
+# via the video-finish container's /overlay route. Folds after finish-rife in ui.order.
+[[services]]
+binding = "MODULE_TEXT_OVERLAY"
+service = "vivijure-module-text-overlay"
+
 # Cast.image: generate a character's LoRA training reference set (FLUX 2 / Nano Banana). Cast-prep.
 [[services]]
 binding = "MODULE_CAST_IMAGE"
