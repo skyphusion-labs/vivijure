@@ -5,7 +5,7 @@ import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/r
 import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
 import { startFilmJob, advanceFilmJob, cancelFilmJob, startFilmFromKeyframes, summarizeFilm, type FilmScene, type FilmSummary } from "./film-orchestrator";
 import {
-  filmJobToPollView, isFilmJobId, mapRenderOverridesToModuleConfigs,
+  filmJobToPollView, filmRowFromJob, isFilmJobId, mapRenderOverridesToModuleConfigs,
   normalizeFilmScenes, filterScenesByShotIds,
 } from "./film-render-bridge";
 import { animateFromPreview, clipAnimateProgress } from "./finalize-from-keyframes";
@@ -778,11 +778,20 @@ const hStartFilm: Handler = async (req, env) => {
     // silent even when the caller supplied a bed (the scored/narrated render path).
     finish_config: a.finish_config, audio_key: a.audio_key, user_email: getUserEmail(req),
   });
+  // Write a renders-table row so this film shows in the history panel (#164), the same way
+  // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
+  // keeps the row's status in sync as the job advances.
+  await insertRender(env, filmRowFromJob(job));
   return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(job, null))) }, 201);
 };
-const hPollFilm: Handler = async (_req, env, _c, p) => {
+const hPollFilm: Handler = async (_req, env, ctx, p) => {
   const r = await advanceFilmJob(env, p.id);
   if (!r) throw notFound("film job");
+  // Insert-if-missing (ON CONFLICT(job_id) DO NOTHING) so a film started before history
+  // unification -- or via a path that did not insert -- still surfaces in history on its next
+  // poll/sweep tick; then sync the live status/output exactly like hPollRender (#164).
+  await insertRender(env, filmRowFromJob(r.job));
+  await updateRenderFromView(env, filmJobToPollView(r.job, r.clipJob), ctx);
   return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(r.job, r.clipJob))) });
 };
 
