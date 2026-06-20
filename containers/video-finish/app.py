@@ -380,10 +380,234 @@ async def overlay(req):
         shutil.rmtree(work, ignore_errors=True)
 
 
+
+
+# ---------------------------------------------------------------------------
+# /film-titles: prepend a title card and/or append a credits card to an
+# assembled film. Title and credits are synthetic black-background segments
+# generated with `lavfi color` + ffmpeg drawtext; each segment is normalized
+# to the same codec/resolution so _concat_hard can join them with -c copy.
+#
+# Audio note: all segments use -an (matches _normalize / _assemble). The
+# caller re-adds audio via /finish remuxAudioOnly if needed.
+#
+# Pure helper functions (_escape_drawtext, _title_card_filter,
+# _credits_card_filter) are factored out for unit-testability.
+
+def _escape_drawtext(text):
+    """Escape text for use in an ffmpeg drawtext text= value.
+    Mirrors modules/text-overlay overlay.ts escapeDrawtext: backslash first,
+    then colon, then single-quote (order is critical to avoid double-escaping).
+    """
+    return (text
+            .replace("\\", "\\\\")
+            .replace(":", "\\:")
+            .replace("'", "\\'"))
+
+
+def _title_card_filter(text, *, subtitle=None, font="DejaVu Sans",
+                       font_size=80, sub_font_size=48, color="white"):
+    """Build a drawtext -vf filter string for a title card.
+    Title is vertically centered (or offset upward when subtitle is present);
+    subtitle appears below at a smaller size. Pure function; no I/O.
+    """
+    t = _escape_drawtext(text)
+    if subtitle:
+        # Each drawtext filter evaluates its own text_h independently, so use
+        # fixed pixel offsets from h/2: title above the midline, subtitle below.
+        gap = 16
+        vf = (
+            f"drawtext=font='{font}':text='{t}':fontsize={font_size}"
+            f":fontcolor={color}:x=(w-text_w)/2:y=(h/2-text_h-{gap})"
+            f",drawtext=font='{font}':text='{_escape_drawtext(subtitle)}'"
+            f":fontsize={sub_font_size}:fontcolor={color}"
+            f":x=(w-text_w)/2:y=(h/2+{gap})"
+        )
+    else:
+        vf = (
+            f"drawtext=font='{font}':text='{t}':fontsize={font_size}"
+            f":fontcolor={color}:x=(w-text_w)/2:y=(h-text_h)/2"
+        )
+    return vf
+
+
+def _credits_card_filter(lines, duration, *, font="DejaVu Sans",
+                         font_size=48, color="white", line_spacing=20):
+    """Build a scrolling-credits -vf filter for a list of text lines.
+    Lines scroll upward from the bottom of the frame to above the top over
+    `duration` seconds. One drawtext segment per line. Pure function; no I/O.
+    """
+    line_height = font_size + line_spacing
+    total_h = len(lines) * line_height
+    filters = []
+    for i, line in enumerate(lines):
+        t = _escape_drawtext(line)
+        # y_i(t) = h - (t/duration)*(h+total_h) + i*line_height
+        # t=0   -> y_0 = h              (block starts below the frame)
+        # t=dur -> y_0 = -total_h       (block ends above the frame)
+        y_expr = f"h-(t/{duration:.3f})*(h+{total_h})+{i * line_height}"
+        filters.append(
+            f"drawtext=font='{font}':text='{t}':fontsize={font_size}"
+            f":fontcolor={color}:x=(w-text_w)/2:y=({y_expr})"
+        )
+    return ",".join(filters)
+
+
+def _make_card(dst, *, width, height, fps, crf, preset, duration, vf_filter):
+    """Generate a title or credit card MP4: black lavfi background + drawtext.
+    Output: libx264/yuv420p, no audio -- matches _normalize output for concat.
+    """
+    lavfi_src = f"color=c=black:s={width}x{height}:r={fps}:d={duration:.3f}"
+    _run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", lavfi_src,
+        "-vf", vf_filter,
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+        "-pix_fmt", "yuv420p",
+        dst,
+    ])
+
+
+def _assemble_film_titles(work, film_path, title_spec, credits_spec,
+                           width, height, fps, crf, preset):
+    """Assemble [title_card?, film_norm, credits_card?] into a single MP4.
+    All segments are normalized to (width x height, fps, libx264, yuv420p, -an)
+    so _concat_hard can join them with -c copy.
+    Returns (out_path, duration_seconds).
+    """
+    segments = []
+
+    if title_spec:
+        text = str(title_spec.get("text", "")).strip()
+        raw_sub = title_spec.get("subtitle")
+        subtitle = str(raw_sub).strip() if raw_sub else None
+        try:
+            secs = max(0.5, min(float(title_spec.get("seconds", 5.0)), 120.0))
+        except (TypeError, ValueError):
+            secs = 5.0
+        if text:
+            card = os.path.join(work, "title_card.mp4")
+            _make_card(card, width=width, height=height, fps=fps, crf=crf,
+                       preset=preset, duration=secs,
+                       vf_filter=_title_card_filter(text, subtitle=subtitle))
+            segments.append(card)
+
+    film_norm = os.path.join(work, "film_norm.mp4")
+    _normalize(film_path, film_norm, width=width, height=height, fps=fps,
+               crf=crf, preset=preset, cap=None)
+    segments.append(film_norm)
+
+    if credits_spec:
+        raw_lines = credits_spec.get("lines", [])
+        lines = [str(l).strip() for l in raw_lines if str(l).strip()]
+        try:
+            secs = max(0.5, min(float(credits_spec.get("seconds", 8.0)), 120.0))
+        except (TypeError, ValueError):
+            secs = 8.0
+        if lines:
+            card = os.path.join(work, "credits_card.mp4")
+            _make_card(card, width=width, height=height, fps=fps, crf=crf,
+                       preset=preset, duration=secs,
+                       vf_filter=_credits_card_filter(lines, secs))
+            segments.append(card)
+
+    out = os.path.join(work, "with_titles.mp4")
+    _concat_hard(segments, out)
+    return out, _probe_duration(out)
+
+
+async def film_titles(req):
+    """POST /film-titles -- prepend a title card and/or append a credits card.
+
+    JSON body (presigned URLs; bytes never touch the Worker):
+      videoUrl   string  presigned GET URL for the assembled film
+      outputUrl  string  presigned PUT URL for the result
+      outputKey  string  R2 key label (logged; unused by this endpoint)
+      title      object  optional {text, subtitle?, seconds?}
+      credits    object  optional {lines:[string], seconds?}
+      width      int     output width  (default 1920)
+      height     int     output height (default 1080)
+      fps        int     frame rate    (default 24)
+      crf        int     libx264 CRF   (default 18)
+      preset     string  libx264 preset (default "medium")
+
+    Returns: {ok, key, bytes, durationSeconds}
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+
+    video_url = body.get("videoUrl")
+    output_url = body.get("outputUrl")
+    output_key = body.get("outputKey", "")
+    title_spec = body.get("title") if isinstance(body.get("title"), dict) else None
+    credits_spec = body.get("credits") if isinstance(body.get("credits"), dict) else None
+
+    if not video_url:
+        return web.json_response({"ok": False, "error": "videoUrl required"}, status=400)
+    if not output_url:
+        return web.json_response({"ok": False, "error": "outputUrl required"}, status=400)
+    if not title_spec and not credits_spec:
+        return web.json_response(
+            {"ok": False, "error": "at least one of title or credits is required"}, status=400)
+
+    try:
+        width = int(body.get("width", 1920))
+        height = int(body.get("height", 1080))
+        fps = int(body.get("fps", 24))
+        crf = int(body.get("crf", 18))
+    except (TypeError, ValueError):
+        return web.json_response({"ok": False, "error": "bad numeric input"}, status=400)
+    preset = str(body.get("preset", "medium"))
+
+    work = tempfile.mkdtemp(prefix="vftitles-")
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=DOWNLOAD_TIMEOUT_S)) as s:
+            film_path = os.path.join(work, "film.mp4")
+            ok, info = await _download(s, video_url, film_path, MAX_CLIP_BYTES)
+            if not ok:
+                sc = 413 if info == "too large" else 502
+                return web.json_response({"ok": False, "error": f"film {info}"}, status=sc)
+
+        loop = asyncio.get_running_loop()
+        try:
+            out_path, secs = await loop.run_in_executor(
+                None, _assemble_film_titles,
+                work, film_path, title_spec, credits_spec,
+                width, height, fps, crf, preset,
+            )
+        except subprocess.CalledProcessError as e:
+            log.exception("ffmpeg failed in /film-titles")
+            return web.json_response({"ok": False, "error": f"ffmpeg failed: {e}"}, status=500)
+        except Exception as e:  # noqa: BLE001
+            log.exception("/film-titles assemble failed")
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+        with open(out_path, "rb") as f:
+            out_bytes = f.read()
+
+        async with ClientSession(timeout=ClientTimeout(total=UPLOAD_TIMEOUT_S)) as s:
+            async with s.put(output_url, data=out_bytes,
+                             headers={"content-type": "video/mp4"}) as r:
+                if r.status not in (200, 201, 204):
+                    return web.json_response(
+                        {"ok": False, "error": f"output put {r.status}"}, status=502)
+
+        log.info("/film-titles ok key=%s bytes=%d dur=%.3f", output_key, len(out_bytes), secs)
+        return web.json_response({
+            "ok": True,
+            "key": output_key,
+            "bytes": len(out_bytes),
+            "durationSeconds": round(secs, 3),
+        })
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
 app = web.Application(client_max_size=1024 * 1024)  # JSON bodies are small (URLs only)
 app.router.add_get("/health", health)
 app.router.add_post("/finish", finish)
 app.router.add_post("/overlay", overlay)
+app.router.add_post("/film-titles", film_titles)
 
 if __name__ == "__main__":
     log.info("video-finish listening on 0.0.0.0:%d", PORT)
