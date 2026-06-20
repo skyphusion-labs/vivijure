@@ -13,6 +13,8 @@ output matches what the pod used to produce, but runs on a cheap CPU container
 instead of GPU-billed seconds. See docs/video-finish-container.md.
 """
 import asyncio
+import base64
+import json as _json
 import logging
 import os
 import shutil
@@ -291,9 +293,97 @@ def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade
     return out, _probe_duration(out), has_audio
 
 
+
+# ---------------------------------------------------------------------------
+# /overlay: burn text overlays onto a single clip via ffmpeg drawtext (#190).
+#
+# The caller (the text-overlay module worker) reads the clip from R2 and POSTs
+# the raw bytes here; the processed bytes are returned in the response body.
+# This bypasses the 1 MB JSON body limit by streaming the video directly and
+# reading the spec from the X-Overlay-Spec header (base64-encoded JSON).
+#
+# Header X-Overlay-Spec: base64( { "filter": "<ffmpeg -vf value>", "output_key": "..." } )
+# Request body:  raw video bytes (Content-Type: video/mp4)
+# Response body: raw video bytes on success; JSON {ok:false, error} on failure.
+
+MAX_OVERLAY_CLIP_BYTES = 256 * 1024 * 1024   # 256 MB (same cap as regular clips)
+
+
+def _draw_overlay(src, dst, vf_filter, *, crf=18, preset="medium"):
+    """Run ffmpeg drawtext on `src`, writing to `dst`. Re-encodes with libx264 so
+    the overlay is baked in (stream-copy cannot apply a video filter). Audio is
+    stream-copied unchanged; `-movflags +faststart` keeps the output web-playable."""
+    cmd = [
+        "ffmpeg", "-y", "-i", src,
+        "-vf", vf_filter,
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        dst,
+    ]
+    _run(cmd)
+
+
+async def overlay(req):
+    # Parse the overlay spec from the header (base64 JSON: {filter, output_key}).
+    spec_b64 = req.headers.get("X-Overlay-Spec", "").strip()
+    if not spec_b64:
+        return web.json_response({"ok": False, "error": "X-Overlay-Spec header required"}, status=400)
+    try:
+        spec = _json.loads(base64.b64decode(spec_b64))
+    except Exception:
+        return web.json_response({"ok": False, "error": "X-Overlay-Spec: invalid base64 JSON"}, status=400)
+
+    vf_filter = spec.get("filter", "").strip() if isinstance(spec, dict) else ""
+    if not vf_filter:
+        return web.json_response({"ok": False, "error": "X-Overlay-Spec: filter is required"}, status=400)
+
+    # Stream the raw clip bytes from the request body (bypass the 1 MB JSON body limit).
+    total = 0
+    chunks = []
+    try:
+        async for chunk in req.content.iter_chunked(256 * 1024):
+            total += len(chunk)
+            if total > MAX_OVERLAY_CLIP_BYTES:
+                return web.json_response({"ok": False, "error": "clip too large"}, status=413)
+            chunks.append(chunk)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": f"read body failed: {e}"}, status=400)
+
+    if total == 0:
+        return web.json_response({"ok": False, "error": "clip body required"}, status=400)
+
+    clip_bytes = b"".join(chunks)
+    work = tempfile.mkdtemp(prefix="voverlay-")
+    try:
+        src_path = os.path.join(work, "in.mp4")
+        dst_path = os.path.join(work, "out.mp4")
+        with open(src_path, "wb") as f:
+            f.write(clip_bytes)
+
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, _draw_overlay, src_path, dst_path, vf_filter)
+        except subprocess.CalledProcessError as e:
+            log.exception("ffmpeg drawtext failed for key=%s", spec.get("output_key", "?"))
+            return web.json_response({"ok": False, "error": f"ffmpeg failed: {e}"}, status=500)
+        except Exception as e:  # noqa: BLE001
+            log.exception("overlay failed")
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+        with open(dst_path, "rb") as f:
+            out_bytes = f.read()
+
+        log.info("overlay ok key=%s in=%d out=%d", spec.get("output_key", "?"), len(clip_bytes), len(out_bytes))
+        return web.Response(body=out_bytes, content_type="video/mp4")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 app = web.Application(client_max_size=1024 * 1024)  # JSON bodies are small (URLs only)
 app.router.add_get("/health", health)
 app.router.add_post("/finish", finish)
+app.router.add_post("/overlay", overlay)
 
 if __name__ == "__main__":
     log.info("video-finish listening on 0.0.0.0:%d", PORT)
