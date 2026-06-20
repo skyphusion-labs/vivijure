@@ -152,17 +152,16 @@
         </section>
 
         <section id="showcase">
-          <h2>Showcase: three films, three audio modes, three backends</h2>
+          <h2>Showcase: the first film, rendered end to end</h2>
           <div class="prose" style="margin-bottom: 28px;">
             <p>
-              Three real films rendered end to end on Vivijure. Together they walk the full audio
-              range (silent default, then a music score, then TTS narration) across all three i2v
-              motion backends (self-hosted <code>own-gpu</code>, then the Seedance and Kling cloud
-              APIs). Every clip is an unedited render straight off the pipeline.
+              A real film rendered end to end on Vivijure, an unedited render straight off the
+              pipeline. (The scored and narrated films on the cloud i2v backends are being
+              re-rendered after an aspect-ratio fix and will return to the showcase shortly.)
             </p>
           </div>
 
-          <h3>1. NEON HALFLIFE (silent)</h3>
+          <h3>NEON HALFLIFE (silent)</h3>
           <figure class="showcase">
             <video controls preload="metadata" playsinline
                    poster="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.jpg">
@@ -200,61 +199,6 @@
             </p>
           </div>
 
-          <h3 style="margin-top: 40px;">2. FUR AND CIRCUITS (scored)</h3>
-          <figure class="showcase">
-            <video controls preload="metadata" playsinline
-                   poster="https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.jpg">
-              <source src="https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4" type="video/mp4" />
-              Your browser does not support embedded video.
-              <a href="https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4">Download the MP4</a>.
-            </video>
-            <figcaption>
-              <em>FUR AND CIRCUITS</em>: the same pipeline with the Audio step turned on. About
-              fifty-six seconds, motion by the <strong>Seedance</strong> cloud i2v backend, and a
-              music score muxed over the locked picture (stereo AAC).
-            </figcaption>
-          </figure>
-          <div class="badge-row" aria-hidden="false">
-            <span class="badge">~56s</span>
-            <span class="badge">Seedance i2v</span>
-            <span class="badge">music score</span>
-            <span class="badge">stereo AAC</span>
-          </div>
-          <div class="prose">
-            <p>
-              The scored end of the range: the picture locks silent as above, then the opt-in Audio
-              step lays a music bed under the whole film. Same control plane, a different motion
-              backend, and one extra step.
-            </p>
-          </div>
-
-          <h3 style="margin-top: 40px;">3. RUST (narrated)</h3>
-          <figure class="showcase">
-            <video controls preload="metadata" playsinline
-                   poster="https://assets.skyphusion.net/vivijure/showcase/rust-narrated.jpg">
-              <source src="https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4" type="video/mp4" />
-              Your browser does not support embedded video.
-              <a href="https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4">Download the MP4</a>.
-            </video>
-            <figcaption>
-              <em>RUST</em>: the third audio mode. About thirty seconds, motion by the
-              <strong>Kling</strong> cloud i2v backend, with TTS narration muxed over the picture
-              (mono AAC).
-            </figcaption>
-          </figure>
-          <div class="badge-row" aria-hidden="false">
-            <span class="badge">~30s</span>
-            <span class="badge">Kling i2v</span>
-            <span class="badge">TTS narration</span>
-            <span class="badge">mono AAC</span>
-          </div>
-          <div class="prose">
-            <p>
-              Same studio, a third motion backend, and the Audio step set to narration instead of a
-              music bed. Silent by default, scored or narrated when you want it: the choice is
-              yours, and it runs after the picture is locked.
-            </p>
-          </div>
         </section>
 
         <section id="why">
