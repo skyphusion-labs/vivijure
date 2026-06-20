@@ -11,6 +11,7 @@ import {
   passthroughOutput,
 } from "../modules/text-overlay/src/overlay";
 import type { FinishInput } from "../modules/text-overlay/src/contract";
+import worker from "../modules/text-overlay/src/index";
 
 const SAMPLE_INPUT: FinishInput = {
   shot_id: "shot_01",
@@ -225,5 +226,55 @@ describe("passthroughOutput", () => {
     const o = passthroughOutput(SAMPLE_INPUT, "no-overlays", { degraded: false });
     expect(o.degraded).toBeUndefined();
     expect(o.applied[0]).toMatch(/^noop:/);
+  });
+});
+
+
+// #212: text-overlay's soft-degrade convention must hold so the central dispatchChain detection catches
+// it -- a genuine degrade (container unreachable) returns ok:true WITH output.degraded set; only the
+// intentional no-overlays no-op opts out. Also guards the bare-path URL bug (must be absolute).
+describe("text-overlay module invoke degrade + absolute url (#212)", () => {
+  function env(over: { throws?: boolean } = {}) {
+    const calls: string[] = [];
+    const e = {
+      VIDEO_FINISH_VPC: {
+        async fetch(input: Request | string) {
+          calls.push(typeof input === "string" ? input : input.url);
+          if (over.throws) throw new TypeError("Invalid URL");
+          return new Response(new ArrayBuffer(64), { status: 200 });
+        },
+      },
+      R2_RENDERS: {
+        get: async () => ({ arrayBuffer: async () => new ArrayBuffer(32) }),
+        put: async () => {},
+      },
+    } as unknown as Parameters<typeof worker.fetch>[1];
+    return { e, calls };
+  }
+  const invoke = (config: Record<string, unknown>) =>
+    new Request("https://module/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hook: "finish", input: SAMPLE_INPUT, config, context: {} }),
+    });
+
+  it("degrades (ok:true + output.degraded) on a container throw, AND uses an absolute url", async () => {
+    const { e, calls } = env({ throws: true });
+    const res = await worker.fetch(invoke({ overlays: [{ text: "HELLO" }] }), e);
+    const json = (await res.json()) as { ok: boolean; output: { degraded?: string } };
+    expect(calls).toHaveLength(1);
+    expect(() => new URL(calls[0])).not.toThrow();   // bare "/overlay" would throw here
+    expect(new URL(calls[0]).pathname).toBe("/overlay");
+    expect(json.ok).toBe(true);                       // never drops the clip
+    expect(json.output.degraded).toContain("container-failed"); // dispatchChain will surface this
+  });
+
+  it("a no-overlays no-op is NOT flagged as degraded", async () => {
+    const { e, calls } = env();
+    const res = await worker.fetch(invoke({}), e); // no overlays
+    const json = (await res.json()) as { ok: boolean; output: { degraded?: string } };
+    expect(calls).toHaveLength(0);
+    expect(json.ok).toBe(true);
+    expect(json.output.degraded).toBeUndefined();
   });
 });

@@ -252,6 +252,10 @@ export interface FilmSummary {
   clips?: JobSummary;
   finish?: FinishSummary;
   film_key?: string; // present once the film is assembled (phase "done")
+  // Outcome of the film.finish chain (title / credit cards). Surfaced so the API/frontend can show
+  // honest degrade state -- a film that reached "done" but shipped WITHOUT cards (e.g. the video-finish
+  // container was unreachable) has film_finish.degraded set. Absent until film.finish runs. (#211 follow-up)
+  film_finish?: FilmJob["film_finish"];
 }
 export function summarizeFinish(shots: FinishShot[]): FinishSummary {
   return {
@@ -267,6 +271,7 @@ export function summarizeFilm(job: FilmJob, clipJob: ClipJob | null): FilmSummar
     clips: clipJob ? summarizeJob(clipJob) : undefined,
     finish: job.finish_shots ? summarizeFinish(job.finish_shots) : undefined,
     film_key: job.film_key,
+    film_finish: job.film_finish,
   };
 }
 
