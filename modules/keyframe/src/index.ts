@@ -46,8 +46,13 @@ export const MANIFEST: ModuleManifest = {
       default: "final",
       label: "quality tier",
     },
-    width: { type: "int", default: 1024, min: 512, max: 1536, label: "width" },
-    height: { type: "int", default: 1024, min: 512, max: 1536, label: "height" },
+    // Default to a 16:9 landscape keyframe (SDXL-friendly 1344x768). Image-to-video backends conform
+    // the clip to the KEYFRAME's aspect ratio (they ignore an aspect_ratio param once given an input
+    // image), so a square keyframe forced square clips that the assembler then pillarboxed into 16:9
+    // with black bars. A 16:9 keyframe makes the whole chain 16:9. Override via keyframe_config for
+    // portrait/square. (fixes the square showcase clips)
+    width: { type: "int", default: 1344, min: 512, max: 1536, label: "width" },
+    height: { type: "int", default: 768, min: 512, max: 1536, label: "height" },
     steps: { type: "int", default: 30, min: 1, max: 60, label: "diffusion steps" },
     guidance_scale: { type: "float", default: 6.5, min: 0, max: 20, label: "guidance scale" },
     seed: { type: "int", default: -1, min: -1, label: "seed (-1 = random)" },
