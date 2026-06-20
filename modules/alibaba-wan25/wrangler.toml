@@ -1,0 +1,23 @@
+# alibaba-wan25 module worker (vivijure-module/1): Alibaba Wan 2.5 I2V on RunPod, a motion.backend
+# module (#187). Bound into the core as MODULE_ALIBABA_WAN25; the registry discovers it from
+# GET /module.json and the studio renders the motion.backend stage from it.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-alibaba-wan25"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# The rendered clip is stored in the shared render bucket so the core / film assembler can find it.
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
+
+# Secret, set AFTER deploy (never committed), with a DEDICATED, scoped vivijure RunPod key (per-module
+# key so a leak's blast radius is this one module):
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/alibaba-wan25/wrangler.toml
