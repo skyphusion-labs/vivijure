@@ -929,11 +929,11 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     const r = await advanceFilmJob(env, "film-finish-obs");
     expect(r?.job.phase).toBe("done");
     // the degrade is OBSERVABLE, not a silent green
-    expect(r?.job.film_finish?.degraded).toBe("passthrough:container-unreachable");
+    expect(r?.job.film_finish?.degraded).toBe("film-titles: passthrough:container-unreachable");
     expect(r?.job.film_finish?.steps).toEqual(["passthrough:container-unreachable"]);
     // film kept the muxed key (no cards applied)
     expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio.mp4");
-    expect(read().film_finish?.degraded).toBe("passthrough:container-unreachable"); // persisted
+    expect(read().film_finish?.degraded).toBe("film-titles: passthrough:container-unreachable"); // persisted
   });
 
   it("records applied + swaps to the carded film when the module succeeds", async () => {

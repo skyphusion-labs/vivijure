@@ -539,7 +539,6 @@ async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
 interface FilmFinishChainOutput {
   film_key?: string;
   applied?: string[];
-  degraded?: string;
 }
 
 async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
@@ -574,17 +573,21 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   // The module soft-degrades (passthrough) on a container failure and still returns ok:true, so the only
   // signal that cards were NOT applied is `output.degraded`; surface it (and any chain errors) here. (#207)
   const out = result.output;
+  // dispatchChain records a module's soft-degrade (ok:true but it passed the film through) centrally in
+  // result.degraded ("<module>: <reason>"); collapse it onto the job so a degraded run is observable
+  // state, not a silent green. A degrade means cards were requested but NOT applied.
+  const degraded = result.degraded.length > 0 ? result.degraded.join("; ") : undefined;
   job.film_finish = {
     applied: result.applied,
     errors: result.errors,
     steps: out?.applied,
-    degraded: out?.degraded,
+    degraded,
   };
   if (result.errors.length > 0) {
     console.warn(`film.finish errors for ${job.film_id}: ${result.errors.join("; ")}`);
   }
-  if (out?.degraded) {
-    console.warn(`film.finish degraded for ${job.film_id}: ${out.degraded} -- film shipped WITHOUT cards`);
+  if (degraded) {
+    console.warn(`film.finish degraded for ${job.film_id}: ${degraded} -- film shipped WITHOUT cards`);
   }
   const next = out?.film_key;
   if (typeof next === "string" && next.length > 0) job.film_key = next;
