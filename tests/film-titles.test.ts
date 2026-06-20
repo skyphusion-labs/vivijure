@@ -7,6 +7,7 @@ import {
   type TitlesConfig,
 } from "../modules/film-titles/src/film-titles";
 import type { FilmFinishInput } from "../modules/film-titles/src/contract";
+import worker from "../modules/film-titles/src/index";
 
 const baseInput = (over: Partial<FilmFinishInput> = {}): FilmFinishInput => ({
   film_key: "renders/film-x/film.mp4",
@@ -59,5 +60,66 @@ describe("film-titles pure logic", () => {
     expect(out.applied).toEqual(["noop:no-cards"]);
     expect(out.degraded).toBeUndefined();
     expect(passthroughOutput(baseInput(), "passthrough:container-failed", { degraded: true }).degraded).toBe("passthrough:container-failed");
+  });
+});
+
+
+// Module invoke path (default export). Guards the bug where a BARE "/film-titles" URL throws in the
+// Workers runtime, gets masked as "container-unreachable", and ships the film UNCARDED at phase=done.
+describe("film-titles module invoke (#207 regression)", () => {
+  function vpcEnv(over: { status?: number; body?: unknown; throws?: boolean } = {}) {
+    const calls: string[] = [];
+    const env = {
+      VIDEO_FINISH_VPC: {
+        async fetch(input: Request | string) {
+          calls.push(typeof input === "string" ? input : input.url);
+          if (over.throws) throw new TypeError("Invalid URL");
+          return new Response(JSON.stringify(over.body ?? { ok: true, key: "renders/film-x/film_titled.mp4" }), {
+            status: over.status ?? 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      },
+    } as unknown as Parameters<typeof worker.fetch>[1];
+    return { env, calls };
+  }
+
+  const invoke = (input: FilmFinishInput) =>
+    new Request("https://module/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hook: "film.finish", input, config: {}, context: {} }),
+    });
+
+  it("calls the container with an ABSOLUTE url and applies the cards (not degraded)", async () => {
+    const { env, calls } = vpcEnv();
+    const res = await worker.fetch(invoke(baseInput({ title: { text: "NEON HALFLIFE" } })), env);
+    const json = (await res.json()) as { ok: boolean; output: { film_key: string; applied: string[]; degraded?: string } };
+    // The whole bug: a bare path threw. Assert a parseable absolute URL with the right path.
+    expect(calls).toHaveLength(1);
+    expect(() => new URL(calls[0])).not.toThrow();
+    expect(new URL(calls[0]).pathname).toBe("/film-titles");
+    expect(json.ok).toBe(true);
+    expect(json.output.film_key).toBe("renders/film-x/film_titled.mp4"); // the carded film, not the original
+    expect(json.output.applied).toEqual(["film-titles"]);
+    expect(json.output.degraded).toBeUndefined();
+  });
+
+  it("soft-degrades (fail-safe) when the container is unreachable, keeping the original film", async () => {
+    const { env } = vpcEnv({ throws: true });
+    const res = await worker.fetch(invoke(baseInput({ title: { text: "NEON HALFLIFE" } })), env);
+    const json = (await res.json()) as { ok: boolean; output: { film_key: string; degraded?: string } };
+    expect(json.ok).toBe(true); // never drops the film
+    expect(json.output.film_key).toBe("renders/film-x/film.mp4"); // original (uncarded)
+    expect(json.output.degraded).toBe("passthrough:container-unreachable");
+  });
+
+  it("no-ops without round-tripping the container when there are no cards", async () => {
+    const { env, calls } = vpcEnv();
+    const res = await worker.fetch(invoke(baseInput()), env);
+    const json = (await res.json()) as { ok: boolean; output: { degraded?: string } };
+    expect(calls).toHaveLength(0);
+    expect(json.ok).toBe(true);
+    expect(json.output.degraded).toBeUndefined();
   });
 });

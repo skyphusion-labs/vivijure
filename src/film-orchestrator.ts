@@ -60,6 +60,17 @@ export interface FilmJob {
   // Opening title + end-credit text for the film.finish chain (title / credit cards). Absent -> no
   // cards; the film.finish module passes the film through unchanged. (#190)
   film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
+  // Observable outcome of the film.finish chain (title / credit cards). The chain is FAIL-SAFE -- the
+  // assembled film always survives -- so a degraded run (e.g. the video-finish container unreachable)
+  // still reaches phase="done", just WITHOUT cards. Recording the outcome makes that observable instead
+  // of a silent green: which modules ran, any chain errors, the per-step detail, and a `degraded` reason
+  // set when cards were requested but could not be applied. (#207 follow-up)
+  film_finish?: {
+    applied: string[];   // module names whose invoke returned ok (ChainResult.applied)
+    errors: string[];    // chain-level errors: a skipped (unbound) or failed (ok:false) module
+    steps?: string[];    // last output detail: ["film-titles"] applied, or ["passthrough:..."]/["noop:no-cards"] degraded
+    degraded?: string;   // set when the film was passed through UNCARDED; the reason (cards NOT applied)
+  };
   mux_output_key?: string; // deterministic mux destination for idempotent retries
   mux_attempts?: number;
   // keyframes-only preview: stop after the keyframe module, no i2v / assemble.
@@ -505,10 +516,30 @@ async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
   try {
     await applyFilmFinish(env, job);
   } catch (e) {
-    console.warn(`film.finish failed for ${job.film_id}: ${(e as Error).message}; keeping the original film`);
+    // A swallowed throw must not ship as a silent green: record it on the job so the degraded outcome is
+    // observable. The film keeps its original (uncarded) key -- a finish step never drops the film. (#190)
+    const msg = (e as Error).message;
+    job.film_finish = {
+      applied: job.film_finish?.applied ?? [],
+      errors: [...(job.film_finish?.errors ?? []), `film.finish threw: ${msg}`],
+      steps: job.film_finish?.steps,
+      degraded: job.film_finish?.degraded ?? `threw: ${msg}`,
+    };
+    console.warn(`film.finish failed for ${job.film_id}: ${msg}; keeping the original film`);
   }
   job.phase = "done";
   await fireNotify(env, job);
+}
+
+/** The film.finish module output the core reads back: the (maybe new) film key, the per-step detail
+ *  (`applied`: the module name on success, or a "passthrough:..."/"noop:..." reason on a soft-degrade),
+ *  and `degraded` -- set when the film was passed through UNCARDED (e.g. the video-finish container was
+ *  unreachable). The chain is fail-safe, so `degraded` is the only signal that requested cards were not
+ *  applied; applyFilmFinish records it on the job rather than dropping it. */
+interface FilmFinishChainOutput {
+  film_key?: string;
+  applied?: string[];
+  degraded?: string;
 }
 
 async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
@@ -531,7 +562,7 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   };
   // One film.finish module today (film-titles). A 2nd would need fresh presigned URLs per step;
   // nextInput keeps the same URLs and is only reached with >1 serving module -- revisit then.
-  const result = await dispatchChain<typeof seed, { film_key?: string }>(
+  const result = await dispatchChain<typeof seed, FilmFinishChainOutput>(
     envRec,
     modules,
     "film.finish",
@@ -539,7 +570,23 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
     { project: job.project, job_id: job.film_id, user_email: job.user_email },
     { nextInput: (prev) => ({ ...seed, film_key: prev?.film_key ?? job.film_key! }), configFor: () => ({}) },
   );
-  const next = result.output?.film_key;
+  // Record the chain outcome so a degraded or failed film.finish is observable state, not a silent green.
+  // The module soft-degrades (passthrough) on a container failure and still returns ok:true, so the only
+  // signal that cards were NOT applied is `output.degraded`; surface it (and any chain errors) here. (#207)
+  const out = result.output;
+  job.film_finish = {
+    applied: result.applied,
+    errors: result.errors,
+    steps: out?.applied,
+    degraded: out?.degraded,
+  };
+  if (result.errors.length > 0) {
+    console.warn(`film.finish errors for ${job.film_id}: ${result.errors.join("; ")}`);
+  }
+  if (out?.degraded) {
+    console.warn(`film.finish degraded for ${job.film_id}: ${out.degraded} -- film shipped WITHOUT cards`);
+  }
+  const next = out?.film_key;
   if (typeof next === "string" && next.length > 0) job.film_key = next;
 }
 

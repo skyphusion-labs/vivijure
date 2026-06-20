@@ -107,7 +107,10 @@ async function invoke(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
   // Call the video-finish container /overlay endpoint.
   let respBytes: ArrayBuffer;
   try {
-    const r = await env.VIDEO_FINISH_VPC.fetch("/overlay", {
+    // Absolute URL (host is the VPC service, ignored by the binding). A bare "/overlay" is not a valid
+    // URL and throws in the Workers runtime, masked below as a passthrough -- same bug class that left
+    // film.finish shipping uncarded. Matches the core convention VIDEO_FINISH_VPC.fetch("http://video-finish/finish").
+    const r = await env.VIDEO_FINISH_VPC.fetch("http://video-finish/overlay", {
       method: "POST",
       headers: {
         "content-type": "video/mp4",
