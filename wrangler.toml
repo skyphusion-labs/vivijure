@@ -142,6 +142,25 @@ service = "vivijure-module-narration-gen"
 binding = "MODULE_BEAT_SYNC"
 service = "vivijure-module-beat-sync"
 
+# Cloud i2v motion.backend modules (RunPod-hosted), joining own-gpu / seedance / kling. Each is its
+# own per-module worker with a scoped RUNPOD_API_KEY; the registry discovers them as MODULE_* bindings.
+# These deploy ahead of the core (see ci.yml), so the bindings never dangle.
+[[services]]
+binding = "MODULE_MINIMAX_HAILUO"
+service = "vivijure-module-minimax-hailuo"
+
+[[services]]
+binding = "MODULE_GOOGLE_VEO"
+service = "vivijure-module-google-veo"
+
+[[services]]
+binding = "MODULE_VIDU_Q3"
+service = "vivijure-module-vidu-q3"
+
+[[services]]
+binding = "MODULE_ALIBABA_WAN"
+service = "vivijure-module-alibaba-wan"
+
 # plan-enhance-py: the Python on-ramp PROOF module (plan.enhance, deterministic rule-based direction).
 # A CF Python Worker behind the same hook contract as the TS plan-enhance, discovered by the registry
 # exactly like any MODULE_* binding. EXPERIMENTAL (CF Python Workers is open beta) -- additive proof;
