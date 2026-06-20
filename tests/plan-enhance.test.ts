@@ -5,6 +5,18 @@ import {
   mergeEnhanced,
   scenePrompts,
 } from "../modules/plan-enhance/src/enhance";
+import {
+  pickProvider,
+  opusModel,
+  toAnthropic,
+  extractAnthropicText,
+  DEFAULT_OPUS_MODEL,
+  type ProviderEnv,
+} from "../modules/plan-enhance/src/provider";
+
+// A ProviderEnv stub whose AI surface is never called by the pure functions under test.
+const stubEnv = (over: Partial<ProviderEnv>): ProviderEnv =>
+  ({ AI: { run: async () => ({}), gateway: () => ({ getUrl: async () => "" }) }, ...over });
 
 describe("plan-enhance pure logic", () => {
   it("buildMessages produces a numbered user prompt of the right length", () => {
@@ -62,5 +74,49 @@ describe("plan-enhance pure logic", () => {
   it("scenePrompts returns null for an empty storyboard and coerces missing prompts", () => {
     expect(scenePrompts({ scenes: [] })).toBeNull();
     expect(scenePrompts({ scenes: [{ prompt: "a" }, {} as { prompt: string }] })).toEqual(["a", ""]);
+  });
+});
+
+describe("plan-enhance provider selection", () => {
+  it("picks opus only when BOTH gateway id and token are set", () => {
+    expect(pickProvider(stubEnv({ GATEWAY_ID: "g", CF_AIG_TOKEN: "t" }))).toBe("opus");
+    expect(pickProvider(stubEnv({ GATEWAY_ID: "g" }))).toBe("local");
+    expect(pickProvider(stubEnv({ CF_AIG_TOKEN: "t" }))).toBe("local");
+    expect(pickProvider(stubEnv({}))).toBe("local");
+  });
+
+  it("opusModel defaults to the latest Opus and honors an override (stripping the provider prefix)", () => {
+    expect(opusModel(stubEnv({}))).toBe(DEFAULT_OPUS_MODEL);
+    expect(opusModel(stubEnv({ ENHANCE_MODEL: "  " }))).toBe(DEFAULT_OPUS_MODEL);
+    expect(opusModel(stubEnv({ ENHANCE_MODEL: "claude-opus-4-7" }))).toBe("claude-opus-4-7");
+    expect(opusModel(stubEnv({ ENHANCE_MODEL: "anthropic/claude-opus-4-7" }))).toBe("claude-opus-4-7");
+  });
+
+  it("toAnthropic pulls system to a top-level field and keeps the user turn", () => {
+    const out = toAnthropic(buildMessages(["a wide shot"], "medium"));
+    expect(out.system).toContain("film director");
+    expect(out.messages).toHaveLength(1);
+    expect(out.messages[0].role).toBe("user");
+    expect(out.messages[0].content).toContain("1. a wide shot");
+  });
+
+  it("toAnthropic concatenates multiple system messages and omits system when there is none", () => {
+    const out = toAnthropic([
+      { role: "system", content: "one" },
+      { role: "system", content: "two" },
+      { role: "user", content: "hi" },
+    ]);
+    expect(out.system).toBe("one\n\ntwo");
+    expect(toAnthropic([{ role: "user", content: "hi" }]).system).toBeUndefined();
+  });
+
+  it("extractAnthropicText concatenates text blocks and rejects empty / wrong shapes", () => {
+    expect(extractAnthropicText({ content: [{ type: "text", text: "hello " }, { type: "text", text: "world" }] })).toBe(
+      "hello world",
+    );
+    expect(extractAnthropicText({ content: [{ type: "image" }] })).toBeNull();
+    expect(extractAnthropicText({ content: [] })).toBeNull();
+    expect(extractAnthropicText({})).toBeNull();
+    expect(extractAnthropicText("nope")).toBeNull();
   });
 });

@@ -3,11 +3,13 @@
 // Serves the two contract endpoints:
 //   GET  /module.json  -> the manifest (the core's registry discovers + indexes it)
 //   POST /invoke       -> run the plan.enhance hook: a director pass over the storyboard's shot
-//                         prompts via Workers AI, returning the enhanced storyboard.
+//                         prompts, returning the enhanced storyboard.
 //
-// A failure is DATA, never an exception across the wire: a bad request returns { ok:false }, and a
-// soft miss (model unavailable or unparseable reply) degrades to passing the storyboard through
-// unchanged with a note, so the core's chain never breaks on this stage.
+// The director pass runs on Opus through the AI Gateway when an Opus token is configured, and
+// degrades to the free Workers AI local model otherwise (or when Opus errors). A failure is DATA,
+// never an exception across the wire: a bad request returns { ok:false }, and a soft miss (no model
+// available, or an unparseable reply) degrades to passing the storyboard through unchanged with a
+// note, so the core's chain never breaks on this stage.
 
 import {
   MODULE_API,
@@ -17,22 +19,24 @@ import {
   type PlanEnhanceInput,
   type PlanEnhanceOutput,
 } from "./contract";
-import { buildMessages, parseEnhanced, mergeEnhanced, scenePrompts, type ChatMessage, type Intensity } from "./enhance";
+import { buildMessages, parseEnhanced, mergeEnhanced, scenePrompts, type Intensity } from "./enhance";
+import {
+  pickProvider,
+  opusModel,
+  callOpus,
+  callLocal,
+  LOCAL_MODEL,
+  type ProviderEnv,
+} from "./provider";
 
-// Structural binding type: just the runner we call, so the module stays free of the full Ai
-// overload surface (and of any @cloudflare/workers-types version pin).
-interface Env {
-  AI: { run(model: string, input: { messages: ChatMessage[] }): Promise<{ response?: string | string[] }> };
-}
-
-const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+type Env = ProviderEnv;
 
 const MANIFEST: ModuleManifest = {
   name: "plan-enhance",
-  version: "0.1.0",
+  version: "0.2.0",
   api: MODULE_API,
   hooks: ["plan.enhance"],
-  provides: [{ id: "auto-direction", label: "LLM auto-direction" }],
+  provides: [{ id: "auto-direction", label: "Opus auto-direction" }],
   config_schema: {
     intensity: {
       type: "enum",
@@ -51,6 +55,24 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+// Run the director pass, returning the model's raw reply plus a label of the model that produced it
+// (for an honest note). Opus first when configured; on any Opus error, degrade to the free local
+// model. Either provider erroring throws to the caller, which degrades to passthrough.
+async function direct(
+  env: Env,
+  messages: ReturnType<typeof buildMessages>,
+): Promise<{ reply: string | string[] | undefined; model: string }> {
+  if (pickProvider(env) === "opus") {
+    try {
+      return { reply: await callOpus(env, messages), model: opusModel(env) };
+    } catch {
+      // Opus unavailable -> fall through to the free local model rather than failing the stage.
+      return { reply: await callLocal(env, messages), model: `${LOCAL_MODEL} (opus fell back)` };
+    }
+  }
+  return { reply: await callLocal(env, messages), model: LOCAL_MODEL };
+}
+
 async function runEnhance(
   env: Env,
   req: InvokeRequest<PlanEnhanceInput>,
@@ -63,11 +85,11 @@ async function runEnhance(
   const intensity = (req.config?.intensity as Intensity) || "medium";
 
   let reply: string | string[] | undefined;
+  let model: string;
   try {
-    const res = await env.AI.run(MODEL, { messages: buildMessages(prompts, intensity) });
-    reply = res?.response;
+    ({ reply, model } = await direct(env, buildMessages(prompts, intensity)));
   } catch (e) {
-    // Soft degrade: model unavailable -> pass the storyboard through unchanged.
+    // Soft degrade: no model available -> pass the storyboard through unchanged.
     return {
       ok: true,
       output: { storyboard, notes: [`enhancement skipped: model error (${(e as Error).message})`] },
@@ -78,7 +100,7 @@ async function runEnhance(
   if (!enhanced) {
     return {
       ok: true,
-      output: { storyboard, notes: ["enhancement skipped: model reply was not a clean prompt array"] },
+      output: { storyboard, notes: [`enhancement skipped: ${model} reply was not a clean prompt array`] },
     };
   }
 
@@ -86,7 +108,7 @@ async function runEnhance(
     ok: true,
     output: {
       storyboard: mergeEnhanced(storyboard, enhanced),
-      notes: [`enhanced ${enhanced.length} shot(s) at ${intensity} intensity`],
+      notes: [`enhanced ${enhanced.length} shot(s) at ${intensity} intensity via ${model}`],
     },
   };
 }
