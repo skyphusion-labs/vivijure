@@ -1,0 +1,27 @@
+# text-overlay module worker (vivijure-module/1): ffmpeg drawtext via the always-on video-finish
+# CPU container (Workers VPC). A finish hook (#190) that burns titles, credits, lower-thirds, and
+# subtitles onto rendered clips. Bound as MODULE_TEXT_OVERLAY; the registry discovers it from
+# GET /module.json.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-text-overlay"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Read the input clip + write the overlaid output clip in the shared render bucket.
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
+
+# Workers VPC -> always-on video-finish container on the fleet (issue #83). Same endpoint the
+# core uses for /finish and remuxAudioOnly; this module calls /overlay (new route in #190).
+[[vpc_services]]
+binding = "VIDEO_FINISH_VPC"
+service_id = "019ecbe6-9fc1-70a0-9946-14bbec0f51bc"
+remote = true
