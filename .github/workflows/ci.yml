@@ -45,20 +45,24 @@ jobs:
           apk add --no-cache docker-cli docker-cli-buildx
           docker buildx install
 
-      - name: Deploy core worker (main only)
-        if: github.ref == 'refs/heads/main'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npm run deploy
-
+      # Module workers deploy BEFORE the core. The core binds each module as a service, and a
+      # [[services]] binding to a not-yet-deployed service makes the core `wrangler deploy` fail.
+      # Deploying modules first keeps every MODULE_* binding pointing at a live service, so adding a
+      # new module + its core binding in one change no longer orphans it (the minimax-hailuo gap).
       - name: Deploy module workers (main only)
         if: github.ref == 'refs/heads/main'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          for module in own-gpu finish-rife keyframe seedance kling; do
+          for module in own-gpu finish-rife keyframe seedance kling minimax-hailuo google-veo vidu-q3 alibaba-wan; do
             echo "Deploying vivijure-module-${module}..."
             npx wrangler deploy -c modules/${module}/wrangler.toml
           done
+
+      - name: Deploy core worker (main only)
+        if: github.ref == 'refs/heads/main'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy
