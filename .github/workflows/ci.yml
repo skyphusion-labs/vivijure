@@ -1,7 +1,8 @@
 name: CI
 
 # Typecheck + test on every push and PR; deploy to Cloudflare on main.
-# Runs on the fleet self-hosted runner (damaged, skyphusion-labs/vivijure).
+# vivijure is PUBLIC and accepts outside PRs, so CI runs on GitHub-hosted
+# ubuntu-latest (fork-safe sandbox), not the self-hosted fleet pool.
 on:
   push:
     branches: [main]
@@ -18,7 +19,7 @@ concurrency:
 
 jobs:
   ci:
-    runs-on: [self-hosted, fleet]
+    runs-on: ubuntu-latest
     container: node:22-alpine
     timeout-minutes: 15
     steps:
@@ -34,11 +35,11 @@ jobs:
         run: npm test
 
       # wrangler builds the video-finish container image at deploy time, which needs `docker build`.
-      # The job runs in node:22-alpine (no docker), but the host docker.sock is bind-mounted in, so
-      # the CLI reaches the daemon. docker-cli alone is NOT enough: Docker 29 routes `docker build`
-      # to the removed legacy builder (exit 125). We need the buildx plugin AND `docker buildx
-      # install`, which wires `docker build` -> `docker buildx build` (the plugin binary present but
-      # un-installed still falls through to the legacy builder). See issue #68.
+      # The job runs in node:22-alpine (no docker CLI), and the GitHub-hosted runner exposes its
+      # Docker daemon to the job container, so the CLI reaches the daemon. docker-cli alone is NOT
+      # enough: Docker routes `docker build` to the removed legacy builder (exit 125). We need the
+      # buildx plugin AND `docker buildx install`, which wires `docker build` -> `docker buildx
+      # build` (the plugin binary present but un-installed still falls through to legacy). See #68.
       - name: Docker setup (buildx for the video-finish container image build)
         if: github.ref == 'refs/heads/main'
         run: |
