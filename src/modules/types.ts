@@ -19,7 +19,8 @@ export type HookName =
   | "score"          // add audio to a film: music / narration / beat-sync. Chainable.
   | "plan.enhance"   // expand a storyboard before render: LLM auto-direction. Chainable.
   | "cast.image"     // character portrait + bible -> LoRA training reference images. Cast-prep, pick one.
-  | "notify";        // film done -> deliver a render-complete notification (email / webhook / ...). Chain.
+  | "notify"         // film done -> deliver a render-complete notification (email / webhook / ...). Chain.
+  | "film.finish";   // assembled+muxed film -> film with title / credit cards. Post-mux, before done. Chain.
 
 export const HOOK_NAMES: readonly HookName[] = [
   "keyframe",
@@ -29,6 +30,7 @@ export const HOOK_NAMES: readonly HookName[] = [
   "plan.enhance",
   "cast.image",
   "notify",
+  "film.finish",
 ];
 
 /** Whether a hook resolves to one module or folds every installed module. */
@@ -40,6 +42,7 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
   "plan.enhance": "chain",
   "cast.image": "pick_one",
   notify: "chain",
+  "film.finish": "chain",
 };
 
 /** One-line description of each hook, for the self-assembling UI. Single source of truth: the
@@ -52,6 +55,7 @@ export const HOOK_BLURBS: Record<HookName, string> = {
   "plan.enhance": "LLM auto-direction",
   "cast.image": "character refs from a portrait + bible",
   notify: "render-complete notification (email / webhook)",
+  "film.finish": "title / credit cards on the finished film",
 };
 
 // --------------------------------------------------------------------------- manifest
