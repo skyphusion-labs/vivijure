@@ -12,13 +12,15 @@ import {
 } from "../modules/google-veo/src/veo";
 
 describe("google-veo pure logic", () => {
-  it("clampDuration bounds the shot length into the Veo range (default 6, allowed 4-8)", () => {
+  it("clampDuration snaps to the nearest allowed discrete value [4, 6, 8] (default 6)", () => {
     expect(clampDuration(6)).toBe(6);
-    expect(clampDuration(0)).toBe(6); // 0 -> default 6
+    expect(clampDuration(0)).toBe(6);   // 0 -> default 6
     expect(clampDuration(99)).toBe(8);
     expect(clampDuration(1)).toBe(4);
-    expect(clampDuration(7.6)).toBe(8);
+    expect(clampDuration(7.6)).toBe(8); // rounds to 8 -> allowed
     expect(clampDuration(4)).toBe(4);
+    expect(clampDuration(5)).toBe(4);   // 5 is between 4 and 6; ties go lower
+    expect(clampDuration(7)).toBe(6);   // 7 is between 6 and 8; ties go lower
   });
 
   it("buildVeoBody maps the hook input + config onto the RunPod body", () => {

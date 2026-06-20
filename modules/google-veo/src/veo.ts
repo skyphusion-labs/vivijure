@@ -9,11 +9,13 @@
 
 import type { MotionBackendInput } from "./contract";
 
-// Veo 3.1 Fast accepts approximately 4-8 seconds per shot; clamp the storyboard's per-shot value in.
-// Default 6 when the input is zero/NaN (matches the #172 spec).
+// Veo 3.1 Fast only accepts the discrete values [4, 6, 8]. Snap to nearest; ties go to the lower
+// allowed value. Default 6 when the input is zero/NaN (matches the #172 spec).
 export function clampDuration(seconds: number): number {
-  const n = Math.round(Number(seconds) || 6);
-  return Math.max(4, Math.min(8, n));
+  const n = Math.max(4, Math.min(8, Math.round(Number(seconds) || 6)));
+  if (n <= 5) return 4;
+  if (n <= 7) return 6;
+  return 8;
 }
 
 /** The RunPod /run body for Veo 3.1 Fast, mapped from the hook input + the clamped module config. */
