@@ -8,7 +8,7 @@
 // No Worker ever holds a multi-minute GPU/cloud render.
 
 import type { Env } from "./env";
-import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig } from "./modules/registry";
+import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
@@ -57,6 +57,9 @@ export interface FilmJob {
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   silent_film_key?: string; // silent concat output before optional audio mux
   audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble
+  // Opening title + end-credit text for the film.finish chain (title / credit cards). Absent -> no
+  // cards; the film.finish module passes the film through unchanged. (#190)
+  film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   mux_output_key?: string; // deterministic mux destination for idempotent retries
   mux_attempts?: number;
   // keyframes-only preview: stop after the keyframe module, no i2v / assemble.
@@ -495,13 +498,57 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
   }
 }
 
+/** Final transition: run the film.finish chain (title / credit cards) on the assembled+muxed film,
+ *  then mark done + notify. FAIL-SAFE: no film.finish module, no title/credits, or ANY error -> the
+ *  film keeps its original key. A film.finish step must never drop a fully-rendered film. (#190) */
+async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
+  try {
+    await applyFilmFinish(env, job);
+  } catch (e) {
+    console.warn(`film.finish failed for ${job.film_id}: ${(e as Error).message}; keeping the original film`);
+  }
+  job.phase = "done";
+  await fireNotify(env, job);
+}
+
+async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
+  if (!job.film_key) return;
+  const envRec = env as unknown as Record<string, unknown>;
+  const modules = await discoverModules(envRec);
+  if (servingForHook(modules, "film.finish").length === 0) return; // nothing installed -> no-op
+  const outKey = job.film_key.replace(/\.mp4$/i, "") + "-titled-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+  const [videoUrl, outputUrl] = await Promise.all([
+    presignR2Get(env, job.film_key, 1800),
+    presignR2Put(env, outKey, 1800),
+  ]);
+  const seed = {
+    film_key: job.film_key,
+    video_url: videoUrl,
+    output_url: outputUrl,
+    output_key: outKey,
+    title: job.film_titles?.title,
+    credits: job.film_titles?.credits,
+  };
+  // One film.finish module today (film-titles). A 2nd would need fresh presigned URLs per step;
+  // nextInput keeps the same URLs and is only reached with >1 serving module -- revisit then.
+  const result = await dispatchChain<typeof seed, { film_key?: string }>(
+    envRec,
+    modules,
+    "film.finish",
+    seed,
+    { project: job.project, job_id: job.film_id, user_email: job.user_email },
+    { nextInput: (prev) => ({ ...seed, film_key: prev?.film_key ?? job.film_key! }), configFor: () => ({}) },
+  );
+  const next = result.output?.film_key;
+  if (typeof next === "string" && next.length > 0) job.film_key = next;
+}
+
 async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
   const silentKey = job.silent_film_key;
   const audioKey = job.audio_key;
   if (!silentKey || !audioKey) {
     job.film_key = silentKey;
-    job.phase = "done";
-    await fireNotify(env, job);
+    await transitionToDone(env, job);
     return;
   }
   if (!env.VIDEO_FINISH_VPC) {
@@ -566,8 +613,7 @@ async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
     return;
   }
   job.film_key = outKey;
-  job.phase = "done";
-  await fireNotify(env, job);
+  await transitionToDone(env, job);
 }
 
 async function finishAssembledFilm(env: Env, job: FilmJob, silentKey: string): Promise<void> {
@@ -577,8 +623,7 @@ async function finishAssembledFilm(env: Env, job: FilmJob, silentKey: string): P
     await enterMuxPhase(env, job);
   } else {
     job.film_key = silentKey;
-    job.phase = "done";
-    await fireNotify(env, job);
+    await transitionToDone(env, job);
   }
 }
 
@@ -747,6 +792,7 @@ export async function startFilmJob(
     pretrained_loras?: Record<string, string>;
     audio_key?: string;
     user_email?: string;
+    film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   },
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
@@ -762,6 +808,7 @@ export async function startFilmJob(
     keyframes_only: !!args.keyframes_only,
     clips_only: !!args.clips_only,
     audio_key: stagedAudio,
+    film_titles: args.film_titles,
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
     phase_started_at: Date.now(),
     user_email: args.user_email,

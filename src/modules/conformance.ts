@@ -143,6 +143,10 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
     if (!isStrArr(o.delivered)) return "notify output needs a delivered string[]";
     return null;
   },
+  "film.finish": (o) => {
+    if (!isStr(o.film_key)) return "film.finish output needs a string film_key";
+    return null;
+  },
 };
 
 /** Validate that a hook's success output honors its typed contract shape (the payload inside
