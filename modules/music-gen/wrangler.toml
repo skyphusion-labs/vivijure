@@ -20,3 +20,10 @@ binding = "AI"
 [[r2_buckets]]
 binding = "R2_RENDERS"
 bucket_name = "vivijure"
+
+# The blocking MiniMax gen runs in a Workflow step (unlimited wall, retried, survives recycle) instead of
+# a request-path ctx.waitUntil that the runtime cancels at ~30s (#155).
+[[workflows]]
+name = "music-gen-score"
+binding = "SCORE_WORKFLOW"
+class_name = "MusicGenWorkflow"

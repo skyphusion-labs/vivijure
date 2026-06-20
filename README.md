@@ -7,6 +7,39 @@ Vivijure is a self-hosted AI film studio built on Cloudflare Workers. It runs fr
 Workers free tier and connects to whatever GPU backend you attach -- RunPod, your own box, or
 a cloud motion API. You own every artifact.
 
+## Showcase: three films, three audio modes, three motion backends
+
+Three real films rendered end to end on Vivijure. Together they walk the full audio range
+(silent default, then a music score, then TTS narration) across all three i2v motion backends
+(self-hosted `own-gpu`, then Seedance and Kling cloud APIs). Every clip below is an unedited
+render straight off the pipeline.
+
+### 1. NEON HALFLIFE -- silent (own-GPU i2v)
+
+[![NEON HALFLIFE, the first full Vivijure film, a 1080p anime cyberpunk render, ten shots, click to play the MP4](https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.jpg)](https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4)
+
+*[NEON HALFLIFE](https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4): the first film rendered end to end on Vivijure. 1080p, ten shots, 30 seconds. Motion on a self-hosted GPU (the `own-gpu` Wan I2V backend). Click the frame above to play, or [download the MP4](https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4) (29 MB).*
+
+This clip is **silent on purpose.** Vivijure assembles a silent picture by default; scoring (a music bed, TTS narration, beat-synced cuts) is an opt-in Audio step you run after the picture locks. This is the picture straight off the pipeline, before any audio pass.
+
+What makes it the proof and not just a demo: this was the first unattended full run, and it came out clean. Zero clips dropped (ten of ten shots rendered). It also recovered itself: the finish phase stalled partway through, the orchestrator re-adopted the in-flight work, and the film finished, all of it across a session restart with nobody watching. The system healing its own stall, unattended, is the part we are actually proud of.
+
+### 2. FUR AND CIRCUITS -- scored (Seedance cloud i2v)
+
+[![FUR AND CIRCUITS, a Vivijure film with a music score, motion by the Seedance cloud i2v backend, click to play the MP4](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.jpg)](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4)
+
+*[FUR AND CIRCUITS](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4): the same pipeline with the Audio step turned on. About 56 seconds, motion by the **Seedance** cloud i2v backend, and a **music score** muxed over the locked picture (stereo AAC). [Download the MP4](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4) (30 MB).*
+
+This is the scored end of the range: the picture locks silent as above, then the opt-in Audio step lays a music bed under the whole film. Same control plane, different motion backend, and one extra step.
+
+### 3. RUST -- narrated (Kling cloud i2v)
+
+[![RUST, a Vivijure film with TTS narration, motion by the Kling cloud i2v backend, click to play the MP4](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.jpg)](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4)
+
+*[RUST](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4): the third audio mode. About 30 seconds, motion by the **Kling** cloud i2v backend, with **TTS narration** muxed over the picture (mono AAC). [Download the MP4](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4) (16 MB).*
+
+Same studio, a third motion backend, and the Audio step set to narration instead of a music bed. Silent by default, scored or narrated when you want it: the choice is yours, and it runs after the picture is locked.
+
 ## Ecosystem
 
 ```
@@ -31,9 +64,9 @@ slate  -->  vivijure  -->  vivijure-backend
 
 ![Modules page showing installed modules panel and stage configuration](docs/screenshots/modules-page.png)
 
-**Render history** -- honest per-render status (in-flight, stalled, failed, done) with inline error snippets:
+**Render history** -- honest per-render status. The panel surfaces real failed attempts alongside completed renders (here, three failed runs and one completed), with inline error snippets; it shows what actually happened, not a curated success:
 
-![Render history tab showing neon_halflife and fur_and_circuits renders with live status badges](docs/screenshots/planner-render-history.png)
+![Render history tab showing the honest-status UX: three failed neon_halflife attempts and one completed fur_and_circuits render, each with a status badge](docs/screenshots/planner-render-history.png)
 
 ## What you can do
 

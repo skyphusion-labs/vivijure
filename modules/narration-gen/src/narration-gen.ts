@@ -1,12 +1,22 @@
-// Pure helpers for the narration-gen module: param construction, Workers AI result parsing,
-// poll tokens, and R2 key layout. Unit-tested without bindings.
+// Pure helpers for the narration-gen module: RunPod request-body construction, status parsing, poll
+// tokens, and R2 key layout. Unit-tested without bindings.
+//
+// Synthesis runs on RunPod's hosted minimax-speech-02-hd endpoint via the SAME async submit+poll
+// transport as seedance/kling (POST /run -> job id; GET /status/<id> -> COMPLETED + audio url), so a
+// multi-minute synth never blocks a Worker request and the durable poll (runpodJobGone + grace) survives
+// a recycle (#155, #141). NOT Workers AI / waitUntil.
 
-import type { ScoreInput, ScoreOutput, PlanEnhanceStoryboard } from "./contract";
+import type { ScoreInput, PlanEnhanceStoryboard } from "./contract";
 
-export const MODEL = "minimax/speech-2.8-hd";
-export const DEFAULT_VOICE = "English_expressive_narrator";
+// RunPod hosted endpoint id (https://api.runpod.ai/v2/<MODEL>). Verified live: input.prompt = the
+// narration text, output.result = the audio URL on COMPLETED.
+export const MODEL = "minimax-speech-02-hd";
+export const DEFAULT_VOICE = "Wise_Woman";
 export const MAX_TEXT = 10_000;
 
+// The RunPod minimax-speech-02-hd emotion enum (verified live: the endpoint 400s on anything else).
+// NOTE this differs from Workers AI speech-2.8 (which had calm/fluent) -- this module is on RunPod, so
+// "neutral" replaces "calm" and there is no "fluent". Sending an out-of-set value fails the job.
 export const EMOTIONS = [
   "happy",
   "sad",
@@ -14,8 +24,7 @@ export const EMOTIONS = [
   "fearful",
   "disgusted",
   "surprised",
-  "calm",
-  "fluent",
+  "neutral",
 ] as const;
 
 export const SAMPLE_RATES = [8000, 16000, 22050, 24000, 32000, 44100] as const;
@@ -35,14 +44,21 @@ export interface NarrationConfig {
   sample_rate?: number;
 }
 
-export interface PollToken {
-  job_id: string;
+// Everything /poll needs to finalize a RunPod job, opaque (base64 JSON) and round-tripped from /invoke.
+// Stateless like seedance: no R2 run-state doc -- the audio is written to R2 only on COMPLETED, and the
+// token carries the rest. submittedAt (epoch ms) measures the not-found grace window (#141).
+export interface PollState {
+  jobId: string;
+  job_id: string;       // the score job id (R2 audio key namespace)
+  film_key: string;
+  format: SpeechFormat;
+  applied: string[];
+  submittedAt?: number;
 }
 
-export type RunState =
-  | { status: "running"; started_at: number; film_key: string; applied: string[] }
-  | { status: "done"; film_key: string; audio_key: string; mime: string; applied: string[] }
-  | { status: "failed"; error: string; applied: string[] };
+// How long after submit a RunPod "job not found" is a propagation race vs a real GC. Mirrors the control
+// plane's PHANTOM_GRACE_SECONDS (150s), same as seedance/kling.
+export const RUNPOD_NOTFOUND_GRACE_MS = 150_000;
 
 function pickEnumNumber(raw: unknown, allowed: readonly number[], fallback: number): number {
   const n = typeof raw === "number" ? raw : Number(raw);
@@ -91,8 +107,9 @@ export function textFromScoreInput(input: ScoreInput, config: NarrationConfig): 
   throw new Error("text required (set config.text or provide storyboard scenes)");
 }
 
-/** Build the Workers AI / AI Gateway params for minimax/speech-2.8-hd. */
-export function buildSpeechParams(text: string, config: NarrationConfig): Record<string, unknown> {
+/** Build the RunPod request body for minimax-speech-02-hd. Their input field is `prompt` (the narration
+ *  text), NOT `text`. Verified live: { input: { prompt, voice_id, speed, volume, ... } }. */
+export function buildSpeechBody(text: string, config: NarrationConfig): { input: Record<string, unknown> } {
   const trimmed = text.trim();
   if (!trimmed) throw new Error("text required");
 
@@ -105,8 +122,8 @@ export function buildSpeechParams(text: string, config: NarrationConfig): Record
   const volume = clamp(typeof config.volume === "number" ? config.volume : 1, 0, 10);
   const sampleRate = pickEnumNumber(config.sample_rate, SAMPLE_RATES, 44100);
 
-  const params: Record<string, unknown> = {
-    text: trimmed.slice(0, MAX_TEXT),
+  const input: Record<string, unknown> = {
+    prompt: trimmed.slice(0, MAX_TEXT),
     voice_id: voiceId,
     speed,
     volume,
@@ -116,25 +133,41 @@ export function buildSpeechParams(text: string, config: NarrationConfig): Record
   };
 
   const emotion = pickEmotion(config.emotion);
-  if (emotion) params.emotion = emotion;
+  if (emotion) input.emotion = emotion;
 
-  return params;
+  return { input };
 }
 
-/** Parse the audio URL from a Workers AI speech response. */
-export function parseAudioUrl(result: unknown): string | null {
-  if (!result || typeof result !== "object") return null;
-  const r = result as Record<string, unknown>;
-  if (typeof r.state === "string" && r.state.length > 0 && r.state !== "Completed") {
-    return null;
-  }
-  if (typeof r.audio === "string" && r.audio.length > 0) return r.audio;
-  const inner = r.result;
-  if (inner && typeof inner === "object" && !Array.isArray(inner)) {
-    const audio = (inner as Record<string, unknown>).audio;
-    if (typeof audio === "string" && audio.length > 0) return audio;
-  }
+/** Extract the audio URL from a COMPLETED RunPod status body. Verified live: output.result is the URL.
+ *  Also tolerates output.audio / a bare-string output for resilience. */
+export function extractAudioUrl(output: unknown): string | null {
+  if (typeof output === "string" && output.length > 0) return output;
+  if (!output || typeof output !== "object") return null;
+  const o = output as Record<string, unknown>;
+  if (typeof o.result === "string" && o.result.length > 0) return o.result;
+  if (typeof o.audio === "string" && o.audio.length > 0) return o.audio;
   return null;
+}
+
+/** Pure: did RunPod report this job as gone (HTTP 404 / numeric status 404 / "not found" title)? (#141)
+ *  Same semantics as seedance: narration writes R2 only on COMPLETED, so a gone job has no artifact. */
+export function runpodJobGone(httpStatus: number, body: { status?: unknown; title?: unknown } | null): boolean {
+  if (httpStatus === 404) return true;
+  if (!body) return false;
+  const st = body.status;
+  if (typeof st === "string" && st.length > 0) return false;
+  if (typeof st === "number") return st === 404;
+  return typeof body.title === "string" && /not\s*found/i.test(body.title);
+}
+
+/** Pure: "gone-failed" past the grace window (or a legacy token); "gone-grace" inside it. (#141) */
+export function classifyGoneState(
+  submittedAt: number | undefined,
+  now: number,
+  graceMs: number = RUNPOD_NOTFOUND_GRACE_MS,
+): "gone-failed" | "gone-grace" {
+  if (submittedAt === undefined) return "gone-failed";
+  return now - submittedAt >= graceMs ? "gone-failed" : "gone-grace";
 }
 
 export function mimeForFormat(format: SpeechFormat): string {
@@ -147,22 +180,27 @@ export function extForFormat(format: SpeechFormat): string {
   return format;
 }
 
-export function encodePoll(t: PollToken): string {
-  return btoa(JSON.stringify(t));
+export function encodePoll(s: PollState): string {
+  return btoa(JSON.stringify(s));
 }
 
-export function decodePoll(token: string): PollToken | null {
+export function decodePoll(token: string): PollState | null {
   try {
-    const o = JSON.parse(atob(token)) as PollToken;
-    if (o && typeof o.job_id === "string" && o.job_id.length > 0) return { job_id: o.job_id };
+    const o = JSON.parse(atob(token)) as PollState;
+    if (o && typeof o.jobId === "string" && typeof o.job_id === "string" && typeof o.film_key === "string") {
+      return {
+        jobId: o.jobId,
+        job_id: o.job_id,
+        film_key: o.film_key,
+        format: pickFormat(o.format),
+        applied: Array.isArray(o.applied) ? o.applied : [],
+        submittedAt: typeof o.submittedAt === "number" ? o.submittedAt : undefined,
+      };
+    }
   } catch {
     /* fall through */
   }
   return null;
-}
-
-export function stateKey(jobId: string): string {
-  return `narration-gen/${jobId}.state.json`;
 }
 
 export function audioKey(jobId: string, format: SpeechFormat): string {
@@ -177,10 +215,6 @@ export function appliedTags(format: SpeechFormat, config: NarrationConfig): stri
   tags.push(`voice:${voice}`);
   if (config.emotion) tags.push(`emotion:${config.emotion}`);
   return tags;
-}
-
-export function readOutput(state: Extract<RunState, { status: "done" }>): ScoreOutput {
-  return { film_key: state.film_key, applied: state.applied };
 }
 
 export function normalizeConfig(raw: Record<string, unknown>): NarrationConfig {

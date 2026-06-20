@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, listProjectClips, clipFileMatchesShot, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -30,6 +30,48 @@ describe("applyFinishOutput (chain fold)", () => {
     expect(fs.status).toBe("done");
     expect(fs.applied).toEqual(["interpolate:2x", "face_restore:gfpgan"]);
     expect(fs.clip_key).toBe("clips/after_b.mp4");
+  });
+});
+
+describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifact in R2)", () => {
+  it("adopts a FAILED shot whose finished clip is in R2 (the GC'd-job path, #141)", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "failed", error: "GC'd" }))).toBe(true);
+  });
+
+  it("adopts a PENDING last-chain shot with a poll token (the frozen-IN_PROGRESS envelope path)", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: "tok", idx: 0, chain: ["MODULE_FINISH_RIFE"] }))).toBe(true);
+  });
+
+  it("does NOT adopt a PENDING shot mid-chain (its R2 key would be an intermediate module's output)", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: "tok", idx: 0, chain: ["MODULE_A", "MODULE_B"] }))).toBe(false);
+  });
+
+  it("does NOT adopt a PENDING shot with no poll token (never submitted -- nothing produced it yet)", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: undefined, idx: 0, chain: ["MODULE_FINISH_RIFE"] }))).toBe(false);
+  });
+
+  it("does NOT re-touch an already-done shot", () => {
+    expect(finishShotAdoptableFromR2(finishShot({ status: "done" }))).toBe(false);
+  });
+
+  it("reclaims a stuck PENDING shot from R2 presence: marks done, sets the clip key, clears the poll", () => {
+    const stuck = finishShot({ shot_id: "shot_02", status: "pending", poll: "frozen", idx: 0, chain: ["MODULE_FINISH_RIFE"] });
+    const ok = finishShot({ shot_id: "shot_01", status: "done", clip_key: "renders/p/clips/shot_01_finished.mp4" });
+    const shots = [ok, stuck];
+    const present = new Map([["shot_02", "renders/p/clips/shot_02_finished.mp4"]]);
+    const adopted = reclaimFinishShotsFromR2(shots, present);
+    expect(adopted).toBe(1);
+    expect(stuck.status).toBe("done");
+    expect(stuck.clip_key).toBe("renders/p/clips/shot_02_finished.mp4");
+    expect(stuck.poll).toBeUndefined();
+    expect(shots.every((s) => s.status !== "pending")).toBe(true); // phase can now advance to assemble
+  });
+
+  it("leaves a stuck PENDING shot pending when its clip is genuinely absent from R2 (no false adoption)", () => {
+    const stuck = finishShot({ shot_id: "shot_02", status: "pending", poll: "frozen", idx: 0, chain: ["MODULE_FINISH_RIFE"] });
+    const adopted = reclaimFinishShotsFromR2([stuck], new Map());
+    expect(adopted).toBe(0);
+    expect(stuck.status).toBe("pending");
   });
 });
 
@@ -380,6 +422,36 @@ describe("listProjectKeyframes (#129 R2 adoption)", () => {
   });
 });
 
+// keyframe phase: adopt on a *pending* poll only when the FULL set is in R2 (envelope-freeze, mirrors
+// #154 for finish; the completeness guard prevents advancing on a partial mid-generation set).
+describe("keyframeSetCompleteInR2 (pending-poll adoption guard)", () => {
+  const job = (scenes: FilmScene[]) => ({ project: "neon", scenes } as unknown as FilmJob);
+  const sc: FilmScene[] = [
+    { shot_id: "shot_01", prompt: "a", seconds: 4 },
+    { shot_id: "shot_02", prompt: "b", seconds: 4 },
+    { shot_id: "shot_03", prompt: "c", seconds: 4 },
+  ];
+  it("true when every scene has a keyframe in R2 (full set -> adopt now, do not wait 20min)", async () => {
+    const env = r2ListEnv([
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.png",
+      "renders/neon/keyframes/shot_03.png",
+    ]);
+    expect(await keyframeSetCompleteInR2(env, job(sc))).toBe(true);
+  });
+  it("false on a PARTIAL set (mid-generation -> must NOT advance early)", async () => {
+    const env = r2ListEnv([
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.png",
+    ]);
+    expect(await keyframeSetCompleteInR2(env, job(sc))).toBe(false);
+  });
+  it("false when none are in R2 and false for an empty storyboard", async () => {
+    expect(await keyframeSetCompleteInR2(r2ListEnv([]), job(sc))).toBe(false);
+    expect(await keyframeSetCompleteInR2(r2ListEnv([]), job([]))).toBe(false);
+  });
+});
+
 // Env double that round-trips one film job through R2 (get -> mutate -> put) and serves the keyframe
 // listing, so advanceFilmJob's recovery can be observed end-to-end on the persisted job.
 function recoveryEnv(job: FilmJob, keyframeKeys: string[]) {
@@ -499,7 +571,7 @@ describe("listProjectClips (#139 R2 adoption)", () => {
 // Env double that round-trips BOTH the film-job doc and the clip-job doc through R2, serves the clips
 // listing, and has NO module bindings (so enterFinishPhase finds an empty finish chain -> clips_only
 // shortcuts to done without touching any module). Lets the clips recovery be observed end-to-end.
-function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[]) {
+function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[], moduleResp: unknown = { ok: true, pending: true }) {
   const filmDoc = filmJobDocKey(job.film_id);
   const clipDoc = clipJobDocKey(clipJob.job_id);
   let filmStored = JSON.stringify(job);
@@ -519,10 +591,9 @@ function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[]
         truncated: false,
       }),
     },
-    // motion.backend stub that always reports "still rendering" (pending) on /poll, so the normal clips
-    // leg leaves a not-yet-adopted shot pending (faithful to prod under the #142 module fix: a still-
-    // rendering shot is pending, not failed). Without this the unbound binding would falsely fail the shot.
-    MODULE_OWN_GPU: { fetch: async () => new Response(JSON.stringify({ ok: true, pending: true }), { headers: { "content-type": "application/json" } }) },
+    // motion.backend stub: returns moduleResp on /poll. Default = pending (still rendering); pass a fail
+    // envelope { ok:false, error } to simulate a #142 fast-fail of a GC'd job.
+    MODULE_OWN_GPU: { fetch: async () => new Response(JSON.stringify(moduleResp), { headers: { "content-type": "application/json" } }) },
   } as unknown as Env;
   return { env, readFilm: () => JSON.parse(filmStored) as FilmJob, readClip: () => JSON.parse(clipStored) as ClipJobLike };
 }
@@ -662,6 +733,34 @@ describe("advanceFilmJob clips stall recovery (#139)", () => {
     expect(r2res?.job.phase).not.toBe("clips");
     expect(readClip().shots.every((s) => s.status === "done")).toBe(true);
     expect(readFilm().clips_recovered).toBe(true);
+  });
+
+  it("FRESH render (<20min): module fast-fails 3 shots but their clips are in R2 -> finish gets all, not 7 (#141 regression)", async () => {
+    // The lead's decisive case. A brand-new render at ~2.5min: the 20min stall-recovery must NOT run, so
+    // only the clips-leg reclaim (before the complete-judgment) can save it. The module fast-fails all 3
+    // pending shots (simulating #142 on GC'd jobs), but all 3 clips ARE in R2. Without the fix, summarizeJob
+    // reads complete (0 done + 3 failed = 3) and the film advances DROPPING all 3.
+    const fresh = stalledFilm({ created_at: Date.now(), phase_started_at: Date.now() }); // FRESH, not stale
+    const allPending: ClipJobLike = {
+      job_id: "clips-stall-1", project: "neon", motion_backend: "own-gpu", binding: "MODULE_OWN_GPU",
+      shots: [
+        { shot_id: "shot_01", status: "pending", poll: "phantom-1" },
+        { shot_id: "shot_02", status: "pending", poll: "phantom-2" },
+        { shot_id: "shot_03", status: "pending", poll: "phantom-3" },
+      ],
+      created_at: Date.now(),
+    };
+    // module FAST-FAILS every poll (#142), but every clip is in R2.
+    const { env, readClip, readFilm } = clipsRecoveryEnv(fresh, allPending, [
+      "renders/neon/clips/shot_01_i2v.mp4",
+      "renders/neon/clips/shot_02_i2v.mp4",
+      "renders/neon/clips/shot_03_i2v.mp4",
+    ], { ok: false, error: "own-gpu job not found on RunPod (#141)" });
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    // all 3 reclaimed from R2 in the clips leg, BEFORE the complete-judgment -> film advanced with ALL 3
+    expect(readClip().shots.every((s) => s.status === "done")).toBe(true);
+    expect(readClip().shots.filter((s) => s.status === "done").length).toBe(3); // not a 0/partial drop
+    expect(r?.job.phase).not.toBe("clips"); // advanced (clips_only -> done)
   });
 });
 

@@ -5,7 +5,7 @@ import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/r
 import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
 import { startFilmJob, advanceFilmJob, cancelFilmJob, startFilmFromKeyframes, summarizeFilm, type FilmScene, type FilmSummary } from "./film-orchestrator";
 import {
-  filmJobToPollView, isFilmJobId, mapRenderOverridesToModuleConfigs,
+  filmJobToPollView, filmRowFromJob, isFilmJobId, mapRenderOverridesToModuleConfigs,
   normalizeFilmScenes, filterScenesByShotIds,
 } from "./film-render-bridge";
 import { animateFromPreview, clipAnimateProgress } from "./finalize-from-keyframes";
@@ -764,7 +764,7 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   return summary;
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>> }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; audio_key?: string }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
@@ -773,13 +773,25 @@ const hStartFilm: Handler = async (req, env) => {
   const job = await startFilmJob(env, {
     project, bundle_key: a.bundle_key, scenes: a.scenes,
     motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
-    finish_config: a.finish_config, user_email: getUserEmail(req),
+    // audio_key: a staged bed (score-bed music/narration) to mux after assemble. startFilmJob runs it
+    // through resolveStagedAudioKey; without forwarding it here the mux phase is skipped and the film is
+    // silent even when the caller supplied a bed (the scored/narrated render path).
+    finish_config: a.finish_config, audio_key: a.audio_key, user_email: getUserEmail(req),
   });
+  // Write a renders-table row so this film shows in the history panel (#164), the same way
+  // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
+  // keeps the row's status in sync as the job advances.
+  await insertRender(env, filmRowFromJob(job));
   return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(job, null))) }, 201);
 };
-const hPollFilm: Handler = async (_req, env, _c, p) => {
+const hPollFilm: Handler = async (_req, env, ctx, p) => {
   const r = await advanceFilmJob(env, p.id);
   if (!r) throw notFound("film job");
+  // Insert-if-missing (ON CONFLICT(job_id) DO NOTHING) so a film started before history
+  // unification -- or via a path that did not insert -- still surfaces in history on its next
+  // poll/sweep tick; then sync the live status/output exactly like hPollRender (#164).
+  await insertRender(env, filmRowFromJob(r.job));
+  await updateRenderFromView(env, filmJobToPollView(r.job, r.clipJob), ctx);
   return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(r.job, r.clipJob))) });
 };
 
@@ -928,7 +940,12 @@ const API_ROUTES: Route[] = [
 
 // Pretty studio page paths (vivijure.skyphusion.org/planner, /cast, /modules). Served
 // from public/*.html so nav works even before a deploy picks up new worker code.
+// /welcome is the public marketing landing page (welcome.html); it is the only path here
+// meant to be reachable without CF Access (it gets a public Access bypass on the /welcome
+// prefix), so it carries no studio data and links into the gated app rather than embedding it.
 const STUDIO_PAGE_ASSETS: Record<string, string> = {
+  "/welcome": "/welcome.html",
+  "/welcome/": "/welcome.html",
   "/planner": "/planner.html",
   "/planner/": "/planner.html",
   "/cast": "/cast.html",
