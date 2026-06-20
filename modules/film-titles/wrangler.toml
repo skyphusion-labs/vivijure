@@ -1,0 +1,24 @@
+# film-titles module worker (vivijure-module/1): opening title + end credit cards on the assembled
+# film, via the video-finish CPU container's /film-titles route (Workers VPC). A film.finish hook
+# (#190). Bound into the core as MODULE_FILM_TITLES; the registry discovers it from GET /module.json.
+#
+# CREDENTIALLESS: the core presigns the film GET + the result PUT and hands them in the invoke input,
+# so this module needs no R2 binding and no S3 secret -- it only forwards the spec to the container.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-film-titles"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Workers VPC -> always-on video-finish container on the fleet (issue #83). Same endpoint the core
+# uses for /finish; this module calls the /film-titles route (title + credit cards).
+[[vpc_services]]
+binding = "VIDEO_FINISH_VPC"
+service_id = "019ecbe6-9fc1-70a0-9946-14bbec0f51bc"
+remote = true

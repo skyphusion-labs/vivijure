@@ -123,6 +123,13 @@ service = "vivijure-module-finish-rife"
 binding = "MODULE_TEXT_OVERLAY"
 service = "vivijure-module-text-overlay"
 
+# Film titles: a film.finish-chain module (opening title + end credit cards) that runs on the
+# assembled+muxed film via the video-finish /film-titles route. Inert until the orchestrator invokes
+# the film.finish chain (separate change); discovered by the registry now.
+[[services]]
+binding = "MODULE_FILM_TITLES"
+service = "vivijure-module-film-titles"
+
 # Cast.image: generate a character's LoRA training reference set (FLUX 2 / Nano Banana). Cast-prep.
 [[services]]
 binding = "MODULE_CAST_IMAGE"

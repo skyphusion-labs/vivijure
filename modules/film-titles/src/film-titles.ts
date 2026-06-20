@@ -1,0 +1,70 @@
+// Pure film-titles logic: config coercion + the /film-titles container request body, plus the
+// passthrough output. No I/O here, so it unit-tests without the runtime, the container, or ffmpeg.
+
+import type { FilmFinishInput, FilmFinishOutput } from "./contract";
+
+export interface TitlesConfig {
+  font: string;
+  color: string;
+  bg: string;          // card background color (ffmpeg color name or #rrggbb)
+  title_seconds: number;
+  credit_seconds: number;
+}
+
+const num = (v: unknown, dflt: number, lo: number, hi: number): number => {
+  const n = typeof v === "number" && Number.isFinite(v) ? v : dflt;
+  return Math.max(lo, Math.min(hi, n));
+};
+const str = (v: unknown, dflt: string): string => (typeof v === "string" && v.length > 0 ? v : dflt);
+
+export function coerceConfig(cfg: Record<string, unknown>): TitlesConfig {
+  return {
+    font: str(cfg.font, "DejaVu Sans"),
+    color: str(cfg.color, "white"),
+    bg: str(cfg.bg, "black"),
+    title_seconds: num(cfg.title_seconds, 3, 1, 15),
+    credit_seconds: num(cfg.credit_seconds, 5, 1, 30),
+  };
+}
+
+/** True when there is at least one card to render. With neither a title nor non-empty credits, the
+ *  module passes the film through unchanged (noop) -- never an empty/cosmetic container round-trip. */
+export function hasCards(input: FilmFinishInput): boolean {
+  const titled = !!(input.title && typeof input.title.text === "string" && input.title.text.trim().length > 0);
+  const credited = !!(input.credits && Array.isArray(input.credits.lines) && input.credits.lines.some((l) => typeof l === "string" && l.trim().length > 0));
+  return titled || credited;
+}
+
+/** The JSON body POSTed to the video-finish container's /film-titles route. Presigned URLs come from
+ *  the core (the module is credentialless); the container downloads the film, generates the cards,
+ *  concats [title?, film, credits?], and uploads the result to output_url. */
+export function buildContainerSpec(input: FilmFinishInput, cfg: TitlesConfig): Record<string, unknown> {
+  const spec: Record<string, unknown> = {
+    videoUrl: input.video_url,
+    outputUrl: input.output_url,
+    outputKey: input.output_key,
+    width: input.width ?? 1920,
+    height: input.height ?? 1080,
+    fps: input.fps ?? 24,
+    font: cfg.font,
+    color: cfg.color,
+    bg: cfg.bg,
+  };
+  if (input.title && input.title.text.trim().length > 0) {
+    spec.title = { text: input.title.text, subtitle: input.title.subtitle ?? "", seconds: cfg.title_seconds };
+  }
+  if (input.credits && input.credits.lines.some((l) => l.trim().length > 0)) {
+    spec.credits = { lines: input.credits.lines.filter((l) => l.trim().length > 0), seconds: cfg.credit_seconds };
+  }
+  return spec;
+}
+
+/** Pass the film through unchanged (no cards, or a recoverable container failure). film_key is
+ *  unchanged so the chain / done-transition keeps the original assembled film. */
+export function passthroughOutput(input: FilmFinishInput, reason: string, opts: { degraded?: boolean } = {}): FilmFinishOutput {
+  return {
+    film_key: input.film_key,
+    applied: [reason],
+    ...(opts.degraded ? { degraded: reason } : {}),
+  };
+}
