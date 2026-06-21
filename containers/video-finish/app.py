@@ -70,6 +70,10 @@ async def finish(req):
     # through _normalize, which forced the container's default 1920x1080 and a
     # lossy libx264 pass, upscaling a 1280x720 hybrid/cloud render.
     remux_audio_only = bool(body.get("remuxAudioOnly", False))
+    # keepClipAudio: the clips carry per-clip lip-synced dialogue (talking film) that
+    # must survive the concat. Set by the orchestrator when job.dialogue_audio is
+    # populated. Default False = the historical silent-concat behavior.
+    keep_clip_audio = bool(body.get("keepClipAudio", False))
     if not isinstance(clips, list) or not clips:
         return web.json_response({"ok": False, "error": "clips must be a non-empty array"}, status=400)
     if len(clips) > MAX_CLIPS:
@@ -128,6 +132,7 @@ async def finish(req):
                 out_path, secs, has_audio = await loop.run_in_executor(
                     None, _assemble, work, srcs, audio_path,
                     width, height, fps, crf, preset, crossfade, trim_join_frames,
+                    keep_clip_audio,
                 )
         except subprocess.CalledProcessError as e:
             log.exception("ffmpeg failed")
@@ -199,25 +204,43 @@ def _probe_audio(path):
     return True, sample_rate, layout
 
 
-def _normalize(src, dst, *, width, height, fps, crf, preset, cap, keep_audio=False):
+def _normalize(src, dst, *, width, height, fps, crf, preset, cap, keep_audio=False, ensure_audio=False):
     """Scale/pad/fps-normalize src to dst.
-    keep_audio=False (default): strip audio (-an). Used by _assemble and the
-    silent-film path of _assemble_film_titles.
-    keep_audio=True: re-encode audio to AAC (192k). Used by _assemble_film_titles
-    when the input film has a score or narration that must be preserved.
+    keep_audio=False (default): strip audio (-an). Used by _assemble's silent path
+    and the silent-film path of _assemble_film_titles.
+    keep_audio=True: re-encode the source's audio to AAC (192k). Used by
+    _assemble_film_titles when the input film has a score/narration to preserve.
+    ensure_audio=True: GUARANTEE a canonical 48k stereo AAC track on the output --
+    re-encode the source's audio if present, else synthesize silence (anullsrc).
+    Used by _assemble's talking-film path so EVERY clip carries a uniform audio
+    stream and _concat_hard (-c copy) preserves the per-clip lip-synced dialogue;
+    a dialogue-less shot still gets a matching silent track so the concat layout
+    stays consistent. Takes precedence over keep_audio.
     """
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps={fps}"
     )
-    cmd = ["ffmpeg", "-y", "-i", src, "-vf", vf]
-    if keep_audio:
+    cmd = ["ffmpeg", "-y", "-i", src]
+    synth_silence = False
+    if ensure_audio:
+        has_a, _, _ = _probe_audio(src)
+        if not has_a:
+            synth_silence = True
+            cmd += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+    cmd += ["-vf", vf]
+    if ensure_audio:
+        cmd += ["-map", "0:v:0", "-map", ("1:a:0" if synth_silence else "0:a:0"),
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
+    elif keep_audio:
         cmd += ["-c:a", "aac", "-b:a", "192k"]
     else:
         cmd += ["-an"]
     cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
     if cap and cap > 0.15:
         cmd += ["-t", f"{cap:.3f}"]
+    elif synth_silence:
+        cmd += ["-shortest"]  # bound the infinite anullsrc track to the video length
     cmd.append(dst)
     _run(cmd)
 
@@ -280,10 +303,16 @@ def _remux_audio_only(work, video_path, audio_path):
     return out, _probe_duration(out), True
 
 
-def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade, trim_join_frames):
+def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade, trim_join_frames,
+              keep_clip_audio=False):
+    # keep_clip_audio: the clips carry per-clip lip-synced dialogue (talking film).
+    # The crossfade concat path drops audio (-an) and acrossfade is not wired, so
+    # dialogue forces a hard cut; every clip is normalized with ensure_audio so the
+    # hard-cut concat (-c copy) preserves the dialogue uniformly.
+    effective_crossfade = 0.0 if keep_clip_audio else crossfade
     # Tail-trim one (or N) frames off every clip but the last, ONLY on hard
     # cuts -- mirrors assemble._trim_seconds_for_join (continuity de-dupe).
-    trim_tail = (trim_join_frames / max(1, fps)) if crossfade <= 0 else 0.0
+    trim_tail = (trim_join_frames / max(1, fps)) if effective_crossfade <= 0 else 0.0
     last = len(srcs) - 1
     norms = []
     for i, (src, target) in enumerate(srcs):
@@ -293,18 +322,37 @@ def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade
             base = cap if cap else _probe_duration(src)
             cap = max(0.1, base - tail)
         dst = os.path.join(work, f"norm_{i:03d}.mp4")
-        _normalize(src, dst, width=width, height=height, fps=fps, crf=crf, preset=preset, cap=cap)
+        _normalize(src, dst, width=width, height=height, fps=fps, crf=crf, preset=preset,
+                   cap=cap, ensure_audio=keep_clip_audio)
         norms.append(dst)
 
     silent = os.path.join(work, "_silent.mp4")
-    if crossfade > 0 and len(norms) > 1:
-        _concat_crossfade(norms, silent, crossfade, crf=crf, preset=preset)
+    if effective_crossfade > 0 and len(norms) > 1:
+        _concat_crossfade(norms, silent, effective_crossfade, crf=crf, preset=preset)
     else:
-        _concat_hard(norms, silent)
+        _concat_hard(norms, silent)  # -c copy; preserves per-clip audio when ensure_audio kept it
 
     out = os.path.join(work, "final.mp4")
-    has_audio = bool(audio_path) and os.path.isfile(audio_path)
-    if has_audio:
+    has_bed = bool(audio_path) and os.path.isfile(audio_path)
+    if has_bed and keep_clip_audio:
+        # Talking film WITH a music/score bed: MIX the bed under the per-clip
+        # dialogue (amix) rather than replacing it. Pin to the video length, same
+        # bulletproof `-t vdur` as the bed-only path below; `apad` fills a short bed.
+        vdur = _probe_duration(silent)
+        cmd = [
+            "ffmpeg", "-y", "-i", silent, "-i", audio_path,
+            "-filter_complex",
+            "[1:a]apad[bed];[0:a][bed]amix=inputs=2:duration=first:dropout_transition=0[a]",
+            "-map", "0:v:0", "-map", "[a]",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        ]
+        if vdur and vdur > 0:
+            cmd += ["-t", f"{vdur:.3f}"]
+        else:
+            cmd += ["-shortest"]
+        cmd += ["-movflags", "+faststart", out]
+        _run(cmd)
+    elif has_bed:
         # v0.137.3: pin the output to the VIDEO length, bulletproof. The earlier
         # `-af apad -shortest` did not hold: `-shortest` cut the output to the
         # (shorter) audio, truncating the video. Probe the video duration and
@@ -325,8 +373,12 @@ def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade
         cmd += ["-movflags", "+faststart", out]
         _run(cmd)
     else:
-        # Web-playable silent: stream-copy with faststart (no re-encode).
+        # Web-playable: stream-copy with faststart (no re-encode). Preserves the
+        # per-clip dialogue when ensure_audio kept it on the concat; silent otherwise.
         _run(["ffmpeg", "-y", "-i", silent, "-c", "copy", "-movflags", "+faststart", out])
+    # Honest: probe the actual output rather than assuming bed == audio (a talking
+    # film has audio with no bed; a failed bed mux would not).
+    has_audio = _probe_audio(out)[0]
     return out, _probe_duration(out), has_audio
 
 
