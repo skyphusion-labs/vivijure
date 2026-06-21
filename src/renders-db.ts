@@ -17,6 +17,7 @@ import type { Env } from "./env";
 import type { RunpodJobView } from "./runpod-submit";
 import { writeRenderLog } from "./render-log";
 import { STUDIO_OWNER } from "./shared";
+import { withD1Retry } from "./d1-retry";
 
 // Surface a corrupted *_json column instead of swallowing it silently (issue #15).
 // The empty / NULL case is handled by a length guard BEFORE the parse, so this only
@@ -241,8 +242,10 @@ export async function updateRenderFromView(
 
   const outputJson = view.output !== undefined ? JSON.stringify(view.output) : null;
 
-  await env.DB.prepare(
-    `UPDATE renders SET
+  // Advance hot path: retry a transient D1 blip so a sweep tick self-heals instead of aborting.
+  await withD1Retry(() =>
+    env.DB.prepare(
+      `UPDATE renders SET
       status = ?,
       output_key = COALESCE(?, output_key),
       output_json = ?,
@@ -254,21 +257,22 @@ export async function updateRenderFromView(
       keyframes_json = COALESCE(?, keyframes_json),
       mode = COALESCE(?, mode)
     WHERE job_id = ?`,
-  )
-    .bind(
-      view.status,
-      outputKey,
-      outputJson,
-      view.error ?? null,
-      view.executionTimeMs ?? null,
-      view.delayTimeMs ?? null,
-      now,
-      completed,
-      keyframesJson,
-      modeFromOutput,
-      view.jobId,
     )
-    .run();
+      .bind(
+        view.status,
+        outputKey,
+        outputJson,
+        view.error ?? null,
+        view.executionTimeMs ?? null,
+        view.delayTimeMs ?? null,
+        now,
+        completed,
+        keyframesJson,
+        modeFromOutput,
+        view.jobId,
+      )
+      .run(),
+  );
 
   // v0.141.0: on terminal status, persist a per-render log to R2 (conventional
   // key renders/logs/<jobId>.txt) so History can offer a "view logs" link.
@@ -403,17 +407,19 @@ export async function markRenderFailedByJobId(
   error: string,
 ): Promise<boolean> {
   const now = nowSeconds();
-  const res = await env.DB.prepare(
-    `UPDATE renders SET
+  const res = await withD1Retry(() =>
+    env.DB.prepare(
+      `UPDATE renders SET
        status = 'FAILED',
        error = ?,
        completed_at = COALESCE(completed_at, ?),
        updated_at = ?
      WHERE job_id = ?
        AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`,
-  )
-    .bind(error.slice(0, 2000), now, now, jobId)
-    .run();
+    )
+      .bind(error.slice(0, 2000), now, now, jobId)
+      .run(),
+  );
   return ((res.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
 }
 
@@ -428,12 +434,14 @@ export async function markRenderFailedByJobId(
 // false and should report "still finishing". 'failed' is re-claimable (retry).
 export async function claimFinish(env: Env, jobId: string): Promise<boolean> {
   const now = nowSeconds();
-  const res = await env.DB.prepare(
-    `UPDATE renders SET finish_state = 'finishing', updated_at = ?
+  const res = await withD1Retry(() =>
+    env.DB.prepare(
+      `UPDATE renders SET finish_state = 'finishing', updated_at = ?
      WHERE job_id = ? AND COALESCE(finish_state, '') NOT IN ('finishing', 'done')`,
-  )
-    .bind(now, jobId)
-    .run();
+    )
+      .bind(now, jobId)
+      .run(),
+  );
   return (res.meta?.changes ?? 0) === 1;
 }
 
@@ -444,13 +452,15 @@ export async function markFinishDone(
   outputJson: string,
 ): Promise<void> {
   const now = nowSeconds();
-  await env.DB.prepare(
-    `UPDATE renders SET output_key = ?, output_json = ?, status = 'COMPLETED',
+  await withD1Retry(() =>
+    env.DB.prepare(
+      `UPDATE renders SET output_key = ?, output_json = ?, status = 'COMPLETED',
        finish_state = 'done', completed_at = COALESCE(completed_at, ?), updated_at = ?
      WHERE job_id = ?`,
-  )
-    .bind(outputKey, outputJson, now, now, jobId)
-    .run();
+    )
+      .bind(outputKey, outputJson, now, now, jobId)
+      .run(),
+  );
 }
 
 // v0.139.0: atomically claim the render-done email for a job (once-only). Flips
@@ -563,22 +573,26 @@ export async function listStrandedPostClipsFilmJobs(
 
 export async function markFinishFailed(env: Env, jobId: string, error: string): Promise<void> {
   const now = nowSeconds();
-  await env.DB.prepare(
-    `UPDATE renders SET finish_state = 'failed', error = ?, updated_at = ? WHERE job_id = ?`,
-  )
-    .bind(error.slice(0, 2000), now, jobId)
-    .run();
+  await withD1Retry(() =>
+    env.DB.prepare(
+      `UPDATE renders SET finish_state = 'failed', error = ?, updated_at = ? WHERE job_id = ?`,
+    )
+      .bind(error.slice(0, 2000), now, jobId)
+      .run(),
+  );
 }
 
 export async function getFinishState(
   env: Env,
   jobId: string,
 ): Promise<{ finish_state: string | null; output_key: string | null } | null> {
-  const row = await env.DB.prepare(
-    `SELECT finish_state, output_key FROM renders WHERE job_id = ?`,
-  )
-    .bind(jobId)
-    .first<{ finish_state: string | null; output_key: string | null }>();
+  const row = await withD1Retry(() =>
+    env.DB.prepare(
+      `SELECT finish_state, output_key FROM renders WHERE job_id = ?`,
+    )
+      .bind(jobId)
+      .first<{ finish_state: string | null; output_key: string | null }>(),
+  );
   return row ?? null;
 }
 
