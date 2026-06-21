@@ -191,7 +191,7 @@ const hDeleteCast: Handler = async (req, env, _c, p) => {
 };
 // portrait / ref / source: binary upload, staged {key,mime}, or {from_chat_artifact} copy.
 const hSetPortrait: Handler = async (req, env, _c, p) =>
-  handleCastPortraitUpload(req, env, idParam(p.id), getUserEmail(req));
+  handleCastPortraitUpload(req, env, idParam(p.id));
 const hClearPortrait: Handler = async (_req, env, _c, p) => {
   const id = idParam(p.id);
   const cur = await getCastById(env, id);
@@ -203,7 +203,7 @@ const hClearPortrait: Handler = async (_req, env, _c, p) => {
   return json({ cast: row });
 };
 const hAddRef: Handler = async (req, env, _c, p) =>
-  handleCastRefAdd(req, env, idParam(p.id), getUserEmail(req));
+  handleCastRefAdd(req, env, idParam(p.id));
 const hRemoveRef: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string }>(req).catch(() => ({} as { key?: string }));
   const key = b.key || p.refKey;
@@ -211,7 +211,7 @@ const hRemoveRef: Handler = async (req, env, _c, p) => {
   return handleCastRefRemove(env, idParam(p.id), key);
 };
 const hAddSource: Handler = async (req, env, _c, p) =>
-  handleCastSourceAdd(req, env, idParam(p.id), getUserEmail(req));
+  handleCastSourceAdd(req, env, idParam(p.id));
 const hRemoveSource: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string }>(req).catch(() => ({} as { key?: string }));
   const key = b.key || p.sourceKey;
@@ -457,7 +457,6 @@ const hSubmitRender: Handler = async (req, env) => {
   });
   const view = filmJobToPollView(job, null);
   const row: NewRenderRow = {
-    userEmail: email,
     jobId: view.jobId,
     project,
     bundleKey: b.bundleKey,
@@ -521,7 +520,6 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
   }
   const view = filmJobToPollView(job, null);
   await insertRender(env, {
-    userEmail: email,
     jobId: view.jobId,
     project,
     bundleKey: b.bundleKey,
@@ -654,7 +652,7 @@ const hTrainCastLora: Handler = async (req, env, _c, p) =>
 const hCastLoraStatus: Handler = async (_req, env, _c, p) =>
   handleCastLoraStatus(env, idParam(p.id));
 const hAdoptRender: Handler = async (req, env) =>
-  handleAdoptRender(req, env, getUserEmail(req));
+  handleAdoptRender(req, env);
 
 // --- validation ----------------------------------------------------------
 const hPreflight: Handler = async (req) => {
@@ -682,10 +680,9 @@ const hRefine: Handler = async (req, env) => {
 const hChat: Handler = async (req, env) => {
   const a = await readBody<ChatCompleteArgs & ChatImageArgs>(req);
   if (!a.model || !a.user_input) throw badRequest("model and user_input required");
-  const email = getUserEmail(req);
   const modelEntry = findModel(a.model);
   if (modelEntry?.type === "image") {
-    const r = await chatImage(env, a, email);
+    const r = await chatImage(env, a);
     if (!r.ok) return json({ error: r.error, model: r.model }, 502);
     return json({
       model: r.model,

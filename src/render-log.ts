@@ -5,8 +5,8 @@
 // GPU side's diagnostics tail). We persist a human-readable version of that to
 // R2 at a CONVENTIONAL key derived from the job id, so the History UI can offer
 // a "view logs" link with no new DB column and no read-path changes. The object
-// is served through /api/artifact, which is ownership-gated on
-// customMetadata.user_email, so the log carries the render owner's email.
+// is served through /api/artifact, which serves by key (single-tenant studio
+// behind CF Access; no per-user ownership stamp).
 import type { Env } from "./env";
 import type { RunpodJobView } from "./runpod-submit";
 
@@ -129,7 +129,6 @@ export function buildCloudAnimateLogText(
 // so one missing/expired log id cannot drop the whole file.
 export async function writeCloudAnimateLog(
   env: Env,
-  userEmail: string,
   input: CloudAnimateLogInput,
 ): Promise<string | null> {
   try {
@@ -164,7 +163,6 @@ export async function writeCloudAnimateLog(
     const text = buildCloudAnimateLogText({ ...input, shots }, new Date().toISOString());
     await env.R2_RENDERS.put(key, text, {
       httpMetadata: { contentType: "text/plain; charset=utf-8" },
-      customMetadata: { user_email: userEmail },
     });
     return key;
   } catch (e) {
@@ -180,14 +178,12 @@ export async function writeCloudAnimateLog(
 export async function writeRenderLog(
   env: Env,
   view: RunpodJobView,
-  userEmail: string,
 ): Promise<string | null> {
   try {
     const key = renderLogKey(view.jobId);
     const text = buildRenderLogText(view, new Date().toISOString());
     await env.R2_RENDERS.put(key, text, {
       httpMetadata: { contentType: "text/plain; charset=utf-8" },
-      customMetadata: { user_email: userEmail },
     });
     return key;
   } catch (e) {

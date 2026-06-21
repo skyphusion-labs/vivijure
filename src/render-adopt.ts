@@ -7,7 +7,6 @@ import { coerceQualityTier, deriveProjectFromBundleKey } from "./runpod-submit";
 export async function handleAdoptRender(
   request: Request,
   env: Env,
-  userEmail: string,
 ): Promise<Response> {
   let body: {
     jobId?: unknown;
@@ -69,9 +68,9 @@ export async function handleAdoptRender(
 
   try {
     const existing = await env.DB.prepare(
-      "SELECT id FROM renders WHERE job_id = ? AND user_email = ? LIMIT 1",
+      "SELECT id FROM renders WHERE job_id = ? LIMIT 1",
     )
-      .bind(jobId, userEmail)
+      .bind(jobId)
       .first<{ id: number }>();
     if (existing) {
       if (outputKey) await markFinishDone(env, jobId, outputKey, outJson());
@@ -86,7 +85,6 @@ export async function handleAdoptRender(
     }
 
     await insertRender(env, {
-      userEmail,
       jobId,
       project,
       bundleKey,

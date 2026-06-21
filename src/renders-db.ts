@@ -5,9 +5,10 @@
 // latest status, output, error, and timing fields. GET /api/storyboard/renders
 // lists rows newest first.
 //
-// Ownership: user_email is provenance (who submitted / who to notify), not an
-// access gate. The studio is single-operator; list/get/patch/delete are scoped
-// by row id (and optional project_id on list) only. Edge auth is Cloudflare Access.
+// Ownership: the studio is single-operator; list/get/patch/delete are scoped by
+// row id (and optional project_id on list) only. Edge auth is Cloudflare Access.
+// The user_email column is retained as legacy provenance (written as the
+// STUDIO_OWNER sentinel on insert; the column is NOT NULL) but is not a filter.
 // Poll / cancel proxy to RunPod regardless of DB state (so jobs submitted before
 // v0.34.0 are still pollable directly via their jobId); the row UPDATE is a no-op
 // when no row exists for that jobId.
@@ -15,6 +16,7 @@
 import type { Env } from "./env";
 import type { RunpodJobView } from "./runpod-submit";
 import { writeRenderLog } from "./render-log";
+import { STUDIO_OWNER } from "./shared";
 
 // Surface a corrupted *_json column instead of swallowing it silently (issue #15).
 // The empty / NULL case is handled by a length guard BEFORE the parse, so this only
@@ -27,7 +29,6 @@ function warnCorruptColumn(column: string, e: unknown): void {
 
 // Fresh row at submit time.
 export interface NewRenderRow {
-  userEmail: string;
   jobId: string;
   project: string;
   bundleKey: string;
@@ -182,7 +183,7 @@ export async function insertRender(env: Env, row: NewRenderRow): Promise<void> {
     ON CONFLICT(job_id) DO NOTHING`,
   )
     .bind(
-      row.userEmail,
+      STUDIO_OWNER,
       row.jobId,
       row.project,
       row.bundleKey,
@@ -270,26 +271,17 @@ export async function updateRenderFromView(
     .run();
 
   // v0.141.0: on terminal status, persist a per-render log to R2 (conventional
-  // key renders/logs/<jobId>.txt) so History can offer a "view logs" link. The
-  // row now exists/updated, so read its owner for the artifact ownership stamp.
+  // key renders/logs/<jobId>.txt) so History can offer a "view logs" link.
   // Best-effort: this never blocks or breaks the render-resolve path. When an
-  // ExecutionContext is supplied (the poll route) the owner lookup + R2 write run
-  // via ctx.waitUntil, OFF the poll hot path -- the caller's response no longer
-  // waits on a D1 round-trip + an R2 PUT (issue #15). Without ctx (tests / other
-  // callers) it falls back to awaiting so behavior is unchanged. A failure is
-  // logged rather than swallowed silently, so a persistently failing log write is
-  // diagnosable instead of invisible.
+  // ExecutionContext is supplied (the poll route) the R2 write runs via
+  // ctx.waitUntil, OFF the poll hot path -- the caller's response no longer waits
+  // on an R2 PUT (issue #15). Without ctx (tests / other callers) it falls back to
+  // awaiting so behavior is unchanged. A failure is logged rather than swallowed
+  // silently, so a persistently failing log write is diagnosable instead of invisible.
   if (completed !== null) {
     const logTask = (async () => {
       try {
-        const owner = await env.DB.prepare(
-          `SELECT user_email FROM renders WHERE job_id = ?`,
-        )
-          .bind(view.jobId)
-          .first<{ user_email: string }>();
-        if (owner?.user_email) {
-          await writeRenderLog(env, view, owner.user_email);
-        }
+        await writeRenderLog(env, view);
       } catch (e) {
         console.warn(
           `render log write failed for job ${view.jobId}: ${e instanceof Error ? e.message : String(e)}`,
@@ -401,15 +393,6 @@ export async function getRenderForPoll(
   };
 }
 
-// v0.161.1: the owner email for a render row by jobId. The cron sweep needs it
-// to drive a scatter parent's gather (resolveScatterGather is owner-scoped) for
-// a fire-and-forget scatter with no client polling.
-export async function getRenderOwnerEmail(env: Env, jobId: string): Promise<string | null> {
-  const r = await env.DB.prepare(`SELECT user_email FROM renders WHERE job_id = ?`)
-    .bind(jobId)
-    .first<{ user_email?: unknown }>();
-  return r && typeof r.user_email === "string" && r.user_email.length > 0 ? r.user_email : null;
-}
 
 // v0.136.0: fail a render row by jobId (used when RunPod has no record of the
 // job past the grace window). Guarded so it never clobbers a row that already
@@ -590,12 +573,12 @@ export async function markFinishFailed(env: Env, jobId: string, error: string): 
 export async function getFinishState(
   env: Env,
   jobId: string,
-): Promise<{ finish_state: string | null; output_key: string | null; user_email: string | null } | null> {
+): Promise<{ finish_state: string | null; output_key: string | null } | null> {
   const row = await env.DB.prepare(
-    `SELECT finish_state, output_key, user_email FROM renders WHERE job_id = ?`,
+    `SELECT finish_state, output_key FROM renders WHERE job_id = ?`,
   )
     .bind(jobId)
-    .first<{ finish_state: string | null; output_key: string | null; user_email: string | null }>();
+    .first<{ finish_state: string | null; output_key: string | null }>();
   return row ?? null;
 }
 

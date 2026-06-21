@@ -13,12 +13,10 @@ export async function putChatArtifact(
   env: Env,
   mime: string,
   bytes: Uint8Array,
-  userEmail: string,
 ): Promise<OutputArtifact> {
   const key = `out/${crypto.randomUUID()}.${extFromMime(mime)}`;
   await env.R2.put(key, bytes, {
     httpMetadata: { contentType: mime },
-    customMetadata: { user_email: userEmail },
   });
   return { key, mime, type: "image" };
 }

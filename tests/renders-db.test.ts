@@ -7,12 +7,12 @@ import type { RunpodJobView } from "../src/runpod-submit";
 // ctx.waitUntil (off the poll hot path) when an ExecutionContext is supplied, and
 // fall back to awaiting when it is not. Fakes for D1 + R2 + ctx, no network.
 
-function makeEnv(owner: { user_email: string } | null, opts: { hangPut?: boolean } = {}) {
+function makeEnv(opts: { hangPut?: boolean } = {}) {
   const putCalls: string[] = [];
   const stmt = {
     bind: () => stmt,
     run: async () => ({ success: true }),
-    first: async () => owner,
+    first: async () => null,
   };
   const env = {
     DB: { prepare: () => stmt },
@@ -40,7 +40,7 @@ describe("updateRenderFromView log write (issue #15: waitUntil off the hot path)
     // (it only schedules the task via waitUntil, never awaits it). If it awaited
     // inline this test would time out -- the definitive proof the write is off the
     // poll hot path.
-    const { env, putCalls } = makeEnv({ user_email: "u@e.com" }, { hangPut: true });
+    const { env, putCalls } = makeEnv({ hangPut: true });
     const { ctx, scheduled } = makeCtx();
     await updateRenderFromView(env, terminalView, ctx);
     expect(scheduled.length).toBe(1);   // the log task went to waitUntil
@@ -48,24 +48,26 @@ describe("updateRenderFromView log write (issue #15: waitUntil off the hot path)
   });
 
   it("awaits the log write inline when no ctx is supplied (no waitUntil)", async () => {
-    const { env, putCalls } = makeEnv({ user_email: "u@e.com" });
+    const { env, putCalls } = makeEnv();
     await updateRenderFromView(env, terminalView);
     expect(putCalls).toEqual(["renders/logs/job-1.txt"]); // completed before return
   });
 
   it("writes no log for a non-terminal status", async () => {
-    const { env, putCalls } = makeEnv({ user_email: "u@e.com" });
+    const { env, putCalls } = makeEnv();
     const { ctx, scheduled } = makeCtx();
     await updateRenderFromView(env, { jobId: "job-2", status: "IN_PROGRESS", statusRaw: "IN_PROGRESS" }, ctx);
     expect(scheduled.length).toBe(0);
     expect(putCalls.length).toBe(0);
   });
 
-  it("does not write when the row has no owner email (and never throws)", async () => {
-    const { env, putCalls } = makeEnv(null);
+  it("writes the log on terminal status regardless of row owner (never throws)", async () => {
+    // The per-render log no longer carries a per-user ownership stamp (the studio is
+    // single-tenant behind CF Access), so the write runs on terminal status alone.
+    const { env, putCalls } = makeEnv();
     const { ctx, scheduled } = makeCtx();
     await updateRenderFromView(env, terminalView, ctx);
     await Promise.all(scheduled);
-    expect(putCalls.length).toBe(0);
+    expect(putCalls).toEqual(["renders/logs/job-1.txt"]);
   });
 });

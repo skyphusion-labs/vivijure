@@ -42,14 +42,14 @@ describe("writeCloudAnimateLog (issue #15: copy, not mutate; parallel + resilien
   it("does NOT mutate the caller's input shots", async () => {
     const { env } = makeEnv(async (id) => ({ cost: 0.01, id }));
     const input = baseInput();
-    await writeCloudAnimateLog(env, "u@e.com", input);
+    await writeCloudAnimateLog(env, input);
     expect(input.shots[0].gateway_log).toBeUndefined();
     expect(input.shots[1].gateway_log).toBeUndefined();
   });
 
   it("writes an enriched copy (the gateway log lands in the file)", async () => {
     const { env, putCalls } = makeEnv(async (id) => ({ marker: `LOG_FOR_${id}` }));
-    const key = await writeCloudAnimateLog(env, "u@e.com", baseInput());
+    const key = await writeCloudAnimateLog(env, baseInput());
     expect(key).toBe("renders/logs/job-1.txt");
     expect(putCalls.length).toBe(1);
     expect(putCalls[0].body).toContain("LOG_FOR_L1");
@@ -60,7 +60,7 @@ describe("writeCloudAnimateLog (issue #15: copy, not mutate; parallel + resilien
     const { env, getLogCalls } = makeEnv(async () => ({}));
     const input = baseInput();
     input.shots.push({ shot_id: "shot_03", model: "wan-i2v", status: "failed", log_id: null });
-    await writeCloudAnimateLog(env, "u@e.com", input);
+    await writeCloudAnimateLog(env, input);
     expect(getLogCalls.sort()).toEqual(["L1", "L2"]); // shot_03 (no log_id) skipped
   });
 
@@ -70,7 +70,7 @@ describe("writeCloudAnimateLog (issue #15: copy, not mutate; parallel + resilien
       return { marker: `LOG_FOR_${id}` };
     });
     const input = baseInput();
-    const key = await writeCloudAnimateLog(env, "u@e.com", input);
+    const key = await writeCloudAnimateLog(env, input);
     expect(key).toBe("renders/logs/job-1.txt");
     expect(putCalls.length).toBe(1); // a single failed lookup did not drop the file
     expect(putCalls[0].body).toContain("LOG_FOR_L2"); // the healthy shot still enriched
@@ -82,7 +82,7 @@ describe("writeCloudAnimateLog (issue #15: copy, not mutate; parallel + resilien
     (env as unknown as { R2_RENDERS: { put: () => Promise<void> } }).R2_RENDERS.put = async () => {
       throw new Error("R2 down");
     };
-    const key = await writeCloudAnimateLog(env, "u@e.com", baseInput());
+    const key = await writeCloudAnimateLog(env, baseInput());
     expect(key).toBeNull();
   });
 });

@@ -62,7 +62,6 @@ export interface ScatterArgs {
   shotIds: string[];
   shardCount: number;
   renderOverrides?: Record<string, unknown>;
-  userEmail?: string;
   // Optional slot map per shot (storyboard character_slots). When present, each
   // shard only carries the LoRAs its own shots actually use, so an
   // environment-only shard does not stage adapters it never binds. Absent => the
@@ -96,7 +95,6 @@ export function buildShardJobs(args: ScatterArgs): RenderSubmitArgs[] {
       renderOverrides: { ...(args.renderOverrides ?? {}), finish_offloaded: true },
     };
     if (Object.keys(pretrained).length > 0) job.pretrainedLoras = pretrained;
-    if (args.userEmail) job.userEmail = args.userEmail;
     return job;
   });
 }

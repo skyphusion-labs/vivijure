@@ -158,7 +158,6 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
   };
 
   await insertRender(env, {
-    userEmail: args.user_email,
     jobId: scatterId,
     project: args.project,
     bundleKey: args.bundle_key,
@@ -192,7 +191,6 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     scatterJob.shard_film_ids.push(film.film_id);
     const view = filmJobToPollView(film, null);
     await insertRender(env, {
-      userEmail: args.user_email,
       jobId: film.film_id,
       project: args.project,
       bundleKey: args.bundle_key,

@@ -193,7 +193,6 @@ export async function animateFromPreview(
 
   const view = filmJobToPollView(job, null);
   const row: NewRenderRow = {
-    userEmail: args.userEmail,
     jobId: view.jobId,
     project: args.parent.project,
     bundleKey: args.parent.bundle_key,
