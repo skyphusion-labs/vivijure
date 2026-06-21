@@ -160,29 +160,59 @@ export function modulesResponse(modules: RegisteredModule[], render: RenderConfi
 // Promise.all). Bound the manifest read with a per-call timeout; on timeout the fetch aborts, the
 // catch below logs it, and the module is simply skipped (issue #17).
 const MANIFEST_READ_TIMEOUT_MS = 3000;
+// A dropped module silently SHORTENS a chain hook (e.g. the finish chain), changing the output with
+// no error -- a talking film's shot lost its lip-sync because a transient manifest blip dropped the
+// module at enterFinishPhase time. So retry a TRANSIENT failure (5xx / timeout / network throw) a few
+// times before giving up; a real error (4xx, invalid manifest) is NOT retried -- that module is
+// genuinely broken and is dropped as before (issue #17). Mirrors the D1 self-heal philosophy.
+const MANIFEST_READ_ATTEMPTS = 3;
+const MANIFEST_RETRY_BASE_MS = 120;
+
+/** A non-2xx manifest status worth retrying (the module is up but momentarily unhappy / warming). A
+ *  4xx is a real, stable error (bad route / auth) -- do not retry. */
+function isRetryableManifestStatus(status: number): boolean {
+  return status === 408 || status === 429 || (status >= 500 && status <= 599);
+}
 
 export async function readManifest(
   binding: string,
   fetcher: FetcherLike,
 ): Promise<RegisteredModule | null> {
-  try {
-    const res = await fetcher.fetch("https://module/module.json", {
-      signal: AbortSignal.timeout(MANIFEST_READ_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      console.warn(`module ${binding}: GET /module.json -> ${res.status}; skipping`);
-      return null;
+  let lastReason = "";
+  for (let attempt = 0; attempt < MANIFEST_READ_ATTEMPTS; attempt++) {
+    const lastAttempt = attempt === MANIFEST_READ_ATTEMPTS - 1;
+    try {
+      const res = await fetcher.fetch("https://module/module.json", {
+        signal: AbortSignal.timeout(MANIFEST_READ_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        // Transient (5xx/timeout-class) -> retry so a blip never silently drops the module from a
+        // chain. A 4xx is stable -> skip now.
+        if (isRetryableManifestStatus(res.status) && !lastAttempt) {
+          lastReason = `GET /module.json -> ${res.status}`;
+          await new Promise((r) => setTimeout(r, MANIFEST_RETRY_BASE_MS * (attempt + 1)));
+          continue;
+        }
+        console.warn(`module ${binding}: GET /module.json -> ${res.status}; skipping`);
+        return null;
+      }
+      const parsed = validateManifest(await res.json());
+      if (typeof parsed === "string") {
+        console.warn(`module ${binding}: invalid manifest (${parsed}); skipping`); // real error: don't retry
+        return null;
+      }
+      return { ...parsed, binding };
+    } catch (e) {
+      // fetch threw (timeout / network) -> transient: retry unless this was the last attempt.
+      lastReason = (e as Error).message;
+      if (!lastAttempt) {
+        await new Promise((r) => setTimeout(r, MANIFEST_RETRY_BASE_MS * (attempt + 1)));
+        continue;
+      }
     }
-    const parsed = validateManifest(await res.json());
-    if (typeof parsed === "string") {
-      console.warn(`module ${binding}: invalid manifest (${parsed}); skipping`);
-      return null;
-    }
-    return { ...parsed, binding };
-  } catch (e) {
-    console.warn(`module ${binding}: unreachable (${(e as Error).message}); skipping`);
-    return null;
   }
+  console.warn(`module ${binding}: unreachable after ${MANIFEST_READ_ATTEMPTS} attempts (${lastReason}); skipping`);
+  return null;
 }
 
 // Per-isolate discovery cache for the /api/modules route (issue #17 follow-up). That route re-ran N
