@@ -19,7 +19,7 @@ import {
   type KeyframeInput,
   type KeyframeOutput,
 } from "./contract";
-import { buildPreviewBody, parseKeyframes, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./keyframe";
+import { buildPreviewBody, parseKeyframes, parseTrainedLoras, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./keyframe";
 
 interface Env {
   RUNPOD_API_KEY: string;
@@ -117,7 +117,15 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<KeyframeO
 
   const keyframes = parseKeyframes(s.output);
   if (!keyframes.length) return { ok: false, error: "keyframe job completed but returned no keyframes" };
-  return { ok: true, output: { project: st.project, keyframes } };
+  const trained_loras = parseTrainedLoras(s.output);
+  return {
+    ok: true,
+    output: {
+      project: st.project,
+      keyframes,
+      ...(Object.keys(trained_loras).length ? { trained_loras } : {}),
+    },
+  };
 }
 
 export default {

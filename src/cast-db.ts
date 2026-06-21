@@ -482,6 +482,43 @@ export async function markLoraReady(
   return result ? rowToCast(result) : null;
 }
 
+/** Single-user, id-only variants of getCastById / markLoraReady. The cast id is the primary key, so
+ *  it identifies the row on its own; these do NOT scope by the (half-stripped, always-"studio")
+ *  user_email. Used by the film orchestrator to bank an inline-trained adapter back onto the cast
+ *  member at keyframe completion without depending on a user_email that may not match. */
+export async function getCastByIdOnly(env: Env, id: number): Promise<CastMember | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
+            ref_keys_json, source_keys_json, created_at, updated_at,
+            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
+       FROM cast_members
+      WHERE id = ?
+      LIMIT 1`
+  )
+    .bind(id)
+    .first<CastRow>();
+  return row ? rowToCast(row) : null;
+}
+
+export async function markLoraReadyById(env: Env, id: number, loraKey: string): Promise<CastMember | null> {
+  const result = await env.DB.prepare(
+    `UPDATE cast_members
+        SET lora_status = 'ready',
+            lora_key = ?,
+            lora_trained_at = datetime('now'),
+            lora_job_id = NULL,
+            lora_error = NULL,
+            updated_at = datetime('now')
+      WHERE id = ?
+     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+               ref_keys_json, source_keys_json, created_at, updated_at,
+               lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
+  )
+    .bind(loraKey, id)
+    .first<CastRow>();
+  return result ? rowToCast(result) : null;
+}
+
 export async function markLoraFailed(
   env: Env,
   id: number,

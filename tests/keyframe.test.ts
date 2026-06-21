@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampTier, buildPreviewBody, parseKeyframes, encodePoll, decodePoll, runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS } from "../modules/keyframe/src/keyframe";
+import { clampTier, buildPreviewBody, parseKeyframes, parseTrainedLoras, encodePoll, decodePoll, runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS } from "../modules/keyframe/src/keyframe";
 
 describe("keyframe pure logic", () => {
   it("clampTier accepts the known tiers and defaults to final", () => {
@@ -82,6 +82,29 @@ describe("keyframe pure logic", () => {
     expect(parseKeyframes(messy)).toEqual([{ shot_id: "ok", keyframe_key: "k.png" }]);
     expect(parseKeyframes(undefined)).toEqual([]);
     expect(parseKeyframes({})).toEqual([]);
+  });
+
+  it("parseTrainedLoras reads backend result.lora ({slot:{lora_id}}) into slot -> R2 key", () => {
+    const result = {
+      keyframes: [{ shot_id: "shot_01", key: "k.png" }],
+      lora: { A: { lora_id: "loras/wren/A/pytorch_lora_weights.safetensors" }, B: { lora_id: "loras/x/B/w.safetensors" } },
+    };
+    expect(parseTrainedLoras(result)).toEqual({
+      A: "loras/wren/A/pytorch_lora_weights.safetensors",
+      B: "loras/x/B/w.safetensors",
+    });
+  });
+
+  it("parseTrainedLoras unwraps the RunPod {output:...} envelope", () => {
+    const wrapped = { output: { keyframes: [], lora: { A: { lora_id: "loras/a.safetensors" } } } };
+    expect(parseTrainedLoras(wrapped)).toEqual({ A: "loras/a.safetensors" });
+  });
+
+  it("parseTrainedLoras drops malformed entries and returns {} when absent", () => {
+    const messy = { keyframes: [], lora: { A: { lora_id: "ok.safetensors" }, B: { nope: 1 }, C: 7, D: null } };
+    expect(parseTrainedLoras(messy)).toEqual({ A: "ok.safetensors" });
+    expect(parseTrainedLoras({ keyframes: [] })).toEqual({});
+    expect(parseTrainedLoras(undefined)).toEqual({});
   });
 
   it("encodePoll / decodePoll round-trips the job state", () => {

@@ -102,7 +102,15 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
     const bad = (o.keyframes as unknown[]).find(
       (k) => !isRec(k) || !isStr(k.shot_id) || !isStr(k.keyframe_key),
     );
-    return bad ? "each keyframe needs shot_id + keyframe_key" : null;
+    if (bad) return "each keyframe needs shot_id + keyframe_key";
+    // Optional: trained_loras maps slot -> R2 key (string -> string).
+    if (o.trained_loras !== undefined) {
+      if (!isRec(o.trained_loras)) return "keyframe output trained_loras must be an object";
+      if (Object.values(o.trained_loras).some((v) => !isStr(v))) {
+        return "keyframe output trained_loras values must be R2 key strings";
+      }
+    }
+    return null;
   },
   "motion.backend": (o) => {
     if (!isStr(o.shot_id)) return "motion output needs a string shot_id";

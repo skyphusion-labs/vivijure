@@ -253,6 +253,11 @@ export interface KeyframeShot {
 export interface KeyframeOutput {
   project: string;
   keyframes: KeyframeShot[];
+  /** slot -> R2 key of the cast LoRA this render trained or reused. The core records a freshly
+   *  trained adapter back onto the cast member (lora_status=ready) so it is reused across every
+   *  project instead of retrained each render. Optional + additive: a module that does no LoRA
+   *  work omits it. */
+  trained_loras?: Record<string, string>;
 }
 
 // motion.backend (v1, forward-declared) ---------------------------------------------------------

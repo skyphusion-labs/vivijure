@@ -17,6 +17,8 @@ import {
 import { presignR2Get, presignR2Put } from "./r2-presign";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { coerceShotId } from "./storyboard-validate";
+import { getCastByIdOnly, markLoraReadyById } from "./cast-db";
+import { deriveLoraDestKey } from "./lora-bundle";
 
 export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
 
@@ -61,6 +63,10 @@ export interface FilmJob {
   dialogue_lines?: DialogueLine[];
   dialogue_poll?: string;
   dialogue_audio?: Record<string, string>; // shot_id -> dialogue audio R2 key
+  // slot -> cast_member id (from the render's castLoras). At keyframe completion the orchestrator
+  // banks any freshly-trained adapter back onto the cast member (markLoraReady) so a character's LoRA
+  // is trained ONCE and reused across every project -- instead of retrained every render. (#xxx)
+  cast_loras?: Record<string, number>;
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   silent_film_key?: string; // silent concat output before optional audio mux
   audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble
@@ -230,8 +236,45 @@ function completeKeyframesOnly(job: FilmJob, kfOut: KeyframeOutput): void {
   job.phase = "done";
 }
 
+/** Bank any freshly-trained cast LoRA so a character is trained ONCE and reused across every project,
+ *  instead of retrained on every render. THE long-standing bug: inline-trained adapters were saved to
+ *  R2 but never written back to cast_members, so resolveCastLoras never saw them `ready` and the
+ *  backend retrained the same LoRA every render (a silent ~20-min tax). For each slot the keyframe
+ *  module reports under trained_loras, map slot -> cast id via job.cast_loras, copy the render-scoped
+ *  adapter to a character-stable key (survives project deletion), and mark the cast member ready.
+ *  Reused slots (backend reports the already-banked key) and unmapped slots are no-ops; a versioned
+ *  stable key keyed on job.created_at makes a retry idempotent. Best-effort but LOUD on failure
+ *  (unlike the silent state-tar restore it replaces). Keyed on cast id (PK) only -- NOT the
+ *  half-stripped user_email. */
+async function recordTrainedLorasToCast(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
+  const trained = kfOut.trained_loras;
+  const castIds = job.cast_loras;
+  if (!trained || !castIds) return;
+  for (const [slot, srcKey] of Object.entries(trained)) {
+    const castId = castIds[slot];
+    if (!Number.isInteger(castId) || castId <= 0 || typeof srcKey !== "string" || !srcKey) continue;
+    const stableKey = deriveLoraDestKey(castId, job.created_at);
+    try {
+      const cast = await getCastByIdOnly(env, castId);
+      if (!cast) continue;
+      // Reused this render (srcKey == current key) or already banked this render (retry): no-op.
+      if (cast.lora_status === "ready" && (cast.lora_key === srcKey || cast.lora_key === stableKey)) continue;
+      const obj = await env.R2_RENDERS.get(srcKey);
+      if (!obj) { console.warn(`recordTrainedLoras: adapter missing in R2 (${srcKey}); cast ${castId} not banked`); continue; }
+      await env.R2_RENDERS.put(stableKey, obj.body);
+      await markLoraReadyById(env, castId, stableKey);
+      console.log(`recordTrainedLoras: cast ${castId} slot ${slot} banked ${srcKey} -> ${stableKey} (cross-project reuse)`);
+    } catch (e) {
+      console.warn(`recordTrainedLoras: cast ${castId} slot ${slot} failed: ${(e as Error).message}`);
+    }
+  }
+}
+
 /** Internal: after keyframes, either stop (preview) or hand off to the clip orchestrator. */
 async function afterKeyframeOutput(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
+  // Bank trained adapters before anything else, so a character LoRA is recorded even for a
+  // keyframes-only preview / regen (which is exactly where the perpetual retrain hurt most).
+  await recordTrainedLorasToCast(env, job, kfOut);
   if (job.keyframes_only) {
     completeKeyframesOnly(job, kfOut);
     return;
@@ -907,6 +950,7 @@ export async function startFilmJob(
     audio_key?: string;
     user_email?: string;
     dialogue_lines?: DialogueLine[];
+    cast_loras?: Record<string, number>;
     film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   },
 ): Promise<FilmJob> {
@@ -928,6 +972,7 @@ export async function startFilmJob(
     phase_started_at: Date.now(),
     user_email: args.user_email,
     dialogue_lines: args.dialogue_lines && args.dialogue_lines.length ? args.dialogue_lines : undefined,
+    cast_loras: args.cast_loras && Object.keys(args.cast_loras).length ? args.cast_loras : undefined,
   };
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
   if (!kf || !fetcher) {
