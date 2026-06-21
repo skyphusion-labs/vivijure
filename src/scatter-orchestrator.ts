@@ -43,6 +43,7 @@ import {
 } from "./renders-db";
 import { resolveCastLoras } from "./cast-loras";
 import { fireNotifyForScatter } from "./scatter-notify";
+import { isTransientD1Error } from "./d1-retry";
 
 export type { ScatterJob } from "./scatter-orchestrator-types";
 export { isScatterParentJobId as isScatterJobId };
@@ -361,6 +362,22 @@ async function advanceScatterGather(env: Env, job: ScatterJob): Promise<void> {
   }
 }
 
+/** A shard's per-tick advance outcome. `ok` carries the loaded film job (use its phase); otherwise
+ *  `doc_missing` = the film-job doc is gone from R2 (genuinely dead), `errored` = the advance threw
+ *  (a transient blip or any mid-advance error -- UNDETERMINED this tick, NOT dead). */
+export type ShardAdvanceOutcome =
+  | { ok: true; job: FilmJob }
+  | { ok: false; reason: "doc_missing" | "errored" };
+
+/** Map a shard's advance outcome to its gather status. The key distinction (watchdog defense-in-
+ *  depth): an `errored` shard is UNDETERMINED -> IN_PROGRESS (recoverable; the gather keeps waiting
+ *  and retries), NOT a SHARD_DEAD status -- so a transient-D1-blocked shard is never declared
+ *  "owning shard dead". Only a genuinely-failed phase or a vanished doc maps to FAILED. */
+export function shardStatusForOutcome(outcome: ShardAdvanceOutcome): string {
+  if (outcome.ok) return filmPhaseToShardStatus(outcome.job);
+  return outcome.reason === "doc_missing" ? "FAILED" : "IN_PROGRESS";
+}
+
 export async function advanceScatterJob(
   env: Env,
   scatterId: string,
@@ -377,19 +394,35 @@ export async function advanceScatterJob(
   for (let i = 0; i < job.shard_film_ids.length; i++) {
     const filmId = job.shard_film_ids[i];
     const shots = job.shard_shots[i] ?? [];
-    const r = await advanceFilmJob(env, filmId);
-    if (r) {
-      const view = filmJobToPollView(r.job, r.clipJob);
-      await updateRenderFromView(env, view, ctx);
-      shardStatuses.push({ status: filmPhaseToShardStatus(r.job), shots });
-      if (r.job.phase === "done") {
-        for (const [shotId] of (await clipKeysFromFilmJob(env, r.job)).entries()) {
-          present.add(shotId);
+    // Per-shard isolation (defense-in-depth, pairs with withD1Retry #229): a shard whose advance
+    // ERRORS this tick (a transient D1/R2 blip outliving the in-tick retries, or any mid-advance
+    // throw) is UNDETERMINED, not dead -- the catch keeps it IN_PROGRESS so the gather waits and
+    // retries next tick instead of declaring its shots "owning shard dead", and one shard's error
+    // no longer aborts the others' advance. Genuinely-dead still fails fast: a `failed` film phase
+    // or a vanished film-job doc (null) both map to FAILED. A permanently-stuck shard is still
+    // backstopped by the film job's own hard-deadline (it eventually reports phase=failed).
+    let status: string;
+    try {
+      const r = await advanceFilmJob(env, filmId);
+      if (r) {
+        await updateRenderFromView(env, filmJobToPollView(r.job, r.clipJob), ctx);
+        status = shardStatusForOutcome({ ok: true, job: r.job });
+        if (r.job.phase === "done") {
+          for (const [shotId] of (await clipKeysFromFilmJob(env, r.job)).entries()) {
+            present.add(shotId);
+          }
         }
+      } else {
+        status = shardStatusForOutcome({ ok: false, reason: "doc_missing" });
       }
-    } else {
-      shardStatuses.push({ status: "FAILED", shots });
+    } catch (e) {
+      const kind = isTransientD1Error(e) ? "transient D1" : "advance error";
+      console.warn(
+        `scatter ${scatterId} shard ${filmId} undetermined (${kind}); treating as in-progress, will retry: ${(e as Error).message}`,
+      );
+      status = shardStatusForOutcome({ ok: false, reason: "errored" });
     }
+    shardStatuses.push({ status, shots });
   }
 
   if (job.phase === "shards") {
