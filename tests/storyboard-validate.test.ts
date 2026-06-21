@@ -115,3 +115,63 @@ describe("path/key injection hardening (security #6)", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe("shot dialogue (talking characters)", () => {
+  // A speaking shot: the slot is loaded (use_characters), in the shot (character_slots), and speaks.
+  const speaking = (dialogue: unknown) =>
+    sb({
+      use_characters: ["A", "B"],
+      scenes: [{ prompt: "two of them talk", character_slots: ["A", "B"], dialogue }],
+    });
+
+  it("accepts a well-formed line from a slot present in the shot", () => {
+    const r = validateStoryboard(speaking({ slot: "A", text: "We should not be here." }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.scenes[0].dialogue).toEqual({ slot: "A", text: "We should not be here." });
+  });
+
+  it("trims the line", () => {
+    const r = validateStoryboard(speaking({ slot: "B", text: "   hello   " }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.scenes[0].dialogue?.text).toBe("hello");
+  });
+
+  it("rejects a speaker not in the shot's character_slots", () => {
+    // C is not in this shot (nor loaded); the speaker has to be in the shot.
+    const r = validateStoryboard(speaking({ slot: "C", text: "off-camera line" }));
+    expect(r.ok).toBe(false);
+    expect(errs(r)).toMatch(/dialogue\.slot/);
+  });
+
+  it("rejects an invalid slot id", () => {
+    const r = validateStoryboard(speaking({ slot: "Z", text: "x" }));
+    expect(r.ok).toBe(false);
+    expect(errs(r)).toMatch(/dialogue\.slot/);
+  });
+
+  it("rejects empty text", () => {
+    const r = validateStoryboard(speaking({ slot: "A", text: "   " }));
+    expect(r.ok).toBe(false);
+    expect(errs(r)).toMatch(/dialogue\.text/);
+  });
+
+  it("rejects a line over the char cap", () => {
+    const r = validateStoryboard(speaking({ slot: "A", text: "x".repeat(301) }));
+    expect(r.ok).toBe(false);
+    expect(errs(r)).toMatch(/dialogue\.text/);
+  });
+
+  it("rejects a non-object dialogue", () => {
+    const r = validateStoryboard(speaking("just a string"));
+    expect(r.ok).toBe(false);
+    expect(errs(r)).toMatch(/dialogue must be an object/);
+  });
+
+  it("a shot with no dialogue stays valid (silent shot)", () => {
+    const r = validateStoryboard(
+      sb({ use_characters: ["A"], scenes: [{ prompt: "silent", character_slots: ["A"] }] }),
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.scenes[0].dialogue).toBeUndefined();
+  });
+});

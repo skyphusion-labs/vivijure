@@ -133,6 +133,26 @@
     }
   }
 
+  // Fill the dialogue-voice picker from the catalog (GET /api/voices). One source of truth on the
+  // server (src/voices.ts); the "no voice (silent)" option is authored in the HTML and kept.
+  async function loadVoices() {
+    const sel = $("#cast-voice");
+    if (!sel) return;
+    try {
+      const data = await api("/api/voices");
+      const voices = Array.isArray(data.voices) ? data.voices : [];
+      for (const v of voices) {
+        const opt = document.createElement("option");
+        opt.value = v.id;
+        opt.textContent = v.label;
+        sel.appendChild(opt);
+      }
+    } catch (e) {
+      // Non-fatal: the picker just stays at "no voice (silent)" if the catalog cannot load.
+      console.warn("could not load voices:", e.message);
+    }
+  }
+
   function renderCastList() {
     const ul = $("#cast-list");
     ul.innerHTML = "";
@@ -188,6 +208,7 @@
   function populateEditor(c) {
     $("#cast-name").value = c.name;
     $("#cast-bible").value = c.bible || "";
+    $("#cast-voice").value = c.voice_id || "";
     $("#cast-slug").textContent = "/" + c.slug;
     restoreTrainingStyle(c.id); // v0.135.13: per-character training art-style
 
@@ -298,6 +319,7 @@
     if (!id) return;
     const name = $("#cast-name").value.trim();
     const bible = $("#cast-bible").value;
+    const voice_id = $("#cast-voice").value; // "" clears the voice
     if (!name) {
       window.alert("name cannot be empty");
       return;
@@ -306,7 +328,7 @@
       const data = await api("/api/cast/" + id, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, bible }),
+        body: JSON.stringify({ name, bible, voice_id }),
       });
       const idx = state.cast.findIndex((c) => c.id === id);
       if (idx >= 0) state.cast[idx] = data.cast;
@@ -1073,6 +1095,7 @@
 
     $("#cast-name").addEventListener("input", () => markDirty(true));
     $("#cast-bible").addEventListener("input", () => markDirty(true));
+    $("#cast-voice").addEventListener("change", () => markDirty(true));
     $("#cast-training-style").addEventListener("input", persistTrainingStyle); // v0.135.13
 
     $("#cast-portrait-file").addEventListener("change", (e) => {
@@ -1292,6 +1315,7 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     wire();
+    loadVoices();
     loadCastList();
   });
 })();

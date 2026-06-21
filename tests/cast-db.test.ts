@@ -15,6 +15,7 @@ const baseRow = (refsJson: string | null) => ({
   ref_keys_json: refsJson, source_keys_json: null,
   created_at: "t", updated_at: "t",
   lora_key: null, lora_status: null, lora_job_id: null, lora_error: null, lora_trained_at: null,
+  voice_id: null,
 });
 
 function fakeCastEnv(opts: { raw: string | null; missing?: boolean; injectConcurrentWrites?: (string | null)[] }) {

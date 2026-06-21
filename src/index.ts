@@ -23,6 +23,7 @@ import {
   clearPortrait,
 } from "./cast-db";
 import { handleCastLoraStatus, handleCastTrainLora } from "./cast-lora-train";
+import { isValidVoiceId, VOICE_IDS, VOICE_CATALOG } from "./voices";
 import { handleAdoptRender } from "./render-adopt";
 import {
   handleCastPortraitUpload,
@@ -153,6 +154,9 @@ const hSaveProjectStoryboard: Handler = async (req, env, _c, p) => {
 // --- cast ----------------------------------------------------------------
 // Wrapped by resource name ({cast}) -- the frontend reads data.cast (array for list, object for item).
 const hListCast: Handler = async (req, env) => json({ cast: await listCastForUser(env, getUserEmail(req)) });
+// The dialogue voice catalog (aura-1 speakers). Static; the cast voice picker renders from it so the
+// list of voices has one source of truth (src/voices.ts), not a hardcoded copy in the frontend.
+const hListVoices: Handler = async () => json({ voices: VOICE_CATALOG });
 const hCreateCast: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; bible?: string | null }>(req);
   if (!b.name) throw badRequest("name required");
@@ -164,8 +168,19 @@ const hGetCast: Handler = async (req, env, _c, p) => {
   return json({ cast: row });
 };
 const hPatchCast: Handler = async (req, env, _c, p) => {
-  const b = await readBody<{ name?: string; bible?: string | null }>(req);
-  const row = await updateCast(env, idParam(p.id), getUserEmail(req), b);
+  const b = await readBody<{ name?: string; bible?: string | null; voice_id?: string | null }>(req);
+  const patch: { name?: string; bible?: string | null; voice_id?: string | null } = {
+    name: b.name,
+    bible: b.bible,
+  };
+  // voice_id is a known Aura-1 speaker; null/"" clears it. Reject anything else so a typo can never
+  // persist a voice the dialogue TTS can't pronounce.
+  if (b.voice_id !== undefined) {
+    if (b.voice_id === null || b.voice_id === "") patch.voice_id = null;
+    else if (isValidVoiceId(b.voice_id)) patch.voice_id = b.voice_id;
+    else throw badRequest(`voice_id must be one of: ${VOICE_IDS.join(", ")}`);
+  }
+  const row = await updateCast(env, idParam(p.id), getUserEmail(req), patch);
   if (!row) throw notFound("cast member");
   return json({ cast: row });
 };
@@ -878,6 +893,7 @@ const API_ROUTES: Route[] = [
   { method: "PATCH",  pattern: "/api/storyboard/projects/:id",                    handler: hPatchProject },
   { method: "POST",   pattern: "/api/storyboard/projects/:id/storyboard",         handler: hSaveProjectStoryboard },
   { method: "DELETE", pattern: "/api/storyboard/projects/:id",                    handler: hDeleteProject },
+  { method: "GET",    pattern: "/api/voices",                          handler: hListVoices },
   { method: "GET",    pattern: "/api/cast",                            handler: hListCast },
   { method: "POST",   pattern: "/api/cast",                            handler: hCreateCast },
   { method: "GET",    pattern: "/api/cast/:id",                        handler: hGetCast },

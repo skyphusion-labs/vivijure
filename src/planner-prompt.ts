@@ -7,6 +7,7 @@
 
 import type { SlotId } from "./storyboard-validate";
 import {
+  DIALOGUE_MAX_CHARS,
   FULL_PROMPT_MAX_CHARS,
   SCENE_PROMPT_MAX_WORDS,
   STORYBOARD_MAX_SCENES,
@@ -53,7 +54,8 @@ SCHEMA:
       "act": string,
       "start": number,
       "end": number,
-      "target_seconds": number
+      "target_seconds": number,
+      "dialogue": { "slot": "A" | "B" | "C" | "D", "text": string }
     },
     ...
   ]
@@ -88,6 +90,13 @@ FIELDS:
 - scenes[].start, end, target_seconds: optional per-shot timing in
   seconds. start may be 0; end must be strictly greater than start;
   target_seconds must be positive.
+- scenes[].dialogue: OPTIONAL spoken line for the shot (auto-direction).
+  Include it ONLY when a character actually speaks on camera in that shot.
+  "slot" is the speaking character and MUST be one of that scene's
+  character_slots. "text" is the line itself: natural spoken words only,
+  no quotation marks, no "Name:" speaker prefix, no stage directions. Keep
+  it short enough to be said within the shot's length (roughly 2-3 spoken
+  words per second). Omit the field entirely for a silent shot.
 
 HARD RULES:
 1. style_prefix is the ONLY place style language belongs. Repeating style
@@ -102,6 +111,9 @@ HARD RULES:
    "sec", "min"); seconds is implicit.
 6. Plan 3 to 12 scenes for a vignette / single-track music video unless
    the brief specifies otherwise.
+6a. A scene's dialogue.slot MUST be one of that scene's character_slots
+    (the speaker has to be in the shot). Only one character speaks per
+    shot. Most shots have no dialogue; reserve it for genuine spoken beats.
 
 LENGTH CAPS (the renderer rejects outputs over these caps because they
 overflow SDXL's CLIP 77-token text encoder or break manifest builds):
@@ -118,6 +130,9 @@ overflow SDXL's CLIP 77-token text encoder or break manifest builds):
 10. scenes array length: at most ${STORYBOARD_MAX_SCENES} entries. A 50-
     shot render is already 25+ minutes of GPU time at typical clip
     seconds; if the brief implies more, shorten clip_seconds or split.
+11. scenes[].dialogue.text: at most ${DIALOGUE_MAX_CHARS} characters. One
+    spoken line per shot; a clip is only a few seconds, so a sentence or
+    two is the ceiling, not a speech.
 
 GOLDEN EXAMPLE (mirrors the renderer's storyboard.example.yaml). This
 shape is the canonical output; produce JSON that matches its style:
@@ -240,7 +255,8 @@ JSON object matching the same schema the planner uses:
       "act": string,
       "start": number,
       "end": number,
-      "target_seconds": number
+      "target_seconds": number,
+      "dialogue": { "slot": "A" | "B" | "C" | "D", "text": string }
     },
     ...
   ]
@@ -256,6 +272,10 @@ REFINEMENT RULES:
   of the remaining scenes.
 - character_slots on each scene must be a subset of use_characters. If
   the user adds a new character or removes one, also update use_characters.
+- dialogue: KEEP each scene's existing dialogue bit-for-bit unless the user
+  asks to change it. When you do edit or add a line, dialogue.slot must be
+  one of that scene's character_slots, "text" is plain spoken words (no
+  quotes, no speaker prefix), and at most ${DIALOGUE_MAX_CHARS} characters.
 - style_prefix carries ALL style language. Do not add style words to
   individual scene prompts; the renderer prepends style_prefix to every
   scene at manifest-build time, so style words inside a scene double-apply.

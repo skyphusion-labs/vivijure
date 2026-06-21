@@ -117,6 +117,12 @@ service = "vivijure-module-keyframe"
 binding = "MODULE_FINISH_RIFE"
 service = "vivijure-module-finish-rife"
 
+# Upscale: a finish-chain module (Real-ESRGAN 2x/4x spatial upscale) on the dedicated vivijure-upscale
+# RunPod endpoint (CUDA, separate from vivijure-backend). Folds after finish-rife in ui.order.
+[[services]]
+binding = "MODULE_UPSCALE"
+service = "vivijure-module-finish-upscale"
+
 # Text overlay: a finish-chain module (titles / credits / lower-thirds / subtitles) that burns text
 # via the video-finish container's /overlay route. Folds after finish-rife in ui.order.
 [[services]]
@@ -154,6 +160,18 @@ service = "vivijure-module-narration-gen"
 [[services]]
 binding = "MODULE_BEAT_SYNC"
 service = "vivijure-module-beat-sync"
+
+# Dialogue: per-shot spoken lines -> Deepgram Aura-1 (Workers AI) in the cast member's voice. The
+# `dialogue` phase runs after clips, before finish; its audio_key feeds the lip-sync finish module.
+[[services]]
+binding = "MODULE_DIALOGUE"
+service = "vivijure-module-dialogue-gen"
+
+# Lip-sync (finish chain): MuseTalk on the dedicated cu128 RunPod endpoint; rewrites a shot's mouth
+# to the dialogue audio_key. Runs before the upscaler (ui.order 15 < 20).
+[[services]]
+binding = "MODULE_LIPSYNC"
+service = "vivijure-module-finish-lipsync"
 
 # Cloud i2v motion.backend modules (RunPod-hosted), joining own-gpu / seedance / kling. Each is its
 # own per-module worker with a scoped RUNPOD_API_KEY; the registry discovers them as MODULE_* bindings.

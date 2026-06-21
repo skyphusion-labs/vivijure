@@ -2572,6 +2572,45 @@ function buildSceneRow(scene, idx, useChars) {
     const slotsRow = document.createElement("div");
     slotsRow.className = "planner-scene-slots";
     const sceneSlots = new Set(Array.isArray(scene.character_slots) ? scene.character_slots : []);
+
+    // dialogue: an optional spoken line for the shot. The speaker must be one of the shot's
+    // character_slots, so the speaker dropdown is driven by the checkboxes below and refreshed when
+    // they change. Blank text = a silent shot (scene.dialogue removed). The voice each speaker uses
+    // is set per cast member on the /cast page; here we author the line + who says it.
+    const dlgSpeaker = document.createElement("select");
+    dlgSpeaker.className = "planner-scene-dialogue-slot";
+    const dlgText = document.createElement("input");
+    dlgText.type = "text";
+    dlgText.className = "planner-scene-dialogue-text";
+    dlgText.maxLength = 300;
+    dlgText.value = (scene.dialogue && scene.dialogue.text) || "";
+
+    const syncDialogue = () => {
+      const text = dlgText.value.trim();
+      const slot = dlgSpeaker.value;
+      if (!text || !slot) delete scene.dialogue;
+      else scene.dialogue = { slot: slot, text: text };
+      onSceneChanged();
+    };
+    const refreshSpeakerOptions = () => {
+      const slots = Array.from(sceneSlots);
+      const want = dlgSpeaker.value || (scene.dialogue && scene.dialogue.slot) || slots[0] || "";
+      dlgSpeaker.innerHTML = "";
+      for (const s of slots) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        dlgSpeaker.appendChild(opt);
+      }
+      if (slots.indexOf(want) >= 0) dlgSpeaker.value = want;
+      const none = slots.length === 0;
+      dlgSpeaker.disabled = none;
+      dlgText.disabled = none;
+      dlgText.placeholder = none
+        ? "add a character to this shot to give it a line"
+        : "what they say (blank = silent shot)";
+    };
+
     for (const slot of useChars) {
       const lbl = document.createElement("label");
       lbl.className = "planner-scene-slot-check";
@@ -2584,6 +2623,9 @@ function buildSceneRow(scene, idx, useChars) {
         const list = Array.from(sceneSlots);
         if (list.length === 0) delete scene.character_slots;
         else scene.character_slots = list;
+        // Keep the dialogue speaker in sync: a removed slot can no longer speak.
+        refreshSpeakerOptions();
+        syncDialogue();
         onSceneChanged();
       });
       lbl.appendChild(cb);
@@ -2592,6 +2634,21 @@ function buildSceneRow(scene, idx, useChars) {
     }
     slotsField.appendChild(slotsRow);
     li.appendChild(slotsField);
+
+    const dlgField = document.createElement("div");
+    dlgField.className = "planner-field";
+    const dlgLabel = document.createElement("span");
+    dlgLabel.textContent = "dialogue (spoken line, optional)";
+    dlgField.appendChild(dlgLabel);
+    const dlgRow = document.createElement("div");
+    dlgRow.className = "planner-scene-dialogue";
+    dlgSpeaker.addEventListener("change", syncDialogue);
+    dlgText.addEventListener("input", syncDialogue);
+    refreshSpeakerOptions();
+    dlgRow.appendChild(dlgSpeaker);
+    dlgRow.appendChild(dlgText);
+    dlgField.appendChild(dlgRow);
+    li.appendChild(dlgField);
   }
 
   return li;
@@ -3753,6 +3810,11 @@ async function submitScatterRender() {
     );
     return;
   }
+
+  // Talking characters: the scatter render reads per-shot dialogue from the SAVED storyboard in D1
+  // (last_storyboard), so flush any unsaved edits (incl. dialogue lines) before submitting. No-ops
+  // without an active project -- and dialogue needs a saved project for its projectId anyway.
+  if (planState.activeProjectId) await saveStoryboardToProject();
 
   const shardInput = $("#planner-scatter-shards");
   let shardCount = shardInput ? parseInt(shardInput.value, 10) : 2;

@@ -9,7 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
-import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput } from "./modules/types";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
@@ -50,10 +50,17 @@ export interface FilmJob {
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>; // per finish module (keyed by module name), validated at enterFinishPhase
   keyframe_binding: string | null;
-  phase: "keyframe" | "clips" | "finish" | "assemble" | "mux" | "done" | "failed";
+  phase: "keyframe" | "clips" | "dialogue" | "finish" | "assemble" | "mux" | "done" | "failed";
   keyframe_poll?: string;
   clip_job_id?: string;
   finish_shots?: FinishShot[];
+  // Talking characters: per-shot dialogue lines (resolved at submission: authored text + cast voice),
+  // synthesized to per-shot audio by the `dialogue` module in a phase between clips and finish. The
+  // resulting audio_key per shot is injected into that shot's FinishInput for lip-sync. Absent/empty
+  // => a silent film (no dialogue phase). dialogue_poll holds the in-flight batch job's poll token.
+  dialogue_lines?: DialogueLine[];
+  dialogue_poll?: string;
+  dialogue_audio?: Record<string, string>; // shot_id -> dialogue audio R2 key
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   silent_film_key?: string; // silent concat output before optional audio mux
   audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble
@@ -328,6 +335,57 @@ async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob): Promi
   job.finish_shots = doneClips.map((s) => ({
     shot_id: s.shot_id, clip_key: s.clip_key as string, chain, configs, idx: 0, status: "pending" as const, applied: [],
   }));
+  // finish_shots are built; interpose the dialogue phase (synthesize per-shot speech) before finish so
+  // a lip-sync finish module has the audio to drive the mouth. No dialogue -> straight to finish.
+  await enterDialogueOrFinish(env, job);
+}
+
+/** Fold a dialogue module's batch result into the per-shot audio map the finish stage reads. */
+function applyDialogueOutput(job: FilmJob, out: DialogueOutput): void {
+  const map: Record<string, string> = {};
+  for (const a of out?.audio || []) {
+    if (a && typeof a.shot_id === "string" && typeof a.audio_key === "string") map[a.shot_id] = a.audio_key;
+  }
+  job.dialogue_audio = map;
+}
+
+/** After finish_shots are built: if the film has dialogue lines AND a `dialogue` module is installed,
+ *  submit the per-shot speech batch and enter the dialogue phase; otherwise go straight to finish. A
+ *  submit failure (or no module) soft-degrades to a SILENT finish -- a dialogue glitch must never fail
+ *  a fully-rendered film (lip-sync no-ops without an audio_key). */
+async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
+  const lines = job.dialogue_lines;
+  if (!lines || !lines.length) { job.phase = "finish"; return; }
+  const envRec = env as unknown as Record<string, unknown>;
+  const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
+  const fetcher = dialogueModule ? asFetcher(envRec[dialogueModule.binding]) : null;
+  if (!fetcher) { job.phase = "finish"; return; }  // no dialogue module bound: silent film
+  const req = {
+    hook: "dialogue" as const,
+    input: { project: job.project, lines } as DialogueInput,
+    config: {},
+    context: { project: job.project, job_id: job.film_id },
+  };
+  const r = await invokeModule<DialogueInput, DialogueOutput>(fetcher, req);
+  if (!r.ok) { console.warn(`film ${job.film_id}: dialogue submit failed (${r.error}); silent finish`); job.phase = "finish"; return; }
+  if ((r as { pending?: boolean }).pending) { job.dialogue_poll = (r as { poll: string }).poll; job.phase = "dialogue"; return; }
+  if ("output" in r) { applyDialogueOutput(job, r.output as DialogueOutput); }
+  job.phase = "finish";
+}
+
+/** Poll the in-flight dialogue batch. On done, record the per-shot audio map and advance to finish; a
+ *  failure soft-degrades to a silent finish (the rendered clips are fine, just unvoiced). */
+async function advanceDialoguePhase(env: Env, job: FilmJob): Promise<void> {
+  if (!job.dialogue_poll) { job.phase = "finish"; return; }
+  const envRec = env as unknown as Record<string, unknown>;
+  const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
+  const fetcher = dialogueModule ? asFetcher(envRec[dialogueModule.binding]) : null;
+  if (!fetcher) { job.dialogue_poll = undefined; job.phase = "finish"; return; }
+  const p = await pollModule<DialogueOutput>(fetcher, { poll: job.dialogue_poll });
+  if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; job.phase = "finish"; return; }
+  if ((p as { pending?: boolean }).pending) return;  // still synthesizing
+  applyDialogueOutput(job, (p as { output: DialogueOutput }).output);
+  job.dialogue_poll = undefined;
   job.phase = "finish";
 }
 
@@ -341,7 +399,7 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
     if (!fetcher) { fs.status = "failed"; fs.error = `finish module ${fs.chain[fs.idx]} not bound`; continue; }
     const req = {
       hook: "finish" as const,
-      input: { shot_id: fs.shot_id, clip_key: fs.clip_key } as FinishInput,
+      input: { shot_id: fs.shot_id, clip_key: fs.clip_key, audio_key: job.dialogue_audio?.[fs.shot_id] } as FinishInput,
       config: fs.configs?.[fs.idx] ?? {}, // validated per-module config (issue #75); {} only for legacy jobs
       context: { project: job.project, job_id: job.film_id },
     };
@@ -842,6 +900,7 @@ export async function startFilmJob(
     pretrained_loras?: Record<string, string>;
     audio_key?: string;
     user_email?: string;
+    dialogue_lines?: DialogueLine[];
     film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   },
 ): Promise<FilmJob> {
@@ -862,6 +921,7 @@ export async function startFilmJob(
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
     phase_started_at: Date.now(),
     user_email: args.user_email,
+    dialogue_lines: args.dialogue_lines && args.dialogue_lines.length ? args.dialogue_lines : undefined,
   };
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
   if (!kf || !fetcher) {
@@ -1121,6 +1181,13 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
   } else if (job.clip_job_id) {
     const cj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id)); // load for the summary
     if (cj) clipJob = JSON.parse(await cj.text()) as ClipJob;
+  }
+
+  // Phase 2.5: synthesize per-shot dialogue audio (one batch via the dialogue module), then -> finish.
+  // Soft-degrades to a silent finish on any failure (see advanceDialoguePhase).
+  if (job.phase === "dialogue") {
+    await advanceDialoguePhase(env, job);
+    await putFilm(env, job);
   }
 
   // Phase 3: drive the finish chain per clip (async, across requests), then -> assemble.
