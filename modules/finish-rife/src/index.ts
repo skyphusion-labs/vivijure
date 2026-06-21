@@ -22,7 +22,7 @@ import {
 } from "./contract";
 import {
   coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
-  runpodJobGone, classifyGoneState,
+  runpodJobGone, classifyGoneState, runpodInnerComplete,
 } from "./finish";
 
 interface Env {
@@ -134,7 +134,10 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<FinishOut
     return { ok: true, pending: true };
   }
   if (s.status === "FAILED") return { ok: false, error: "finish-rife job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
-  if (s.status !== "COMPLETED") return { ok: true, pending: true };
+  // R2-artifact-authoritative over the RunPod envelope: COMPLETED, OR the backend signalled completion
+  // in its streamed output while the envelope is frozen IN_PROGRESS (the envelope-freeze that hangs the
+  // finish chain at this module). Anything else: still running.
+  if (s.status !== "COMPLETED" && !runpodInnerComplete(s.output)) return { ok: true, pending: true };
 
   const out = parseBackendOutput(s.output);
   if (!out?.clip_key) return { ok: false, error: "finish-rife: backend returned no clip_key" };

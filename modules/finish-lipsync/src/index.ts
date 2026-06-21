@@ -26,7 +26,7 @@ import {
 } from "./contract";
 import {
   coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
-  runpodJobGone, classifyGoneState,
+  runpodJobGone, classifyGoneState, runpodInnerComplete,
 } from "./lipsync";
 
 interface Env {
@@ -132,7 +132,9 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<FinishOut
     return { ok: true, pending: true };
   }
   if (s.status === "FAILED") return { ok: false, error: "finish-lipsync job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
-  if (s.status !== "COMPLETED") return { ok: true, pending: true };
+  // COMPLETED, OR the handler signalled completion in its output while RunPod's envelope is frozen
+  // IN_PROGRESS (the envelope-freeze that stalls the finish chain). Otherwise still syncing.
+  if (s.status !== "COMPLETED" && !runpodInnerComplete(s.output)) return { ok: true, pending: true };
 
   // The endpoint's R2-mode result: { ok, clip_key, applied, ... }. If the handler soft-degraded
   // (e.g. no detectable face), ok is false and clip_key is absent -> pass the original clip through.

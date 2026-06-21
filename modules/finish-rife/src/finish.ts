@@ -128,6 +128,21 @@ export function classifyGoneState(
   return now - submittedAt >= graceMs ? "gone-failed" : "gone-grace";
 }
 
+/** RunPod ENVELOPE-FREEZE (#154 follow-up): a finish_clip job can finish on the worker -- it writes the
+ *  output_key and emits a `complete` event -- while RunPod's OUTER /status envelope stays stuck at
+ *  IN_PROGRESS and never flips to COMPLETED. The control plane's finish poll already treats R2 presence
+ *  as authoritative, but the module-host refactor moved finish into this per-module worker whose /poll
+ *  checks the envelope status directly, re-introducing the freeze (a finish chain hangs at idx 0 forever,
+ *  blocking every later module incl. lip-sync). So we read the backend's OWN completion signal -- emitted
+ *  in the streamed output -- and trust it over the frozen envelope. Pure. */
+export function runpodInnerComplete(output: unknown): boolean {
+  if (!output || typeof output !== "object") return false;
+  const o = output as Record<string, unknown>;
+  if (o.status === "complete") return true;
+  const le = o.last_event as Record<string, unknown> | undefined;
+  return !!le && typeof le === "object" && le.event === "complete";
+}
+
 /** What the vivijure-backend finish_clip action returns on completion. */
 export interface BackendOutput {
   shot_id?: string;
@@ -140,9 +155,18 @@ export interface BackendOutput {
 export function parseBackendOutput(output: unknown): BackendOutput | null {
   if (!output || typeof output !== "object") return null;
   const o = output as Record<string, unknown>;
+  // clip_key comes from the clean final return value ({clip_key,...}) OR, under an envelope-freeze,
+  // from the streamed completion event (last_event.output_key) -- the only place the key surfaces
+  // before RunPod flips the envelope to COMPLETED. out_fps/frames/shot_id are absent in the streamed
+  // shape; the caller backfills them from the poll token.
+  let clip_key = typeof o.clip_key === "string" ? o.clip_key : undefined;
+  if (!clip_key) {
+    const le = o.last_event as Record<string, unknown> | undefined;
+    if (le && typeof le.output_key === "string") clip_key = le.output_key;
+  }
   return {
     shot_id: typeof o.shot_id === "string" ? o.shot_id : undefined,
-    clip_key: typeof o.clip_key === "string" ? o.clip_key : undefined,
+    clip_key,
     out_fps: typeof o.out_fps === "number" ? o.out_fps : undefined,
     frames: typeof o.frames === "number" ? o.frames : undefined,
     applied: Array.isArray(o.applied) ? (o.applied as string[]) : [],

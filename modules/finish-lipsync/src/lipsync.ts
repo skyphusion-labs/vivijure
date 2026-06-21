@@ -123,6 +123,21 @@ export function classifyGoneState(
   return now - submittedAt >= graceMs ? "gone-failed" : "gone-grace";
 }
 
+/** RunPod ENVELOPE-FREEZE: a job can finish on the worker (the handler returns its terminal result, or
+ *  emits a `complete` event) while RunPod's OUTER /status envelope stays stuck at IN_PROGRESS and never
+ *  flips to COMPLETED. A /poll that waits on the envelope status hangs forever (the freeze that stalls
+ *  the finish chain, observed on the shared backend; finish-rife carries the same guard). So we trust
+ *  the backend's OWN completion signal over the frozen envelope. The musetalk handler returns a terminal
+ *  result with a boolean `ok` (true with a clip_key, or false for a soft-degrade); `ok` being present
+ *  means it finished. Also accept the streamed completion signals in case the endpoint streams. Pure. */
+export function runpodInnerComplete(output: unknown): boolean {
+  if (!output || typeof output !== "object") return false;
+  const o = output as Record<string, unknown>;
+  if (typeof o.ok === "boolean" || o.status === "complete") return true;
+  const le = o.last_event as Record<string, unknown> | undefined;
+  return !!le && typeof le === "object" && le.event === "complete";
+}
+
 /** What the vivijure-musetalk endpoint returns on completion (R2 mode): { ok, clip_key, bytes,
  *  version, applied:["lipsync:v15"] }. It echoes the new key as `clip_key`. */
 export interface BackendOutput {
@@ -133,8 +148,15 @@ export interface BackendOutput {
 export function parseBackendOutput(output: unknown): BackendOutput | null {
   if (!output || typeof output !== "object") return null;
   const o = output as Record<string, unknown>;
+  // clip_key from the clean return ({clip_key,...}) OR, under an envelope-freeze on a streaming
+  // endpoint, from the completion event (last_event.output_key).
+  let clip_key = typeof o.clip_key === "string" ? o.clip_key : undefined;
+  if (!clip_key) {
+    const le = o.last_event as Record<string, unknown> | undefined;
+    if (le && typeof le.output_key === "string") clip_key = le.output_key;
+  }
   return {
-    clip_key: typeof o.clip_key === "string" ? o.clip_key : undefined,
+    clip_key,
     applied: Array.isArray(o.applied) ? (o.applied as string[]) : [],
   };
 }

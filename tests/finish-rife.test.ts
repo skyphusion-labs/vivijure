@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
-  runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS,
+  runpodJobGone, classifyGoneState, runpodInnerComplete, RUNPOD_NOTFOUND_GRACE_MS,
 } from "../modules/finish-rife/src/finish";
 import { checkManifest, checkInvokeResponse, allPass, failures } from "../src/modules/conformance";
 import type { FinishInput } from "../modules/finish-rife/src/contract";
@@ -222,5 +222,30 @@ describe("finish-rife RunPod gone-detection + grace (#141)", () => {
     expect(classifyGoneState(now - (RUNPOD_NOTFOUND_GRACE_MS - 1), now)).toBe("gone-grace");
     expect(classifyGoneState(now - (RUNPOD_NOTFOUND_GRACE_MS + 1), now)).toBe("gone-failed");
     expect(classifyGoneState(undefined, now)).toBe("gone-failed");
+  });
+});
+
+// RunPod envelope-freeze: the job finishes on the worker (writes output_key, emits `complete`) but
+// RunPod's outer /status envelope stays IN_PROGRESS. Before the fix, the chain hung here forever; now
+// the streamed inner-completion signal is authoritative. Shape mirrors a real frozen finish_clip job.
+describe("envelope-freeze (inner complete under a frozen IN_PROGRESS envelope)", () => {
+  const frozenOutput = {
+    status: "complete",
+    last_event: { event: "complete", output_key: "renders/p/clips/shot_01_finished.mp4", ts: 1 },
+    project: "p",
+  };
+  it("runpodInnerComplete trusts the backend's own completion signal", () => {
+    expect(runpodInnerComplete(frozenOutput)).toBe(true);
+    expect(runpodInnerComplete({ last_event: { event: "complete" } })).toBe(true);
+    expect(runpodInnerComplete({ last_event: { event: "progress" } })).toBe(false);
+    expect(runpodInnerComplete({})).toBe(false);
+    expect(runpodInnerComplete(null)).toBe(false);
+  });
+  it("parseBackendOutput recovers clip_key from last_event.output_key when no clean clip_key", () => {
+    expect(parseBackendOutput(frozenOutput)?.clip_key).toBe("renders/p/clips/shot_01_finished.mp4");
+  });
+  it("still prefers a clean final clip_key when present", () => {
+    expect(parseBackendOutput({ clip_key: "renders/p/clips/shot_01.mp4", out_fps: 16 })?.clip_key)
+      .toBe("renders/p/clips/shot_01.mp4");
   });
 });
