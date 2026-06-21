@@ -15,6 +15,8 @@ import librosa
 import numpy as np
 from aiohttp import ClientSession, ClientTimeout, web
 
+from url_guard import validate_fetch_url
+
 PORT = int(os.environ.get("PORT", "8000"))
 DOWNLOAD_TIMEOUT_S = 30
 MAX_AUDIO_BYTES = 64 * 1024 * 1024  # 64 MB upper bound
@@ -47,6 +49,9 @@ async def analyze(req):
 
     if not audio_url or clip_s <= 0 or mode not in ("beat", "duration"):
         return web.json_response({"ok": False, "error": "bad input"}, status=400)
+    ok, why = validate_fetch_url(audio_url)
+    if not ok:
+        return web.json_response({"ok": False, "error": f"audioUrl blocked: {why}"}, status=400)
 
     fd, path = tempfile.mkstemp(suffix=".bin")
     os.close(fd)

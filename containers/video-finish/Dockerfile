@@ -29,7 +29,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY app.py .
+COPY url_guard.py app.py .
 
 # Build-time libx264 sanity-encode. ffmpeg has no JIT/model cache to bake (unlike
 # the numba/pymatting fix the audio + image-prep containers needed), so the only

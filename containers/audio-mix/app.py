@@ -24,6 +24,7 @@ import tempfile
 from aiohttp import ClientSession, ClientTimeout, web
 
 from mix_core import DEFAULT_TARGET_LUFS, ROLES, mix_tracks
+from url_guard import validate_fetch_url
 
 PORT = int(os.environ.get("PORT", "8000"))
 DOWNLOAD_TIMEOUT_S = 120
@@ -41,6 +42,9 @@ async def health(_req):
 
 
 async def _download(session, url, path, cap):
+    ok, why = validate_fetch_url(url)
+    if not ok:
+        return False, f"blocked: {why}"
     async with session.get(url) as r:
         if r.status != 200:
             return False, f"fetch {r.status}"
@@ -71,6 +75,9 @@ async def mix(req):
         return web.json_response({"ok": False, "error": f"too many tracks (>{MAX_TRACKS})"}, status=400)
     if not output_url:
         return web.json_response({"ok": False, "error": "outputUrl required"}, status=400)
+    ok, why = validate_fetch_url(output_url)
+    if not ok:
+        return web.json_response({"ok": False, "error": f"outputUrl blocked: {why}"}, status=400)
     if fmt not in ("mp3", "wav"):
         return web.json_response({"ok": False, "error": "format must be mp3 or wav"}, status=400)
 
@@ -104,7 +111,7 @@ async def mix(req):
                 p = os.path.join(work, f"track_{i:02d}.bin")
                 ok, info = await _download(s, t["url"], p, MAX_TRACK_BYTES)
                 if not ok:
-                    status = 413 if info == "too large" else 502
+                    status = 413 if info == "too large" else (400 if info.startswith("blocked:") else 502)
                     return web.json_response({"ok": False, "error": f"tracks[{i}] {info}"}, status=status)
                 t["path"] = p
 

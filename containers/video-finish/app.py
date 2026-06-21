@@ -23,6 +23,8 @@ import tempfile
 
 from aiohttp import ClientSession, ClientTimeout, web
 
+from url_guard import validate_fetch_url
+
 PORT = int(os.environ.get("PORT", "8000"))
 DOWNLOAD_TIMEOUT_S = 120
 UPLOAD_TIMEOUT_S = 120
@@ -40,6 +42,9 @@ async def health(_req):
 
 
 async def _download(session, url, path, cap):
+    ok, why = validate_fetch_url(url)
+    if not ok:
+        return False, f"blocked: {why}"
     async with session.get(url) as r:
         if r.status != 200:
             return False, f"fetch {r.status}"
@@ -80,6 +85,9 @@ async def finish(req):
         return web.json_response({"ok": False, "error": f"too many clips (>{MAX_CLIPS})"}, status=400)
     if not output_url:
         return web.json_response({"ok": False, "error": "outputUrl required"}, status=400)
+    ok, why = validate_fetch_url(output_url)
+    if not ok:
+        return web.json_response({"ok": False, "error": f"outputUrl blocked: {why}"}, status=400)
     if remux_audio_only and len(clips) != 1:
         return web.json_response(
             {"ok": False, "error": "remuxAudioOnly requires exactly one clip"}, status=400)
@@ -106,7 +114,7 @@ async def finish(req):
                 p = os.path.join(work, f"clip_{i:03d}.mp4")
                 ok, info = await _download(s, url, p, MAX_CLIP_BYTES)
                 if not ok:
-                    status = 413 if info == "too large" else 502
+                    status = 413 if info == "too large" else (400 if info.startswith("blocked:") else 502)
                     return web.json_response({"ok": False, "error": f"clips[{i}] {info}"}, status=status)
                 target = c.get("targetSeconds")
                 try:
@@ -673,6 +681,9 @@ async def film_titles(req):
         return web.json_response({"ok": False, "error": "videoUrl required"}, status=400)
     if not output_url:
         return web.json_response({"ok": False, "error": "outputUrl required"}, status=400)
+    ok, why = validate_fetch_url(output_url)
+    if not ok:
+        return web.json_response({"ok": False, "error": f"outputUrl blocked: {why}"}, status=400)
     if not title_spec and not credits_spec:
         return web.json_response(
             {"ok": False, "error": "at least one of title or credits is required"}, status=400)
@@ -692,7 +703,7 @@ async def film_titles(req):
             film_path = os.path.join(work, "film.mp4")
             ok, info = await _download(s, video_url, film_path, MAX_CLIP_BYTES)
             if not ok:
-                sc = 413 if info == "too large" else 502
+                sc = 413 if info == "too large" else (400 if info.startswith("blocked:") else 502)
                 return web.json_response({"ok": False, "error": f"film {info}"}, status=sc)
 
         loop = asyncio.get_running_loop()

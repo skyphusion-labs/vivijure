@@ -21,7 +21,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY app.py .
+COPY url_guard.py app.py .
 
 # Eager-load librosa + JIT the beat tracker at build time so the first /analyze
 # does not pay librosa's ~26s numba compile. The compiled kernels (cache=True)

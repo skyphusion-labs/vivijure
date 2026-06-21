@@ -15,6 +15,8 @@ from io import BytesIO
 from aiohttp import ClientSession, ClientTimeout, web
 from PIL import Image
 
+from url_guard import validate_fetch_url
+
 # rembg is intentionally NOT imported at module load. `import rembg` pulls in
 # pymatting, which JIT-compiles numba kernels on import (~46s on a cold cache,
 # ~1.5s on the baked cache). Doing that before web.run_app binds :8000 trips the
@@ -70,6 +72,10 @@ async def prep(req):
     background = body.get("background", "alpha")
     if not input_url or not output_url or background not in ("alpha", "black"):
         return web.json_response({"ok": False, "error": "bad input"}, status=400)
+    for label, u in (("inputUrl", input_url), ("outputUrl", output_url)):
+        ok, why = validate_fetch_url(u)
+        if not ok:
+            return web.json_response({"ok": False, "error": f"{label} blocked: {why}"}, status=400)
 
     # Fetch the source portrait.
     async with ClientSession(timeout=ClientTimeout(total=DOWNLOAD_TIMEOUT_S)) as s:
