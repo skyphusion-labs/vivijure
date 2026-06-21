@@ -1,12 +1,14 @@
-// D1 helpers for the persisted cast (v0.46.0). One row per character per
-// user_email; survives across storyboards / renders so a character drawn
-// once is reusable in every project.
+// D1 helpers for the persisted cast (v0.46.0). One row per character;
+// survives across storyboards / renders so a character drawn once is
+// reusable in every project.
 //
-// All read paths filter on user_email; writes accept a user_email argument
-// and embed it in the WHERE / VALUES so the route handler does not need to
-// re-check ownership separately.
+// The studio is single-user, so rows are scoped on the cast id (the
+// primary key) alone. The user_email column is retained (legacy
+// provenance, written as the STUDIO_OWNER sentinel on insert) but is no
+// longer a filter: nothing reads it as an access gate.
 
 import type { Env } from "./env";
+import { STUDIO_OWNER } from "./shared";
 
 export interface CastRefImage {
   key: string;
@@ -121,16 +123,16 @@ export function slugifyCharacter(name: string): string {
   return s || "character";
 }
 
-// Allocate a slug unused by this user's other cast members. Bounded
-// at 200 to surface pathological state instead of looping forever.
-export async function allocateCastSlug(env: Env, userEmail: string, base: string): Promise<string> {
+// Allocate a slug unused by any other cast member. Bounded at 200 to surface
+// pathological state instead of looping forever.
+export async function allocateCastSlug(env: Env, base: string): Promise<string> {
   let candidate = base;
   let suffix = 2;
   while (suffix < 200) {
     const existing = await env.DB.prepare(
-      `SELECT id FROM cast_members WHERE user_email = ? AND slug = ? LIMIT 1`
+      `SELECT id FROM cast_members WHERE slug = ? LIMIT 1`
     )
-      .bind(userEmail, candidate)
+      .bind(candidate)
       .first();
     if (!existing) return candidate;
     candidate = `${base}-${suffix}`;
@@ -139,51 +141,46 @@ export async function allocateCastSlug(env: Env, userEmail: string, base: string
   throw new Error(`Could not allocate cast slug after 200 attempts (base='${base}')`);
 }
 
-// Bound the per-user cast list so it can never scan unboundedly (issue #12). Generous -- well past
-// any realistic cast size -- so the newest-first list is effectively complete for real users while
-// the query stays capped.
+// Bound the cast list so it can never scan unboundedly (issue #12). Generous -- well past any
+// realistic cast size -- so the newest-first list is effectively complete while the query stays capped.
 const CAST_LIST_LIMIT = 500;
 
-export async function listCastForUser(env: Env, userEmail: string): Promise<CastMember[]> {
+export async function listCast(env: Env): Promise<CastMember[]> {
   const result = await env.DB.prepare(
     `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
             ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
        FROM cast_members
-      WHERE user_email = ?
       ORDER BY created_at DESC
       LIMIT ?`
   )
-    .bind(userEmail, CAST_LIST_LIMIT)
+    .bind(CAST_LIST_LIMIT)
     .all<CastRow>();
   return (result.results || []).map(rowToCast);
 }
 
-export async function getCastById(
-  env: Env,
-  id: number,
-  userEmail: string,
-): Promise<CastMember | null> {
+export async function getCastById(env: Env, id: number): Promise<CastMember | null> {
   const row = await env.DB.prepare(
     `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
             ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
        FROM cast_members
-      WHERE id = ? AND user_email = ?
+      WHERE id = ?
       LIMIT 1`
   )
-    .bind(id, userEmail)
+    .bind(id)
     .first<CastRow>();
   return row ? rowToCast(row) : null;
 }
 
 export async function createCast(
   env: Env,
-  userEmail: string,
   input: { name: string; bible?: string | null },
 ): Promise<CastMember> {
   const baseSlug = slugifyCharacter(input.name);
-  const slug = await allocateCastSlug(env, userEmail, baseSlug);
+  const slug = await allocateCastSlug(env, baseSlug);
+  // user_email is legacy provenance; the column is NOT NULL, so the insert stamps the
+  // STUDIO_OWNER sentinel. The (user_email, slug) unique index keeps slugs studio-unique.
   const result = await env.DB.prepare(
     `INSERT INTO cast_members (user_email, slug, name, bible)
      VALUES (?, ?, ?, ?)
@@ -191,7 +188,7 @@ export async function createCast(
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
-    .bind(userEmail, slug, input.name, input.bible ?? null)
+    .bind(STUDIO_OWNER, slug, input.name, input.bible ?? null)
     .first<CastRow>();
   if (!result) throw new Error("createCast: INSERT...RETURNING produced no row");
   return rowToCast(result);
@@ -200,7 +197,6 @@ export async function createCast(
 export async function updateCast(
   env: Env,
   id: number,
-  userEmail: string,
   patch: { name?: string; bible?: string | null; voice_id?: string | null },
 ): Promise<CastMember | null> {
   const fields: string[] = [];
@@ -218,13 +214,13 @@ export async function updateCast(
     values.push(patch.voice_id);
   }
   if (fields.length === 0) {
-    return getCastById(env, id, userEmail);
+    return getCastById(env, id);
   }
   fields.push("updated_at = datetime('now')");
-  values.push(id, userEmail);
+  values.push(id);
   const result = await env.DB.prepare(
     `UPDATE cast_members SET ${fields.join(", ")}
-      WHERE id = ? AND user_email = ?
+      WHERE id = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
@@ -234,19 +230,15 @@ export async function updateCast(
   return result ? rowToCast(result) : null;
 }
 
-export async function deleteCast(
-  env: Env,
-  id: number,
-  userEmail: string,
-): Promise<CastMember | null> {
+export async function deleteCast(env: Env, id: number): Promise<CastMember | null> {
   // Caller is responsible for R2 cleanup of portrait_key + ref keys
   // BEFORE calling this; we return the row so the route handler can do it.
-  const row = await getCastById(env, id, userEmail);
+  const row = await getCastById(env, id);
   if (!row) return null;
   await env.DB.prepare(
-    `DELETE FROM cast_members WHERE id = ? AND user_email = ?`
+    `DELETE FROM cast_members WHERE id = ?`
   )
-    .bind(id, userEmail)
+    .bind(id)
     .run();
   return row;
 }
@@ -254,37 +246,32 @@ export async function deleteCast(
 export async function setPortrait(
   env: Env,
   id: number,
-  userEmail: string,
   key: string,
   mime: string,
 ): Promise<CastMember | null> {
   const result = await env.DB.prepare(
     `UPDATE cast_members
         SET portrait_key = ?, portrait_mime = ?, updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
+      WHERE id = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
-    .bind(key, mime, id, userEmail)
+    .bind(key, mime, id)
     .first<CastRow>();
   return result ? rowToCast(result) : null;
 }
 
-export async function clearPortrait(
-  env: Env,
-  id: number,
-  userEmail: string,
-): Promise<CastMember | null> {
+export async function clearPortrait(env: Env, id: number): Promise<CastMember | null> {
   const result = await env.DB.prepare(
     `UPDATE cast_members
         SET portrait_key = NULL, portrait_mime = NULL, updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
+      WHERE id = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
-    .bind(id, userEmail)
+    .bind(id)
     .first<CastRow>();
   return result ? rowToCast(result) : null;
 }
@@ -311,22 +298,21 @@ async function casUpdateImageList(
   env: Env,
   column: "ref_keys_json" | "source_keys_json",
   id: number,
-  userEmail: string,
   mutate: ImageListMutator,
   maxAttempts = 6,
 ): Promise<{ row: CastMember | null; changed: boolean; notFound: boolean }> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const cur = await env.DB.prepare(
-      `SELECT ${column} AS raw FROM cast_members WHERE id = ? AND user_email = ?`
+      `SELECT ${column} AS raw FROM cast_members WHERE id = ?`
     )
-      .bind(id, userEmail)
+      .bind(id)
       .first<{ raw: string | null }>();
     if (!cur) return { row: null, changed: false, notFound: true };
 
     const { next, changed } = mutate(parseImageKeyList(cur.raw));
     if (!changed) {
       // Nothing to write (e.g. removing a key that is not present). Return the current row.
-      const row = await getCastById(env, id, userEmail);
+      const row = await getCastById(env, id);
       return { row, changed: false, notFound: row === null };
     }
 
@@ -335,10 +321,10 @@ async function casUpdateImageList(
     const updated = await env.DB.prepare(
       `UPDATE cast_members
           SET ${column} = ?, updated_at = datetime('now')
-        WHERE id = ? AND user_email = ? AND ${column} IS ?
+        WHERE id = ? AND ${column} IS ?
        RETURNING ${CAST_ROW_COLUMNS}`
     )
-      .bind(JSON.stringify(next), id, userEmail, cur.raw)
+      .bind(JSON.stringify(next), id, cur.raw)
       .first<CastRow>();
     if (updated) return { row: rowToCast(updated), changed: true, notFound: false };
     // CAS miss: the column changed under us between read and write -> re-read and retry.
@@ -346,16 +332,15 @@ async function casUpdateImageList(
   console.warn(
     `cast ${column} update for id ${id} gave up after ${maxAttempts} CAS attempts under contention`
   );
-  return { row: await getCastById(env, id, userEmail), changed: false, notFound: false };
+  return { row: await getCastById(env, id), changed: false, notFound: false };
 }
 
 export async function addRef(
   env: Env,
   id: number,
-  userEmail: string,
   ref: CastRefImage,
 ): Promise<CastMember | null> {
-  const { row } = await casUpdateImageList(env, "ref_keys_json", id, userEmail, (cur) => ({
+  const { row } = await casUpdateImageList(env, "ref_keys_json", id, (cur) => ({
     next: [...cur, ref],
     changed: true,
   }));
@@ -368,11 +353,10 @@ export async function addRef(
 export async function addRefs(
   env: Env,
   id: number,
-  userEmail: string,
   refs: CastRefImage[],
 ): Promise<CastMember | null> {
-  if (refs.length === 0) return getCastById(env, id, userEmail);
-  const { row } = await casUpdateImageList(env, "ref_keys_json", id, userEmail, (cur) => ({
+  if (refs.length === 0) return getCastById(env, id);
+  const { row } = await casUpdateImageList(env, "ref_keys_json", id, (cur) => ({
     next: [...cur, ...refs],
     changed: true,
   }));
@@ -382,11 +366,10 @@ export async function addRefs(
 export async function removeRef(
   env: Env,
   id: number,
-  userEmail: string,
   refKey: string,
 ): Promise<{ row: CastMember | null; removedKey: string | null }> {
   const { row, changed, notFound } = await casUpdateImageList(
-    env, "ref_keys_json", id, userEmail,
+    env, "ref_keys_json", id,
     (cur) => {
       const next = cur.filter((r) => r.key !== refKey);
       return { next, changed: next.length !== cur.length };
@@ -403,10 +386,9 @@ export async function removeRef(
 export async function addSource(
   env: Env,
   id: number,
-  userEmail: string,
   src: CastRefImage,
 ): Promise<CastMember | null> {
-  const { row } = await casUpdateImageList(env, "source_keys_json", id, userEmail, (cur) => ({
+  const { row } = await casUpdateImageList(env, "source_keys_json", id, (cur) => ({
     next: [...cur, src],
     changed: true,
   }));
@@ -416,11 +398,10 @@ export async function addSource(
 export async function removeSource(
   env: Env,
   id: number,
-  userEmail: string,
   srcKey: string,
 ): Promise<{ row: CastMember | null; removedKey: string | null }> {
   const { row, changed, notFound } = await casUpdateImageList(
-    env, "source_keys_json", id, userEmail,
+    env, "source_keys_json", id,
     (cur) => {
       const next = cur.filter((s) => s.key !== srcKey);
       return { next, changed: next.length !== cur.length };
@@ -439,7 +420,6 @@ export async function removeSource(
 export async function setLoraJob(
   env: Env,
   id: number,
-  userEmail: string,
   jobId: string,
 ): Promise<CastMember | null> {
   const result = await env.DB.prepare(
@@ -448,12 +428,12 @@ export async function setLoraJob(
             lora_job_id = ?,
             lora_error = NULL,
             updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
+      WHERE id = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
                lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
-    .bind(jobId, id, userEmail)
+    .bind(jobId, id)
     .first<CastRow>();
   return result ? rowToCast(result) : null;
 }
@@ -461,46 +441,8 @@ export async function setLoraJob(
 export async function markLoraReady(
   env: Env,
   id: number,
-  userEmail: string,
   loraKey: string,
 ): Promise<CastMember | null> {
-  const result = await env.DB.prepare(
-    `UPDATE cast_members
-        SET lora_status = 'ready',
-            lora_key = ?,
-            lora_trained_at = datetime('now'),
-            lora_job_id = NULL,
-            lora_error = NULL,
-            updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
-               ref_keys_json, source_keys_json, created_at, updated_at,
-               lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
-  )
-    .bind(loraKey, id, userEmail)
-    .first<CastRow>();
-  return result ? rowToCast(result) : null;
-}
-
-/** Single-user, id-only variants of getCastById / markLoraReady. The cast id is the primary key, so
- *  it identifies the row on its own; these do NOT scope by the (half-stripped, always-"studio")
- *  user_email. Used by the film orchestrator to bank an inline-trained adapter back onto the cast
- *  member at keyframe completion without depending on a user_email that may not match. */
-export async function getCastByIdOnly(env: Env, id: number): Promise<CastMember | null> {
-  const row = await env.DB.prepare(
-    `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
-            ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
-       FROM cast_members
-      WHERE id = ?
-      LIMIT 1`
-  )
-    .bind(id)
-    .first<CastRow>();
-  return row ? rowToCast(row) : null;
-}
-
-export async function markLoraReadyById(env: Env, id: number, loraKey: string): Promise<CastMember | null> {
   const result = await env.DB.prepare(
     `UPDATE cast_members
         SET lora_status = 'ready',
@@ -522,7 +464,6 @@ export async function markLoraReadyById(env: Env, id: number, loraKey: string): 
 export async function markLoraFailed(
   env: Env,
   id: number,
-  userEmail: string,
   errorMessage: string,
 ): Promise<CastMember | null> {
   const result = await env.DB.prepare(
@@ -531,12 +472,12 @@ export async function markLoraFailed(
             lora_error = ?,
             lora_job_id = NULL,
             updated_at = datetime('now')
-      WHERE id = ? AND user_email = ?
+      WHERE id = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
                lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
-    .bind(errorMessage.slice(0, 4000), id, userEmail)
+    .bind(errorMessage.slice(0, 4000), id)
     .first<CastRow>();
   return result ? rowToCast(result) : null;
 }

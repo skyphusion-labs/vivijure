@@ -25,7 +25,6 @@ export interface ResolvedCastLoras {
  *  entry, used to bank a freshly-trained adapter back onto the cast member). */
 export async function resolveCastLoras(
   env: Env,
-  userEmail: string,
   castLoras: Record<string, unknown> | undefined,
 ): Promise<ResolvedCastLoras> {
   const pretrained: Record<string, string> = {};
@@ -42,9 +41,9 @@ export async function resolveCastLoras(
       continue;
     }
     castIds[slot] = id;
-    let cast = await getCastById(env, id, userEmail);
+    let cast = await getCastById(env, id);
     if (cast?.lora_status === "training") {
-      cast = await refreshTrainingLora(env, cast, userEmail);
+      cast = await refreshTrainingLora(env, cast);
     }
     // Voice rides the row we already fetched, independent of LoRA readiness.
     if (cast) voices[slot] = coerceVoiceId(cast.voice_id) ?? DEFAULT_VOICE_ID;

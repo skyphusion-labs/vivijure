@@ -19,7 +19,7 @@ import {
   listProjectsForUser, getProjectById, createProject, updateProjectMeta, setLastStoryboard, deleteProject,
 } from "./storyboard-projects-db";
 import {
-  listCastForUser, getCastById, createCast, updateCast, deleteCast,
+  listCast, getCastById, createCast, updateCast, deleteCast,
   clearPortrait,
 } from "./cast-db";
 import { handleCastLoraStatus, handleCastTrainLora } from "./cast-lora-train";
@@ -153,17 +153,17 @@ const hSaveProjectStoryboard: Handler = async (req, env, _c, p) => {
 
 // --- cast ----------------------------------------------------------------
 // Wrapped by resource name ({cast}) -- the frontend reads data.cast (array for list, object for item).
-const hListCast: Handler = async (req, env) => json({ cast: await listCastForUser(env, getUserEmail(req)) });
+const hListCast: Handler = async (_req, env) => json({ cast: await listCast(env) });
 // The dialogue voice catalog (aura-1 speakers). Static; the cast voice picker renders from it so the
 // list of voices has one source of truth (src/voices.ts), not a hardcoded copy in the frontend.
 const hListVoices: Handler = async () => json({ voices: VOICE_CATALOG });
 const hCreateCast: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; bible?: string | null }>(req);
   if (!b.name) throw badRequest("name required");
-  return json({ cast: await createCast(env, getUserEmail(req), { name: b.name, bible: b.bible }) }, 201);
+  return json({ cast: await createCast(env, { name: b.name, bible: b.bible }) }, 201);
 };
 const hGetCast: Handler = async (req, env, _c, p) => {
-  const row = await getCastById(env, idParam(p.id), getUserEmail(req));
+  const row = await getCastById(env, idParam(p.id));
   if (!row) throw notFound("cast member");
   return json({ cast: row });
 };
@@ -180,27 +180,26 @@ const hPatchCast: Handler = async (req, env, _c, p) => {
     else if (isValidVoiceId(b.voice_id)) patch.voice_id = b.voice_id;
     else throw badRequest(`voice_id must be one of: ${VOICE_IDS.join(", ")}`);
   }
-  const row = await updateCast(env, idParam(p.id), getUserEmail(req), patch);
+  const row = await updateCast(env, idParam(p.id), patch);
   if (!row) throw notFound("cast member");
   return json({ cast: row });
 };
 const hDeleteCast: Handler = async (req, env, _c, p) => {
-  const row = await deleteCast(env, idParam(p.id), getUserEmail(req));
+  const row = await deleteCast(env, idParam(p.id));
   if (!row) throw notFound("cast member");
   return json({ ok: true, deleted: row.id });
 };
 // portrait / ref / source: binary upload, staged {key,mime}, or {from_chat_artifact} copy.
 const hSetPortrait: Handler = async (req, env, _c, p) =>
   handleCastPortraitUpload(req, env, idParam(p.id), getUserEmail(req));
-const hClearPortrait: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
+const hClearPortrait: Handler = async (_req, env, _c, p) => {
   const id = idParam(p.id);
-  const cur = await getCastById(env, id, email);
+  const cur = await getCastById(env, id);
   if (!cur) throw notFound("cast member");
   if (cur.portrait_key) {
     try { await env.R2_RENDERS.delete(cur.portrait_key); } catch { /* ignore */ }
   }
-  const row = await clearPortrait(env, id, email);
+  const row = await clearPortrait(env, id);
   return json({ cast: row });
 };
 const hAddRef: Handler = async (req, env, _c, p) =>
@@ -209,7 +208,7 @@ const hRemoveRef: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string }>(req).catch(() => ({} as { key?: string }));
   const key = b.key || p.refKey;
   if (!key) throw badRequest("key required");
-  return handleCastRefRemove(env, idParam(p.id), getUserEmail(req), key);
+  return handleCastRefRemove(env, idParam(p.id), key);
 };
 const hAddSource: Handler = async (req, env, _c, p) =>
   handleCastSourceAdd(req, env, idParam(p.id), getUserEmail(req));
@@ -217,25 +216,25 @@ const hRemoveSource: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string }>(req).catch(() => ({} as { key?: string }));
   const key = b.key || p.sourceKey;
   if (!key) throw badRequest("key required");
-  return handleCastSourceRemove(env, idParam(p.id), getUserEmail(req), key);
+  return handleCastSourceRemove(env, idParam(p.id), key);
 };
 
 // cast.image: generate a cast member's LoRA training reference set via the installed cast.image
 // module (FLUX 2 / Nano Banana), then register the generated images onto the member. Async run/poll
 // across requests (a 10-image set can't finish in one request) -- POST starts it, GET advances it.
 const hGenerateCastRefs: Handler = async (req, env, _c, p) => {
-  const id = idParam(p.id), email = getUserEmail(req);
+  const id = idParam(p.id);
   const b = await readBody<{ config?: Record<string, unknown>; art_style?: string; source_keys?: string[]; choice?: string }>(req);
   const job = await startCastRefsJob(env, {
-    castId: id, userEmail: email, config: b.config, artStyle: b.art_style, sourceKeys: b.source_keys, choice: b.choice,
+    castId: id, config: b.config, artStyle: b.art_style, sourceKeys: b.source_keys, choice: b.choice,
   });
   if (!job) throw notFound("cast member");
   return json({ ok: true, ...summarizeCastRefs(job) }, 201);
 };
-const hPollCastRefs: Handler = async (req, env, _c, p) => {
-  const id = idParam(p.id), email = getUserEmail(req);
+const hPollCastRefs: Handler = async (_req, env, _c, p) => {
+  const id = idParam(p.id);
   const job = await advanceCastRefsJob(env, id, p.jobId);
-  if (!job || job.user_email !== email) throw notFound("cast refs job"); // ownership: the doc carries the owner
+  if (!job) throw notFound("cast refs job");
   return json({ ok: true, ...summarizeCastRefs(job) });
 };
 
@@ -651,9 +650,9 @@ const hScatterRender: Handler = async (req, env) => {
   }
 };
 const hTrainCastLora: Handler = async (req, env, _c, p) =>
-  handleCastTrainLora(req, env, idParam(p.id), getUserEmail(req));
-const hCastLoraStatus: Handler = async (req, env, _c, p) =>
-  handleCastLoraStatus(env, idParam(p.id), getUserEmail(req));
+  handleCastTrainLora(req, env, idParam(p.id));
+const hCastLoraStatus: Handler = async (_req, env, _c, p) =>
+  handleCastLoraStatus(env, idParam(p.id));
 const hAdoptRender: Handler = async (req, env) =>
   handleAdoptRender(req, env, getUserEmail(req));
 

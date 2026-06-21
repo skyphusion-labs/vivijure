@@ -7,7 +7,7 @@ import { scatterShards } from "../src/scatter";
 describe("resolveCastLoras", () => {
   it("returns empty when castLoras is missing", async () => {
     const env = {} as import("../src/env").Env;
-    const r = await resolveCastLoras(env, "u@x.com", undefined);
+    const r = await resolveCastLoras(env, undefined);
     expect(r.pretrained).toEqual({});
     expect(r.skipped).toEqual([]);
   });

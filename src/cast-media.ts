@@ -69,7 +69,7 @@ export async function handleCastPortraitUpload(
   userEmail: string,
 ): Promise<Response> {
   return wrap(async () => {
-    const cur = await getCastById(env, id, userEmail);
+    const cur = await getCastById(env, id);
     if (!cur) throw new HttpError(404, "cast not found");
 
     const contentType = (request.headers.get("content-type") || "").toLowerCase();
@@ -92,12 +92,12 @@ export async function handleCastPortraitUpload(
           body.from_chat_artifact,
           `cast/${id}/portrait`,
         );
-        const row = await setPortrait(env, id, userEmail, key, mime);
+        const row = await setPortrait(env, id, key, mime);
         return json({ cast: row });
       }
 
       if (!body.key || !body.mime) throw new HttpError(400, "key and mime required");
-      const row = await setPortrait(env, id, userEmail, body.key, body.mime);
+      const row = await setPortrait(env, id, body.key, body.mime);
       if (!row) throw new HttpError(404, "cast not found");
       return json({ cast: row });
     }
@@ -119,7 +119,7 @@ export async function handleCastPortraitUpload(
       httpMetadata: { contentType },
       customMetadata: { user_email: userEmail },
     });
-    const row = await setPortrait(env, id, userEmail, key, contentType);
+    const row = await setPortrait(env, id, key, contentType);
     return json({ cast: row });
   });
 }
@@ -131,7 +131,7 @@ export async function handleCastRefAdd(
   userEmail: string,
 ): Promise<Response> {
   return wrap(async () => {
-    const cur = await getCastById(env, id, userEmail);
+    const cur = await getCastById(env, id);
     if (!cur) throw new HttpError(404, "cast not found");
 
     const contentType = (request.headers.get("content-type") || "").toLowerCase();
@@ -151,12 +151,12 @@ export async function handleCastRefAdd(
           body.from_chat_artifact,
           `cast/${id}/refs/${crypto.randomUUID()}`,
         );
-        const row = await addRef(env, id, userEmail, { key, mime });
+        const row = await addRef(env, id, { key, mime });
         return json({ cast: row });
       }
 
       if (!body.key || !body.mime) throw new HttpError(400, "key and mime required");
-      const row = await addRef(env, id, userEmail, { key: body.key, mime: body.mime });
+      const row = await addRef(env, id, { key: body.key, mime: body.mime });
       if (!row) throw new HttpError(404, "cast not found");
       return json({ cast: row });
     }
@@ -172,7 +172,7 @@ export async function handleCastRefAdd(
       httpMetadata: { contentType },
       customMetadata: { user_email: userEmail },
     });
-    const row = await addRef(env, id, userEmail, { key, mime: contentType });
+    const row = await addRef(env, id, { key, mime: contentType });
     return json({ cast: row });
   });
 }
@@ -180,10 +180,9 @@ export async function handleCastRefAdd(
 export async function handleCastRefRemove(
   env: Env,
   id: number,
-  userEmail: string,
   refKey: string,
 ): Promise<Response> {
-  const result = await removeRef(env, id, userEmail, refKey);
+  const result = await removeRef(env, id, refKey);
   if (!result.row) return json({ error: "cast not found" }, 404);
   if (!result.removedKey) return json({ error: "ref key not in this cast member's set" }, 404);
   try { await env.R2_RENDERS.delete(result.removedKey); } catch { /* ignore */ }
@@ -197,7 +196,7 @@ export async function handleCastSourceAdd(
   userEmail: string,
 ): Promise<Response> {
   return wrap(async () => {
-    const cur = await getCastById(env, id, userEmail);
+    const cur = await getCastById(env, id);
     if (!cur) throw new HttpError(404, "cast not found");
 
     const contentType = (request.headers.get("content-type") || "").toLowerCase();
@@ -217,12 +216,12 @@ export async function handleCastSourceAdd(
           body.from_chat_artifact,
           `cast/${id}/sources/${crypto.randomUUID()}`,
         );
-        const row = await addSource(env, id, userEmail, { key, mime });
+        const row = await addSource(env, id, { key, mime });
         return json({ cast: row });
       }
 
       if (!body.key || !body.mime) throw new HttpError(400, "key and mime required");
-      const row = await addSource(env, id, userEmail, { key: body.key, mime: body.mime });
+      const row = await addSource(env, id, { key: body.key, mime: body.mime });
       if (!row) throw new HttpError(404, "cast not found");
       return json({ cast: row });
     }
@@ -238,7 +237,7 @@ export async function handleCastSourceAdd(
       httpMetadata: { contentType },
       customMetadata: { user_email: userEmail },
     });
-    const row = await addSource(env, id, userEmail, { key, mime: contentType });
+    const row = await addSource(env, id, { key, mime: contentType });
     return json({ cast: row });
   });
 }
@@ -246,10 +245,9 @@ export async function handleCastSourceAdd(
 export async function handleCastSourceRemove(
   env: Env,
   id: number,
-  userEmail: string,
   srcKey: string,
 ): Promise<Response> {
-  const result = await removeSource(env, id, userEmail, srcKey);
+  const result = await removeSource(env, id, srcKey);
   if (!result.row) return json({ error: "cast not found" }, 404);
   if (!result.removedKey) return json({ error: "source key not in this cast member's set" }, 404);
   try { await env.R2_RENDERS.delete(result.removedKey); } catch { /* ignore */ }

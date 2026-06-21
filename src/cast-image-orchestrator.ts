@@ -21,7 +21,6 @@ import { getCastById, addRefs, type CastRefImage } from "./cast-db";
 export interface CastRefsJob {
   job_id: string;
   cast_id: number;
-  user_email: string;
   module_name: string | null;
   binding: string | null;
   phase: "generating" | "done" | "failed";
@@ -96,7 +95,7 @@ async function finalize(env: Env, job: CastRefsJob, output: CastImageOutput): Pr
   job.images = imgs;
   job.applied = output.applied || [];
   if (imgs.length) {
-    const row = await addRefs(env, job.cast_id, job.user_email, imgs);
+    const row = await addRefs(env, job.cast_id, imgs);
     job.registered = row ? imgs.length : 0;
   }
   job.phase = "done";
@@ -109,20 +108,18 @@ export async function startCastRefsJob(
   env: Env,
   args: {
     castId: number;
-    userEmail: string;
     config?: Record<string, unknown>;
     artStyle?: string;
     sourceKeys?: string[];
     choice?: string;
   },
 ): Promise<CastRefsJob | null> {
-  const cast = await getCastById(env, args.castId, args.userEmail);
+  const cast = await getCastById(env, args.castId);
   if (!cast) return null;
 
   const job: CastRefsJob = {
     job_id: "refs-" + crypto.randomUUID(),
     cast_id: args.castId,
-    user_email: args.userEmail,
     module_name: null,
     binding: null,
     phase: "generating",
@@ -175,7 +172,7 @@ export async function startCastRefsJob(
     hook: "cast.image",
     input,
     config,
-    context: { project: `cast-${args.castId}`, job_id: job.job_id, user_email: args.userEmail },
+    context: { project: `cast-${args.castId}`, job_id: job.job_id },
   });
   if (!r.ok) {
     job.phase = "failed";
