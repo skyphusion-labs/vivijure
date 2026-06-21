@@ -70,4 +70,7 @@ export interface KeyframeShot {
 export interface KeyframeOutput {
   project: string;
   keyframes: KeyframeShot[];
+  /** slot -> R2 key of the cast LoRA this render trained or reused; the core records a freshly
+   *  trained adapter back onto the cast member so it is reused across projects. Optional. */
+  trained_loras?: Record<string, string>;
 }

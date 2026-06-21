@@ -67,6 +67,24 @@ export function parseKeyframes(result: unknown): KeyframeShot[] {
   return out;
 }
 
+/** Extract the trained/reused LoRA R2 keys from the backend result. The handler returns
+ *  RenderResult.to_dict() = { ..., lora: { <slot>: { lora_id: <r2 key> } } } for every slot it
+ *  trained or reused; RunPod nests it under `output`. Returns slot -> R2 key (drops malformed). */
+export function parseTrainedLoras(result: unknown): Record<string, string> {
+  const root = (result && typeof result === "object" && "keyframes" in (result as object))
+    ? (result as Record<string, unknown>)
+    : ((result as { output?: unknown })?.output as Record<string, unknown> | undefined);
+  const lora = root && root.lora && typeof root.lora === "object"
+    ? (root.lora as Record<string, unknown>)
+    : {};
+  const out: Record<string, string> = {};
+  for (const [slot, v] of Object.entries(lora)) {
+    const id = v && typeof v === "object" ? (v as Record<string, unknown>).lora_id : undefined;
+    if (typeof id === "string" && id) out[slot] = id;
+  }
+  return out;
+}
+
 // --- async poll token --------------------------------------------------------------------------
 
 // submittedAt (epoch ms) lets the stateless /poll measure a grace window before treating a RunPod

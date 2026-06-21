@@ -13,11 +13,16 @@ export interface ResolvedCastLoras {
   // readiness (a character can speak while its face LoRA is still training). DEFAULT_VOICE_ID when the
   // cast member has no voice assigned. The dialogue stage reads this; no second cast lookup.
   voices: Record<string, string>;
+  // slot -> cast_member id for every well-formed entry (regardless of LoRA readiness). The film
+  // orchestrator uses this at keyframe completion to write a freshly-trained adapter back onto the
+  // right cast member (markLoraReady) so it is reused across projects instead of retrained.
+  castIds: Record<string, number>;
   skipped: string[];
 }
 
-/** Map slot -> cast_id from the request body into slot -> loras/ R2 key (drops non-ready rows) and
- *  slot -> voice_id (kept for every resolvable cast row). */
+/** Map slot -> cast_id from the request body into slot -> loras/ R2 key (drops non-ready rows),
+ *  slot -> voice_id (kept for every resolvable cast row), and slot -> cast_id (every well-formed
+ *  entry, used to bank a freshly-trained adapter back onto the cast member). */
 export async function resolveCastLoras(
   env: Env,
   userEmail: string,
@@ -25,8 +30,9 @@ export async function resolveCastLoras(
 ): Promise<ResolvedCastLoras> {
   const pretrained: Record<string, string> = {};
   const voices: Record<string, string> = {};
+  const castIds: Record<string, number> = {};
   const skipped: string[] = [];
-  if (!castLoras || typeof castLoras !== "object") return { pretrained, voices, skipped };
+  if (!castLoras || typeof castLoras !== "object") return { pretrained, voices, castIds, skipped };
 
   for (const [slot, raw] of Object.entries(castLoras)) {
     if (typeof slot !== "string" || !slot.trim()) continue;
@@ -35,6 +41,7 @@ export async function resolveCastLoras(
       skipped.push(slot);
       continue;
     }
+    castIds[slot] = id;
     let cast = await getCastById(env, id, userEmail);
     if (cast?.lora_status === "training") {
       cast = await refreshTrainingLora(env, cast, userEmail);
@@ -47,5 +54,5 @@ export async function resolveCastLoras(
     }
     pretrained[slot] = cast.lora_key;
   }
-  return { pretrained, voices, skipped };
+  return { pretrained, voices, castIds, skipped };
 }
