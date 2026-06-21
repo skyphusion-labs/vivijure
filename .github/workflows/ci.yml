@@ -1,11 +1,16 @@
 name: CI
 
-# Typecheck + test on every push and PR; deploy to Cloudflare on main.
-# vivijure is PUBLIC and accepts outside PRs, so CI runs on GitHub-hosted
-# ubuntu-latest (fork-safe sandbox), not the self-hosted fleet pool.
+# Typecheck + test on every push and PR. DEPLOY ONLY on a version tag (v*), NEVER on a bare push
+# to main -- an ordinary merge (even a docs-only one) must not redeploy production. A mid-render
+# merge once auto-deployed the core worker and reset the orchestration Durable Object, freezing a
+# live render. Releases are now deliberate: cut a SemVer tag to ship.
+#   git tag v0.158.0 && git push origin v0.158.0
+# vivijure is PUBLIC and accepts outside PRs, so CI runs on GitHub-hosted ubuntu-latest (fork-safe
+# sandbox), not the self-hosted fleet pool.
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -34,19 +39,30 @@ jobs:
       - name: Test
         run: npm test
 
-      # NOTE: the 3 CPU containers (video-finish / image-prep / audio-beat-sync) are NOT built or
-      # deployed here. CF Containers were dropped in wrangler.toml migration v2-drop-cpu-containers
-      # (issue #83); they now run always-on on the fleet (dischord) as Docker services, deployed out
-      # of band via containers/compose.yaml (`docker compose -p vivijure-media up -d --build`) and
-      # reached over the VIDEO_FINISH_VPC / IMAGE_PREP_VPC / AUDIO_BEAT_SYNC_VPC bindings. `wrangler
-      # deploy` ships ONLY the workers, so this job needs no Docker/buildx setup.
+  deploy:
+    # DEPLOY GATE: this job runs ONLY for a pushed version tag (refs/tags/v*), after ci passes.
+    # A push/merge to main runs `ci` above but never reaches here, so no merge can redeploy prod
+    # (and no merge can bite an in-flight render). To release: push a SemVer tag vX.Y.Z.
+    needs: ci
+    if: startsWith(github.ref, "refs/tags/v")
+    runs-on: ubuntu-latest
+    container: node:22-alpine
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
 
-      # Module workers deploy BEFORE the core. The core binds each module as a service, and a
-      # [[services]] binding to a not-yet-deployed service makes the core `wrangler deploy` fail.
-      # Deploying modules first keeps every MODULE_* binding pointing at a live service, so adding a
-      # new module + its core binding in one change no longer orphans it (the minimax-hailuo gap).
-      - name: Deploy module workers (main only)
-        if: github.ref == 'refs/heads/main'
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # The 3 CPU containers (video-finish / image-prep / audio-beat-sync) are NOT built or deployed
+      # here. CF Containers were dropped in wrangler.toml migration v2-drop-cpu-containers (issue #83);
+      # they run always-on on the fleet (dischord) as Docker services, deployed out of band via
+      # containers/compose.yaml. `wrangler deploy` ships ONLY the workers, so no Docker/buildx needed.
+
+      # Module workers deploy BEFORE the core. The core binds each module as a [[services]] dependency,
+      # and a binding to a not-yet-deployed service makes the core `wrangler deploy` fail. Deploying
+      # modules first keeps every MODULE_* binding pointing at a live service.
+      - name: Deploy module workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -56,19 +72,16 @@ jobs:
             npx wrangler deploy -c modules/${module}/wrangler.toml
           done
 
-      # Apply D1 schema migrations BEFORE the core deploys, so the new code never runs against an old
-      # schema (the talking-characters voice_id 500). Idempotent: wrangler tracks applied migrations in
-      # d1_migrations and only runs untracked ones, so this is a no-op when there is nothing new. Safe
-      # for additive migrations (the only kind we ship); a destructive one would need a manual gate.
-      - name: Apply D1 migrations (main only)
-        if: github.ref == 'refs/heads/main'
+      # Apply D1 schema migrations BEFORE the core deploys, so new code never runs against an old
+      # schema. Idempotent: wrangler only runs untracked migrations. Additive migrations only; a
+      # destructive one would need a manual gate.
+      - name: Apply D1 migrations
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler d1 migrations apply vivijure-studio --remote
 
-      - name: Deploy core worker (main only)
-        if: github.ref == 'refs/heads/main'
+      - name: Deploy core worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
