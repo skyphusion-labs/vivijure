@@ -5,3 +5,5 @@ dist/
 *.log
 worker-configuration.d.ts
 .DS_Store
+__pycache__/
+*.pyc

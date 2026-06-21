@@ -50,7 +50,7 @@ RUN find /usr/local/lib/python3.11/site-packages/pymatting -name '*.py' -exec to
     && python -c "from rembg import new_session; new_session('u2net'); print('rembg warm OK')" \
     && test -d /app/numba-cache && echo "numba cache baked: $(find /app/numba-cache -name '*.nbi' | wc -l) kernels"
 
-COPY app.py .
+COPY url_guard.py app.py .
 
 EXPOSE 8000
 CMD ["python", "app.py"]

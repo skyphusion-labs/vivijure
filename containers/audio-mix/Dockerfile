@@ -18,7 +18,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY mix_core.py app.py .
+COPY mix_core.py url_guard.py app.py .
 
 # Build-time sanity-encode: prove the exact filter chain /mix relies on links
 # and runs in this slim ffmpeg -- sidechaincompress + loudnorm + libmp3lame.
