@@ -32,7 +32,7 @@ describe("cast-image orchestrator pure logic", () => {
 
   it("summarizeCastRefs maps the job to the caller-facing view", () => {
     const job: CastRefsJob = {
-      job_id: "refs-1", cast_id: 7, user_email: "a@b.c",
+      job_id: "refs-1", cast_id: 7,
       module_name: "cast-image", binding: "MODULE_CAST_IMAGE", phase: "done",
       images: [{ key: "cast-gen/7/ref_01.png", mime: "image/png" }],
       applied: ["model:flux-2-klein-9b", "generated:1"], registered: 1, created_at: 0,
@@ -45,7 +45,7 @@ describe("cast-image orchestrator pure logic", () => {
 
   it("summarizeCastRefs carries an error + omits an unset module", () => {
     const job: CastRefsJob = {
-      job_id: "refs-2", cast_id: 9, user_email: "a@b.c",
+      job_id: "refs-2", cast_id: 9,
       module_name: null, binding: null, phase: "failed",
       images: [], applied: [], registered: 0, error: "no cast.image module installed", created_at: 0,
     };

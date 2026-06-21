@@ -21,7 +21,6 @@ const MIN_TRAINING_REFS = 4;
 export async function refreshTrainingLora(
   env: Env,
   cast: CastMember | null,
-  userEmail: string,
 ): Promise<CastMember | null> {
   if (!cast || cast.lora_status !== "training" || !cast.lora_job_id) return cast;
   try {
@@ -30,12 +29,11 @@ export async function refreshTrainingLora(
     const view = poll.view;
     if (view.status === "COMPLETED") {
       const loraKey = extractTrainedLoraKey(view.output);
-      if (loraKey) return (await markLoraReady(env, cast.id, userEmail, loraKey)) || cast;
+      if (loraKey) return (await markLoraReady(env, cast.id, loraKey)) || cast;
       return (
         (await markLoraFailed(
           env,
           cast.id,
-          userEmail,
           "GPU job completed but envelope did not include lora_key",
         )) || cast
       );
@@ -49,7 +47,6 @@ export async function refreshTrainingLora(
         (await markLoraFailed(
           env,
           cast.id,
-          userEmail,
           view.error || `training ${view.status.toLowerCase()}`,
         )) || cast
       );
@@ -64,7 +61,6 @@ export async function handleCastTrainLora(
   request: Request,
   env: Env,
   id: number,
-  userEmail: string,
 ): Promise<Response> {
   let bodyRenderOverrides: Record<string, unknown> | undefined;
   try {
@@ -83,7 +79,7 @@ export async function handleCastTrainLora(
     /* empty body is fine */
   }
 
-  const cast = await getCastById(env, id, userEmail);
+  const cast = await getCastById(env, id);
   if (!cast) return json({ error: "cast not found" }, 404);
   if (cast.lora_status === "training") {
     return json(
@@ -130,14 +126,13 @@ export async function handleCastTrainLora(
   const submit = await submitTrainLoraJob(env, {
     project: args.storyboard.projectName,
     bundleKey: bundleResult.bundleKey,
-    userEmail,
     renderOverrides: bodyRenderOverrides,
   });
   if (!submit.ok) {
     return json({ error: submit.error }, 502);
   }
 
-  const updated = await setLoraJob(env, cast.id, userEmail, submit.view.jobId);
+  const updated = await setLoraJob(env, cast.id, submit.view.jobId);
   return json({
     ok: true,
     jobId: submit.view.jobId,
@@ -152,9 +147,8 @@ export async function handleCastTrainLora(
 export async function handleCastLoraStatus(
   env: Env,
   id: number,
-  userEmail: string,
 ): Promise<Response> {
-  const cast = await getCastById(env, id, userEmail);
+  const cast = await getCastById(env, id);
   if (!cast) return json({ error: "cast not found" }, 404);
   if (!cast.lora_job_id) {
     return json({ cast, view: null });
@@ -172,17 +166,16 @@ export async function handleCastLoraStatus(
       const updated = await markLoraFailed(
         env,
         cast.id,
-        userEmail,
         "GPU job completed but envelope did not include lora_key",
       );
       return json({ cast: updated || cast, view });
     }
-    const updated = await markLoraReady(env, cast.id, userEmail, loraKey);
+    const updated = await markLoraReady(env, cast.id, loraKey);
     return json({ cast: updated || cast, view });
   }
   if (view.status === "FAILED" || view.status === "TIMED_OUT" || view.status === "CANCELLED") {
     const msg = view.error || `training ${view.status.toLowerCase()}`;
-    const updated = await markLoraFailed(env, cast.id, userEmail, msg);
+    const updated = await markLoraFailed(env, cast.id, msg);
     return json({ cast: updated || cast, view });
   }
 

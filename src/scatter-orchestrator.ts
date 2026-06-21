@@ -107,7 +107,7 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     throw new Error("no motion.backend module installed");
   }
 
-  const { pretrained, voices, castIds, skipped } = await resolveCastLoras(env, args.user_email, args.cast_loras);
+  const { pretrained, voices, castIds, skipped } = await resolveCastLoras(env, args.cast_loras);
   if (!Object.keys(pretrained).length) {
     throw new Error(
       skipped.length
