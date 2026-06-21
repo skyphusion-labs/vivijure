@@ -10,6 +10,10 @@ export interface ScatterJob {
   shard_shots: string[][];
   motion_backend?: string;
   audio_key?: string;
+  // True when this scatter render has per-shot dialogue (talking film) -- the shards' lip-sync bakes
+  // audio into each clip, so the gather must keep per-clip audio through the concat (keepClipAudio)
+  // or the assembled film comes out silent. Mirrors the single-film assemble's dialogue_audio gate.
+  has_dialogue?: boolean;
   user_email?: string;
   phase: "shards" | "gather" | "mux" | "done" | "failed";
   film_key?: string;

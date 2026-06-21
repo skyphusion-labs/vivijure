@@ -153,6 +153,7 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     shard_shots: shards.map((s) => s.shots),
     motion_backend: motionBackend,
     audio_key: stagedAudio,
+    has_dialogue: dialogueLines.length > 0,
     user_email: args.user_email,
     phase: "shards",
     created_at: Date.now(),
@@ -274,10 +275,16 @@ async function assembleScatterClips(
     presigned.push({ url: await presignR2Get(env, c.clip_key, 1800) });
   }
   const outputKey = scatterOutKey(job.scatter_id);
+  // Talking film: the shards' lip-sync baked per-shot audio into each clip, so preserve it through the
+  // concat (the container then silent-pads any audio-less clip to a uniform track). Without this the
+  // gather strips ALL clip audio (-an) and the film comes out silent -- mirrors film-orchestrator's
+  // single-film assemble (keepClipAudio on dialogue). Also keeps the audio of the clips that DID
+  // lip-sync even when a sibling clip didn't, so one short finish chain can't silence the whole film.
   const resp = await callVideoFinish(env, {
     clips: presigned,
     outputUrl: await presignR2Put(env, outputKey, 1800),
     outputKey,
+    keepClipAudio: !!job.has_dialogue,
   });
   const transport = classifyAssembleTransport(resp ? resp.status : null, job.assemble_attempts ?? 0, MAX_ASSEMBLE_ATTEMPTS);
   job.assemble_attempts = transport.attempts;
