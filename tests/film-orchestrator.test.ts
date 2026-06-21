@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -91,6 +91,92 @@ describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifa
     const adopted = reclaimFinishShotsFromR2([stuck], new Map());
     expect(adopted).toBe(0);
     expect(stuck.status).toBe("pending");
+  });
+});
+
+describe("finish-step transient retry (the silent-render trigger: a lip-sync invocation blip)", () => {
+  it("classifyFinishFailure: transport blips are transient, module-logic rejects are deterministic", () => {
+    expect(classifyFinishFailure("module /invoke -> 503")).toBe("transient");
+    expect(classifyFinishFailure("module /poll -> 504")).toBe("transient");
+    expect(classifyFinishFailure("module /invoke -> 429")).toBe("transient");
+    expect(classifyFinishFailure("module unreachable: signal timed out")).toBe("transient");
+    expect(classifyFinishFailure("module /invoke -> 400")).toBe("deterministic");
+    expect(classifyFinishFailure("module /invoke -> 404")).toBe("deterministic");
+    expect(classifyFinishFailure("finish-lipsync: input needs shot_id and clip_key")).toBe("deterministic");
+    expect(classifyFinishFailure("finish-lipsync job failed: out of memory")).toBe("deterministic");
+    expect(classifyFinishFailure(undefined)).toBe("deterministic");
+  });
+
+  it("classifyFinishRetry: transient retries under the cap, fails at the cap; deterministic fails at once", () => {
+    expect(classifyFinishRetry("module /invoke -> 503", 0)).toEqual({ action: "retry", attempts: 1 });
+    expect(classifyFinishRetry("module /invoke -> 503", 1)).toEqual({ action: "retry", attempts: 2 });
+    expect(classifyFinishRetry("module /invoke -> 503", FINISH_STEP_MAX_ATTEMPTS - 1)).toEqual({ action: "fail" });
+    expect(classifyFinishRetry("module /invoke -> 400", 0)).toEqual({ action: "fail" }); // deterministic, no spin
+  });
+
+  // Integration: a film at phase=finish whose lip-sync invocation transiently 503s, then succeeds.
+  // The step must RE-DISPATCH (stay pending, bump attempts) -- not go failed + adopt an intermediate --
+  // so the shot ends up voiced (applied includes the lip-sync tag).
+  const lipsyncFilm = (): FilmJob => ({
+    film_id: "film-finish-retry", project: "neon", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+    keyframe_binding: null, phase: "finish", clips_only: true,
+    finish_shots: [
+      { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4", chain: ["MODULE_FINISH_LIPSYNC"], configs: [{}], idx: 0, status: "pending", applied: [], poll: undefined, error: undefined },
+    ] as FinishShot[],
+    created_at: Date.now(),
+  });
+
+  function retryEnv(job: FilmJob, lipsyncOutcomes: Array<number>) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    let call = 0;
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        list: async () => ({ objects: [], truncated: false }), // no _finished clip in R2 -> no reclaim interference
+      },
+      MODULE_FINISH_LIPSYNC: {
+        fetch: async (url: string) => {
+          if (!String(url).includes("/invoke")) return new Response("{}", { status: 404 });
+          const status = lipsyncOutcomes[Math.min(call, lipsyncOutcomes.length - 1)];
+          call += 1;
+          if (status !== 200) return new Response("", { status });
+          return new Response(JSON.stringify({ ok: true, output: { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_ls.mp4", out_fps: 24, frames: 96, applied: ["lipsync:v15"] } }), { status: 200, headers: { "content-type": "application/json" } });
+        },
+      },
+    } as unknown as Env;
+    return { env, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  it("re-dispatches a transient lip-sync 503, then voices the shot on the retry", async () => {
+    const { env, read } = retryEnv(lipsyncFilm(), [503, 200]); // fail once, then succeed
+    await advanceFilmJob(env, "film-finish-retry");
+    const after1 = read().finish_shots![0];
+    expect(after1.status).toBe("pending");          // NOT failed -- re-dispatching
+    expect(after1.attempts).toBe(1);
+    expect(after1.applied).toEqual([]);             // lip-sync did not run yet
+    await advanceFilmJob(env, "film-finish-retry"); // second tick: 200
+    const after2 = read().finish_shots![0];
+    expect(after2.status).toBe("done");
+    expect(after2.applied).toEqual(["lipsync:v15"]); // shot_02-style fix: actually VOICED
+    expect(after2.clip_key).toBe("renders/neon/clips/shot_01_ls.mp4");
+  });
+
+  it("fails LOUD after the cap on a persistent transient (no infinite spin)", async () => {
+    const { env, read } = retryEnv(lipsyncFilm(), [503]); // 503 forever
+    for (let i = 0; i < FINISH_STEP_MAX_ATTEMPTS; i++) await advanceFilmJob(env, "film-finish-retry");
+    expect(read().finish_shots![0].status).toBe("failed");
+  });
+
+  it("fails LOUD at once on a deterministic 400 (no retry)", async () => {
+    const { env, read } = retryEnv(lipsyncFilm(), [400]);
+    await advanceFilmJob(env, "film-finish-retry");
+    const fs = read().finish_shots![0];
+    expect(fs.status).toBe("failed");
+    expect(fs.attempts ?? 0).toBe(0); // deterministic -> never incremented
   });
 });
 

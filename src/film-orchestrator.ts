@@ -37,6 +37,11 @@ export interface FinishShot {
   poll?: string;
   applied: string[];
   error?: string;
+  // Transient-retry counter for the CURRENT chain step (reset when the step advances). A transient
+  // invocation blip (the module worker momentarily unreachable / 5xx -- the musetalk cold-start race
+  // that silenced shot_02) re-dispatches the step up to FINISH_STEP_MAX_ATTEMPTS instead of going
+  // failed; a deterministic reject or the cap exhausted fails loud. Mirrors scatter assemble_attempts.
+  attempts?: number;
 }
 
 export interface FilmKeyframeRef {
@@ -317,7 +322,45 @@ export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
   fs.applied.push(...(out.applied || []));
   fs.idx += 1;
   fs.poll = undefined;
+  fs.attempts = 0; // a step succeeded -> the next step gets a fresh transient-retry budget
   if (fs.idx >= fs.chain.length) fs.status = "done"; // else stays pending; next advance submits chain[idx]
+}
+
+// Bounded transient-retry for a finish-step invocation/poll failure. shot_02 shipped silent because
+// its lip-sync invocation hit a transient blip (the module worker momentarily unreachable / 5xx --
+// a musetalk cold-start race) and went straight to `failed`, where the mid-chain intermediate was
+// then adopted. Now a TRANSIENT failure re-dispatches the step (status stays `pending`) up to the
+// cap; a DETERMINISTIC reject (a 4xx, a real module error, "job failed", "no clip_key") or the cap
+// exhausted goes `failed` -- loud, no spin. Same classify-then-retry discipline as the D1 / assemble
+// transport retries.
+export const FINISH_STEP_MAX_ATTEMPTS = 3;
+
+/** Classify an invokeModule / pollModule failure string. Transport shapes are transient:
+ *  "module /invoke -> 503", "module /poll -> 504", "module unreachable: <timeout/network>". A module-
+ *  logic ok:false (input reject, "job failed", "no clip_key") or a 4xx is deterministic -> fail. */
+export function classifyFinishFailure(error: string | undefined): "transient" | "deterministic" {
+  const e = error ?? "";
+  const m = e.match(/->\s*(\d{3})\b/); // the "module /invoke -> NNN" / "/poll -> NNN" transport status
+  if (m) {
+    const s = Number(m[1]);
+    return s === 408 || s === 429 || (s >= 500 && s <= 599) ? "transient" : "deterministic";
+  }
+  if (/unreachable|timed? ?out|timeout|network|econnreset|connection (reset|lost)|fetch failed/i.test(e)) {
+    return "transient";
+  }
+  return "deterministic"; // a module-logic ok:false -> a real reject, fail loud
+}
+
+/** Decide whether to re-dispatch a failed finish step or fail it. Pure so the retry contract is
+ *  unit-testable without a module fetcher. */
+export function classifyFinishRetry(
+  error: string | undefined,
+  priorAttempts: number,
+  maxAttempts: number = FINISH_STEP_MAX_ATTEMPTS,
+): { action: "retry"; attempts: number } | { action: "fail" } {
+  if (classifyFinishFailure(error) !== "transient") return { action: "fail" };
+  const attempts = (priorAttempts ?? 0) + 1;
+  return attempts < maxAttempts ? { action: "retry", attempts } : { action: "fail" };
 }
 
 /** Pure: resolve the validated config for each finish module, in chain order. Each module gets its
@@ -446,6 +489,20 @@ async function advanceDialoguePhase(env: Env, job: FilmJob): Promise<void> {
  *  chaining to the next module on completion. Phase -> assemble when every shot is terminal. */
 async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
   const envRec = env as unknown as Record<string, unknown>;
+  // A transient invocation/poll blip re-dispatches the step (status stays `pending`) up to the cap
+  // instead of failing it; a deterministic reject or the cap exhausted fails loud. `keepPoll` keeps a
+  // poll token to re-poll (a lost poll) vs clearing it to re-submit (a failed invoke).
+  const failOrRetry = (fs: FinishShot, error: string | undefined, keepPoll: boolean): void => {
+    const d = classifyFinishRetry(error, fs.attempts ?? 0);
+    if (d.action === "retry") {
+      fs.attempts = d.attempts;
+      fs.error = `finish ${fs.chain[fs.idx]} transient (attempt ${d.attempts}/${FINISH_STEP_MAX_ATTEMPTS}), retrying: ${error ?? ""}`;
+      if (!keepPoll) fs.poll = undefined; // re-submit next tick; status stays "pending"
+    } else {
+      fs.status = "failed";
+      fs.error = error;
+    }
+  };
   for (const fs of job.finish_shots || []) {
     if (fs.status !== "pending") continue;
     const fetcher = asFetcher(envRec[fs.chain[fs.idx]]);
@@ -458,13 +515,13 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
     };
     if (!fs.poll) {
       const r = await invokeModule<FinishInput, FinishOutput>(fetcher, req);
-      if (!r.ok) { fs.status = "failed"; fs.error = r.error; }
+      if (!r.ok) { failOrRetry(fs, r.error, false); }
       else if ((r as { pending?: boolean }).pending) { fs.poll = (r as { poll: string }).poll; }
       else if ("output" in r) { applyFinishOutput(fs, r.output as FinishOutput); }
       else { fs.status = "failed"; fs.error = "finish module returned neither output nor a poll token"; }
     } else {
       const p = await pollModule<FinishOutput>(fetcher, { poll: fs.poll });
-      if (!p.ok) { fs.status = "failed"; fs.error = p.error; }
+      if (!p.ok) { failOrRetry(fs, p.error, true); }
       else if (!(p as { pending?: boolean }).pending) { applyFinishOutput(fs, (p as { output: FinishOutput }).output); }
     }
   }
