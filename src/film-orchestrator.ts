@@ -18,6 +18,7 @@ import { presignR2Get, presignR2Put } from "./r2-presign";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { coerceShotId } from "./storyboard-validate";
 import { getCastById, markLoraReady } from "./cast-db";
+import { withD1Retry } from "./d1-retry";
 import { deriveLoraDestKey } from "./lora-bundle";
 
 export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
@@ -255,14 +256,16 @@ async function recordTrainedLorasToCast(env: Env, job: FilmJob, kfOut: KeyframeO
     if (!Number.isInteger(castId) || castId <= 0 || typeof srcKey !== "string" || !srcKey) continue;
     const stableKey = deriveLoraDestKey(castId, job.created_at);
     try {
-      const cast = await getCastById(env, castId);
+      // Advance hot path: a transient D1 blip here would needlessly skip banking a freshly-trained
+      // adapter (-> a wasteful retrain next render), so retry the cast read + readiness write.
+      const cast = await withD1Retry(() => getCastById(env, castId));
       if (!cast) continue;
       // Reused this render (srcKey == current key) or already banked this render (retry): no-op.
       if (cast.lora_status === "ready" && (cast.lora_key === srcKey || cast.lora_key === stableKey)) continue;
       const obj = await env.R2_RENDERS.get(srcKey);
       if (!obj) { console.warn(`recordTrainedLoras: adapter missing in R2 (${srcKey}); cast ${castId} not banked`); continue; }
       await env.R2_RENDERS.put(stableKey, obj.body);
-      await markLoraReady(env, castId, stableKey);
+      await withD1Retry(() => markLoraReady(env, castId, stableKey));
       console.log(`recordTrainedLoras: cast ${castId} slot ${slot} banked ${srcKey} -> ${stableKey} (cross-project reuse)`);
     } catch (e) {
       console.warn(`recordTrainedLoras: cast ${castId} slot ${slot} failed: ${(e as Error).message}`);
