@@ -20,6 +20,9 @@ import { presignR2Get, presignR2Put } from "./r2-presign";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { discoverModules, servingForHook } from "./modules/registry";
 import { readBundleScenes } from "./bundle-storyboard";
+import { getProjectById } from "./storyboard-projects-db";
+import { buildDialogueLines } from "./dialogue-lines";
+import type { DialogueLine } from "./modules/types";
 import {
   gatherDecision,
   isScatterParentJobId,
@@ -80,6 +83,21 @@ export interface StartScatterArgs {
   project_id?: number | null;
 }
 
+/** Read the stored storyboard (D1 last_storyboard) and build the per-shot dialogue batch (authored
+ *  line + cast-resolved voice). Returns [] when there's no project_id, no stored storyboard, or no
+ *  dialogue -- a silent film. The bundle can't carry this (lossy), so D1 is the source of truth. */
+async function resolveDialogueLines(
+  env: Env,
+  args: StartScatterArgs,
+  voices: Record<string, string>,
+  shotIds: string[],
+): Promise<DialogueLine[]> {
+  if (args.project_id == null) return [];
+  const project = await getProjectById(env, args.project_id, args.user_email);
+  if (!project?.last_storyboard) return [];
+  return buildDialogueLines(project.last_storyboard, voices, shotIds);
+}
+
 export async function startScatterRender(env: Env, args: StartScatterArgs): Promise<ScatterJob> {
   const modules = await discoverModules(env as unknown as Record<string, unknown>);
   if (servingForHook(modules, "keyframe").length === 0) {
@@ -89,7 +107,7 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     throw new Error("no motion.backend module installed");
   }
 
-  const { pretrained, skipped } = await resolveCastLoras(env, args.user_email, args.cast_loras);
+  const { pretrained, voices, skipped } = await resolveCastLoras(env, args.user_email, args.cast_loras);
   if (!Object.keys(pretrained).length) {
     throw new Error(
       skipped.length
@@ -106,6 +124,11 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
   }));
   const expected = args.shot_ids.filter((s) => typeof s === "string" && s.length > 0);
   if (expected.length < 2) throw new Error("scatter requires >= 2 shots");
+
+  // Talking characters: the dialogue is dropped by the lossy bundle, so read the AUTHORITATIVE
+  // storyboard from D1 (last_storyboard) and resolve each speaking shot's voice from the cast (voices,
+  // off the same rows resolveCastLoras already read). Absent project_id / no dialogue -> a silent film.
+  const dialogueLines = await resolveDialogueLines(env, args, voices, expected);
 
   const shards = scatterShards({
     shotIds: expected,
@@ -149,6 +172,9 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
 
   for (const shard of shards) {
     const shardScenes = filterScenesByShotIds(scenes, shard.shots);
+    // Each shard runs its own finish chain (incl. lip-sync), so it carries only its shots' dialogue.
+    const shardShotSet = new Set(shard.shots);
+    const shardDialogue = dialogueLines.filter((l) => shardShotSet.has(l.shot_id));
     const film = await startFilmJob(env, {
       project: args.project,
       bundle_key: args.bundle_key,
@@ -160,6 +186,7 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
       clips_only: true,
       pretrained_loras: shard.pretrainedLoras,
       user_email: args.user_email,
+      dialogue_lines: shardDialogue,
     });
     scatterJob.shard_film_ids.push(film.film_id);
     const view = filmJobToPollView(film, null);

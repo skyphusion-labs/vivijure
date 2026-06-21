@@ -354,6 +354,7 @@ body.sw-open .planner-layout { overflow-x: hidden; }
 
 .cast-field { display: grid; gap: 6px; }
 .cast-field > span, .cast-gen-field > span { color: var(--muted); font-size: 13px; }
+.cast-field-hint { color: var(--muted); font-size: 12px; }
 .cast-gen-field { display: grid; gap: 6px; margin-top: 10px; }
 
 .cast-section-header { display: grid; gap: 4px; }
@@ -631,6 +632,10 @@ details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
 .planner-scene-meta { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 .planner-scene-slots { display: flex; flex-wrap: wrap; gap: 10px 14px; }
 .planner-scene-slot-check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.planner-scene-dialogue { display: flex; gap: 8px; align-items: stretch; }
+.planner-scene-dialogue-slot { flex: 0 0 auto; min-width: 56px; }
+.planner-scene-dialogue-text { flex: 1 1 auto; min-width: 0; }
+.planner-scene-dialogue-text:disabled, .planner-scene-dialogue-slot:disabled { opacity: 0.55; }
 .planner-scene-slot-check input { width: auto; }
 
 /* audio */

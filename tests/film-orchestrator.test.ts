@@ -866,7 +866,6 @@ describe("advanceFilmJob hard-deadline loud fail (#129)", () => {
   });
 });
 
-
 // #207 follow-up: the film.finish chain is FAIL-SAFE -- the film always survives -- so a degraded run
 // (e.g. the video-finish container unreachable) reaches phase="done" with NO cards. The orchestrator
 // must RECORD that outcome on the job (film_finish) instead of shipping a silent green. Drives the real
@@ -961,5 +960,73 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     expect(r?.job.phase).toBe("done");
     expect(r?.job.film_finish).toBeUndefined();
     expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio.mp4");
+  });
+});
+
+// --- dialogue phase (talking characters) ----------------------------------------------------------
+// The crux: a clips-complete job with dialogue_lines runs the `dialogue` phase (per-shot TTS) and the
+// resulting audio_key is injected into the shot's FinishInput, so the lip-sync finish module receives
+// it. Drives advanceFilmJob through dialogue -> finish with fake MODULE_DIALOGUE + MODULE_LIPSYNC.
+function moduleFetcher(
+  manifest: object,
+  handlers: { invoke?: (body: unknown) => object; poll?: (body: unknown) => object },
+) {
+  return {
+    fetch: async (input: Request | string, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url;
+      const j = (o: object) => new Response(JSON.stringify(o), { status: 200, headers: { "content-type": "application/json" } });
+      if (url.endsWith("/module.json")) return j(manifest);
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      if (url.endsWith("/invoke") && handlers.invoke) return j(handlers.invoke(body));
+      if (url.endsWith("/poll") && handlers.poll) return j(handlers.poll(body));
+      return new Response("{}", { status: 404 });
+    },
+  };
+}
+
+describe("advanceFilmJob dialogue phase injects audio_key into finish (talking characters)", () => {
+  const job = {
+    film_id: "film-dlg-1",
+    project: "p",
+    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+    phase: "dialogue" as const,
+    clips_only: true, // stop after finish -> done (skip assemble), so the tick ends cleanly
+    dialogue_poll: "tok",
+    dialogue_lines: [{ shot_id: "shot_01", text: "We're here.", voice_id: "orion" }],
+    finish_shots: [{ shot_id: "shot_01", clip_key: "renders/p/clips/shot_01.mp4", chain: ["MODULE_LIPSYNC"], idx: 0, status: "pending" as const, applied: [] }],
+  };
+
+  function dialogueEnv() {
+    const finishInputs: unknown[] = [];
+    const env = {
+      DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey("film-dlg-1") ? { text: async () => JSON.stringify(job) } : null),
+        head: async () => null,
+        put: async () => {},
+        list: async () => ({ objects: [] }),
+      },
+      MODULE_DIALOGUE: moduleFetcher(
+        { name: "dialogue-gen", version: "0.1.0", api: "vivijure-module/1", hooks: ["dialogue"], ui: { order: 10 } },
+        { poll: () => ({ ok: true, output: { project: "p", audio: [{ shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01.wav", voice_id: "orion" }], applied: ["dialogue:@cf/deepgram/aura-1", "lines:1"] } }) },
+      ),
+      MODULE_LIPSYNC: moduleFetcher(
+        { name: "finish-lipsync", version: "0.1.0", api: "vivijure-module/1", hooks: ["finish"], ui: { section: "finish", order: 15 } },
+        { invoke: (body) => { finishInputs.push((body as { input: unknown }).input); return { ok: true, output: { shot_id: "shot_01", clip_key: "renders/p/clips/shot_01_ls.mp4", out_fps: 16, frames: 48, applied: ["lipsync:v15"] } }; } },
+      ),
+    } as unknown as Env;
+    return { env, finishInputs };
+  }
+
+  it("polls dialogue -> records the audio map -> finish receives the shot's audio_key", async () => {
+    const { env, finishInputs } = dialogueEnv();
+    const r = await advanceFilmJob(env, "film-dlg-1");
+    // dialogue audio recorded on the job
+    expect(r?.job.dialogue_audio).toEqual({ shot_01: "renders/p/dialogue/shot_01.wav" });
+    // the finish (lip-sync) module was invoked WITH that audio_key -- the whole point
+    expect(finishInputs.length).toBe(1);
+    expect((finishInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01.wav");
+    // clips_only -> after finish the shard is done
+    expect(r?.job.phase).toBe("done");
   });
 });

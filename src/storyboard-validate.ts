@@ -55,6 +55,10 @@ export const STYLE_PREFIX_MAX_CHARS = 256;
 // (well past any one i2v clip the model makes) and the whole film at scenes x per-shot.
 export const SCENE_MAX_SECONDS = 60;
 export const STORYBOARD_MAX_SECONDS = STORYBOARD_MAX_SCENES * SCENE_MAX_SECONDS;
+// Per-shot dialogue line cap. The line is voiced by Deepgram Aura-1 (billed per 1k chars) and a
+// shot lip-syncs one spoken line, so this bounds both TTS cost and how much speech must fit a clip.
+// 300 chars is ~20s of speech, well past any single-shot line, while staying firmly bounded.
+export const DIALOGUE_MAX_CHARS = 300;
 // Scene-id format the renderer expects (core.py shot manifest looks up
 // scenes by this id). LLM Assist outputs like "scene_dramatic_sunset"
 // silently break downstream tools that expect the shot_NN pattern.
@@ -85,6 +89,10 @@ export interface StoryboardScene {
   target_seconds?: number;
   act?: string;
   start_image?: string;
+  // Optional spoken line for this shot ("talking characters"). `slot` is which cast member speaks
+  // (must be one of this shot's character_slots); `text` is the line, voiced in that cast member's
+  // assigned voice and lip-synced onto the clip. Absent => a silent shot (no dialogue stage).
+  dialogue?: { slot: SlotId; text: string };
 }
 
 // Top-level storyboard. Mirrors storyboard.example.yaml. The serverless
@@ -339,6 +347,45 @@ export function validateStoryboard(input: unknown): ValidationResult {
             slotsOut.push(slot as SlotId);
           });
           out.character_slots = slotsOut;
+        }
+      }
+
+      // dialogue: optional { slot, text }. The speaker must be in this shot (one of its validated
+      // character_slots, which already enforces the use_characters subset rule), and the line is a
+      // non-empty string capped to bound TTS cost + how much speech must fit the clip.
+      if (scene.dialogue !== undefined) {
+        if (!isPlainObject(scene.dialogue)) {
+          errors.push(
+            `${label} dialogue must be an object { slot, text } if provided (got ${describeType(scene.dialogue)})`,
+          );
+        } else {
+          const dlgSlot = scene.dialogue.slot;
+          const dlgText = scene.dialogue.text;
+          let slotOk = false;
+          if (typeof dlgSlot !== "string" || !SLOT_SET.has(dlgSlot)) {
+            errors.push(
+              `${label} dialogue.slot must be a valid slot id (allowed: ${SLOT_IDS.join(", ")})`,
+            );
+          } else if (!(out.character_slots ?? []).includes(dlgSlot as SlotId)) {
+            errors.push(
+              `${label} dialogue.slot "${dlgSlot}" must be one of this shot's character_slots (the speaker has to be in the shot)`,
+            );
+          } else {
+            slotOk = true;
+          }
+          let textOk = false;
+          if (typeof dlgText !== "string" || dlgText.trim().length === 0) {
+            errors.push(`${label} dialogue.text must be a non-empty string`);
+          } else if (dlgText.length > DIALOGUE_MAX_CHARS) {
+            errors.push(
+              `${label} dialogue.text is ${dlgText.length} chars; cap is ${DIALOGUE_MAX_CHARS} (one spoken line per shot)`,
+            );
+          } else {
+            textOk = true;
+          }
+          if (slotOk && textOk) {
+            out.dialogue = { slot: dlgSlot as SlotId, text: (dlgText as string).trim() };
+          }
         }
       }
 

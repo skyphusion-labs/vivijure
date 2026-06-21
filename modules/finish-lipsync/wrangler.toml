@@ -1,0 +1,21 @@
+# finish-lipsync module worker (vivijure-module/1): MuseTalk audio-driven lip-sync on the dedicated
+# vivijure-musetalk RunPod endpoint (cu128, separate from vivijure-backend). Bound into the core as
+# MODULE_LIPSYNC; the registry discovers it from GET /module.json. Runs in the `finish` chain before
+# the upscaler (ui.order 15 < 20) so a lip-synced shot is then upscaled.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core. This worker
+# holds no R2 creds -- the endpoint reads/writes the shared bucket by key itself.
+
+name = "vivijure-module-finish-lipsync"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Secrets, set AFTER deploy (never committed):
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/finish-lipsync/wrangler.toml
+#   ! npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/finish-lipsync/wrangler.toml
+#     (RUNPOD_ENDPOINT_ID = zw6pt4lymf69pk, the vivijure-musetalk serverless endpoint)

@@ -17,6 +17,7 @@ export type HookName =
   | "motion.backend" // keyframe (+ motion prompt) -> shot clip. GPU or cloud, pick one per shot.
   | "finish"         // post-process a clip: interpolation / upscale / face restore. Chainable.
   | "score"          // add audio to a film: music / narration / beat-sync. Chainable.
+  | "dialogue"       // per-shot dialogue lines -> TTS audio (one voice per cast member). Pick one.
   | "plan.enhance"   // expand a storyboard before render: LLM auto-direction. Chainable.
   | "cast.image"     // character portrait + bible -> LoRA training reference images. Cast-prep, pick one.
   | "notify"         // film done -> deliver a render-complete notification (email / webhook / ...). Chain.
@@ -27,6 +28,7 @@ export const HOOK_NAMES: readonly HookName[] = [
   "motion.backend",
   "finish",
   "score",
+  "dialogue",
   "plan.enhance",
   "cast.image",
   "notify",
@@ -39,6 +41,7 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
   "motion.backend": "pick_one",
   finish: "chain",
   score: "chain",
+  dialogue: "pick_one",
   "plan.enhance": "chain",
   "cast.image": "pick_one",
   notify: "chain",
@@ -52,6 +55,7 @@ export const HOOK_BLURBS: Record<HookName, string> = {
   "motion.backend": "keyframe -> shot clip (GPU or cloud)",
   finish: "interpolation / upscale / face restore",
   score: "music / narration / beat-sync",
+  dialogue: "spoken lines -> per-character voice (TTS)",
   "plan.enhance": "LLM auto-direction",
   "cast.image": "character refs from a portrait + bible",
   notify: "render-complete notification (email / webhook)",
@@ -147,6 +151,9 @@ export type PollResponse<O = unknown> =
 export interface FinishInput {
   shot_id: string;
   clip_key: string;  // R2 key of the input clip (mp4)
+  audio_key?: string; // R2 key of the shot's dialogue audio (TTS); set only for a shot with a line.
+                      // A finish module that lip-syncs (finish-lipsync) consumes it; others ignore it.
+                      // Absent => a silent shot, so lip-sync no-ops (passthrough).
   src_fps?: number;  // optional hints; the finish backend probes the clip if absent
   frames?: number;
   width?: number;
@@ -164,6 +171,37 @@ export interface FinishOutput {
   degraded?: string; // set ONLY when the clip was passed through because the finish could not run
                      // (misconfig / backend down), carrying the reason; absent on success and on
                      // the intentional no-op, so a real degrade is never silent (finish-rife #77)
+}
+
+// dialogue (v1) ---------------------------------------------------------------------------------
+
+/** One spoken line for one shot. `voice_id` is resolved by the core (slot -> cast member -> voice),
+ *  so the module just synthesizes; absent/unknown falls back to a default speaker at synth time. */
+export interface DialogueLine {
+  shot_id: string;
+  text: string;
+  voice_id?: string;
+}
+
+/** What the core hands a `dialogue` module: every speaking shot in ONE batch (so a film's dialogue is
+ *  a single submit+poll, not N round-trips). `project` is the R2 key prefix the audio lands under. */
+export interface DialogueInput {
+  project: string;
+  lines: DialogueLine[];
+}
+
+/** One synthesized line: the R2 key of its audio and the voice actually used. The core attaches
+ *  `audio_key` to that shot's FinishInput so a lip-sync finish module can drive the mouth from it. */
+export interface DialogueShotAudio {
+  shot_id: string;
+  audio_key: string;
+  voice_id: string;
+}
+
+export interface DialogueOutput {
+  project: string;
+  audio: DialogueShotAudio[];
+  applied: string[];
 }
 
 // plan.enhance (v1) -----------------------------------------------------------------------------

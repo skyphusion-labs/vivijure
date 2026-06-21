@@ -37,6 +37,9 @@ export interface CastMember {
   lora_job_id: string | null;
   lora_error: string | null;
   lora_trained_at: string | null;
+  // Dialogue: Aura-1 speaker name (see src/voices.ts); the voice this character speaks in across
+  // every shot/film. NULL = unassigned. Sibling of lora_key (face) -- both pin the same identity.
+  voice_id: string | null;
 }
 
 interface CastRow {
@@ -58,6 +61,7 @@ interface CastRow {
   lora_job_id: string | null;
   lora_error: string | null;
   lora_trained_at: string | null;
+  voice_id: string | null;
 }
 
 // Shared parser for the two JSON-array image-key columns (ref_keys_json
@@ -100,6 +104,7 @@ function rowToCast(row: CastRow): CastMember {
     lora_job_id: row.lora_job_id,
     lora_error: row.lora_error,
     lora_trained_at: row.lora_trained_at,
+    voice_id: row.voice_id,
   };
 }
 
@@ -143,7 +148,7 @@ export async function listCastForUser(env: Env, userEmail: string): Promise<Cast
   const result = await env.DB.prepare(
     `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
             ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at
+            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
        FROM cast_members
       WHERE user_email = ?
       ORDER BY created_at DESC
@@ -162,7 +167,7 @@ export async function getCastById(
   const row = await env.DB.prepare(
     `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
             ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at
+            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
        FROM cast_members
       WHERE id = ? AND user_email = ?
       LIMIT 1`
@@ -184,7 +189,7 @@ export async function createCast(
      VALUES (?, ?, ?, ?)
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
+            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
     .bind(userEmail, slug, input.name, input.bible ?? null)
     .first<CastRow>();
@@ -196,7 +201,7 @@ export async function updateCast(
   env: Env,
   id: number,
   userEmail: string,
-  patch: { name?: string; bible?: string | null },
+  patch: { name?: string; bible?: string | null; voice_id?: string | null },
 ): Promise<CastMember | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -208,6 +213,10 @@ export async function updateCast(
     fields.push("bible = ?");
     values.push(patch.bible);
   }
+  if (patch.voice_id !== undefined) {
+    fields.push("voice_id = ?");
+    values.push(patch.voice_id);
+  }
   if (fields.length === 0) {
     return getCastById(env, id, userEmail);
   }
@@ -218,7 +227,7 @@ export async function updateCast(
       WHERE id = ? AND user_email = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
+            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
     .bind(...values)
     .first<CastRow>();
@@ -255,7 +264,7 @@ export async function setPortrait(
       WHERE id = ? AND user_email = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
+            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
     .bind(key, mime, id, userEmail)
     .first<CastRow>();
@@ -273,7 +282,7 @@ export async function clearPortrait(
       WHERE id = ? AND user_email = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
-            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
+            lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
     .bind(id, userEmail)
     .first<CastRow>();
@@ -284,7 +293,7 @@ export async function clearPortrait(
 const CAST_ROW_COLUMNS =
   `id, user_email, slug, name, bible, portrait_key, portrait_mime,
    ref_keys_json, source_keys_json, created_at, updated_at,
-   lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`;
+   lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`;
 
 // Optimistic-concurrency update of one of a cast member's JSON-array image-key columns
 // (ref_keys_json / source_keys_json). The old code was read-modify-write across two statements, so
@@ -442,7 +451,7 @@ export async function setLoraJob(
       WHERE id = ? AND user_email = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
-               lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
+               lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
     .bind(jobId, id, userEmail)
     .first<CastRow>();
@@ -466,7 +475,7 @@ export async function markLoraReady(
       WHERE id = ? AND user_email = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
-               lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
+               lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
     .bind(loraKey, id, userEmail)
     .first<CastRow>();
@@ -488,7 +497,7 @@ export async function markLoraFailed(
       WHERE id = ? AND user_email = ?
      RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
-               lora_key, lora_status, lora_job_id, lora_error, lora_trained_at`
+               lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
     .bind(errorMessage.slice(0, 4000), id, userEmail)
     .first<CastRow>();

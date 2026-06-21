@@ -124,6 +124,16 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
     if (!isStrArr(o.applied)) return "score output needs an applied string[]";
     return null;
   },
+  dialogue: (o) => {
+    if (!isStr(o.project)) return "dialogue output needs a string project";
+    if (!Array.isArray(o.audio)) return "dialogue output needs an audio[]";
+    const badEntry = (o.audio as unknown[]).find(
+      (a) => !isRec(a) || !isStr(a.shot_id) || !isStr(a.audio_key) || !isStr(a.voice_id),
+    );
+    if (badEntry) return "each dialogue audio needs shot_id + audio_key + voice_id";
+    if (!isStrArr(o.applied)) return "dialogue output needs an applied string[]";
+    return null;
+  },
   "plan.enhance": (o) => {
     if (!isRec(o.storyboard)) return "plan.enhance output needs a storyboard object";
     if (!Array.isArray((o.storyboard as Record<string, unknown>).scenes)) {

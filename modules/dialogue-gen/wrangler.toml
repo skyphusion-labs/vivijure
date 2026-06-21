@@ -1,0 +1,32 @@
+# dialogue-gen module worker (vivijure-module/1): Deepgram Aura-1 via Workers AI for the `dialogue`
+# hook. Voices each speaking shot's line in the cast member's assigned voice and writes one WAV per
+# shot to the shared render bucket; the core attaches each audio_key to the shot's FinishInput so
+# finish-lipsync can drive the mouth. Bound into the core as MODULE_DIALOGUE.
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-dialogue-gen"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Workers AI + AI Gateway (same pattern as music-gen / cast-image proxied models).
+#   ! npx wrangler secret put GATEWAY_ID -c modules/dialogue-gen/wrangler.toml
+[ai]
+binding = "AI"
+
+# Per-shot dialogue WAVs + async run state land in the shared render bucket
+# (renders/<project>/dialogue/<shot>.wav).
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
+
+# The blocking Aura-1 synth runs one step.do per shot in a Workflow (unlimited wall, per-shot retry +
+# checkpoint, survives recycle) instead of a request-path waitUntil the runtime cancels at ~30s (#155).
+[[workflows]]
+name = "dialogue-gen"
+binding = "DIALOGUE_WORKFLOW"
+class_name = "DialogueGenWorkflow"
