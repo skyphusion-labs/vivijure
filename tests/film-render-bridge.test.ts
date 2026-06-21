@@ -218,7 +218,6 @@ describe("filmRowFromJob (#164 -- film jobs in render history)", () => {
   it("maps a full render job to a renders row (tier defaults to final)", () => {
     const row = filmRowFromJob(base);
     expect(row).toEqual({
-      userEmail: "joan@skyphusion.org",
       jobId: "film-abc",
       project: "demo",
       bundleKey: "bundles/demo.tar.gz",
@@ -246,8 +245,4 @@ describe("filmRowFromJob (#164 -- film jobs in render history)", () => {
     expect(filmRowFromJob({ ...base, phase: "failed", cancelled: true }).status).toBe("CANCELLED");
   });
 
-  it("defaults userEmail to an empty string when the job has no owner", () => {
-    const { user_email: _omit, ...noOwner } = base;
-    expect(filmRowFromJob(noOwner as FilmJob).userEmail).toBe("");
-  });
 });

@@ -37,15 +37,11 @@ function wrap(fn: () => Promise<Response>): Promise<Response> {
 /** Copy a chat-side artifact (env.R2) into R2_RENDERS under destPrefix.<ext>. */
 export async function copyChatArtifactToRenders(
   env: Env,
-  userEmail: string,
   srcKey: string,
   destPrefix: string,
 ): Promise<{ key: string; mime: string }> {
   const obj = await env.R2.get(srcKey);
   if (!obj) throw new HttpError(404, `source artifact not found: ${srcKey}`);
-  if (obj.customMetadata?.user_email !== userEmail) {
-    throw new HttpError(403, "source artifact not owned by this user");
-  }
   const mime = obj.httpMetadata?.contentType || "image/png";
   if (!CAST_IMAGE_MIME_RE.test(mime)) {
     throw new HttpError(400, `source mime ${mime} not allowed (png/jpeg/webp only)`);
@@ -57,7 +53,6 @@ export async function copyChatArtifactToRenders(
   const key = `${destPrefix}.${extFromMime(mime)}`;
   await env.R2_RENDERS.put(key, bytes, {
     httpMetadata: { contentType: mime },
-    customMetadata: { user_email: userEmail },
   });
   return { key, mime };
 }
@@ -66,7 +61,6 @@ export async function handleCastPortraitUpload(
   request: Request,
   env: Env,
   id: number,
-  userEmail: string,
 ): Promise<Response> {
   return wrap(async () => {
     const cur = await getCastById(env, id);
@@ -88,7 +82,6 @@ export async function handleCastPortraitUpload(
         }
         const { key, mime } = await copyChatArtifactToRenders(
           env,
-          userEmail,
           body.from_chat_artifact,
           `cast/${id}/portrait`,
         );
@@ -117,7 +110,6 @@ export async function handleCastPortraitUpload(
     const key = `cast/${id}/portrait.${extFromMime(contentType)}`;
     await env.R2_RENDERS.put(key, new Uint8Array(buf), {
       httpMetadata: { contentType },
-      customMetadata: { user_email: userEmail },
     });
     const row = await setPortrait(env, id, key, contentType);
     return json({ cast: row });
@@ -128,7 +120,6 @@ export async function handleCastRefAdd(
   request: Request,
   env: Env,
   id: number,
-  userEmail: string,
 ): Promise<Response> {
   return wrap(async () => {
     const cur = await getCastById(env, id);
@@ -147,7 +138,6 @@ export async function handleCastRefAdd(
       if (typeof body.from_chat_artifact === "string" && body.from_chat_artifact) {
         const { key, mime } = await copyChatArtifactToRenders(
           env,
-          userEmail,
           body.from_chat_artifact,
           `cast/${id}/refs/${crypto.randomUUID()}`,
         );
@@ -170,7 +160,6 @@ export async function handleCastRefAdd(
     const key = `cast/${id}/refs/${crypto.randomUUID()}.${extFromMime(contentType)}`;
     await env.R2_RENDERS.put(key, new Uint8Array(buf), {
       httpMetadata: { contentType },
-      customMetadata: { user_email: userEmail },
     });
     const row = await addRef(env, id, { key, mime: contentType });
     return json({ cast: row });
@@ -193,7 +182,6 @@ export async function handleCastSourceAdd(
   request: Request,
   env: Env,
   id: number,
-  userEmail: string,
 ): Promise<Response> {
   return wrap(async () => {
     const cur = await getCastById(env, id);
@@ -212,7 +200,6 @@ export async function handleCastSourceAdd(
       if (typeof body.from_chat_artifact === "string" && body.from_chat_artifact) {
         const { key, mime } = await copyChatArtifactToRenders(
           env,
-          userEmail,
           body.from_chat_artifact,
           `cast/${id}/sources/${crypto.randomUUID()}`,
         );
@@ -235,7 +222,6 @@ export async function handleCastSourceAdd(
     const key = `cast/${id}/sources/${crypto.randomUUID()}.${extFromMime(contentType)}`;
     await env.R2_RENDERS.put(key, new Uint8Array(buf), {
       httpMetadata: { contentType },
-      customMetadata: { user_email: userEmail },
     });
     const row = await addSource(env, id, { key, mime: contentType });
     return json({ cast: row });

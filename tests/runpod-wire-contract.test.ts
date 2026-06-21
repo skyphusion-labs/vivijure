@@ -36,13 +36,11 @@ describe("buildSubmitPayload wire contract", () => {
     const { input } = buildSubmitPayload({
       bundleKey: "bundles/x.tar.gz",
       qualityTier: "draft",
-      userEmail: "u@e.com",
       audioKey: "audio/bed.mp3",
       pretrainedLoras: { hero: "loras/hero.safetensors" },
       processShotIds: ["shot_01", "shot_02"],
     });
     expect(input.quality_tier).toBe("draft");
-    expect(input.user_email).toBe("u@e.com");
     expect(input.audio_key).toBe("audio/bed.mp3");
     expect(input.pretrained_loras).toEqual({ hero: "loras/hero.safetensors" });
     expect(input.process_shot_ids).toEqual(["shot_01", "shot_02"]);
@@ -51,12 +49,10 @@ describe("buildSubmitPayload wire contract", () => {
   it("keeps empty optionals OFF the wire (no empty strings / arrays / maps)", () => {
     const { input } = buildSubmitPayload({
       bundleKey: "bundles/x.tar.gz",
-      userEmail: "",
       audioKey: "",
       pretrainedLoras: {},
       processShotIds: [],
     });
-    expect("user_email" in input).toBe(false);
     expect("audio_key" in input).toBe(false);
     expect("pretrained_loras" in input).toBe(false);
     expect("process_shot_ids" in input).toBe(false);
@@ -75,14 +71,13 @@ describe("buildFinalizePayload wire contract", () => {
   it("stamps action=finalize and mirrors the submit field names", () => {
     const { input } = buildFinalizePayload({
       project: "hero", bundleKey: "bundles/hero.tar.gz", qualityTier: "standard",
-      userEmail: "u@e.com", processShotIds: ["shot_03"], audioKey: "audio/a.mp3",
+      processShotIds: ["shot_03"], audioKey: "audio/a.mp3",
       pretrainedLoras: { hero: "loras/h.safetensors" },
     });
     expect(input.action).toBe("finalize");
     expect(input.project).toBe("hero");
     expect(input.bundle_key).toBe("bundles/hero.tar.gz");
     expect(input.quality_tier).toBe("standard");
-    expect(input.user_email).toBe("u@e.com");
     expect(input.process_shot_ids).toEqual(["shot_03"]);
     expect(input.audio_key).toBe("audio/a.mp3");
     expect(input.pretrained_loras).toEqual({ hero: "loras/h.safetensors" });

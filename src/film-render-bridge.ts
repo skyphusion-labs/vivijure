@@ -25,7 +25,6 @@ export function filmRowFromJob(job: FilmJob): NewRenderRow {
   // Same mode derivation filmJobToPollView uses, so the row + the poll view never disagree.
   const mode = job.derive_mode ?? (job.keyframes_only ? "keyframes-only" : "full");
   return {
-    userEmail: job.user_email ?? "",
     jobId: job.film_id,
     project: job.project,
     bundleKey: job.bundle_key,

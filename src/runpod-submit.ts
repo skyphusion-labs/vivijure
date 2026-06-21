@@ -45,12 +45,6 @@ export interface RenderSubmitArgs {
   // flag). normalizeRenderOverrides drops anything else; the pod re-clamps. See
   // docs/render-api.md.
   renderOverrides?: Record<string, unknown>;
-  // v0.39.0: stamped on every R2 upload the GPU side produces (MP4,
-  // state.tar.gz, keyframes) as x-amz-meta-user_email, so the existing
-  // /api/artifact route can authorize the user back to their own
-  // artifacts. Pre-0.39.0 jobs (no user_email) still render, but their
-  // artifacts are not fetchable through the ownership-checked route.
-  userEmail?: string;
   // v0.40.0: skip Wan I2V + silent-MP4 assembly; produce only SDXL
   // keyframes so the user can preview shots before committing to the
   // full render. v0.160.0: this now selects the first-class
@@ -90,7 +84,6 @@ export interface RenderJobInput {
   bundle_key: string;
   quality_tier: "draft" | "standard" | "final";
   render_overrides?: Record<string, unknown>;
-  user_email?: string;
   audio_key?: string;
   // v0.58.0: {slot: r2_key} of pretrained LoRAs the worker should
   // stage to skip Stage 1 training. Resolved server-side from cast
@@ -110,7 +103,6 @@ export interface RegenShotArgs {
   project: string;
   bundleKey: string;
   shotId: string;
-  userEmail?: string;
 }
 
 export interface RegenShotJobInput {
@@ -118,7 +110,6 @@ export interface RegenShotJobInput {
   project: string;
   bundle_key: string;
   process_shot_ids: string[];
-  user_email?: string;
 }
 
 // v0.42.0: finalize. Runs Wan I2V over the keyframes already on the
@@ -131,7 +122,6 @@ export interface FinalizeArgs {
   bundleKey: string;
   qualityTier?: "draft" | "standard" | "final";
   renderOverrides?: Record<string, unknown>;
-  userEmail?: string;
   // v0.45.0: optional shot_id list to restrict the I2V pass + final
   // assembly to. When non-empty the GPU (vivijure-serverless 0.4.5+)
   // processes ONLY these shots and assembles the silent MP4 from a
@@ -151,7 +141,6 @@ export interface FinalizeJobInput {
   bundle_key: string;
   quality_tier: "draft" | "standard" | "final";
   render_overrides?: Record<string, unknown>;
-  user_email?: string;
   process_shot_ids?: string[];
   audio_key?: string;
   pretrained_loras?: Record<string, string>;
@@ -165,7 +154,6 @@ export interface FinalizeJobInput {
 export interface TrainLoraArgs {
   project: string;
   bundleKey: string;
-  userEmail?: string;
   // The namespaced override contract (same as the render path). Training
   // hyperparams ride render_overrides.lora (rank / max_steps / learning_rate /
   // ...), parsed by config.py RenderConfig.from_request on the pod. Lets the
@@ -177,7 +165,6 @@ export interface TrainLoraJobInput {
   action: "train_lora";
   project: string;
   bundle_key: string;
-  user_email?: string;
   render_overrides?: Record<string, unknown>;
 }
 
@@ -238,9 +225,6 @@ export function buildSubmitPayload(args: RenderSubmitArgs): { input: RenderJobIn
   if (args.keyframesOnly) input.action = "preview";
   const ro = normalizeRenderOverrides(args.renderOverrides);
   if (ro) input.render_overrides = ro;
-  if (typeof args.userEmail === "string" && args.userEmail.length > 0) {
-    input.user_email = args.userEmail;
-  }
   // v0.52.0: pass through the audio bed key. Already-empty values stay
   // off the wire so 0.4.10 and earlier workers (which ignore unknown
   // fields anyway) see no diff.
@@ -279,9 +263,6 @@ export function buildFinalizePayload(args: FinalizeArgs): { input: FinalizeJobIn
   };
   const ro = normalizeRenderOverrides(args.renderOverrides);
   if (ro) input.render_overrides = ro;
-  if (typeof args.userEmail === "string" && args.userEmail.length > 0) {
-    input.user_email = args.userEmail;
-  }
   // v0.45.0: only include the shot list when there is at least one
   // shot to process. An empty array stripped to undefined means "run
   // the full all-scenes flow" on the GPU side; that matches the
@@ -309,9 +290,6 @@ export function buildTrainLoraPayload(args: TrainLoraArgs): { input: TrainLoraJo
     project: args.project,
     bundle_key: args.bundleKey,
   };
-  if (typeof args.userEmail === "string" && args.userEmail.length > 0) {
-    input.user_email = args.userEmail;
-  }
   const ro = normalizeRenderOverrides(args.renderOverrides);
   if (ro) input.render_overrides = ro;
   return { input };
@@ -363,9 +341,6 @@ export function buildRegenShotPayload(args: RegenShotArgs): { input: RegenShotJo
     bundle_key: args.bundleKey,
     process_shot_ids: [args.shotId],
   };
-  if (typeof args.userEmail === "string" && args.userEmail.length > 0) {
-    input.user_email = args.userEmail;
-  }
   return { input };
 }
 

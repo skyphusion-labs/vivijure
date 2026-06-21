@@ -165,7 +165,7 @@ async function generateImageBytes(
   return { bytes, mime, logId };
 }
 
-export async function chatImage(env: Env, args: ChatImageArgs, userEmail: string): Promise<ChatImageResult> {
+export async function chatImage(env: Env, args: ChatImageArgs): Promise<ChatImageResult> {
   const model = findModel(args.model);
   if (!model || model.type !== "image") {
     return { ok: false, error: `model "${args.model}" is not an image model`, model: args.model };
@@ -173,7 +173,7 @@ export async function chatImage(env: Env, args: ChatImageArgs, userEmail: string
   const start = Date.now();
   try {
     const { bytes, mime, logId } = await generateImageBytes(env, model, args);
-    const output_artifact = await putChatArtifact(env, mime, bytes, userEmail);
+    const output_artifact = await putChatArtifact(env, mime, bytes);
     const latency_ms = Date.now() - start;
     return {
       ok: true,
