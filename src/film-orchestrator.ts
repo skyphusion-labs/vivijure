@@ -343,8 +343,15 @@ export function resolveFinishConfigs(
  *  A `pending` shot mid-chain (idx < last) is NOT adopted: its R2 key would be an intermediate module's
  *  output, not the chain's final artifact, so the remaining modules must still run. */
 export function finishShotAdoptableFromR2(fs: FinishShot): boolean {
+  // Adopt an R2 clip ONLY when it is the chain's FINAL artifact (idx === last). A mid-chain shot's
+  // R2 key is an INTERMEDIATE module's output, so adopting it skips the remaining finish modules
+  // (e.g. lip-sync) and ships a half-finished, silent clip. This guard protected the `pending` branch
+  // but the `failed` branch lacked it, so a mid-chain module failure adopted the intermediate as
+  // "done" -- the silent showcase render (lip-sync failed at idx 1 of 4 -> the RIFE intermediate was
+  // adopted). The failed branch is the #141 GC'd-job path: a fast-failed shot whose FINAL clip is in R2.
+  if (fs.idx !== fs.chain.length - 1) return false;
   if (fs.status === "failed") return true;
-  return fs.status === "pending" && !!fs.poll && fs.idx === fs.chain.length - 1;
+  return fs.status === "pending" && !!fs.poll;
 }
 
 /** Pure: adopt every adoptable finish shot whose finished clip is present in R2 (the artifact overrides

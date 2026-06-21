@@ -46,6 +46,25 @@ describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifa
     expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: "tok", idx: 0, chain: ["MODULE_A", "MODULE_B"] }))).toBe(false);
   });
 
+  it("does NOT adopt a FAILED shot mid-chain (the silent-render bug: a lip-sync fail at idx 1 of 4 must not adopt the RIFE intermediate)", () => {
+    const midChainFailed = finishShot({
+      status: "failed", idx: 1,
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+    });
+    expect(finishShotAdoptableFromR2(midChainFailed)).toBe(false);
+  });
+
+  it("reclaim does NOT touch a mid-chain FAILED shot even when an intermediate clip is present in R2", () => {
+    const failed = finishShot({
+      shot_id: "shot_02", status: "failed", idx: 1, // failed at lip-sync (idx 1), 2 more steps to go
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+    });
+    const present = new Map([["shot_02", "renders/p/clips/shot_02_finished.mp4"]]); // the RIFE intermediate
+    const adopted = reclaimFinishShotsFromR2([failed], present);
+    expect(adopted).toBe(0);
+    expect(failed.status).toBe("failed"); // NOT silently flipped to done on an intermediate
+  });
+
   it("does NOT adopt a PENDING shot with no poll token (never submitted -- nothing produced it yet)", () => {
     expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: undefined, idx: 0, chain: ["MODULE_FINISH_RIFE"] }))).toBe(false);
   });
