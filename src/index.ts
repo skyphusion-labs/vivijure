@@ -9,6 +9,7 @@ import {
   normalizeFilmScenes, filterScenesByShotIds,
 } from "./film-render-bridge";
 import { animateFromPreview, clipAnimateProgress } from "./finalize-from-keyframes";
+import { resolveCastLoras, untrainedCastMessage } from "./cast-loras";
 import { normalizeHybridBackends } from "./storyboard-validate";
 import { startCastRefsJob, advanceCastRefsJob, summarizeCastRefs } from "./cast-image-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
@@ -425,6 +426,7 @@ const hSubmitRender: Handler = async (req, env) => {
     renderOverrides?: Record<string, unknown>; keyframesOnly?: boolean; audioKey?: string;
     processShotIds?: string[]; projectId?: unknown;
     scenes?: unknown; motion_backend?: string;
+    castLoras?: Record<string, unknown>;
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
   const tier = coerceQualityTier(b.qualityTier) ?? "final";
@@ -439,6 +441,16 @@ const hSubmitRender: Handler = async (req, env) => {
   if (!b.keyframesOnly && servingForHook(modules, "motion.backend").length === 0) {
     throw badRequest("no motion.backend module installed for full render");
   }
+
+  // FAIL HARD on any bound character whose cast LoRA is not ready, instead of letting the GPU
+  // silently inline-retrain it (the ~20-min, no-signal week-long bug). A character with NO bound
+  // cast LoRA is unaffected -- the gate only fires when the planner sent {slot: cast_id} bindings
+  // and one resolves to a not-ready row. Ready bindings are forwarded as pretrained_loras so the GPU
+  // REUSES the banked adapter (the canonical cast-page Train LoRAs flow), and cast_loras lets the
+  // orchestrator bank any freshly-trained adapter back onto the cast member. Mirrors the scatter path.
+  const { pretrained, castIds, skipped, skippedDetail } = await resolveCastLoras(env, b.castLoras);
+  if (skipped.length) throw badRequest(untrainedCastMessage(skippedDetail));
+
   const mapped = mapRenderOverridesToModuleConfigs(b.renderOverrides, tier, modules);
   const motionBackend = b.keyframesOnly
     ? undefined
@@ -453,6 +465,8 @@ const hSubmitRender: Handler = async (req, env) => {
     finish_config: mapped.finish_config,
     keyframes_only: !!b.keyframesOnly,
     audio_key: b.keyframesOnly ? undefined : b.audioKey,
+    pretrained_loras: Object.keys(pretrained).length ? pretrained : undefined,
+    cast_loras: Object.keys(castIds).length ? castIds : undefined,
     user_email: email,
   });
   const view = filmJobToPollView(job, null);
