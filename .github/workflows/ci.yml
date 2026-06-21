@@ -34,17 +34,12 @@ jobs:
       - name: Test
         run: npm test
 
-      # wrangler builds the video-finish container image at deploy time, which needs `docker build`.
-      # The job runs in node:22-alpine (no docker CLI), and the GitHub-hosted runner exposes its
-      # Docker daemon to the job container, so the CLI reaches the daemon. docker-cli alone is NOT
-      # enough: Docker routes `docker build` to the removed legacy builder (exit 125). We need the
-      # buildx plugin AND `docker buildx install`, which wires `docker build` -> `docker buildx
-      # build` (the plugin binary present but un-installed still falls through to legacy). See #68.
-      - name: Docker setup (buildx for the video-finish container image build)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          apk add --no-cache docker-cli docker-cli-buildx
-          docker buildx install
+      # NOTE: the 3 CPU containers (video-finish / image-prep / audio-beat-sync) are NOT built or
+      # deployed here. CF Containers were dropped in wrangler.toml migration v2-drop-cpu-containers
+      # (issue #83); they now run always-on on the fleet (dischord) as Docker services, deployed out
+      # of band via containers/compose.yaml (`docker compose -p vivijure-media up -d --build`) and
+      # reached over the VIDEO_FINISH_VPC / IMAGE_PREP_VPC / AUDIO_BEAT_SYNC_VPC bindings. `wrangler
+      # deploy` ships ONLY the workers, so this job needs no Docker/buildx setup.
 
       # Module workers deploy BEFORE the core. The core binds each module as a service, and a
       # [[services]] binding to a not-yet-deployed service makes the core `wrangler deploy` fail.
