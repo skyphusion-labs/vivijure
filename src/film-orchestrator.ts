@@ -461,6 +461,7 @@ export async function callVideoFinish(
     fps?: number;
     audioUrl?: string;
     remuxAudioOnly?: boolean;
+    keepClipAudio?: boolean;
   },
   opts: { retries?: number; backoffMs?: number } = {},
 ): Promise<Response | null> {
@@ -763,9 +764,14 @@ async function enterAssemblePhase(
   }
   const outputUrl = await presignR2Put(env, outputKey, 1800);
 
+  // Talking film: when shots carry per-shot dialogue, the lip-sync module baked that audio into each
+  // clip. Tell the container to preserve per-clip audio through the concat (keepClipAudio) instead of
+  // stripping it (-an) -- otherwise the assembled film comes out silent despite the spoken clips.
+  const keepClipAudio = !!job.dialogue_audio && Object.keys(job.dialogue_audio).length > 0;
+
   // Resolution/fps are left to the container default (it normalizes the clips); the motion output
   // does not carry width/height, so matching the source resolution is a later polish, not a gate.
-  const resp = await callVideoFinish(env, { clips, outputUrl, outputKey });
+  const resp = await callVideoFinish(env, { clips, outputUrl, outputKey, keepClipAudio });
   // A transient gateway outcome (unreachable / 502 / 503 / 504) auto-recovers across polls instead of
   // going terminal: the clips are intact in R2 and re-PUTting the same film key is idempotent, so keep
   // phase="assemble" and let the next poll re-attempt against a (by then) warmer container -- bounded so
