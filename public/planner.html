@@ -388,6 +388,11 @@
           </p>
         </div>
       </details>
+      <!-- v0.221.0: LoRA training preflight warning. Hidden until a render
+           click finds a bound character whose LoRA is not trained-and-ready;
+           such a slot would be retrained inline (~20 min) by the server
+           fail-safe. Populated by showLoraPreflightWarning() in planner.js. -->
+      <div id="planner-lora-preflight-warning" class="planner-lora-preflight-warning" role="alert" hidden></div>
       <div class="planner-actions">
         <button id="planner-render-btn" type="button" class="planner-primary">render</button>
         <span id="planner-render-meta" class="planner-status"></span>
@@ -531,6 +536,7 @@
   <script src="topbar.js"></script>
   <script src="planner-registry.js"></script>
   <script src="planner-render-config.js"></script>
+  <script src="lora-preflight.js"></script>
   <script src="planner.js"></script>
 </body>
 </html>

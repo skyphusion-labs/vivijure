@@ -670,6 +670,20 @@ details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
 .planner-preflight-scope { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); }
 .planner-preflight-msg { font-size: 13px; line-height: 1.45; }
 
+/* v0.221.0: LoRA training preflight warning on the render stage */
+.planner-lora-preflight-warning {
+  display: block; margin: 12px 0; padding: 12px 14px;
+  border-radius: 10px; border: 1px solid var(--line); border-left: 3px solid #e8b84a;
+  background: var(--panel-2); font-size: 13px; line-height: 1.45;
+}
+.planner-lora-preflight-msg { color: #e8b84a; }
+.planner-lora-preflight-link {
+  display: inline-block; margin-left: 4px; color: var(--accent);
+  font-weight: 600; text-decoration: none;
+}
+.planner-lora-preflight-link:hover { text-decoration: underline; }
+.planner-history-mode-lora-failsafe { color: #e8b84a; border-color: #5b4a20; }
+
 /* bundle uploads */
 .planner-slot-upload {
   border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--panel-2); display: grid; gap: 10px;
