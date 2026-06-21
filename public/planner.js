@@ -3591,7 +3591,95 @@ function showRenderStage() {
   $("#planner-render-result").hidden = true;
   stage.scrollIntoView({ behavior: "smooth", block: "start" });
   setRenderStatus("", "");
+  // v0.221.0: a fresh visit to the render stage starts with no LoRA warning;
+  // the next render click re-checks against fresh cast state.
+  hideLoraPreflightWarning();
+  loraPreflightAck = null;
   updateScatterGate();
+}
+
+// ---------- LoRA training preflight (v0.221.0) ----------
+//
+// A bound character whose LoRA is not trained-and-ready gets its LoRA RETRAINED
+// inline (~20 min) on EVERY render via the server fail-safe (resolveCastLoras).
+// That used to fire with no visible signal -- the bug this closes. Right before
+// a render submit we re-read FRESH cast state and, if any bound slot will
+// trigger the retrain tax, show a visible, actionable warning. It is NOT a hard
+// block: the fail-safe is a valid escape hatch, so a second render click (with
+// the same warning standing) proceeds anyway.
+//
+// FRESH, not cached: the page-load cast catalog's lora_status goes stale when
+// training finishes after load (see buildCastLoraSubmit v0.135.6), so the gate
+// re-fetches /api/cast before checking rather than trusting planState.castCatalog.
+
+// Signature of the unready-slot set the user has already acknowledged by
+// clicking render a second time. Reset whenever the set is empty or changes.
+let loraPreflightAck = null;
+
+function hideLoraPreflightWarning() {
+  const el = $("#planner-lora-preflight-warning");
+  if (!el) return;
+  el.hidden = true;
+  el.textContent = "";
+}
+
+function showLoraPreflightWarning(unready) {
+  const el = $("#planner-lora-preflight-warning");
+  if (!el) return;
+  const names = unready.map((u) => u.name).join(", ");
+  el.textContent = "";
+  // Build with textContent (names are user-authored) plus a real link to /cast.
+  const msg = document.createElement("span");
+  msg.className = "planner-lora-preflight-msg";
+  msg.textContent =
+    "Warning: these characters have no trained LoRA and will be retrained inline " +
+    "(~20 min each) during this render: " + names + ". Train them on the Cast page " +
+    "first for instant reuse. Click render again to proceed anyway.";
+  const link = document.createElement("a");
+  link.href = "/cast";
+  link.className = "planner-lora-preflight-link";
+  link.textContent = "open Cast page";
+  el.appendChild(msg);
+  el.appendChild(document.createTextNode(" "));
+  el.appendChild(link);
+  el.hidden = false;
+}
+
+// Returns true when the render may proceed, false when it should pause on a
+// freshly-shown warning. Re-fetches /api/cast so the readiness check is fresh.
+async function loraPreflightGate() {
+  const bindings = planState.castBindings || {};
+  if (Object.keys(bindings).length === 0) {
+    hideLoraPreflightWarning();
+    loraPreflightAck = null;
+    return true;
+  }
+  setRenderStatus("checking cast LoRA status...", "loading");
+  // Refresh the catalog in place; loadCast swallows its own errors and leaves
+  // the prior catalog on failure, which is an acceptable fall-back here.
+  await loadCast();
+  const unready = window.loraPreflight.unreadyBoundLoraSlots(bindings, planState.castCatalog);
+  if (unready.length === 0) {
+    hideLoraPreflightWarning();
+    loraPreflightAck = null;
+    setRenderStatus("", "");
+    return true;
+  }
+  const sig = window.loraPreflight.loraSlotSignature(unready);
+  if (loraPreflightAck === sig) {
+    // Same warning the user already saw; they clicked render again -> proceed.
+    hideLoraPreflightWarning();
+    return true;
+  }
+  loraPreflightAck = sig;
+  showLoraPreflightWarning(unready);
+  setRenderStatus(
+    unready.length === 1
+      ? "1 bound character has no trained LoRA (see warning above)"
+      : unready.length + " bound characters have no trained LoRA (see warning above)",
+    "error",
+  );
+  return false;
 }
 
 async function submitRender() {
@@ -5141,6 +5229,25 @@ function focusHistoryRow(id) {
   if (li) li.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
+// v0.221.0: read the inline-retrain (fail-safe) signal off a render row. When a
+// bound character had no trained LoRA at submit, the GPU retrained it inline
+// (~20 min) instead of reusing -- the silent tax this preflight surfaces. The
+// backend stamps the row with lora_failsafe_retrain (Mackaye's sibling task);
+// this reader is the UI hook, tolerant of the final wire shape so the badge
+// lights up the moment the flag lands without a second frontend change. Returns
+// { fired, slots }; fired drives the badge, slots names it when available.
+function loraFailsafeInfo(r) {
+  if (!r) return { fired: false, slots: [] };
+  const raw = r.lora_failsafe_retrain != null
+    ? r.lora_failsafe_retrain
+    : (r.output && typeof r.output === "object" ? r.output.lora_failsafe_retrain : null);
+  if (raw == null || raw === false) return { fired: false, slots: [] };
+  let slots = [];
+  if (Array.isArray(raw)) slots = raw.map(String);
+  else if (typeof raw === "object" && Array.isArray(raw.slots)) slots = raw.slots.map(String);
+  return { fired: true, slots };
+}
+
 function buildHistoryRow(r, childrenByParent) {
   const li = document.createElement("li");
   li.className = "planner-history-item";
@@ -5209,6 +5316,23 @@ function buildHistoryRow(r, childrenByParent) {
     modeBadge.textContent = "kf only";
     modeBadge.title = "this render produced SDXL keyframes only; no motion / no silent MP4";
     meta.appendChild(modeBadge);
+  }
+
+  // v0.221.0: LoRA inline-retrain (fail-safe) badge. A bound character with no
+  // trained LoRA at submit gets retrained inline (~20 min) instead of reused.
+  // This used to be invisible; the badge makes it never silent again. The flag
+  // is stamped by the backend sibling task -- loraFailsafeInfo is a no-op until
+  // it lands, then a visible badge.
+  const failsafe = loraFailsafeInfo(r);
+  if (failsafe.fired) {
+    const fsBadge = document.createElement("span");
+    fsBadge.className = "planner-history-mode planner-history-mode-lora-failsafe";
+    fsBadge.textContent = "LoRA retrained inline";
+    fsBadge.title =
+      "a bound character had no trained LoRA, so it was retrained inline during this render (~20 min)" +
+      (failsafe.slots.length ? ": " + failsafe.slots.join(", ") : "") +
+      ". Train it on the Cast page for instant reuse next time.";
+    meta.appendChild(fsBadge);
   }
 
   // v0.162.0: scatter parent badge + shard progress. Shard children are
@@ -6964,7 +7088,22 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#planner-bundle-btn").addEventListener("click", bundleNow);
   // v0.162.0: dispatch to submitScatterRender when the scatter checkbox is
   // checked; fall through to submitRender for all other cases.
-  $("#planner-render-btn").addEventListener("click", () => {
+  $("#planner-render-btn").addEventListener("click", async () => {
+    // v0.221.0: LoRA training preflight runs first for BOTH the normal and the
+    // scatter submit paths (each reuses buildCastLoraSubmit, so each can trip
+    // the inline-retrain fail-safe). The gate fetches fresh cast state, so
+    // disable the button while it runs to avoid a double-submit.
+    const btn = $("#planner-render-btn");
+    btn.disabled = true;
+    let proceed = false;
+    try {
+      proceed = await loraPreflightGate();
+    } finally {
+      // submitRender / submitScatterRender re-take ownership of the disabled
+      // state from here; on a pause (proceed === false) the button stays usable.
+      btn.disabled = false;
+    }
+    if (!proceed) return;
     const scatter = $("#planner-scatter");
     if (scatter && scatter.checked && !scatter.disabled) {
       submitScatterRender();
