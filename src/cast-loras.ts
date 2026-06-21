@@ -17,7 +17,20 @@ export interface ResolvedCastLoras {
   // orchestrator uses this at keyframe completion to write a freshly-trained adapter back onto the
   // right cast member (markLoraReady) so it is reused across projects instead of retrained.
   castIds: Record<string, number>;
+  // Slots whose LoRA is NOT ready (bad id, missing cast row, still training, or no trained adapter).
+  // The render path hard-rejects on this rather than letting the GPU silently inline-train (~20-min
+  // tax). `skipped` is the slot ids only (back-compat with scatter's emptiness check); `skippedDetail`
+  // carries the per-character name + reason so the caller can name exactly who needs training.
   skipped: string[];
+  skippedDetail: SkippedCast[];
+}
+
+export interface SkippedCast {
+  slot: string;
+  castId?: number;
+  // Display name of the cast member, when the row resolved (absent for a bad id / missing row).
+  name?: string;
+  reason: "not a valid cast id" | "cast member not found" | "LoRA still training" | "no trained LoRA";
 }
 
 /** Map slot -> cast_id from the request body into slot -> loras/ R2 key (drops non-ready rows),
@@ -31,13 +44,15 @@ export async function resolveCastLoras(
   const voices: Record<string, string> = {};
   const castIds: Record<string, number> = {};
   const skipped: string[] = [];
-  if (!castLoras || typeof castLoras !== "object") return { pretrained, voices, castIds, skipped };
+  const skippedDetail: SkippedCast[] = [];
+  const skip = (d: SkippedCast) => { skipped.push(d.slot); skippedDetail.push(d); };
+  if (!castLoras || typeof castLoras !== "object") return { pretrained, voices, castIds, skipped, skippedDetail };
 
   for (const [slot, raw] of Object.entries(castLoras)) {
     if (typeof slot !== "string" || !slot.trim()) continue;
     const id = typeof raw === "number" ? raw : Number(raw);
     if (!Number.isInteger(id) || id <= 0) {
-      skipped.push(slot);
+      skip({ slot, reason: "not a valid cast id" });
       continue;
     }
     castIds[slot] = id;
@@ -47,11 +62,28 @@ export async function resolveCastLoras(
     }
     // Voice rides the row we already fetched, independent of LoRA readiness.
     if (cast) voices[slot] = coerceVoiceId(cast.voice_id) ?? DEFAULT_VOICE_ID;
-    if (!cast || cast.lora_status !== "ready" || !cast.lora_key || !cast.lora_key.startsWith("loras/")) {
-      skipped.push(slot);
+    if (!cast) {
+      skip({ slot, castId: id, reason: "cast member not found" });
+      continue;
+    }
+    if (cast.lora_status !== "ready" || !cast.lora_key || !cast.lora_key.startsWith("loras/")) {
+      skip({
+        slot, castId: id, name: cast.name,
+        reason: cast.lora_status === "training" ? "LoRA still training" : "no trained LoRA",
+      });
       continue;
     }
     pretrained[slot] = cast.lora_key;
   }
-  return { pretrained, voices, castIds, skipped };
+  return { pretrained, voices, castIds, skipped, skippedDetail };
+}
+
+/** Build an actionable, per-character rejection message from the skipped slots: name who needs
+ *  training (falling back to the slot id when the cast row did not resolve) and where to do it. */
+export function untrainedCastMessage(skippedDetail: SkippedCast[]): string {
+  const names = skippedDetail.map((d) => {
+    const who = d.name ?? `slot ${d.slot}`;
+    return d.reason === "LoRA still training" ? `${who} (still training)` : who;
+  });
+  return `These characters have no trained LoRA -- train them on the Cast page first: ${names.join(", ")}.`;
 }
