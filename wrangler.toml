@@ -188,9 +188,14 @@ service = "vivijure-module-google-veo"
 binding = "MODULE_VIDU_Q3"
 service = "vivijure-module-vidu-q3"
 
-[[services]]
-binding = "MODULE_ALIBABA_WAN"
-service = "vivijure-module-alibaba-wan"
+# PULLED for QA (#246): Wan 2.6 FAILs the finish path -- finish-rife (RIFE, vivijure-backend) crashes
+# on its non-64-divisible 1270x726 i2v output, and the studio silent-degrades to a raw clip with
+# applied=[] (full root cause: #245). Commenting the binding deregisters it from the motion-backend
+# selector (the registry discovers MODULE_* bindings only). Module code + worker are left in place;
+# RE-ENABLE = uncomment these three lines once the finish path is fixed and a render hits VOICED+FULL.
+# [[services]]
+# binding = "MODULE_ALIBABA_WAN"
+# service = "vivijure-module-alibaba-wan"
 
 # plan-enhance-py: the Python on-ramp PROOF module (plan.enhance, deterministic rule-based direction).
 # A CF Python Worker behind the same hook contract as the TS plan-enhance, discovered by the registry
