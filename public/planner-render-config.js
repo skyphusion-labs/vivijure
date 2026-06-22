@@ -1,9 +1,10 @@
 // Registry-driven render module config panel for the planner Render step.
-// Renders controls from installed modules' config_schema (keyframe, motion.backend, finish).
+// Renders controls from installed modules' config_schema (keyframe, motion.backend, speech, finish).
 (function (global) {
   const HOOKS = [
     { hook: "keyframe", title: "Keyframe", pickOne: true },
     { hook: "motion.backend", title: "Motion", pickOne: true },
+    { hook: "speech", title: "Speech", chain: true },
     { hook: "finish", title: "Finish", chain: true },
     { hook: "master", title: "Audio master", chain: true },
   ];
@@ -211,6 +212,7 @@
 
     const keyframeMods = cache.keyframe || [];
     const motionMods = cache["motion.backend"] || [];
+    const speechMods = cache.speech || [];
     const finishMods = cache.finish || [];
 
     if (!keyframeMods.length) {
@@ -225,6 +227,9 @@
     else if (motionWrap) motionWrap.hidden = true;
 
     for (const mod of motionMods) root.appendChild(renderModuleSection(mod));
+    // `speech` (dialogue-audio enhancement chain) sits between motion and finish,
+    // its real pipeline position: dialogue -> speech -> finish.
+    for (const mod of speechMods) root.appendChild(renderModuleSection(mod));
     for (const mod of finishMods) root.appendChild(renderModuleSection(mod));
   }
 

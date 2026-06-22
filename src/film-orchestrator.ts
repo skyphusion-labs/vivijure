@@ -9,7 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
-import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, MasterInput, MasterOutput } from "./modules/types";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
@@ -46,6 +46,25 @@ export interface FinishShot {
   attempts?: number;
 }
 
+/** One shot's dialogue audio moving through the `speech` chain (post-dialogue, pre-finish). `chain` is
+ *  the speech module bindings in ui.order; `idx` walks them, each consuming the previous module's
+ *  enhanced audio. `configs` is the validated config per step (parallel to `chain`). Mirrors FinishShot,
+ *  but threads AUDIO (audio_key) instead of the video clip. A speech step is a POLISH step: a hard
+ *  failure DEGRADES the shot (keeps its current audio) rather than failing the render. */
+export interface SpeechShot {
+  shot_id: string;
+  audio_key: string;   // current dialogue-audio key (updated as each speech module completes)
+  chain: string[];     // speech module env-binding names, in ui.order
+  configs?: Record<string, unknown>[];
+  idx: number;
+  status: "pending" | "done" | "failed";
+  poll?: string;
+  applied: string[];
+  degraded?: string;   // last soft-degrade reason on this shot (honest, never a fake applied tag)
+  error?: string;
+  attempts?: number;   // transient-retry counter for the current step (reset on advance)
+}
+
 export interface FilmKeyframeRef {
   shot_id: string;
   keyframe_key: string;
@@ -59,11 +78,13 @@ export interface FilmJob {
   motion_backend: string | null;
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>; // per finish module (keyed by module name), validated at enterFinishPhase
+  speech_config?: Record<string, Record<string, unknown>>; // per speech module (keyed by module name), validated at enterSpeechOrFinish
   keyframe_binding: string | null;
-  phase: "keyframe" | "clips" | "dialogue" | "finish" | "assemble" | "master" | "mux" | "done" | "failed";
+  phase: "keyframe" | "clips" | "dialogue" | "speech" | "finish" | "assemble" | "master" | "mux" | "done" | "failed";
   keyframe_poll?: string;
   clip_job_id?: string;
   finish_shots?: FinishShot[];
+  speech_shots?: SpeechShot[]; // per-shot speech (dialogue-audio enhance) chain, run between dialogue and finish
   // Talking characters: per-shot dialogue lines (resolved at submission: authored text + cast voice),
   // synthesized to per-shot audio by the `dialogue` module in a phase between clips and finish. The
   // resulting audio_key per shot is injected into that shot's FinishInput for lip-sync. Absent/empty
@@ -350,6 +371,20 @@ export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
   if (fs.idx >= fs.chain.length) fs.status = "done"; // else stays pending; next advance submits chain[idx]
 }
 
+/** Pure: fold one speech module's output into the shot. On a REAL enhancement (no `degraded`), thread the
+ *  new audio_key forward so the next step (and finish) sees the cleaned audio; on an honest soft-degrade,
+ *  LEAVE audio_key UNCHANGED (the original audio survives) and record the reason -- no fake applied tag,
+ *  the chain never fails on a polish miss. Advance idx; done when the chain is exhausted. */
+export function applySpeechOutput(ss: SpeechShot, out: SpeechOutput): void {
+  if (!out.degraded) ss.audio_key = out.audio_key; // real enhance threads forward; a degrade keeps the original
+  ss.applied.push(...(out.applied || []));
+  if (out.degraded) ss.degraded = out.degraded;
+  ss.idx += 1;
+  ss.poll = undefined;
+  ss.attempts = 0;
+  if (ss.idx >= ss.chain.length) ss.status = "done";
+}
+
 // Bounded transient-retry for a finish-step invocation/poll failure. shot_02 shipped silent because
 // its lip-sync invocation hit a transient blip (the module worker momentarily unreachable / 5xx --
 // a musetalk cold-start race) and went straight to `failed`, where the mid-chain intermediate was
@@ -510,11 +545,11 @@ function applyDialogueOutput(job: FilmJob, out: DialogueOutput): void {
  *  a fully-rendered film (lip-sync no-ops without an audio_key). */
 async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
   const lines = job.dialogue_lines;
-  if (!lines || !lines.length) { job.phase = "finish"; return; }
+  if (!lines || !lines.length) { await enterSpeechOrFinish(env, job); return; }
   const envRec = env as unknown as Record<string, unknown>;
   const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
   const fetcher = dialogueModule ? asFetcher(envRec[dialogueModule.binding]) : null;
-  if (!fetcher) { job.phase = "finish"; return; }  // no dialogue module bound: silent film
+  if (!fetcher) { await enterSpeechOrFinish(env, job); return; }  // no dialogue module bound: silent film
   const req = {
     hook: "dialogue" as const,
     input: { project: job.project, lines } as DialogueInput,
@@ -522,26 +557,106 @@ async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
     context: { project: job.project, job_id: job.film_id },
   };
   const r = await invokeModule<DialogueInput, DialogueOutput>(fetcher, req);
-  if (!r.ok) { console.warn(`film ${job.film_id}: dialogue submit failed (${r.error}); silent finish`); job.phase = "finish"; return; }
+  if (!r.ok) { console.warn(`film ${job.film_id}: dialogue submit failed (${r.error}); silent finish`); await enterSpeechOrFinish(env, job); return; }
   if ((r as { pending?: boolean }).pending) { job.dialogue_poll = (r as { poll: string }).poll; job.phase = "dialogue"; return; }
   if ("output" in r) { applyDialogueOutput(job, r.output as DialogueOutput); }
-  job.phase = "finish";
+  await enterSpeechOrFinish(env, job);
 }
 
 /** Poll the in-flight dialogue batch. On done, record the per-shot audio map and advance to finish; a
  *  failure soft-degrades to a silent finish (the rendered clips are fine, just unvoiced). */
 async function advanceDialoguePhase(env: Env, job: FilmJob): Promise<void> {
-  if (!job.dialogue_poll) { job.phase = "finish"; return; }
+  if (!job.dialogue_poll) { await enterSpeechOrFinish(env, job); return; }
   const envRec = env as unknown as Record<string, unknown>;
   const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
   const fetcher = dialogueModule ? asFetcher(envRec[dialogueModule.binding]) : null;
-  if (!fetcher) { job.dialogue_poll = undefined; job.phase = "finish"; return; }
+  if (!fetcher) { job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
   const p = await pollModule<DialogueOutput>(fetcher, { poll: job.dialogue_poll });
-  if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; job.phase = "finish"; return; }
+  if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
   if ((p as { pending?: boolean }).pending) return;  // still synthesizing
   applyDialogueOutput(job, (p as { output: DialogueOutput }).output);
   job.dialogue_poll = undefined;
-  job.phase = "finish";
+  await enterSpeechOrFinish(env, job);
+}
+
+/** After dialogue is resolved: if any `speech` module is installed AND there is dialogue audio to clean,
+ *  build the per-shot speech chain and enter the speech phase; otherwise go straight to finish. No speech
+ *  module, or no shot with dialogue audio -> straight to finish (an unvoiced film needs no speech pass). */
+async function enterSpeechOrFinish(env: Env, job: FilmJob): Promise<void> {
+  const audio = job.dialogue_audio ?? {};
+  const shotIds = Object.keys(audio);
+  if (!shotIds.length) { job.phase = "finish"; return; }  // unvoiced film: nothing to enhance
+  const serving = servingForHook(await discoverModules(env as unknown as Record<string, unknown>), "speech"); // ui.order
+  const chain = serving.map((m) => m.binding);
+  if (!chain.length) { job.phase = "finish"; return; }  // no speech modules installed: passthrough to finish
+  const configs = resolveFinishConfigs(serving, job.speech_config ?? {});
+  job.speech_shots = shotIds.map((shot_id) => ({
+    shot_id, audio_key: audio[shot_id], chain, configs, idx: 0, status: "pending" as const, applied: [],
+  }));
+  job.phase = "speech";
+}
+
+/** Advance the speech chain: per shot, submit its current speech module or poll the in-flight one,
+ *  chaining the enhanced audio forward on completion. A transient invocation/poll blip re-dispatches the
+ *  step up to the cap (classifyFinishRetry, shared with finish); a DETERMINISTIC failure does NOT fail the
+ *  render -- speech is a POLISH step, so a hard step failure DEGRADES the shot (keep its current audio,
+ *  record the reason, mark the chain done) rather than failing a fully-rendered film (#249/#77). When
+ *  every shot is terminal, fold the cleaned (or, on a degrade, original) audio back into job.dialogue_audio
+ *  -- so a lip-sync finish module drives the mouth from it -- and advance to finish. */
+async function advanceSpeechPhase(env: Env, job: FilmJob): Promise<void> {
+  const envRec = env as unknown as Record<string, unknown>;
+  const degrade = (ss: SpeechShot, reason: string): void => {
+    // A hard failure on a POLISH step: keep the current audio (original survives), record the reason
+    // honestly (no fake applied tag), advance idx so the chain completes. The render never fails here.
+    ss.degraded = reason;
+    ss.idx += 1; ss.poll = undefined; ss.attempts = 0;
+    if (ss.idx >= ss.chain.length) ss.status = "done";
+  };
+  const blipOrDegrade = (ss: SpeechShot, error: string | undefined, keepPoll: boolean): void => {
+    const d = classifyFinishRetry(error, ss.attempts ?? 0); // reuse the shared transient classifier
+    if (d.action === "retry") {
+      ss.attempts = d.attempts;
+      ss.error = `speech ${ss.chain[ss.idx]} transient (attempt ${d.attempts}/${FINISH_STEP_MAX_ATTEMPTS}), retrying: ${error ?? ""}`;
+      if (!keepPoll) ss.poll = undefined;
+    } else {
+      degrade(ss, `${ss.chain[ss.idx]}: ${error ?? "speech step failed"}`);
+    }
+  };
+  for (const ss of job.speech_shots || []) {
+    if (ss.status !== "pending") continue;
+    const fetcher = asFetcher(envRec[ss.chain[ss.idx]]);
+    if (!fetcher) { degrade(ss, `speech module ${ss.chain[ss.idx]} not bound`); continue; }
+    const req = {
+      hook: "speech" as const,
+      input: { shot_id: ss.shot_id, audio_key: ss.audio_key } as SpeechInput,
+      config: ss.configs?.[ss.idx] ?? {},
+      context: { project: job.project, job_id: job.film_id },
+    };
+    if (!ss.poll) {
+      const r = await invokeModule<SpeechInput, SpeechOutput>(fetcher, req);
+      if (!r.ok) { blipOrDegrade(ss, r.error, false); }
+      else if ((r as { pending?: boolean }).pending) { ss.poll = (r as { poll: string }).poll; }
+      else if ("output" in r) { applySpeechOutput(ss, r.output as SpeechOutput); }
+      else { degrade(ss, "speech module returned neither output nor a poll token"); }
+    } else {
+      const p = await pollModule<SpeechOutput>(fetcher, { poll: ss.poll });
+      if (p.ok && !(p as { pending?: boolean }).pending) {
+        applySpeechOutput(ss, (p as { output: SpeechOutput }).output);
+      } else if (!p.ok && classifyFinishFailure(p.error) === "transient") {
+        blipOrDegrade(ss, p.error, true);
+      } else if (!p.ok) {
+        blipOrDegrade(ss, p.error, false);
+      }
+      // else: still pending -> leave it for the next tick
+    }
+  }
+  const speechShots = job.speech_shots || [];
+  if (speechShots.every((ss) => ss.status !== "pending")) {
+    // Fold the cleaned (or, on a degrade, original) audio back into dialogue_audio so a lip-sync finish
+    // module drives the mouth from it. This is the single point folding speech results into film state.
+    for (const ss of speechShots) (job.dialogue_audio ??= {})[ss.shot_id] = ss.audio_key;
+    job.phase = "finish";
+  }
 }
 
 /** R2-authoritative recovery for a finish step whose RunPod job is GONE (poll 404s, GC'd-after-complete)
@@ -1335,7 +1450,7 @@ export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob |
 export const KEYFRAME_STALL_SECONDS = 20 * 60; // 20min: a project-wide SDXL keyframe pass is well done by now
 export const PHASE_HARD_DEADLINE_SECONDS = 90 * 60; // 90min: absolute ceiling for any one pollable phase
 
-const POLLABLE_PHASES: ReadonlySet<FilmJob["phase"]> = new Set(["keyframe", "clips", "finish"]);
+const POLLABLE_PHASES: ReadonlySet<FilmJob["phase"]> = new Set(["keyframe", "clips", "speech", "finish"]);
 
 /** Seconds the job has sat in its current phase. Falls back to created_at on pre-#129 jobs (no
  *  phase_started_at stamp); `now` is injectable so tests do not depend on the wall clock. */
@@ -1542,6 +1657,14 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
   // Soft-degrades to a silent finish on any failure (see advanceDialoguePhase).
   if (job.phase === "dialogue") {
     await advanceDialoguePhase(env, job);
+    await putFilm(env, job);
+  }
+
+  // Phase 2.6: enhance per-shot dialogue audio (the speech chain, async across requests), then -> finish.
+  // A POLISH phase: a hard step failure degrades the shot (keeps the original audio) and the render
+  // proceeds to finish -- a speech glitch must never fail a fully-rendered film (see advanceSpeechPhase).
+  if (job.phase === "speech") {
+    await advanceSpeechPhase(env, job);
     await putFilm(env, job);
   }
 
