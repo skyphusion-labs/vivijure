@@ -3,6 +3,13 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.2.5
+
+**Preflight fix: the pre-render safety check actually runs now.** Found in a full planner regression pass.
+
+- **preflight route wired + envelope unwrapped (#242 / #243):** `src/preflight.ts` (the real validator: shape + cast-readiness) was written but never imported, so `/api/storyboard/preflight` only ran the shape gate against the wrong object: it read `.title`/`.scenes` off the `{storyboard, castBindings}` envelope (undefined) and returned HTTP 400 on every valid storyboard. The client threw on the non-2xx and showed only "HTTP 400" with no reasons, and its bundle gate never activated. The handler now unwraps `.storyboard`, runs the full chain (validateStoryboard -> checkStoryboardShape -> checkCastBindingsReady -> summarize), and returns the PreflightResult at HTTP 200 with `ok:false` + structured issues for a storyboard-with-problems (validation findings are data, not an HTTP failure). The client now renders the issues and the bundle gate works. D1 is only queried when cast bindings are present.
+- **690 tests** (8 new preflight-route tests incl. the exact old-bug payload as a regression guard), typecheck-clean.
+
 ## v0.2.4
 
 **Cloud i2v duration enum fix.** Unblocks the cloud motion backends for short shots.
