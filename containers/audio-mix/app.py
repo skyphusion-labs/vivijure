@@ -157,8 +157,10 @@ async def mix(req):
 async def music_upscale_handler(req):
     """POST /music-upscale -- the no-dialogue branch of the audio finish router: "master" a single
     music/score bed (VHQ soxr resample to 48k + gentle air lift + two-pass loudnorm). One presigned
-    input track, one presigned output. CPU ffmpeg DSP, sibling to /mix. A non-ok result is a soft-
-    degrade signal to the caller (pass the original bed through), never a drop."""
+    input track, one presigned output. CPU ffmpeg DSP, sibling to /mix. On failure this returns
+    {ok:false, error} -- it SURFACES the failure (never swallows it / silently passes the original
+    through, cf. the #249 silent-degrade bug); `applied` is set only on success and the router owns
+    any soft-degrade policy."""
     try:
         body = await req.json()
     except Exception:
