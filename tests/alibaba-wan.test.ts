@@ -12,12 +12,14 @@ import {
 } from "../modules/alibaba-wan/src/wan";
 
 describe("alibaba-wan pure logic", () => {
-  it("clampDuration bounds the shot length (default 5, range 3-10)", () => {
+  it("clampDuration snaps to Wan's allowed enum {5,10,15} (up, never shorter)", () => {
     expect(clampDuration(5)).toBe(5);
+    expect(clampDuration(4)).toBe(5); // the bug: 4 used to pass through and 400 at the provider
     expect(clampDuration(0)).toBe(5); // 0 -> default 5
-    expect(clampDuration(99)).toBe(10);
-    expect(clampDuration(1)).toBe(3);
-    expect(clampDuration(7.6)).toBe(8);
+    expect(clampDuration(99)).toBe(15);
+    expect(clampDuration(1)).toBe(5);
+    expect(clampDuration(7.6)).toBe(10); // round 8 -> next allowed up is 10
+    expect(clampDuration(15)).toBe(15);
   });
 
   it("buildWanBody maps the hook input + config onto the RunPod body", () => {
