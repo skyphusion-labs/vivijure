@@ -26,8 +26,8 @@ import {
 } from "./finish";
 
 interface Env {
-  RUNPOD_API_KEY: string;
-  RUNPOD_ENDPOINT_ID: string;
+  RUNPOD_API_KEY: SecretsStoreSecret;
+  RUNPOD_ENDPOINT_ID: SecretsStoreSecret;
 }
 
 const MANIFEST: ModuleManifest = {
@@ -53,12 +53,34 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function runpodBase(env: Env): string {
-  return `https://api.runpod.ai/v2/${env.RUNPOD_ENDPOINT_ID}`;
+function runpodBase(endpointId: string): string {
+  return `https://api.runpod.ai/v2/${endpointId}`;
 }
 
-function auth(env: Env) {
-  return { authorization: "Bearer " + env.RUNPOD_API_KEY };
+function auth(apiKey: string) {
+  return { authorization: "Bearer " + apiKey };
+}
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
+
+/** Resolve both RunPod secrets once per request. */
+async function runpodCreds(env: Env): Promise<{ apiKey: string; endpointId: string }> {
+  const [apiKey, endpointId] = await Promise.all([
+    secretValue(env.RUNPOD_API_KEY),
+    secretValue(env.RUNPOD_ENDPOINT_ID),
+  ]);
+  return { apiKey, endpointId };
 }
 
 /** Soft degrade: pass the input clip through unchanged (for a chain hook a no-op beats a crash), but
@@ -81,7 +103,8 @@ async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
   if (!input?.shot_id || !input?.clip_key) {
     return { ok: false, error: "finish-rife: input needs shot_id and clip_key" };
   }
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!apiKey || !endpointId) {
     return passthrough(input, "no-runpod-secrets");  // not configured: degrade, but say so
   }
 
@@ -92,9 +115,9 @@ async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
   }
 
   try {
-    const r = await fetch(runpodBase(env) + "/run", {
+    const r = await fetch(runpodBase(endpointId) + "/run", {
       method: "POST",
-      headers: { ...auth(env), "content-type": "application/json" },
+      headers: { ...auth(apiKey), "content-type": "application/json" },
       body: JSON.stringify(buildRunPodBody(input, cfg, req.context.project)),
     });
     if (!r.ok) return passthrough(input, "runpod-run-failed", { detail: "HTTP " + r.status });
@@ -113,12 +136,13 @@ async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<FinishOutput>> {
   const st = decodePoll(body.poll);
   if (!st) return { ok: false, error: "finish-rife: bad poll token" };
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) return { ok: false, error: "finish-rife: not configured" };
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!apiKey || !endpointId) return { ok: false, error: "finish-rife: not configured" };
 
   let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    const resp = await fetch(runpodBase(env) + "/status/" + st.jobId, { headers: auth(env) });
+    const resp = await fetch(runpodBase(endpointId) + "/status/" + st.jobId, { headers: auth(apiKey) });
     httpStatus = resp.status;
     s = await resp.json() as typeof s;
   } catch {

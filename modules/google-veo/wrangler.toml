@@ -18,6 +18,12 @@ enabled = true
 binding = "R2_RENDERS"
 bucket_name = "vivijure"
 
-# Secret, set AFTER deploy (never committed), with a DEDICATED, scoped vivijure RunPod key (per-module
-# key so a leak's blast radius is this one module):
-#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/google-veo/wrangler.toml
+# RUNPOD_API_KEY is bound from the account-level Cloudflare Secrets Store -- declarative config that
+# every `wrangler deploy` re-establishes, so a fresh-create can't start secretless and silently
+# degrade (the v0.2.2 finish-upscale passthrough bug). Seeded ONCE by the operator from the crew
+# secret store; values never touch CI/GitHub. Set store_id to the real id at cutover.
+# See docs/DEPLOYMENT.md "Module secrets via the Secrets Store".
+[[secrets_store_secrets]]
+binding = "RUNPOD_API_KEY"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "RUNPOD_API_KEY"

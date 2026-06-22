@@ -124,13 +124,47 @@ done
 npm run deploy   # the core Studio Worker
 ```
 
-Each module worker takes only the secrets it actually uses (e.g. the i2v modules need
-`RUNPOD_API_KEY`; the AI modules need `GATEWAY_ID`). Set those per module with the same
-`wrangler secret put -c modules/<name>/wrangler.toml` pattern.
+Module worker secrets are NOT set with `wrangler secret put`. They are bound declaratively from an
+account-level **Cloudflare Secrets Store**, so every `wrangler deploy` re-establishes them and a
+freshly (re)created module worker can never start secretless and silently degrade (the bug that
+shipped finish-upscale as a passthrough in v0.2.2). The values are seeded ONCE into the store and
+never touch CI or GitHub. See **Module secrets via the Secrets Store** below.
 
 > The whole of 3c--3d is automated in CI on push to `main` (`.github/workflows/ci.yml`), gated behind
 > typecheck + tests. For a hosted deploy, set `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` as repo
 > secrets and let Actions do it.
+
+### Module secrets via the Secrets Store
+
+The endpoint + i2v modules need `RUNPOD_API_KEY` (the GPU/finish modules also need
+`RUNPOD_ENDPOINT_ID`); `dialogue-gen` needs `GATEWAY_ID`. Each module's `wrangler.toml` binds these
+from an account-level Secrets Store via `[[secrets_store_secrets]]`, so the binding is declarative
+config that ships with every deploy -- no per-deploy `wrangler secret put`, and nothing to lose on a
+fresh-create.
+
+Seed the store ONCE, from a trusted box that already holds the values (e.g. a crew machine). The
+hidden prompt keeps the value out of shell history -- never pass `--value` on the command line:
+
+```bash
+# 1. Create the account-level store (once). Note the store id it prints.
+npx wrangler secrets-store store create vivijure --remote
+
+# 2. Put that store id into every module wrangler.toml (replace the placeholder).
+grep -rl REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID modules/*/wrangler.toml \
+  | xargs sed -i 's/REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID/<your-store-id>/'
+
+# 3. Create each secret in the store (hidden prompt; --scopes workers is required).
+npx wrangler secrets-store secret create <your-store-id> --name RUNPOD_API_KEY     --scopes workers --remote
+npx wrangler secrets-store secret create <your-store-id> --name RUNPOD_ENDPOINT_ID --scopes workers --remote
+npx wrangler secrets-store secret create <your-store-id> --name GATEWAY_ID         --scopes workers --remote
+```
+
+Once the store is seeded and `store_id` is filled in, deploy as in 3d -- each module reads its secret
+through the binding. A `wrangler deploy` against a secret that does not yet exist in the store fails
+at deploy time, so a misconfigured module can no longer ship a silent passthrough.
+
+> The core Studio Worker still uses `wrangler secret put` (section 3b). Migrating it to the Secrets
+> Store is a follow-up; it is not required for this module durability fix.
 
 You now have a working Studio for everything except the GPU render itself.
 

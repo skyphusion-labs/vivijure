@@ -21,7 +21,7 @@ import {
 import { buildSeedanceBody, extractVideoUrl, clipKey, clampDuration, MIN_DURATION, MAX_DURATION, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./seedance";
 
 interface Env {
-  RUNPOD_API_KEY: string;
+  RUNPOD_API_KEY: SecretsStoreSecret;
   R2_RENDERS: { put(key: string, value: ArrayBuffer): Promise<unknown> };
 }
 
@@ -47,7 +47,20 @@ const MANIFEST: ModuleManifest = {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
-const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
+const auth = (apiKey: string) => ({ authorization: "Bearer " + apiKey });
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
 
 /** /invoke: validate, submit to RunPod, return a poll token immediately. No blocking. */
 async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise<InvokeResponse<MotionBackendOutput>> {
@@ -55,7 +68,8 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
   if (!input || !input.keyframe_url || !input.prompt || !input.shot_id) {
     return { ok: false, error: "motion.backend: input needs shot_id, keyframe_url, and prompt" };
   }
-  if (!env.RUNPOD_API_KEY) return { ok: false, error: "seedance: RUNPOD_API_KEY not configured" };
+  const apiKey = await secretValue(env.RUNPOD_API_KEY);
+  if (!apiKey) return { ok: false, error: "seedance: RUNPOD_API_KEY not configured" };
   // Non-silent duration snap (#279): seedance requires duration in [4, 12]; record when a sub-4s shot
   // is snapped up so the timing change is observable, never silent.
   const requestedDuration = Math.round(Number(input.seconds) || 5);
@@ -69,7 +83,7 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
   try {
     const r = await fetch(ENDPOINT + "/run", {
       method: "POST",
-      headers: { ...auth(env), "content-type": "application/json" },
+      headers: { ...auth(apiKey), "content-type": "application/json" },
       body: JSON.stringify(buildSeedanceBody(input, req.config)),
     });
     if (!r.ok) return { ok: false, error: "seedance /run -> " + r.status };
@@ -89,12 +103,13 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBackendOutput>> {
   const st = decodePoll(body.poll);
   if (!st) return { ok: false, error: "seedance: bad poll token" };
-  if (!env.RUNPOD_API_KEY) return { ok: false, error: "seedance: RUNPOD_API_KEY not configured" };
+  const apiKey = await secretValue(env.RUNPOD_API_KEY);
+  if (!apiKey) return { ok: false, error: "seedance: RUNPOD_API_KEY not configured" };
 
   let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    const resp = await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(env) });
+    const resp = await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(apiKey) });
     httpStatus = resp.status;
     s = (await resp.json()) as typeof s;
   } catch {
