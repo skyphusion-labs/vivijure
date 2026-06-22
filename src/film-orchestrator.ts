@@ -414,6 +414,41 @@ export function reclaimFinishShotsFromR2(finishShots: FinishShot[], present: Map
   return adopted;
 }
 
+/** Pure: the R2 key the CURRENT finish step (fs.chain[fs.idx]) is expected to write, given its input
+ *  clip (fs.clip_key). Mirrors each finish module's OWN output-key convention so the orchestrator can
+ *  check R2 PRESENCE for a step whose RunPod job was GC'd / froze MID-chain (the #141/#166 R2-authoritative
+ *  pattern, extended from the final step to any step). The modules: finish-rife writes
+ *  `<project>/clips/<shot>_finished.mp4` (named off the shot id by its container); the append-convention
+ *  modules derive `<input-base>_<suffix>.<ext>` from the input clip key (musetalk lip-sync -> `_ls`,
+ *  upscale -> `_up`; see vivijure-musetalk / vivijure-upscale handler.py). Returns null for a module whose
+ *  convention we do not model (e.g. text-overlay), so an unmodeled step gets NO R2 shortcut and can never
+ *  be advanced off a sibling step's artifact -- the mid-chain phantom-adopt the silent-render bug warned of. */
+export function finishStepOutputKey(project: string, fs: FinishShot): string | null {
+  const binding = fs.chain[fs.idx] ?? "";
+  if (/RIFE/i.test(binding)) return `renders/${project}/clips/${fs.shot_id}_finished.mp4`;
+  const suffix = /LIPSYNC|MUSETALK/i.test(binding) ? "_ls" : /UPSCALE/i.test(binding) ? "_up" : null;
+  if (!suffix) return null;
+  const key = fs.clip_key;
+  const slash = key.lastIndexOf("/");
+  const dotInBase = key.slice(slash + 1).lastIndexOf(".");
+  if (dotInBase < 0) return `${key}${suffix}`;
+  const at = slash + 1 + dotInBase;
+  return `${key.slice(0, at)}${suffix}${key.slice(at)}`; // insert the suffix before the extension
+}
+
+/** Pure: the `applied` tag the CURRENT finish step would report, reconstructed from its validated config
+ *  so an R2-adopted step (whose job is gone, so its real response is lost) still carries the marker the
+ *  verifier and UI read (e.g. `lipsync:v15`, `upscale:2x`, `interpolate:2x`). Mirrors each module's own
+ *  `applied` string. Unmodeled modules get a `<binding>:r2-adopted` marker so the adoption is never silent. */
+export function finishStepAppliedTag(fs: FinishShot): string {
+  const binding = fs.chain[fs.idx] ?? "";
+  const cfg = (fs.configs?.[fs.idx] ?? {}) as Record<string, unknown>;
+  if (/LIPSYNC|MUSETALK/i.test(binding)) return `lipsync:${String(cfg.version ?? "v15")}`;
+  if (/UPSCALE/i.test(binding)) return `upscale:${Number(cfg.scale ?? 2)}x`;
+  if (/RIFE/i.test(binding)) return cfg.interpolate === false ? "noop:interpolate-off" : `interpolate:${Number(cfg.interpolation_factor ?? 2)}x`;
+  return `${binding}:r2-adopted`;
+}
+
 /** Internal: clips done -> set up the finish chain (one FinishShot per done clip). No finish modules
  *  installed -> skip straight to assemble (the raw clips). No clips rendered at all -> fail (nothing
  *  to assemble). */
@@ -485,6 +520,21 @@ async function advanceDialoguePhase(env: Env, job: FilmJob): Promise<void> {
   job.phase = "finish";
 }
 
+/** R2-authoritative recovery for a finish step whose RunPod job is GONE (poll 404s, GC'd-after-complete)
+ *  or FROZEN (envelope stuck IN_PROGRESS so /poll pends forever, #166) MID-chain: if THIS step's expected
+ *  output (finishStepOutputKey) is already in R2, fold it in and advance idx so the next module dispatches
+ *  -- instead of pending to the hard-deadline. Distinct from finishShotAdoptableFromR2, which adopts only
+ *  the chain's FINAL artifact: this advances ONE step on its OWN predicted output, so the remaining modules
+ *  still run and it can never ship a half-finished clip (the mid-chain phantom-adopt the silent-render bug
+ *  warned against). Returns true iff it advanced the step. */
+async function adoptFinishStepFromR2(env: Env, job: FilmJob, fs: FinishShot): Promise<boolean> {
+  const expected = finishStepOutputKey(job.project, fs);
+  if (!expected) return false;
+  if ((await env.R2_RENDERS.head(expected)) === null) return false;
+  applyFinishOutput(fs, { shot_id: fs.shot_id, clip_key: expected, out_fps: 0, frames: 0, applied: [finishStepAppliedTag(fs)] });
+  return true;
+}
+
 /** Advance the finish chain: per shot, submit its current finish module or poll the in-flight one,
  *  chaining to the next module on completion. Phase -> assemble when every shot is terminal. */
 async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
@@ -521,8 +571,20 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
       else { fs.status = "failed"; fs.error = "finish module returned neither output nor a poll token"; }
     } else {
       const p = await pollModule<FinishOutput>(fetcher, { poll: fs.poll });
-      if (!p.ok) { failOrRetry(fs, p.error, true); }
-      else if (!(p as { pending?: boolean }).pending) { applyFinishOutput(fs, (p as { output: FinishOutput }).output); }
+      if (p.ok && !(p as { pending?: boolean }).pending) {
+        applyFinishOutput(fs, (p as { output: FinishOutput }).output);
+      } else if (!p.ok && classifyFinishFailure(p.error) === "transient") {
+        failOrRetry(fs, p.error, true); // a transport blip: re-poll the same job under the cap
+      } else if (!(await adoptFinishStepFromR2(env, job, fs))) {
+        // The step's RunPod job is GONE (a deterministic poll failure -- 404 job-not-found, the
+        // GC'd-after-complete path) or FROZEN (envelope stuck IN_PROGRESS so /poll pends forever, #166),
+        // and this step's output is NOT in R2. A deterministic failure with no artifact fails loud; a
+        // still-pending poll with no artifact stays pending (the job may yet finish, or its output land).
+        // The whole point: a mid-chain finish step can no longer pend forever when its output is in R2 --
+        // the wedge that stalled the showcase (RIFE done, idx never advanced, lip-sync never dispatched).
+        if (!p.ok) failOrRetry(fs, p.error, true);
+      }
+      // else: adoptFinishStepFromR2 folded this step's R2 output in and advanced idx (R2 authoritative).
     }
   }
   // R2 PRESENCE IS AUTHORITATIVE (issue #141), symmetric to the clips reclaim: the finish output may
