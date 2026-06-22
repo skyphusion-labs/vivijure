@@ -101,9 +101,14 @@ service = "vivijure-module-plan-enhance"
 binding = "MODULE_OWN_GPU"
 service = "vivijure-module-own-gpu"
 
-[[services]]
-binding = "MODULE_SEEDANCE"
-service = "vivijure-module-seedance"
+# PULLED for QA (#246): Seedance FAILs the finish path at the default 16:9 (1280x720, non-64-div ->
+# RIFE crash -> silent-degrade to applied=[], same bug as wan #245). It PASSES at 1:1 (960x960,
+# already shipped), but the showcase default is 16:9, so it is pulled now and comes back FIXED (works
+# at every aspect) rather than shipping a works-at-1:1-only backend. RE-ENABLE = uncomment once the
+# RIFE pad-to-64 fix is pinned (backend-vX.Y.Z) and a 16:9 render verifies VOICED+FULL.
+# [[services]]
+# binding = "MODULE_SEEDANCE"
+# service = "vivijure-module-seedance"
 
 [[services]]
 binding = "MODULE_KLING"
@@ -181,8 +186,6 @@ service = "vivijure-module-finish-lipsync"
 # vivijure-backend) crashes and the studio silent-degrades to applied=[] -- same resolution bug as
 # wan (#245). Classified by dims (no fresh renders); no 64-safe aspect observed for these three.
 # RE-ENABLE = uncomment once RIFE pads-to-64 (rescues all backends) or each module emits 64-safe dims.
-# seedance is intentionally NOT pulled here: it PASSES at 1:1 (960x960, already shipped) and only
-# fails at 16:9, so blanket-pulling it would remove working functionality -- see #246.
 # [[services]]
 # binding = "MODULE_MINIMAX_HAILUO"
 # service = "vivijure-module-minimax-hailuo"
