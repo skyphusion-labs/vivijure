@@ -3,6 +3,15 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.2.6
+
+**Launch prep: fail-loud finish, the talking showcase, and the render-pipeline diagram.**
+
+- **Fail loud on a failed finish chain (#245 / #249):** a finish step that genuinely fails (after the bounded retry + R2 reclaim) now fails the render with the real per-shot error instead of silently advancing to done and shipping the raw i2v clip with `applied=[]`. `clipKeysFromFilmJob` returns finished clips only when a finish chain was set up, never substituting a raw clip for a non-done shot. The honest-failures safety net: a finish failure can no longer ship a green-but-unfinished film.
+- **Welcome page + README:** the "Vivijure Speaks" talking-character showcase on the public welcome page (#240), and a render-pipeline mermaid diagram in the README (storyboard to keyframe to dialogue + motion.backend to the finish chain to assemble to mux).
+- Pairs with **backend-v0.2.27** (the RIFE pad-to-64 fix, verified live VOICED+FULL on a non-64 resolution): the finish chain now runs on every cloud i2v output dimension, so all seven motion backends do the full lip-sync + upscale path.
+- **693 tests**, typecheck-clean.
+
 ## v0.2.5
 
 **Preflight fix: the pre-render safety check actually runs now.** Found in a full planner regression pass.
