@@ -1,0 +1,46 @@
+# notify-email
+
+A **`notify`** module (vivijure-module/1): the **email backend** of the notify hook. On a
+`render.complete` event it mails the film owner a download link via the native **Cloudflare Email
+Service**. It is **out-of-band** -- it hangs off render completion and is not in the render path, so
+it never gates or delays a film.
+
+## Where it fits
+
+The `notify` hook fires **after** the render is done. notify-email is a side effect of completion,
+not a stage in the chain: the keyframe -> clips -> dialogue -> speech -> finish -> assemble -> mux
+pipeline reaches **done**, and only then does the core hand a `render.complete` event to notify. A
+notify failure is best-effort data (`ok:false`), never a reason to fail the render.
+
+```mermaid
+flowchart LR
+  kf["keyframe"]
+  clips["clips · motion.backend"]
+  dlg["dialogue"]
+  sp["speech"]
+  fin["finish"]
+  asm["assemble"]
+  mux["mux"]
+  done["done"]
+  note["notify-email<br/>(render.complete -> email)"]
+
+  kf --> clips --> dlg --> sp --> fin --> asm --> mux --> done
+  done -. "render.complete (out of band)" .-> note
+
+  style note fill:#fe7,stroke:#c80,stroke-width:2px
+```
+
+## Contract
+
+- **Hook**: `notify` (out-of-band; not in the render path). `provides: notify-email` ("Email
+  notification (Cloudflare Email Service)"), `ui { section: "notify", order: 10 }`.
+- **Input** (`NotifyInput`): `event` (`render.complete`), `film_id`, `project`, optional
+  `download_url`, `seconds`, and `user_email` (the recipient).
+- **Output** (`NotifyOutput`): `delivered` -- e.g. `["email:<to>"]` on a send, or `[]` for a no-op.
+- **Synchronous**: an email send is fast, well within a Worker request. `POST /invoke` composes the
+  render-complete email and sends it, then returns. No recipient or no `EMAIL` binding -> empty
+  `delivered` (a no-op, not an error); a real send failure is returned as `ok:false` (best-effort).
+- **Transport**: the native Cloudflare Email Service `send_email` binding (`EMAIL`). The from-domain
+  (`render@skyphusion.org`) must be onboarded once for Email Sending
+  (`wrangler email sending enable skyphusion.org`). In `wrangler dev` the send is simulated; prod
+  sends for real. Bound into the core as `MODULE_NOTIFY_EMAIL`.
