@@ -5,9 +5,24 @@ input surface, idempotent re-runs, a teardown path. This is the primary deploy p
 in #244 (a guided Python installer, not full Terraform -- RunPod's IaC is too immature and the
 Cloudflare side needs Wrangler for code/migrations regardless).
 
-**Status: Phase 1 SKELETON.** The CLI, the single input surface, the secret handling, and the
-provisioning-order spine are in place. The provider API calls are marked `TODO(phase1)`. Do not point
-this at a live account yet.
+**Status: complete provisioning spine, NOT yet live-tested.** The CLI, the single input surface, the
+secret handling, and every provider call (Cloudflare + RunPod) are implemented and verified against the
+CF/RunPod API docs + the RunPod OpenAPI -- but the end-to-end `up` has NOT been run against a live
+account. Treat the first run accordingly, and **set the required config below first**.
+
+> `up` provisions REAL resources on your accounts -- it mints an R2 API token, creates an Access app,
+> RunPod endpoints, D1, R2 buckets, etc. `down` removes what it created (see State + teardown).
+
+## Required config before a live run
+
+A few non-secret values must be set (constants at the top of `vivijure_deploy.py`; the run **dies loud**
+if any is missing, rather than POSTing an empty value):
+
+- `DEPLOY_DOMAIN` -- the studio hostname behind CF Access (match the core worker's route).
+- `OPERATOR_EMAIL` -- the one email allowed through the Access self-only policy.
+- `DATACENTER_ID` -- an available RunPod data-center id (`GET /datacenters`) for the network volumes.
+- `BACKEND_IMAGE_TAG` -- an explicit released backend tag (e.g. `0.2.27`); never `latest`.
+- `GPU_TYPE_IDS` -- the endpoint GPU type id(s) (`GET /gputypes`).
 
 ## What it collects (and never will)
 
@@ -59,12 +74,20 @@ The pieces are mutually dependent, so the order is load-bearing:
 
 `up` is reconcile-shaped: look up each resource by name/id in `.vivijure-deploy.json`,
 create-if-absent, record the id. Safe to re-run after a partial failure. The state file holds
-resource ids only -- never secrets -- and should be gitignored. `down` deletes by those recorded ids.
+resource ids only -- never secrets -- and should be gitignored.
+
+`down` deletes by those recorded ids: the RunPod endpoints/volumes/templates, the workers (modules +
+core via `wrangler delete`), the Access app, AI Gateway, the Secrets Store, and **the minted R2 API
+token** (so a teardown never leaves a live credential behind). It prints a summary of what it removed.
+`--delete-data` additionally deletes the R2 buckets + D1 (your render + project data); without it,
+those are left intact. (A re-run of `up` re-mutates the module wrangler.tomls with the store id during
+deploy and restores the placeholder after, so your checkout stays clean on success.)
 
 ## Roadmap
 
-- **Phase 1 (this):** CLI + input/secret handling + the order spine + reconcile/teardown scaffolding.
-- **Phase 2:** fill in the provider API bodies, the CPU-container bring-up + VPC wiring, and an
-  optional Cloudflare Terraform module (D1/R2/AI-Gateway/Access/Secrets-Store/routes are all
-  TF-native now) sharing this same RunPod script, for IaC-inclined users.
-- **Phase 3:** a Deploy-to-Cloudflare button for the CF half as a low-friction front door.
+- **Done:** the CLI, input/secret handling, the full CF + RunPod provisioning spine, seed-before-deploy
+  ordering, idempotent reconcile, and teardown (incl. the minted R2 token).
+- **Next:** a first live-account end-to-end run to shake out anything the docs did not capture; the
+  CPU-container bring-up + VPC wiring; RunPod endpoint tuning (scaler/idle) + optional boto3 model-seed.
+- **Later:** an optional Cloudflare Terraform module (D1/R2/AI-Gateway/Access/Secrets-Store/routes are
+  all TF-native now) sharing this same RunPod script; a Deploy-to-Cloudflare button for the CF half.

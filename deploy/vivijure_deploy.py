@@ -2,15 +2,22 @@
 """vivijure-deploy: a guided installer that stands up the whole Vivijure stack on YOUR OWN
 Cloudflare + RunPod accounts (BYO keys + GPU). One input surface, idempotent re-runs, a teardown.
 
-This is the Phase 1 SKELETON (see issue #244 for the design + options survey). It implements:
-  - the single input surface + correct secret handling (hidden prompts, never echoed or logged),
-  - the provisioning-order SPINE with the cross-wiring constraints encoded (most importantly:
-    seed the Cloudflare Secrets Store BEFORE deploying the workers -- a module worker's
-    secrets_store_secrets binding fails at deploy if its secret does not yet exist; see #237),
-  - idempotent reconcile scaffolding (a local state file: create-if-absent, never duplicate),
-  - a teardown path.
-The actual provider API calls are marked TODO(phase1) -- the spine, the order, and the secret
-handling are the reviewable surface here.
+What it does (see issue #244 for the design + options survey):
+  - one input surface + correct secret handling (hidden prompts, never echoed, logged, or on argv),
+  - the full provisioning spine: Cloudflare (D1, R2 x2, AI Gateway, Access app, Secrets Store + an
+    R2 S3 token mint), then RunPod (template, network volume, endpoints), then seed -> migrate ->
+    deploy. The cross-wiring order is enforced -- most importantly the Secrets Store is seeded BEFORE
+    the workers deploy (a module's secrets_store_secrets binding fails at deploy if its secret does
+    not yet exist; see #237), and RunPod endpoint ids are captured before RUNPOD_ENDPOINT_ID is seeded,
+  - idempotent reconcile (a local state file of resource IDS, never secrets: create-if-absent),
+  - `up` / `plan` / `down` -- teardown removes the RunPod + CF resources it created, by recorded id.
+
+HONESTY NOTE: the provider calls are REAL. `up` provisions against YOUR live Cloudflare + RunPod
+accounts -- it mints an R2 API token, creates an Access app, RunPod endpoints, etc. The calls are
+written against the CF/RunPod API docs + the RunPod OpenAPI, but have NOT been integration-tested end
+to end on a live account; treat the first run accordingly. A few values you MUST set before a live run
+(DEPLOY_DOMAIN, OPERATOR_EMAIL, DATACENTER_ID, BACKEND_IMAGE_TAG, GPU_TYPE_IDS) are flagged at the top
+and the run dies loud if any is missing.
 
 WHAT THIS TOOL COLLECTS (and what it never will):
   COLLECTS: exactly three infra credentials, for YOUR accounts -- a Cloudflare account id, a
@@ -249,14 +256,21 @@ class State:
         data = json.loads(p.read_text()) if p.exists() else {}
         return cls(p, data)
 
+    # Keys that would carry a SECRET VALUE -- never allowed in the state file (it holds ids/names only).
+    _SECRET_KEY_HINTS = ("secret", "password", "api_token", "token_value", "_value")
+
     def save(self) -> None:
-        # Guard: refuse to persist anything that looks like a secret name -> value mapping.
+        # State holds resource ids/names only; the put() guard below enforces no secret-valued key lands here.
         self.path.write_text(json.dumps(self.data, indent=2, sort_keys=True) + "\n")
 
     def get(self, key: str):
         return self.data.get(key)
 
     def put(self, key: str, value) -> None:
+        # Real guard (not just a comment): refuse to persist a key whose name implies a secret VALUE.
+        # Ids/names only -- note r2_token_id is the access-key ID, not the secret it derives.
+        if any(h in key.lower() for h in self._SECRET_KEY_HINTS):
+            die(f"refusing to write '{key}' to the state file -- it looks like a secret value (state holds ids only)")
         self.data[key] = value
         self.save()
 
@@ -343,7 +357,7 @@ def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
 def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     """Step 1. The CF data-plane resources the workers bind (D1, R2 x2, AI Gateway), reconciled by name.
     Returns the IN-MEMORY derived values the secret seed needs (GATEWAY_ID slug + R2 S3 creds);
-    identifiers are also recorded in state. Access app + the scoped R2 token are documented TODOs."""
+    identifiers are also recorded in state. Also mints the scoped R2 S3 token and creates the Access app."""
     acct, tok = s.cf_account_id, s.cf_api_token
     log("provisioning Cloudflare infra (D1, R2 x2, AI Gateway, Access) ...")
 
@@ -365,13 +379,8 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
         name=AI_GATEWAY_ID, name_key="id", id_key="id")
     st.put("gateway_id", gateway)  # an identifier (the slug), not a secret -- safe in state
 
-    # FIDDLY BITS, deliberately left as documented TODOs (verify the exact shape against current CF docs
-    # before enabling -- a wrong shape would silently mis-gate the studio or mint a too-broad token):
-    #   - Access application + a self-only policy gating the studio domain (the v5 inline-vs-standalone
-    #     policy shape is the thing to confirm).
-    #   - A scoped R2 S3 API token (Object Read+Write on the render bucket). CF returns the access key id
-    #     + secret ONCE on create; they would be held in memory here for the seed step, NEVER in state.
     # Scoped R2 S3 token: mint + derive (Access Key ID = token id; Secret = SHA-256(token value)).
+    # CF returns the secret ONCE; it is held in memory for the seed step, never written to state.
     r2 = mint_r2_s3_token(acct, tok, st)
     # Access app + self-only policy gating the single-tenant studio (shapes confirmed against the CF
     # Access API docs). No-op with a warn if DEPLOY_DOMAIN / OPERATOR_EMAIL are unset.
@@ -381,7 +390,8 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
 
 RUNPOD_API = "https://rest.runpod.io/v1"  # the current REST API (Bearer key; OpenAPI at /v1/openapi.json)
 DATACENTER_ID = ""  # REQUIRED for a network volume -- set an available DC id (GET /datacenters or console)
-BACKEND_IMAGE_TAG = "latest"  # TODO: pin an explicit released tag (e.g. 0.2.27) for reproducibility
+BACKEND_IMAGE_TAG = ""  # REQUIRED -- pin an explicit released tag (e.g. "0.2.27"); never "latest" (reproducibility)
+GPU_TYPE_IDS: list = []  # REQUIRED -- endpoint GPU type id(s) (GET /gputypes), e.g. ["NVIDIA H100 80GB HBM3"]
 
 
 def rp_api(method: str, path: str, key: str, body: dict | None = None):
@@ -410,20 +420,29 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
     """Step 2. RunPod must come BEFORE secret-seeding because RUNPOD_ENDPOINT_ID is a seeded secret.
     Order within: registry-auth (only if the image is private) -> template (pin GHCR image, R2 env) ->
     network volume -> endpoint. Returns {endpoint_name: endpoint_id}. Reconciled by name. Consumes the
-    R2 S3 creds (cf_derived) for the backend env -- so a real run needs the CF R2-token TODO filled first.
+    R2 S3 creds (cf_derived, from the CF R2-token mint) for the backend env.
 
     GOTCHA encoded: for a PUBLIC GHCR image, leave containerRegistryAuthId UNSET. A stale/blank-but-
     present auth makes RunPod attempt auth and abort even a public pull."""
     key = s.runpod_api_key
     log("provisioning RunPod (registry-auth?, templates, volumes, endpoints) ...")
 
-    # Public GHCR image -> NO registry auth (leave containerRegistryAuthId unset; the blank-auth gotcha).
-    registry_auth_id = None  # TODO: for a PRIVATE image, rp_reconcile a containerregistryauth here first.
+    # Required config -- die loud rather than POST an empty/unpinned value (relying on a remote 400).
+    if not BACKEND_IMAGE_TAG or BACKEND_IMAGE_TAG == "latest":
+        die('set BACKEND_IMAGE_TAG to an explicit released tag (e.g. "0.2.27") -- never empty or "latest"')
+    if not DATACENTER_ID:
+        die("set DATACENTER_ID to an available RunPod data-center id (GET /datacenters) -- volumes require it")
+    if not GPU_TYPE_IDS:
+        die("set GPU_TYPE_IDS to the endpoint GPU type id(s) (GET /gputypes)")
 
-    # The env the pod reads to reach R2 (S3). From the CF R2-token mint (cf_derived) -- empty until that
-    # TODO is filled, so flag it loudly rather than ship an endpoint that cannot read R2.
+    # Public GHCR image -> NO registry auth (leave containerRegistryAuthId unset; the blank-auth gotcha).
+    registry_auth_id = None  # for a PRIVATE image, rp_reconcile a containerregistryauth here first.
+
+    # The env the pod reads to reach R2 (S3), from the CF R2-token mint (cf_derived). If the mint warned
+    # (e.g. the permission group was missing), the creds are empty -> abort rather than ship an endpoint
+    # that cannot read R2.
     if not cf_derived.get("R2_S3_ACCESS_KEY_ID"):
-        log("  WARN: R2 S3 creds not minted yet (CF R2-token TODO) -- endpoints will lack R2 access until then")
+        die("R2 S3 creds were not minted (see the CF R2-token warning above) -- aborting before creating RunPod endpoints that cannot read R2")
     # RunPod template env is a key->value OBJECT (confirmed against the v1 OpenAPI), not an array.
     backend_env = {
         "R2_S3_ACCESS_KEY_ID": cf_derived.get("R2_S3_ACCESS_KEY_ID", ""),
@@ -443,9 +462,7 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
                 **({"containerRegistryAuthId": registry_auth_id} if registry_auth_id else {}),
             }, name=f"{ep}-tmpl")
         # Network volume for the model weights (warm cache between jobs). dataCenterId is REQUIRED +
-        # region-specific (confirmed against the v1 OpenAPI), so it must be set before a live run.
-        if not DATACENTER_ID:
-            log("  WARN: DATACENTER_ID unset -- a network volume needs a real DC id (GET /datacenters); set it before a live run")
+        # region-specific (confirmed against the v1 OpenAPI); checked + die-loud at the top of this fn.
         vol_id = rp_reconcile(kind="network volume", key=key, list_path="/networkvolumes",
             create_path="/networkvolumes",
             create_body={"name": f"{ep}-vol", "size": 100, "dataCenterId": DATACENTER_ID},  # size in GB
@@ -453,8 +470,10 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
         ep_id = rp_reconcile(kind="endpoint", key=key, list_path="/endpoints", create_path="/endpoints",
             create_body={
                 "name": ep, "templateId": tmpl_id, "networkVolumeId": vol_id,
+                "gpuTypeIds": GPU_TYPE_IDS,
                 "workersMin": 0, "workersMax": 1,
-                # TODO: gpuTypeIds (exact ids from GET /gputypes) + scaler/idle/timeout tuned per endpoint.
+                # scaler/idle/timeout tuning (scalerType / scalerValue / idleTimeout / executionTimeoutMs)
+                # is optional; confirm the exact fields against the live /v1/openapi.json before tuning.
             }, name=ep)
         endpoints[ep] = ep_id
         st.put(f"runpod_endpoint_{ep}", ep_id)
@@ -479,6 +498,22 @@ def replace_store_id_placeholder(repo: Path, store_id: str) -> None:
             toml.write_text(text.replace(STORE_ID_PLACEHOLDER, store_id))
             n += 1
     log(f"  wired store_id into {n} module wrangler.toml(s)")
+
+
+def restore_store_id_placeholder(repo: Path, store_id: str) -> None:
+    """Undo replace_store_id_placeholder after a successful deploy, so the working tree is left CLEAN
+    (the user's checkout is not dirtied with their store id). Only runs on success; a failed deploy
+    leaves the tomls mutated, and a re-run reconciles them."""
+    if not store_id:
+        return
+    n = 0
+    for toml in sorted((repo / "modules").glob("*/wrangler.toml")):
+        text = toml.read_text()
+        if store_id in text and STORE_ID_PLACEHOLDER not in text:
+            toml.write_text(text.replace(store_id, STORE_ID_PLACEHOLDER))
+            n += 1
+    if n:
+        log(f"  restored the store_id placeholder in {n} module wrangler.toml(s) (working tree left clean)")
 
 
 def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_endpoints: dict) -> None:
@@ -508,10 +543,13 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
     }
     base = f"/accounts/{acct}/secrets_store/stores/{store_id}/secrets"
     existing = {x.get("name") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict)}
+    # COUPLING NOTE: on a re-run, mint_r2_s3_token returns an EMPTY R2 secret (CF returns the token
+    # value only once). The skip-empty guard below is what protects the already-seeded R2 secret from
+    # being overwritten with a blank on a reconcile -- do NOT "fix" it to seed empty values.
     for name in STORE_SECRETS:
         v = values.get(name, "")
         if not v:
-            log(f"  skip {name}: value not resolved yet -- re-run once it is available")
+            log(f"  skip {name}: no value this run (already seeded, or not yet resolved) -- left as-is")
             continue
         if name in existing:
             cf_api("PATCH", f"{base}/{name}", tok, {"value": v, "scopes": ["workers"]})
@@ -577,6 +615,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool) -> None:
     seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
     run_migrations(repo, s)
     deploy_workers(repo, s)
+    restore_store_id_placeholder(repo, st.get("store_id"))  # leave the working tree clean post-deploy
     bring_up_containers(repo)
     finalize(repo, st)
 
@@ -605,14 +644,47 @@ def cmd_down(repo: Path, delete_data: bool) -> None:
             rp_api("DELETE", f"/templates/{tid}", key)
             log(f"  deleted RunPod template {ep}")
 
-    # CF teardown (core + module workers, Access app, AI Gateway, Secrets Store secrets+store) by id.
-    # Left as a documented TODO -- delete order + the exact delete endpoints to confirm against CF docs.
-    log("  TODO: CF teardown (workers / Access / AI Gateway / Secrets Store) -- delete-by-id, next increment")
+    # CF teardown by recorded id, in dependency-safe order. The minted R2 API TOKEN is the security
+    # footgun -- it must NOT survive a `down`. A delete error surfaces loud (cf_api dies), never silent.
+    acct, tok = s.cf_account_id, s.cf_api_token
+    removed: list = []
+
+    # Workers (modules + core) via `wrangler delete`. wrangler may prompt for confirmation depending on
+    # version; that surfaces (it is not silently skipped).
+    for m in module_dirs(repo):
+        wrangler(["delete", "-c", f"modules/{m}/wrangler.toml"], cwd=repo, cf_env=cf_env_for(s))
+    wrangler(["delete"], cwd=repo, cf_env=cf_env_for(s))
+    removed.append("workers (modules + core)")
+
+    sid = st.get("store_id")
+    if sid:
+        base = f"/accounts/{acct}/secrets_store/stores/{sid}/secrets"
+        for name in {x.get("name") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict)}:
+            cf_api("DELETE", f"{base}/{name}", tok)
+        cf_api("DELETE", f"/accounts/{acct}/secrets_store/stores/{sid}", tok)
+        removed.append("Secrets Store (store + secrets)")
+    aid = st.get("access_app_id")
+    if aid:
+        cf_api("DELETE", f"/accounts/{acct}/access/apps/{aid}", tok); removed.append("Access app")
+    gw = st.get("gateway_id")
+    if gw:
+        cf_api("DELETE", f"/accounts/{acct}/ai-gateway/gateways/{gw}", tok); removed.append("AI Gateway")
+    rt = st.get("r2_token_id")
+    if rt:
+        cf_api("DELETE", f"/accounts/{acct}/tokens/{rt}", tok); removed.append("R2 API token")
+
+    log("CF removed by id: " + (", ".join(removed) if removed else "(nothing was recorded in state)"))
 
     if not delete_data:
-        log("NOTE: R2 buckets + D1 (your data) left intact. Re-run with --delete-data to remove them.")
+        log("NOTE: R2 buckets + D1 (your DATA) left intact. Re-run with --delete-data to remove them.")
     else:
-        log("  TODO: --delete-data: delete R2 buckets + D1 (by recorded id) -- guarded destructive op")
+        for b in (st.get("r2_buckets") or []):
+            cf_api("DELETE", f"/accounts/{acct}/r2/buckets/{b}", tok)
+            log(f"  deleted R2 bucket {b}")
+        d1 = st.get("d1_id")
+        if d1:
+            cf_api("DELETE", f"/accounts/{acct}/d1/database/{d1}", tok)
+            log("  deleted D1 database")
 
 
 def main(argv: list[str] | None = None) -> None:
