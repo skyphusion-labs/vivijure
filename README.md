@@ -9,10 +9,10 @@ a cloud motion API. You own every artifact.
 
 ## Showcase: four films -- silent, scored, narrated, and now talking
 
-Four real films rendered end to end on Vivijure, unedited renders straight off the pipeline.
-A silent picture, one scored with a generated music bed, one narrated with TTS, and a talking
-character lip-synced to its own dialogue -- across own-GPU Wan, Seedance cloud, and Kling cloud
-motion backends.
+Four real films rendered end to end on Vivijure, unedited renders straight off the pipeline:
+a silent picture, one scored with a generated music bed, and one narrated with TTS, with motion
+across own-GPU Wan, Seedance cloud, and Kling cloud backends. The newest, Vivijure Speaks, adds a
+character lip-synced to its own dialogue, on a self-hosted GPU.
 
 ### NEON HALFLIFE -- silent (own-GPU Wan i2v)
 
