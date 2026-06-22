@@ -176,17 +176,24 @@ service = "vivijure-module-finish-lipsync"
 # Cloud i2v motion.backend modules (RunPod-hosted), joining own-gpu / seedance / kling. Each is its
 # own per-module worker with a scoped RUNPOD_API_KEY; the registry discovers them as MODULE_* bindings.
 # These deploy ahead of the core (see ci.yml), so the bindings never dangle.
-[[services]]
-binding = "MODULE_MINIMAX_HAILUO"
-service = "vivijure-module-minimax-hailuo"
-
-[[services]]
-binding = "MODULE_GOOGLE_VEO"
-service = "vivijure-module-google-veo"
-
-[[services]]
-binding = "MODULE_VIDU_Q3"
-service = "vivijure-module-vidu-q3"
+# PULLED for QA (#246): these three FAIL the finish path at 16:9 (the showcase aspect) -- their i2v
+# output is non-64-divisible (hailuo 1364x768, veo/vidu 1280x720), so finish-rife (RIFE,
+# vivijure-backend) crashes and the studio silent-degrades to applied=[] -- same resolution bug as
+# wan (#245). Classified by dims (no fresh renders); no 64-safe aspect observed for these three.
+# RE-ENABLE = uncomment once RIFE pads-to-64 (rescues all backends) or each module emits 64-safe dims.
+# seedance is intentionally NOT pulled here: it PASSES at 1:1 (960x960, already shipped) and only
+# fails at 16:9, so blanket-pulling it would remove working functionality -- see #246.
+# [[services]]
+# binding = "MODULE_MINIMAX_HAILUO"
+# service = "vivijure-module-minimax-hailuo"
+#
+# [[services]]
+# binding = "MODULE_GOOGLE_VEO"
+# service = "vivijure-module-google-veo"
+#
+# [[services]]
+# binding = "MODULE_VIDU_Q3"
+# service = "vivijure-module-vidu-q3"
 
 # PULLED for QA (#246): Wan 2.6 FAILs the finish path -- finish-rife (RIFE, vivijure-backend) crashes
 # on its non-64-divisible 1270x726 i2v output, and the studio silent-degrades to a raw clip with
