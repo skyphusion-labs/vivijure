@@ -148,11 +148,17 @@ export async function clipKeysFromFilmJob(
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (job.finish_shots?.length) {
+    // Finish WAS set up for this job: the assembled clips are the FINISHED ones only. Never substitute
+    // a raw i2v clip for a finish shot that did not reach "done" -- that silent-degrade (#245/#246)
+    // shipped unfinished clips marked done with applied=[] (wan: RIFE crashed at idx 0 -> the shot
+    // "failed" -> the job fell through to the raw _wan clip). A failed finish fails the render in
+    // advanceFinishPhase; this is the defense-in-depth so assemble can never ship a raw clip.
     for (const fs of job.finish_shots) {
       if (fs.status === "done" && fs.clip_key) out.set(fs.shot_id, fs.clip_key);
     }
-    if (out.size) return out;
+    return out;
   }
+  // No finish modules installed (finish_shots empty) -> assemble the raw i2v clips (the clips_only path).
   if (!job.clip_job_id) return out;
   const cjObj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
   if (!cjObj) return out;
@@ -600,6 +606,18 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
     reclaimFinishShotsFromR2(finishShots, present);
   }
   if (finishShots.every((fs) => fs.status !== "pending")) {
+    // Fail LOUD on a genuinely-failed finish step. After the bounded transient-retry (failOrRetry)
+    // and the R2 reclaim above, a shot still "failed" has no path left and no finished artifact -- so
+    // the render must NOT advance to done/assemble shipping the raw i2v clip with applied=[]. That
+    // silent-degrade (#245/#246) shipped green-but-unfinished films (wan: RIFE crashed at idx 0, the
+    // shot "failed", the job went done with the raw clip, error:None). Surface the real error instead.
+    const failed = finishShots.filter((fs) => fs.status === "failed");
+    if (failed.length) {
+      job.phase = "failed";
+      job.error = `finish failed for ${failed.length} shot(s): ` +
+        failed.map((fs) => `${fs.shot_id} at ${fs.chain[fs.idx] ?? "?"} (${fs.error ?? "no error"})`).join("; ");
+      return;
+    }
     job.phase = job.clips_only ? "done" : "assemble";
   }
 }

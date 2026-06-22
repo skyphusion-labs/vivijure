@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -177,6 +177,45 @@ describe("finish-step transient retry (the silent-render trigger: a lip-sync inv
     const fs = read().finish_shots![0];
     expect(fs.status).toBe("failed");
     expect(fs.attempts ?? 0).toBe(0); // deterministic -> never incremented
+  });
+
+  // #245/#246: a failed finish must fail the RENDER loud -- the film job goes phase=failed with the
+  // real error, NOT phase=done shipping the raw i2v clip with applied=[] (the wan silent-degrade).
+  it("a failed finish fails the render (phase=failed), never silently done with the raw clip", async () => {
+    const { env, read } = retryEnv(lipsyncFilm(), [400]); // deterministic finish failure
+    await advanceFilmJob(env, "film-finish-retry");
+    const job = read();
+    expect(job.finish_shots![0].status).toBe("failed");
+    expect(job.phase).toBe("failed");        // was "done" before the fix (clips_only path)
+    expect(job.phase).not.toBe("done");
+    expect(job.error).toMatch(/finish failed/i);
+    expect(job.error).toMatch(/shot_01/);
+  });
+});
+
+describe("clipKeysFromFilmJob: no raw-clip substitution for a failed finish (#245/#246)", () => {
+  it("finish set up + a shot failed -> finished clips only, never the raw i2v clip", async () => {
+    const job = {
+      film_id: "film-x", project: "neon", clip_job_id: "clips-x",
+      finish_shots: [
+        { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_ls.mp4", chain: ["MODULE_LIPSYNC"], configs: [{}], idx: 0, status: "done", applied: ["lipsync:v15"] },
+        { shot_id: "shot_02", clip_key: "renders/neon/clips/shot_02_wan.mp4", chain: ["MODULE_FINISH_RIFE"], configs: [{}], idx: 0, status: "failed", applied: [], error: "RIFE crash" },
+      ] as FinishShot[],
+    } as unknown as FilmJob;
+    let touchedRawClipJob = false;
+    const env = { R2_RENDERS: { get: async () => { touchedRawClipJob = true; return null; } } } as unknown as Env;
+    const keys = await clipKeysFromFilmJob(env, job);
+    expect(touchedRawClipJob).toBe(false);                                  // never fell through to raw
+    expect(keys.get("shot_01")).toBe("renders/neon/clips/shot_01_ls.mp4");  // the finished clip
+    expect(keys.has("shot_02")).toBe(false);                               // failed shot NOT raw-substituted
+  });
+
+  it("no finish modules installed (finish_shots empty) -> assembles the raw i2v clips", async () => {
+    const job = { film_id: "film-y", project: "neon", clip_job_id: "clips-y", finish_shots: [] } as unknown as FilmJob;
+    const clipJob = { shots: [{ shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_wan.mp4", status: "done" }] };
+    const env = { R2_RENDERS: { get: async () => ({ text: async () => JSON.stringify(clipJob) }) } } as unknown as Env;
+    const keys = await clipKeysFromFilmJob(env, job);
+    expect(keys.get("shot_01")).toBe("renders/neon/clips/shot_01_wan.mp4"); // raw clip used (no finish)
   });
 });
 
