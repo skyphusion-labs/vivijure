@@ -34,7 +34,7 @@ render reaches your hook. **The core never knows who answers** -- it just asks t
 | `plan.enhance` | expand a storyboard before render (LLM auto-direction) | **chain** |
 | `cast.image` | portrait + bible -> LoRA training reference images | **pick one** |
 | `notify` | render-complete notification (email / webhook) | **chain** |
-| `film.finish` | assembled + muxed film -> title / credit cards (post-mux) | **chain** |
+| `film.finish` | assembled + muxed film -> title / credit cards (post-mux; single-film path only) | **chain** |
 
 `pick_one` resolves to a single module (the user picks; default is the first). `chain` folds every
 installed module in `ui.order`, each consuming the previous one's output.

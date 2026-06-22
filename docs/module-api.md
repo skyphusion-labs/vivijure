@@ -45,7 +45,7 @@ Shapes live in `src/modules/types.ts`.
 | `plan.enhance` | Expand a storyboard before render: LLM auto-direction, camera/lighting enrichment. | chain (0..n) |
 | `cast.image` | Portrait + bible -> LoRA training reference images. | pick one |
 | `notify` | Film done -> deliver a render-complete notification (email, webhook, ...). | chain (0..n) |
-| `film.finish` | Assembled + muxed film -> film with opening title / end-credit cards. Post-mux, before done. | chain (0..n) |
+| `film.finish` | Assembled + muxed film -> film with opening title / end-credit cards. Post-mux, before done. Dispatched on the single-film render path (`/api/render/film`, fail-safe); the scatter/gather path does not run it yet. | chain (0..n) |
 
 `pick one` hooks resolve to a single module (the user's chosen backend). `chain` hooks run every
 installed module in a declared order, each consuming the previous output.
