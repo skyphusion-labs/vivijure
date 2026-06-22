@@ -220,4 +220,4 @@ are in `wrangler.toml` (committed); secrets go in via `wrangler secret put`.
 
 ## License
 
-AGPL-3.0. Free as in yours.
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
