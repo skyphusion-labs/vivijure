@@ -28,20 +28,6 @@ The seam is the reference set: this module writes the generated training images 
 the cast member's LoRA is trained from them, and the **keyframe** stage reuses that adapter so every
 shot renders the character on-model. It is pre-render, off the per-shot path entirely.
 
-## Contract
-
-- **Hook**: `cast.image` (one producer; pre-render). `ui { section: "cast", order: 10 }`.
-- **Input** (`CastImageInput`): `cast_id`, `portrait_url` (presigned), optional `portrait_key`,
-  `source_urls`, `bible`, `art_style`.
-- **Output** (`CastImageOutput`): `cast_id`, `images[]` (`key`, `mime`), `applied`.
-- **Async**: `POST /invoke` composes the prompt set and persists run state to R2, returning a stable
-  poll pointer; `POST /poll` renders the next prompt(s) (a few per cycle) and returns pending until the
-  queue drains. A safety-flagged model auto-falls back to the configured fallback model mid-run.
-- **R2 transport**: run state and generated refs land in the shared `vivijure` bucket.
-
-This is a producer stage: a real generation failure (post-fallback) is an honest `ok:false`, not a
-fake-success tag.
-
 ## Configuration
 
 Config options (the planner-projected `config_schema`; the core clamps each against it):
@@ -66,6 +52,20 @@ To self-host (service `vivijure-module-cast-image`, bound into the core as `MODU
   nano-banana fallback path).
 - **Provision**: no RunPod. You need a Cloudflare account with Workers AI, an AI Gateway, and (for
   prod) Cloudflare Images.
+
+## Contract
+
+- **Hook**: `cast.image` (one producer; pre-render). `ui { section: "cast", order: 10 }`.
+- **Input** (`CastImageInput`): `cast_id`, `portrait_url` (presigned), optional `portrait_key`,
+  `source_urls`, `bible`, `art_style`.
+- **Output** (`CastImageOutput`): `cast_id`, `images[]` (`key`, `mime`), `applied`.
+- **Async**: `POST /invoke` composes the prompt set and persists run state to R2, returning a stable
+  poll pointer; `POST /poll` renders the next prompt(s) (a few per cycle) and returns pending until the
+  queue drains. A safety-flagged model auto-falls back to the configured fallback model mid-run.
+- **R2 transport**: run state and generated refs land in the shared `vivijure` bucket.
+
+This is a producer stage: a real generation failure (post-fallback) is an honest `ok:false`, not a
+fake-success tag.
 
 ## License
 

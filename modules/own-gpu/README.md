@@ -38,21 +38,6 @@ key and WRITES the finished clip itself, so this module never downloads or re-up
 polls, and surfaces the `clip_key` the backend reported. The next stage (dialogue, then finish) drives
 off that clip.
 
-## Contract
-
-- **Hook**: `motion.backend` (the clips backend slot). `ui { section: "motion", order: 5 }` -- low
-  order so the own-GPU backend is the default pick over the rented cloud i2v modules.
-- **Input** (`MotionBackendInput`): `shot_id`, `keyframe_url` (presigned, for cloud backends),
-  `keyframe_key` (the R2 key this backend reads directly), `prompt`, `seconds`.
-- **Output** (`MotionBackendOutput`): `shot_id`, `clip_key`, `fps`, `frames`.
-- **Async**: `POST /invoke` submits `i2v_clip` to RunPod and returns a poll token; `POST /poll` checks
-  `/status/{jobId}` (with the GC-grace window, #141) and surfaces the clip on completion.
-- **R2 transport**: the backend reads the keyframe and writes the clip in the shared bucket itself;
-  this worker holds no R2 creds.
-
-This is a producer stage, not a polish step: a real failure is an honest `ok:false` (no soft-degrade),
-because a missing clip cannot be finished or assembled.
-
 ## Configuration
 
 Config options (the planner-projected `config_schema`; the core clamps each against it):
@@ -74,6 +59,21 @@ To self-host (service `vivijure-module-own-gpu`, bound into the core as `MODULE_
   module calls its `/run` with the `i2v_clip` action. No R2 binding -- the backend shares the bucket
   and does the clip I/O. The same endpoint can also serve `keyframe` and `finish-rife` (different
   actions).
+
+## Contract
+
+- **Hook**: `motion.backend` (the clips backend slot). `ui { section: "motion", order: 5 }` -- low
+  order so the own-GPU backend is the default pick over the rented cloud i2v modules.
+- **Input** (`MotionBackendInput`): `shot_id`, `keyframe_url` (presigned, for cloud backends),
+  `keyframe_key` (the R2 key this backend reads directly), `prompt`, `seconds`.
+- **Output** (`MotionBackendOutput`): `shot_id`, `clip_key`, `fps`, `frames`.
+- **Async**: `POST /invoke` submits `i2v_clip` to RunPod and returns a poll token; `POST /poll` checks
+  `/status/{jobId}` (with the GC-grace window, #141) and surfaces the clip on completion.
+- **R2 transport**: the backend reads the keyframe and writes the clip in the shared bucket itself;
+  this worker holds no R2 creds.
+
+This is a producer stage, not a polish step: a real failure is an honest `ok:false` (no soft-degrade),
+because a missing clip cannot be finished or assembled.
 
 ## License
 

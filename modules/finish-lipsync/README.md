@@ -35,25 +35,6 @@ meet here: the clip from rife and the shot's `audio_key` (TTS, cleaned by the sp
 deliberately below the upscaler's 20 so a lip-synced shot is then upscaled, the 256px face region wants
 it. A shot with no dialogue arrives without an `audio_key` and is an intentional NO-OP.
 
-## Contract
-
-- **Hook**: `finish` (cardinality `chain`). `ui { section: "finish", icon: "mic", order: 15 }`.
-- **Input** (`FinishInput`): `shot_id`, `clip_key`, optional `audio_key` (the shot's dialogue audio;
-  absent => no-op passthrough), `src_fps`, `frames`, `width`, `height`.
-- **Output** (`FinishOutput`): `shot_id`, `clip_key` (synced clip; fps + frame count preserved),
-  `out_fps`, `frames`, `applied`, and `degraded` set ONLY on a real passthrough.
-- **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
-  `/status/{jobId}` (with the GC-grace window, #141) and returns the output on completion.
-- **R2 transport**: the endpoint reads `clip_key` + `audio_key` and writes the output in the shared
-  bucket itself; this worker holds no R2 creds.
-
-## Soft-degrade (a polish step -- never fail the chain, never fake the tag; #249/#77)
-
-No `audio_key` is a legitimate NO-OP (`noop:no-dialogue`, not a degrade). A missing endpoint, a submit
-failure, or a backend soft-degrade (e.g. no detectable face) passes the **input** `clip_key` through
-unchanged with `degraded` set to the honest reason, so the chain always has a clip. The two cases are
-never indistinguishable. The only hard `ok:false` is malformed input or a bad poll token.
-
 ## Configuration
 
 Config options (the planner-projected `config_schema`; the core clamps each against it):
@@ -71,6 +52,27 @@ To self-host (service `vivijure-module-finish-lipsync`, bound into the core as `
 - **Provision**: a DEDICATED RunPod serverless endpoint running the `vivijure-musetalk` image (cu128,
   MuseTalk), SEPARATE from vivijure-backend. No R2 binding -- the endpoint reads `clip_key` +
   `audio_key` and writes the output in the shared bucket itself.
+
+## Contract
+
+- **Hook**: `finish` (cardinality `chain`). `ui { section: "finish", icon: "mic", order: 15 }`.
+- **Input** (`FinishInput`): `shot_id`, `clip_key`, optional `audio_key` (the shot's dialogue audio;
+  absent => no-op passthrough), `src_fps`, `frames`, `width`, `height`.
+- **Output** (`FinishOutput`): `shot_id`, `clip_key` (synced clip; fps + frame count preserved),
+  `out_fps`, `frames`, `applied`, and `degraded` set ONLY on a real passthrough.
+- **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
+  `/status/{jobId}` (with the GC-grace window, #141) and returns the output on completion.
+- **R2 transport**: the endpoint reads `clip_key` + `audio_key` and writes the output in the shared
+  bucket itself; this worker holds no R2 creds.
+
+## Soft-degrade
+
+*A polish step: never fail the chain, never fake the tag (#249/#77).*
+
+No `audio_key` is a legitimate NO-OP (`noop:no-dialogue`, not a degrade). A missing endpoint, a submit
+failure, or a backend soft-degrade (e.g. no detectable face) passes the **input** `clip_key` through
+unchanged with `degraded` set to the honest reason, so the chain always has a clip. The two cases are
+never indistinguishable. The only hard `ok:false` is malformed input or a bad poll token.
 
 ## License
 

@@ -35,21 +35,6 @@ The seam is the audio key: this module produces `job.dialogue_audio[shot]`, the 
 it, and the cleaned key flows into **finish-lipsync** (MuseTalk) to drive the mouth. A shot with no
 spoken line simply has no audio key, and finish-lipsync no-ops for it.
 
-## Contract
-
-- **Hook**: `dialogue` (one producer; per-film batch). `ui { section: "dialogue", order: 10 }`.
-- **Input** (`DialogueInput`): `project` (the R2 key prefix) + `lines[]`, each `shot_id`, `text`, and
-  optional `voice_id` (the cast member's Aura-1 speaker; absent/unknown falls back at synth time).
-- **Output** (`DialogueOutput`): `project`, `audio[]` (`shot_id`, `audio_key`, the `voice_id` actually
-  used post-fallback), and `applied`.
-- **Async**: the blocking Aura-1 synth runs one `step.do` per shot inside a Cloudflare **Workflow**
-  (unlimited wall, per-shot retry + checkpoint, survives a recycle), since a request-path `waitUntil`
-  is cancelled at ~30s (#155). `POST /invoke` starts the workflow and returns a poll token; `POST
-  /poll` reads R2 run state, authoritative for done.
-- **R2 transport**: per-shot WAVs and run state land in the shared `vivijure` bucket.
-
-This is a producer stage: a real failure is an honest `ok:false`, not a fake-success tag.
-
 ## Configuration
 
 Config options: **none**. There are no user-facing knobs; the voice is the speaking cast member's
@@ -66,6 +51,21 @@ To self-host (service `vivijure-module-dialogue-gen`, bound into the core as `MO
   called through the gateway).
 - **Provision**: no RunPod. The model is Deepgram Aura-1 on Workers AI; you need a Cloudflare account
   with Workers AI + an AI Gateway.
+
+## Contract
+
+- **Hook**: `dialogue` (one producer; per-film batch). `ui { section: "dialogue", order: 10 }`.
+- **Input** (`DialogueInput`): `project` (the R2 key prefix) + `lines[]`, each `shot_id`, `text`, and
+  optional `voice_id` (the cast member's Aura-1 speaker; absent/unknown falls back at synth time).
+- **Output** (`DialogueOutput`): `project`, `audio[]` (`shot_id`, `audio_key`, the `voice_id` actually
+  used post-fallback), and `applied`.
+- **Async**: the blocking Aura-1 synth runs one `step.do` per shot inside a Cloudflare **Workflow**
+  (unlimited wall, per-shot retry + checkpoint, survives a recycle), since a request-path `waitUntil`
+  is cancelled at ~30s (#155). `POST /invoke` starts the workflow and returns a poll token; `POST
+  /poll` reads R2 run state, authoritative for done.
+- **R2 transport**: per-shot WAVs and run state land in the shared `vivijure` bucket.
+
+This is a producer stage: a real failure is an honest `ok:false`, not a fake-success tag.
 
 ## License
 

@@ -33,25 +33,6 @@ flowchart LR
 The finish chain runs in ascending `ui.order`: **rife (10) -> lipsync (15) -> upscale (20)**. Smoothing
 first means lip-sync and upscale both operate on the higher-frame-rate, face-restored clip.
 
-## Contract
-
-- **Hook**: `finish` (cardinality `chain`). `ui { section: "finish", icon: "wand", order: 10 }`.
-- **Input** (`FinishInput`): `shot_id`, `clip_key`, `src_fps`, `frames`, `width`, `height` (the
-  optional `audio_key` is for lipsync; rife ignores it).
-- **Output** (`FinishOutput`): `shot_id`, `clip_key` (the finished clip), `out_fps`, `frames`,
-  `applied`, and `degraded` set ONLY on a real passthrough.
-- **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
-  `/status/{jobId}` (with the GC-grace window, #141) and returns the output on completion.
-- **R2 transport**: the GPU endpoint reads `clip_key` and writes the finished clip in the shared bucket
-  itself; the clip bytes never pass through this worker.
-
-## Soft-degrade (a polish step -- never fail the chain, never fake the tag; #249/#77)
-
-Nothing enabled is a legitimate NO-OP (`applied` tagged, `degraded` unset). A missing endpoint or any
-backend failure passes the **input** `clip_key` through unchanged with `degraded` set to the honest
-reason, so the chain always has a clip to hand on. The only hard `ok:false` is malformed input (no
-`shot_id`/`clip_key`) or a bad poll token.
-
 ## Configuration
 
 Config options (the planner-projected `config_schema`; the core clamps each against it):
@@ -73,6 +54,27 @@ To self-host (service `vivijure-module-finish-rife`, bound into the core as `MOD
 - **Provision**: a RunPod serverless endpoint running the `vivijure-backend` image; this module calls
   its `/run` with `action=finish_clip` (RIFE + GFPGAN). The same endpoint can also serve `keyframe`
   and `own-gpu` (different actions).
+
+## Contract
+
+- **Hook**: `finish` (cardinality `chain`). `ui { section: "finish", icon: "wand", order: 10 }`.
+- **Input** (`FinishInput`): `shot_id`, `clip_key`, `src_fps`, `frames`, `width`, `height` (the
+  optional `audio_key` is for lipsync; rife ignores it).
+- **Output** (`FinishOutput`): `shot_id`, `clip_key` (the finished clip), `out_fps`, `frames`,
+  `applied`, and `degraded` set ONLY on a real passthrough.
+- **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
+  `/status/{jobId}` (with the GC-grace window, #141) and returns the output on completion.
+- **R2 transport**: the GPU endpoint reads `clip_key` and writes the finished clip in the shared bucket
+  itself; the clip bytes never pass through this worker.
+
+## Soft-degrade
+
+*A polish step: never fail the chain, never fake the tag (#249/#77).*
+
+Nothing enabled is a legitimate NO-OP (`applied` tagged, `degraded` unset). A missing endpoint or any
+backend failure passes the **input** `clip_key` through unchanged with `degraded` set to the honest
+reason, so the chain always has a clip to hand on. The only hard `ok:false` is malformed input (no
+`shot_id`/`clip_key`) or a bad poll token.
 
 ## License
 
