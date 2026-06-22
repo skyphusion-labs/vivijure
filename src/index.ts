@@ -58,6 +58,7 @@ import {
   type AudioAnalyzeRequest,
 } from "./runpod-submit";
 import { validateStoryboard, type StoryboardValidated } from "./storyboard-validate";
+import { checkStoryboardShape, checkCastBindingsReady, summarize, type PreflightIssue } from "./preflight";
 import {
   planStoryboard, refineStoryboard, chatComplete,
   type PlanStoryboardArgs, type RefineStoryboardArgs, type ChatCompleteArgs,
@@ -669,10 +670,44 @@ const hAdoptRender: Handler = async (req, env) =>
   handleAdoptRender(req, env);
 
 // --- validation ----------------------------------------------------------
-const hPreflight: Handler = async (req) => {
-  const result = validateStoryboard(await readBody<unknown>(req));
-  const okFlag = (result as { ok?: boolean }).ok;
-  return json(result, okFlag === false ? 400 : 200);
+// Pre-render preflight. The client (planner.js `runPreflight`) POSTs the
+// envelope { storyboard, castBindings?, bundleKey?, audioKey? } and expects a
+// PreflightResult { ok, counts, issues[] } (see ./preflight): it renders the
+// issues, shows the counts, and gates the bundle button on counts.error.
+//
+// Two things this handler must get right (both were wrong before #242):
+//   1. Unwrap `.storyboard` from the envelope. The previous code validated the
+//      whole body, so `validateStoryboard` read `.title`/`.scenes` off the
+//      wrapper (undefined) and 400'd on every valid storyboard.
+//   2. A storyboard with problems is DATA, not an HTTP failure -- return 200
+//      with `ok:false` + the issues so the client renders them. The previous
+//      code returned 400, which made the client `throw` and show only
+//      "HTTP 400" with no reasons (and never reach its own gate). Reserve
+//      non-2xx for a genuinely malformed request (handled by readBody's 400).
+const hPreflight: Handler = async (req, env) => {
+  const body = await readBody<unknown>(req);
+  const envelope = (body && typeof body === "object") ? (body as Record<string, unknown>) : {};
+
+  // Hard shape gate first: title + scenes structure. Surface its errors as
+  // preflight issues so the panel shows the actual reasons.
+  const validated = validateStoryboard(envelope.storyboard);
+  if (!validated.ok) {
+    const issues: PreflightIssue[] = validated.errors.map((message) => ({
+      level: "error" as const, scope: "storyboard", message,
+    }));
+    return json(summarize(issues), 200);
+  }
+
+  // Shape is valid -> run the semantic + cast-readiness checks.
+  const issues: PreflightIssue[] = [...checkStoryboardShape(validated.value)];
+  const bindings = (envelope.castBindings && typeof envelope.castBindings === "object")
+    ? (envelope.castBindings as Record<string, number>)
+    : null;
+  // Only touch D1 when there are bindings to check.
+  if (bindings && Object.keys(bindings).length > 0) {
+    issues.push(...checkCastBindingsReady(bindings, await listCast(env)));
+  }
+  return json(summarize(issues), 200);
 };
 
 // --- authoring: planning / yaml / markers / bundle / audio ----------------

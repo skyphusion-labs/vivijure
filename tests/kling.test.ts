@@ -2,11 +2,14 @@ import { describe, it, expect } from "vitest";
 import { clampDuration, buildKlingBody, extractVideoUrl, clipKey, encodePoll, decodePoll, runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS } from "../modules/kling/src/kling";
 
 describe("kling pure logic", () => {
-  it("clampDuration bounds to Kling range (3-10)", () => {
+  it("clampDuration snaps to Kling's allowed enum {5,10} (up, never shorter)", () => {
     expect(clampDuration(5)).toBe(5);
+    expect(clampDuration(4)).toBe(5); // the bug: 4 used to pass through and 400 at the provider
     expect(clampDuration(99)).toBe(10);
-    expect(clampDuration(1)).toBe(3);
+    expect(clampDuration(1)).toBe(5);
     expect(clampDuration(0)).toBe(5);
+    expect(clampDuration(7)).toBe(10); // 5 < 7 -> next allowed up is 10 (don't clip a 7s shot to 5)
+    expect(clampDuration(10)).toBe(10);
   });
   it("buildKlingBody maps input + config", () => {
     const b = buildKlingBody({ shot_id: "s", keyframe_url: "u", prompt: "p", seconds: 5 },
@@ -15,7 +18,7 @@ describe("kling pure logic", () => {
   });
   it("buildKlingBody falls back to defaults", () => {
     const b = buildKlingBody({ shot_id: "s", keyframe_url: "u", prompt: "p", seconds: 7 }, {});
-    expect(b.input).toMatchObject({ negative_prompt: "", guidance_scale: 0.5, duration: 7, enable_safety_checker: true });
+    expect(b.input).toMatchObject({ negative_prompt: "", guidance_scale: 0.5, duration: 10, enable_safety_checker: true });
   });
   it("extractVideoUrl finds the url across shapes", () => {
     expect(extractVideoUrl({ output: { video_url: "https://cdn/x.mp4" } })).toBe("https://cdn/x.mp4");
