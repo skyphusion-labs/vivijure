@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import shutil
@@ -276,6 +277,40 @@ def preflight(repo: Path, s: Secrets) -> None:
     log("preflight ok: deps present, both credentials valid")
 
 
+def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
+    """Create an account-scoped API token with the R2 read/write permission group and DERIVE the S3
+    credentials. Confirmed against developers.cloudflare.com/r2/api/tokens/:
+      Access Key ID     = the token's `id`
+      Secret Access Key = SHA-256 hex digest of the token's `value`
+    The token value is returned ONCE by CF; the derived secret is held in memory for the seed step and
+    is NEVER written to state. NOT cleanly idempotent (CF returns the value once), so a state flag skips
+    a re-mint on re-run -- the secret was already seeded into the store on the first run."""
+    endpoint = f"https://{account}.r2.cloudflarestorage.com"
+    if st.get("r2_token_id"):
+        log("  R2 S3 token already minted (id in state) -- skipping re-mint (secret already seeded)")
+        return {"R2_S3_ACCESS_KEY_ID": st.get("r2_token_id"), "R2_S3_SECRET_ACCESS_KEY": "", "R2_S3_ENDPOINT": endpoint}
+    groups = cf_api("GET", f"/accounts/{account}/tokens/permission_groups", token) or []
+    pg = next((g for g in groups if isinstance(g, dict) and g.get("name") == "Workers R2 Storage Write"), None)
+    if not pg:
+        log("  WARN: 'Workers R2 Storage Write' permission group not found -- R2 S3 token NOT minted")
+        return {"R2_S3_ACCESS_KEY_ID": "", "R2_S3_SECRET_ACCESS_KEY": "", "R2_S3_ENDPOINT": endpoint}
+    created = cf_api("POST", f"/accounts/{account}/tokens", token, {
+        "name": "vivijure-r2-s3",
+        "policies": [{
+            "effect": "allow",
+            "permission_groups": [{"id": pg["id"]}],
+            # Account-scoped; narrow the resource to one bucket for a tighter blast radius if preferred.
+            "resources": {f"com.cloudflare.api.account.{account}": "*"},
+        }],
+    }) or {}
+    token_id, token_value = created.get("id", ""), created.get("value", "")
+    secret = hashlib.sha256(token_value.encode()).hexdigest() if token_value else ""
+    if token_id:
+        st.put("r2_token_id", token_id)  # the access-key id (NOT the secret) -- safe in state
+    log("  minted R2 S3 token (access-key id recorded; secret held in memory only)")
+    return {"R2_S3_ACCESS_KEY_ID": token_id, "R2_S3_SECRET_ACCESS_KEY": secret, "R2_S3_ENDPOINT": endpoint}
+
+
 def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     """Step 1. The CF data-plane resources the workers bind (D1, R2 x2, AI Gateway), reconciled by name.
     Returns the IN-MEMORY derived values the secret seed needs (GATEWAY_ID slug + R2 S3 creds);
@@ -307,18 +342,17 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     #     policy shape is the thing to confirm).
     #   - A scoped R2 S3 API token (Object Read+Write on the render bucket). CF returns the access key id
     #     + secret ONCE on create; they would be held in memory here for the seed step, NEVER in state.
-    log("  TODO: Access app + scoped R2 S3 token (the two verify-against-docs CF bits) -- next increment")
-    return {
-        "GATEWAY_ID": gateway,
-        # R2 S3 creds: filled by the token mint once implemented. Empty for now -> the seed step skips
-        # R2_S3_* with a warning rather than seeding a blank.
-        "R2_S3_ACCESS_KEY_ID": "",
-        "R2_S3_SECRET_ACCESS_KEY": "",
-        "R2_S3_ENDPOINT": f"https://{acct}.r2.cloudflarestorage.com",
-    }
+    # Scoped R2 S3 token: mint + derive (Access Key ID = token id; Secret = SHA-256(token value)).
+    r2 = mint_r2_s3_token(acct, tok, st)
+    # Access app + self-only policy gating the studio domain stays the one remaining documented TODO
+    # (the v5 inline-vs-standalone policy shape is the verify-against-docs piece; a wrong shape would
+    # mis-gate the single-tenant studio).
+    log("  TODO: Access app + self-only policy (verify the v5 policy shape) -- remaining CF bit")
+    return {"GATEWAY_ID": gateway, **r2}
 
 
 RUNPOD_API = "https://rest.runpod.io/v1"  # the current REST API (Bearer key; OpenAPI at /v1/openapi.json)
+DATACENTER_ID = ""  # REQUIRED for a network volume -- set an available DC id (GET /datacenters or console)
 BACKEND_IMAGE_TAG = "latest"  # TODO: pin an explicit released tag (e.g. 0.2.27) for reproducibility
 
 
@@ -362,12 +396,13 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
     # TODO is filled, so flag it loudly rather than ship an endpoint that cannot read R2.
     if not cf_derived.get("R2_S3_ACCESS_KEY_ID"):
         log("  WARN: R2 S3 creds not minted yet (CF R2-token TODO) -- endpoints will lack R2 access until then")
-    backend_env = [
-        {"key": "R2_S3_ACCESS_KEY_ID", "value": cf_derived.get("R2_S3_ACCESS_KEY_ID", "")},
-        {"key": "R2_S3_SECRET_ACCESS_KEY", "value": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", "")},
-        {"key": "R2_ENDPOINT", "value": cf_derived.get("R2_S3_ENDPOINT", "")},
-        {"key": "R2_BUCKET", "value": R2_BUCKETS[0]},
-    ]
+    # RunPod template env is a key->value OBJECT (confirmed against the v1 OpenAPI), not an array.
+    backend_env = {
+        "R2_S3_ACCESS_KEY_ID": cf_derived.get("R2_S3_ACCESS_KEY_ID", ""),
+        "R2_S3_SECRET_ACCESS_KEY": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", ""),
+        "R2_ENDPOINT": cf_derived.get("R2_S3_ENDPOINT", ""),
+        "R2_BUCKET": R2_BUCKETS[0],
+    }
 
     endpoints: dict = {}
     for ep in RUNPOD_ENDPOINTS:
@@ -379,11 +414,13 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
                 "env": backend_env,
                 **({"containerRegistryAuthId": registry_auth_id} if registry_auth_id else {}),
             }, name=f"{ep}-tmpl")
-        # Network volume for the model weights (warm cache between jobs). dataCenterId is required +
-        # region-specific -- left as a TODO so the installer/user picks an available DC (GET /datacenters).
+        # Network volume for the model weights (warm cache between jobs). dataCenterId is REQUIRED +
+        # region-specific (confirmed against the v1 OpenAPI), so it must be set before a live run.
+        if not DATACENTER_ID:
+            log("  WARN: DATACENTER_ID unset -- a network volume needs a real DC id (GET /datacenters); set it before a live run")
         vol_id = rp_reconcile(kind="network volume", key=key, list_path="/networkvolumes",
             create_path="/networkvolumes",
-            create_body={"name": f"{ep}-vol", "size": 100},  # TODO: dataCenterId + right size per endpoint
+            create_body={"name": f"{ep}-vol", "size": 100, "dataCenterId": DATACENTER_ID},  # size in GB
             name=f"{ep}-vol")
         ep_id = rp_reconcile(kind="endpoint", key=key, list_path="/endpoints", create_path="/endpoints",
             create_body={
