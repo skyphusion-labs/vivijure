@@ -27,21 +27,31 @@ cards prepended/appended. It holds no R2 binding; it only forwards the card spec
 which reads and writes the film itself. It runs on the single-film render path (`/api/render/film`);
 the scatter/gather path does not dispatch it yet.
 
+## Configuration
+
+`config_schema` (the core clamps against it; the planner projects each field into a control):
+
+| Option | Type | Default | What it does |
+|---|---|---|---|
+| `font` | string | `DejaVu Sans` | card font (installed in the video-finish container) |
+| `color` | string | `white` | card text color (name or `#rrggbb`) |
+| `bg` | string | `black` | card background color |
+| `title_seconds` | int | `3` | opening title card duration in s (1 to 15) |
+| `credit_seconds` | int | `5` | end credit card duration in s (1 to 30) |
+
+The title / credit text is a runtime input, not part of the schema.
+
+**Self-host**: service `vivijure-module-film-titles`, bound into the core as `MODULE_FILM_TITLES`.
+Binding: `VIDEO_FINISH_VPC` (the video-finish CPU container over Workers VPC). No R2 binding, no
+secrets (it only forwards the card spec). See `wrangler.toml`.
+
 ## Contract
 
 - **Hook**: `film.finish` (cardinality `chain`). **Provides**: `film-titles`,
   "Title + credit cards on the finished film". `ui { section: "film.finish", order: 10 }`.
-- **Config** (`config_schema`): `font`, `color`, `bg`, `title_seconds` (default 3), `credit_seconds`
-  (default 5). The title/credit text is a runtime input.
 
 ## Soft-degrade
 
 A polish step never fails the chain. No title and no credits is an intentional no-op
 (`noop:no-cards`); a container failure passes the original film through unchanged tagged
 `passthrough:container-failed` with `degraded` set.
-
-## Deploy
-
-Service `vivijure-module-film-titles`, bound into the core as `MODULE_FILM_TITLES`. Binding:
-`VIDEO_FINISH_VPC` (the video-finish CPU container over Workers VPC). No R2 binding, no S3 secret.
-See `wrangler.toml`.

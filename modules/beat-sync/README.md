@@ -30,17 +30,27 @@ The seam is the timing it returns: beat-sync analyzes the bed and reports where 
 the assemble step uses to time the cut. It generates no audio of its own; it shapes how the film is
 assembled to the audio already there.
 
+## Configuration
+
+`config_schema` (the core clamps against it; the planner projects each field into a control):
+
+| Option | Type | Default | What it does |
+|---|---|---|---|
+| `clip_seconds` | float | `8` | target seconds per shot (0.5 to 60) |
+| `mode` | enum (`beat`, `duration`) | `beat` | timing mode |
+| `min_scene_s` | float | `2.5` | minimum shot length, beat mode (0.5 to 30) |
+| `max_scene_s` | float | `12` | maximum shot length, beat mode (1 to 60) |
+| `force_shots` | int | `0` | force shot count, duration mode (0 = auto) |
+
+The `audio_url` + `audio_key` are runtime fields the core presigns and passes in config at invoke
+time, not part of the schema.
+
+**Self-host**: service `vivijure-module-beat-sync`, bound into the core as `MODULE_BEAT_SYNC`.
+Binding: `AUDIO_BEAT_SYNC_VPC` (the audio-beat-sync container over Workers VPC; Hetzner fleet, issue
+#83). No secrets. See `wrangler.toml`.
+
 ## Contract
 
 - **Hook**: `score` (cardinality `chain`). **Provides**: `librosa-beat-sync`,
   "Beat sync (librosa, fleet VPC)". `ui { section: "score", order: 30 }`.
-- **Config** (`config_schema`): `target_seconds` (target seconds per shot), `mode` (timing mode),
-  `min_seconds` / `max_seconds` (beat mode bounds), `force_shots` (duration mode; 0 = auto). The
-  `audio_url` + `audio_key` are runtime fields passed in config at invoke time, not in the schema.
-- **Sync**: analysis completes in one `POST /invoke` (no `/poll`). The core presigns the audio bed
-  and passes `audio_url` + `audio_key` at invoke time.
-
-## Deploy
-
-Service `vivijure-module-beat-sync`, bound into the core as `MODULE_BEAT_SYNC`. Binding:
-`AUDIO_BEAT_SYNC_VPC` (the audio-beat-sync container over Workers VPC; issue #83). See `wrangler.toml`.
+- **Sync**: analysis completes in one `POST /invoke` (no `/poll`).

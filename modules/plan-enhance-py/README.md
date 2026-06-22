@@ -49,6 +49,18 @@ flowchart LR
 The seam is the storyboard itself: this module returns an enriched storyboard, structurally
 unchanged (same scenes), that keyframe and the rest of the pipeline render from.
 
+## Configuration
+
+`config_schema` (the core clamps against it; the planner projects each field into a control):
+
+| Option | Type | Default | What it does |
+|---|---|---|---|
+| `intensity` | enum (`light`, `medium`, `bold`) | `medium` | how strongly the rule-based pass appends direction cues to each shot prompt |
+
+**Self-host**: no bindings, no secrets, no deps (pure stdlib; runs on the Pyodide runtime via
+`compatibility_flags = ["python_workers"]`, `main = src/entry.py`). It is bound into the core as the
+`MODULE_PLANENHANCE_PY` service binding when installed (see the Wiring section below).
+
 ## Endpoints (the contract)
 
 | Endpoint | Purpose |
