@@ -69,3 +69,7 @@ To self-host (service `vivijure-module-finish-upscale`, bound into the core as `
 - **Provision**: a DEDICATED RunPod serverless endpoint running the `vivijure-upscale` image (CUDA,
   Real-ESRGAN), SEPARATE from vivijure-backend. No R2 binding -- the endpoint reads `clip_key` and
   writes the output in the shared bucket itself.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

@@ -74,3 +74,7 @@ To self-host (service `vivijure-module-keyframe`, bound into the core as `MODULE
   its `/run` with `action=preview` (SDXL keyframes). No R2 binding -- the backend writes the keyframe
   PNGs to the shared bucket with its own creds. The same endpoint can also serve `own-gpu` and
   `finish-rife` (different actions).
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

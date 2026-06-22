@@ -74,3 +74,7 @@ To self-host (service `vivijure-module-own-gpu`, bound into the core as `MODULE_
   module calls its `/run` with the `i2v_clip` action. No R2 binding -- the backend shares the bucket
   and does the clip I/O. The same endpoint can also serve `keyframe` and `finish-rife` (different
   actions).
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

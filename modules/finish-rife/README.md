@@ -73,3 +73,7 @@ To self-host (service `vivijure-module-finish-rife`, bound into the core as `MOD
 - **Provision**: a RunPod serverless endpoint running the `vivijure-backend` image; this module calls
   its `/run` with `action=finish_clip` (RIFE + GFPGAN). The same endpoint can also serve `keyframe`
   and `own-gpu` (different actions).
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
