@@ -1,0 +1,26 @@
+# alibaba-wan-lora module worker (vivijure-module/1): Wan 2.2 I2V on the RunPod PUBLIC managed endpoint
+# wan-2-2-t2v-720-lora, a motion.backend module with CUSTOM operator LoRAs. Bound into the core as
+# MODULE_ALIBABA_WAN_LORA; the registry discovers it from GET /module.json and the studio renders the
+# motion.backend stage from it.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-alibaba-wan-lora"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# The rendered clip is stored in the shared render bucket so the core / film assembler can find it.
+# The endpoint's own video_url expires after 7 days, so /poll downloads the clip and writes it here on
+# completion; the durable R2 key (never the expiring URL) is what flows downstream.
+[[r2_buckets]]
+binding = "R2_RENDERS"
+bucket_name = "vivijure"
+
+# Secret, set AFTER deploy (never committed), with a DEDICATED, scoped vivijure RunPod key (per-module
+# key so a leak's blast radius is this one module):
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/alibaba-wan-lora/wrangler.toml
