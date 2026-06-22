@@ -142,6 +142,12 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
     if (!isStrArr(o.applied)) return "dialogue output needs an applied string[]";
     return null;
   },
+  speech: (o) => {
+    if (!isStr(o.shot_id)) return "speech output needs a string shot_id";
+    if (!isStr(o.audio_key)) return "speech output needs a string audio_key";
+    if (!isStrArr(o.applied)) return "speech output needs an applied string[]";
+    return null;
+  },
   "plan.enhance": (o) => {
     if (!isRec(o.storyboard)) return "plan.enhance output needs a storyboard object";
     if (!Array.isArray((o.storyboard as Record<string, unknown>).scenes)) {

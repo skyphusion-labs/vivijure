@@ -18,6 +18,7 @@ export type HookName =
   | "finish"         // post-process a clip: interpolation / upscale / face restore. Chainable.
   | "score"          // add audio to a film: music / narration / beat-sync. Chainable.
   | "dialogue"       // per-shot dialogue lines -> TTS audio (one voice per cast member). Pick one.
+  | "speech"         // per-shot dialogue audio -> cleaned / enhanced dialogue audio. Post-dialogue, pre-finish. Chainable.
   | "plan.enhance"   // expand a storyboard before render: LLM auto-direction. Chainable.
   | "cast.image"     // character portrait + bible -> LoRA training reference images. Cast-prep, pick one.
   | "notify"         // film done -> deliver a render-complete notification (email / webhook / ...). Chain.
@@ -29,6 +30,7 @@ export const HOOK_NAMES: readonly HookName[] = [
   "finish",
   "score",
   "dialogue",
+  "speech",
   "plan.enhance",
   "cast.image",
   "notify",
@@ -42,6 +44,7 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
   finish: "chain",
   score: "chain",
   dialogue: "pick_one",
+  speech: "chain",
   "plan.enhance": "chain",
   "cast.image": "pick_one",
   notify: "chain",
@@ -56,6 +59,7 @@ export const HOOK_BLURBS: Record<HookName, string> = {
   finish: "interpolation / upscale / face restore",
   score: "music / narration / beat-sync",
   dialogue: "spoken lines -> per-character voice (TTS)",
+  speech: "clean / enhance dialogue audio",
   "plan.enhance": "LLM auto-direction",
   "cast.image": "character refs from a portrait + bible",
   notify: "render-complete notification (email / webhook)",
@@ -202,6 +206,29 @@ export interface DialogueOutput {
   project: string;
   audio: DialogueShotAudio[];
   applied: string[];
+}
+
+// speech (v1) -----------------------------------------------------------------------------------
+
+/** What the core hands a `speech` module: ONE shot's dialogue audio to enhance / clean. The audio is
+ *  self-describing (a speech backend probes it), so this is deliberately minimal. The speech chain runs
+ *  AFTER the dialogue phase (the audio exists) and BEFORE finish (so a lip-sync finish module drives the
+ *  mouth from the cleaned audio). */
+export interface SpeechInput {
+  shot_id: string;
+  audio_key: string; // R2 key of the shot's dialogue audio (TTS), from job.dialogue_audio[shot_id]
+}
+
+/** What a `speech` module returns: the (maybe enhanced) dialogue audio plus what it did. On a real
+ *  enhancement `audio_key` is the NEW cleaned key; on an honest soft-degrade it is the input key passed
+ *  through unchanged, `applied` carries no fake tag, and `degraded` carries the reason. A speech step is
+ *  a POLISH step: it NEVER fails the render on a miss -- only malformed I/O fails loud (cf #249/#77). */
+export interface SpeechOutput {
+  shot_id: string;
+  audio_key: string;  // R2 key of the enhanced audio, or the input key passed through on a soft-degrade
+  applied: string[];  // e.g. ["speech-upscale:resemble-enhance"]; or [] on passthrough
+  degraded?: string;  // set ONLY when the audio was passed through because the work could not run
+                      // (disabled / backend down / no audio), carrying the reason; absent on success
 }
 
 // plan.enhance (v1) -----------------------------------------------------------------------------
