@@ -105,20 +105,40 @@ the GPU work hits whatever endpoint you point it at; the artifacts land in your 
 
 ## Quick start
 
+### Guided installer
+
+One command stands the whole stack up on **your own** Cloudflare + RunPod accounts (bring your own keys
+and GPU). It collects exactly three infra credentials (a Cloudflare account id + API token and a RunPod
+API key, nothing else, never payment or wallet data), provisions everything in dependency order, and
+gives you an idempotent re-run plus a teardown path.
+
 ```bash
-# 1. Clone and install
+git clone https://github.com/skyphusion-labs/vivijure
+cd vivijure
+# set the non-secret config at the top of deploy/vivijure_deploy.py first:
+#   DEPLOY_DOMAIN, OPERATOR_EMAIL, DATACENTER_ID, BACKEND_IMAGE_TAG, GPU_TYPE_IDS
+python3 deploy/vivijure_deploy.py plan   # print the ordered plan, change nothing
+python3 deploy/vivijure_deploy.py up     # provision + seed + deploy (idempotent)
+python3 deploy/vivijure_deploy.py down   # teardown by recorded id (keeps your R2/D1 data)
+```
+
+`up` provisions real resources on your accounts (mints a scoped R2 token, creates a Cloudflare Access
+app, RunPod endpoints, D1, R2 buckets). **Status: the full provisioning spine is implemented and
+verified against the Cloudflare/RunPod API docs, but the end-to-end `up` has not yet been run against a
+live account** -- treat the first run accordingly. Full details, required config, and the secret-handling
+notes are in [deploy/README.md](deploy/README.md).
+
+### Manual (Wrangler)
+
+```bash
 git clone https://github.com/skyphusion-labs/vivijure
 cd vivijure
 npm install
 
-# 2. Configure
-#    Edit wrangler.toml: add your R2 bucket, D1 database, and module service bindings.
-#    Set secrets (RunPod key, CF Access token for R2, AI Gateway) via wrangler secret put.
+# Configure: edit wrangler.toml (R2 bucket, D1 database, module service bindings);
+# set secrets (RunPod key, CF Access token for R2, AI Gateway) via `wrangler secret put`.
 
-# 3. Develop locally
 npm run dev        # wrangler dev -- hot reload at localhost:8787
-
-# 4. Deploy
 npm run deploy     # wrangler deploy
 ```
 
