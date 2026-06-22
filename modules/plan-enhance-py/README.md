@@ -27,6 +27,28 @@ CF Python Workers run on Pyodide (Python on WASM). They are great for **light co
 GPU render. The heavy path stays on RunPod. This module is pure stdlib (no deps), no GPU, no network,
 no bindings.
 
+## Where it fits
+
+`plan.enhance` is a **pre-production** chain (cardinality `chain`, `0..n`, ordered by `ui.order`): it
+runs on the storyboard **before keyframe**. Because the hook is a chain, this Python module and the
+TS [`plan-enhance`](../plan-enhance) both run, in `ui.order` (TS at 10, this at 11), each enriching
+the storyboard in turn before any frame is rendered.
+
+```mermaid
+flowchart LR
+  sb["storyboard"] --> plan
+  subgraph plan["plan.enhance chain (pre-production · ui.order)"]
+    pe["plan-enhance (TS, Opus) · 10"]
+    pep["plan-enhance-py<br/>(rule-based, Python) · 11"]
+  end
+  plan --> kf["keyframe"] --> clips["clips<br/>(motion.backend)"] --> fin["finish chain"]
+  fin --> asm["assemble -> mux -> done"]
+  style pep fill:#dff,stroke:#0aa,stroke-width:2px
+```
+
+The seam is the storyboard itself: this module returns an enriched storyboard, structurally
+unchanged (same scenes), that keyframe and the rest of the pipeline render from.
+
 ## Endpoints (the contract)
 
 | Endpoint | Purpose |
