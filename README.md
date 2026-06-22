@@ -26,7 +26,7 @@ What makes it the proof and not just a demo: this was the first unattended full 
 
 ### FUR AND CIRCUITS -- scored, music bed (Seedance cloud i2v)
 
-[![FUR AND CIRCUITS, a scored Vivijure film, two characters on a red-lit cobblestone street, click to play the MP4](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.jpg)](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4)
+[![FUR AND CIRCUITS, a scored Vivijure film, two characters on a red-lit cobblestone street, click to play the MP4](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.jpg?v=2)](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4)
 
 *[FUR AND CIRCUITS](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4): eight shots, scored with a generated music bed (MiniMax Music module). Motion on Seedance cloud i2v; two character LoRAs trained from cast portraits. Click the frame above to play, or [download the MP4](https://assets.skyphusion.net/vivijure/showcase/fur-and-circuits-scored.mp4) (43 MB).*
 
@@ -34,7 +34,7 @@ The scored mode: the picture locks and the Audio step attaches a generated music
 
 ### RUST -- narrated, TTS (Kling cloud i2v)
 
-[![RUST, a narrated Vivijure film, two rust-covered robots shaking hands, click to play the MP4](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.jpg)](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4)
+[![RUST, a narrated Vivijure film, two rust-covered robots shaking hands, click to play the MP4](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.jpg?v=2)](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4)
 
 *[RUST](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4): three shots, narrated with TTS (MiniMax Speech module). Motion on Kling cloud i2v; two character LoRAs (Salvage Robot and Companion Robot). Click the frame above to play, or [download the MP4](https://assets.skyphusion.net/vivijure/showcase/rust-narrated.mp4) (33 MB).*
 
