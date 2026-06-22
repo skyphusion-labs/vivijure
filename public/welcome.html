@@ -117,6 +117,14 @@
       footer a { color: var(--muted); text-decoration: none; margin-right: 18px; }
       footer a:hover { color: var(--ink); }
       footer .lic { display: block; margin-top: 14px; font-size: 13px; }
+
+      /* Pipeline diagram (How it works) -- a static, pre-rendered SVG (welcome.html stays JS-free) */
+      figure.diagram {
+        margin: 0; border: 1px solid var(--line); border-radius: 12px;
+        background: var(--panel); padding: 20px; overflow-x: auto;
+      }
+      figure.diagram img { width: 100%; min-width: 640px; height: auto; display: block; }
+      figure.diagram figcaption { color: var(--muted); font-size: 14px; margin-top: 14px; }
     </style>
     <!-- Cloudflare Web Analytics (privacy-first: no cookies, no PII, nothing sold) -->
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "cc55ea5bbe1d44a48423f59f8e5a6cc3"}'></script>
@@ -131,6 +139,7 @@
         <span class="spacer"></span>
         <nav aria-label="Primary">
           <a href="#showcase">Showcase</a>
+          <a href="#howitworks">How it works</a>
           <a href="#why">Why</a>
           <a href="https://github.com/skyphusion-labs/vivijure">Source</a>
           <a href="/planner">Open the studio</a>
@@ -294,6 +303,27 @@
             </p>
           </div>
 
+        </section>
+
+        <section id="howitworks">
+          <h2>How it works</h2>
+          <div class="prose">
+            <p>
+              From a storyboard to a finished <code>film.mp4</code>: the keyframe fans into per-shot
+              dialogue and the motion backend; any of seven motion backends (own-GPU or cloud) renders
+              the clip; the opt-in finish chain interpolates, lip-syncs, and upscales it; then the
+              shots gather, assemble, and mux into the film.
+            </p>
+            <p class="muted">
+              Motion is backend-agnostic and the finish chain runs the same way over whatever clip
+              comes back, so you can mix own-GPU and cloud per shot.
+            </p>
+          </div>
+          <figure class="diagram">
+            <img src="https://assets.skyphusion.net/vivijure/diagram-pipeline.svg"
+                 alt="The Vivijure render pipeline: a storyboard becomes SDXL keyframes, which fan into per-shot dialogue (TTS) and the motion backend (own-GPU Wan or a cloud i2v model); the clip runs an opt-in finish chain (RIFE interpolate, MuseTalk lip-sync, CUDA Real-ESRGAN upscale, text overlay); then the shots gather, assemble, and mux into the final film.mp4." />
+            <figcaption>The render pipeline: keyframe to film, through the opt-in finish chain.</figcaption>
+          </figure>
         </section>
 
         <section id="why">
