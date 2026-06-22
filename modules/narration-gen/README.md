@@ -55,3 +55,7 @@ Binding: `R2_RENDERS` (R2 bucket `vivijure`). Secret: `RUNPOD_API_KEY` (the host
 - **Async**: `POST /invoke` submits the RunPod job and returns a poll token immediately (no blocking
   on the wire); `POST /poll` returns the track when the job completes. Failures are **data**
   (`ok:false`), never thrown across the wire.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

@@ -55,3 +55,7 @@ Bindings: `AI` (Workers AI + AI Gateway), `R2_RENDERS` (R2 bucket `vivijure`), `
 - **Async**: a MiniMax generation is a single blocking `env.AI.run` with no async handle, so the
   module runs it inside the `SCORE_WORKFLOW`. `POST /invoke` starts the workflow and returns a poll
   token; `POST /poll` returns the result when the track is written to R2.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

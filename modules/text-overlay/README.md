@@ -56,3 +56,7 @@ over Workers VPC). No secrets. See `wrangler.toml`.
 A polish step never fails the chain. No overlays defined for the shot is an intentional no-op
 (`no-overlays`, not a degrade); a container failure passes the original clip through unchanged tagged
 `passthrough:container-failed` with `degraded` set, so the next finish step always has a clip.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

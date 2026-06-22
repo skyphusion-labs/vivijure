@@ -106,3 +106,7 @@ instance, point the live runner at it: `MODULE_URL=<url> npx vitest run tests/co
 
 Bound into the core as the `MODULE_PLANENHANCE_PY` service binding (see the core `wrangler.toml`).
 The registry discovers it from `GET /module.json` like any other module.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

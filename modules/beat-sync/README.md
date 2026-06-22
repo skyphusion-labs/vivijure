@@ -54,3 +54,7 @@ Binding: `AUDIO_BEAT_SYNC_VPC` (the audio-beat-sync container over Workers VPC; 
 - **Hook**: `score` (cardinality `chain`). **Provides**: `librosa-beat-sync`,
   "Beat sync (librosa, fleet VPC)". `ui { section: "score", order: 30 }`.
 - **Sync**: analysis completes in one `POST /invoke` (no `/poll`).
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

@@ -55,3 +55,7 @@ secrets (it only forwards the card spec). See `wrangler.toml`.
 A polish step never fails the chain. No title and no credits is an intentional no-op
 (`noop:no-cards`); a container failure passes the original film through unchanged tagged
 `passthrough:container-failed` with `degraded` set.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
