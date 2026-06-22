@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -177,6 +177,106 @@ describe("finish-step transient retry (the silent-render trigger: a lip-sync inv
     const fs = read().finish_shots![0];
     expect(fs.status).toBe("failed");
     expect(fs.attempts ?? 0).toBe(0); // deterministic -> never incremented
+  });
+});
+
+describe("finish-step R2 advance (FIX C: a MID-chain step GC'd/frozen with its output already in R2)", () => {
+  const fs = (over: Partial<FinishShot>): FinishShot => ({
+    shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4",
+    chain: [], configs: [], idx: 0, status: "pending", applied: [], ...over,
+  } as FinishShot);
+
+  it("finishStepOutputKey: predicts each finish module's output key; null for an unmodeled module", () => {
+    // finish-rife names its output off the shot id (container convention), not by appending to the input.
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_FINISH_RIFE"] }))).toBe("renders/neon/clips/shot_01_finished.mp4");
+    // the append-convention modules insert their suffix before the extension of the INPUT clip key.
+    expect(finishStepOutputKey("neon", fs({ clip_key: "renders/neon/clips/shot_01_finished.mp4", chain: ["MODULE_FINISH_LIPSYNC"] }))).toBe("renders/neon/clips/shot_01_finished_ls.mp4");
+    expect(finishStepOutputKey("neon", fs({ clip_key: "renders/neon/clips/shot_01_finished_ls.mp4", chain: ["MODULE_FINISH_UPSCALE"] }))).toBe("renders/neon/clips/shot_01_finished_ls_up.mp4");
+    // an unmodeled module -> null: NO R2 shortcut, so it can never advance off a sibling step's artifact.
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_TEXT_OVERLAY"] }))).toBeNull();
+  });
+
+  it("finishStepAppliedTag: reconstructs each module's applied marker from its validated config", () => {
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_LIPSYNC"], configs: [{ version: "v15" }] }))).toBe("lipsync:v15");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_UPSCALE"], configs: [{ scale: 2 }] }))).toBe("upscale:2x");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_RIFE"], configs: [{ interpolation_factor: 2 }] }))).toBe("interpolate:2x");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_TEXT_OVERLAY"], configs: [{}] }))).toBe("MODULE_TEXT_OVERLAY:r2-adopted");
+  });
+
+  // The live wedge: a 4-step chain stuck at idx 0 (RIFE) whose poll froze IN_PROGRESS / 404s while the
+  // RIFE output already landed in R2 -- so lip-sync was never dispatched and the shot pended forever.
+  const wedgeFilm = (): FilmJob => ({
+    film_id: "film-fixc", project: "neon", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+    keyframe_binding: null, phase: "finish", clips_only: true,
+    finish_shots: [{
+      shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4",
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      configs: [{ interpolation_factor: 2 }, { version: "v15" }, { scale: 2 }, {}],
+      idx: 0, status: "pending", applied: [], poll: "frozen", error: undefined,
+    }] as FinishShot[],
+    created_at: Date.now(),
+  });
+
+  function wedgeEnv(job: FilmJob, opts: { rifePoll: "pending" | "404"; rifeOutputInR2: boolean }) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const present = new Set<string>();
+    if (opts.rifeOutputInR2) present.add("renders/neon/clips/shot_01_finished.mp4");
+    let lipsyncInvoked = false;
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        list: async () => ({ objects: [], truncated: false }),
+        head: async (k: string) => (present.has(k) ? { key: k } : null),
+      },
+      MODULE_FINISH_RIFE: {
+        fetch: async (url: string) => {
+          if (!String(url).includes("/poll")) return new Response("{}", { status: 404 });
+          if (opts.rifePoll === "404") return new Response("", { status: 404 }); // GC'd-after-complete
+          return new Response(JSON.stringify({ ok: true, pending: true }), { status: 200, headers: { "content-type": "application/json" } }); // frozen IN_PROGRESS
+        },
+      },
+      MODULE_FINISH_LIPSYNC: {
+        fetch: async (url: string) => {
+          if (String(url).includes("/invoke")) { lipsyncInvoked = true; return new Response(JSON.stringify({ ok: true, pending: true, poll: "ls-tok" }), { status: 200, headers: { "content-type": "application/json" } }); }
+          return new Response(JSON.stringify({ ok: true, pending: true }), { status: 200, headers: { "content-type": "application/json" } });
+        },
+      },
+    } as unknown as Env;
+    return { env, read: () => JSON.parse(stored) as FilmJob, lipsyncInvoked: () => lipsyncInvoked };
+  }
+
+  it("frozen-pending RIFE + its output in R2 -> adopts the step, advances idx, then dispatches lip-sync", async () => {
+    const { env, read, lipsyncInvoked } = wedgeEnv(wedgeFilm(), { rifePoll: "pending", rifeOutputInR2: true });
+    await advanceFilmJob(env, "film-fixc");
+    const a = read().finish_shots![0];
+    expect(a.idx).toBe(1);                                              // advanced off the RIFE step...
+    expect(a.applied).toEqual(["interpolate:2x"]);                     // ...recording its reconstructed tag
+    expect(a.clip_key).toBe("renders/neon/clips/shot_01_finished.mp4"); // next step's input is the RIFE output
+    expect(a.status).toBe("pending");                                  // 3 modules still to run
+    expect(a.poll).toBeUndefined();
+    expect(lipsyncInvoked()).toBe(false);                             // lip-sync dispatches on the NEXT tick
+    await advanceFilmJob(env, "film-fixc");
+    expect(lipsyncInvoked()).toBe(true);                              // the wedge is cleared: lip-sync now runs
+    expect(read().finish_shots![0].poll).toBe("ls-tok");
+  });
+
+  it("404 job-not-found + NO R2 output -> fails loud (not silent-pending)", async () => {
+    const { env, read } = wedgeEnv(wedgeFilm(), { rifePoll: "404", rifeOutputInR2: false });
+    await advanceFilmJob(env, "film-fixc");
+    expect(read().finish_shots![0].status).toBe("failed");
+  });
+
+  it("frozen-pending + NO R2 output yet -> stays pending (the job may still finish), never false-fails", async () => {
+    const { env, read } = wedgeEnv(wedgeFilm(), { rifePoll: "pending", rifeOutputInR2: false });
+    await advanceFilmJob(env, "film-fixc");
+    const a = read().finish_shots![0];
+    expect(a.status).toBe("pending");
+    expect(a.idx).toBe(0);
+    expect(a.applied).toEqual([]);
   });
 });
 
