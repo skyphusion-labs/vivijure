@@ -80,8 +80,9 @@ slate  -->  vivijure  -->  vivijure-backend
 
 - **Write a storyboard** -- scenes, shot descriptions, character beats -- in the planner.
 - **Generate SDXL keyframes** per shot on your GPU (preview before committing to full motion).
-- **Animate** each shot with Wan I2V on your own GPU or a cloud motion model (Kling, Seedance,
-  Gen-4.5, Hailuo) -- mix and match per shot.
+- **Animate** each shot with Wan 2.2 I2V on your own GPU, or any of six cloud motion backends
+  (Kling, Seedance, MiniMax Hailuo, Google Veo, Vidu Q3, Wan 2.6) -- seven in all, mix and match
+  per shot, any aspect ratio.
 - **Cast characters** -- upload portraits, generate LoRA training sets, train a character LoRA
   on your GPU so your cast looks consistent across shots.
 - **Score the film** -- attach a music bed, narrate it with TTS, or beat-sync cuts.
