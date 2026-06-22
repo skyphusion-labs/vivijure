@@ -114,6 +114,26 @@ def main():
     else:
         failures.append(f"music only ducked {drop:.2f} dB (<6 dB); duck not effective")
 
+    # 4. music_upscale ("master the bed"): a low-rate, quiet music source resamples to 48k stereo and
+    # lands at the loudness target. (The no-dialogue branch of the audio finish router.)
+    lo = os.path.join(work, "lo.wav")
+    _run(["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=330:duration=4:sample_rate=22050",
+          "-af", "volume=-26dB", "-ac", "2", lo])
+    mu_out, mu_res = mix_core.music_upscale(work, lo, target, "wav")
+    mu_sr = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+         "stream=sample_rate,channels", "-of", "csv=p=0", mu_out],
+        capture_output=True, text=True, check=True).stdout.strip()
+    print(f"[music-upscale] out={mu_out} sr/ch={mu_sr} lufs={mu_res['lufs']}")
+    if mu_sr.startswith("48000") and mu_sr.endswith("2"):
+        print("[PASS] music-upscale output is 48k stereo")
+    else:
+        failures.append(f"music-upscale output not 48k stereo: {mu_sr}")
+    if abs(mu_res["lufs"] - target) <= 1.5:
+        print(f"[PASS] music-upscale loudness {mu_res['lufs']} LUFS ~ target {target}")
+    else:
+        failures.append(f"music-upscale loudness {mu_res['lufs']} not within 1.5 of {target}")
+
     if failures:
         print("\nFAILED:")
         for f in failures:
