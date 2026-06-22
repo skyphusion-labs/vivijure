@@ -32,8 +32,16 @@ flowchart LR
 The seam is the keyframe key: this module reads each shot's prompt + character portraits from the
 bundle, generates a reference-conditioned keyframe, writes the PNG to the shared `vivijure` bucket at
 `renders/<project>/keyframes/<shot>.png`, and reports the key. The core presigns it so
-**motion.backend** can pull the frame and animate it. The keyframe is normalized to the configured
-width x height so its aspect pins the downstream clip aspect.
+**motion.backend** can pull the frame and animate it.
+
+**Aspect is pinned in two halves**, because the keyframe aspect drives the downstream i2v clip aspect
+(a square keyframe forces square clips the assembler then pillarboxes): (1) the model is asked for the
+target aspect up front -- FLUX-2 is given `width`/`height`, and nano-banana-pro is given the nearest
+standard `aspect_ratio` so it **frames the composition** for that shape (a full-body establishing shot
+stays composed for 16:9 instead of being shot square and later body-cropped); then (2) the result is
+normalized to exactly `width` x `height` via Cloudflare Images. Because the frame already arrives near
+target, that final crop is a trivial trim, not a body-cropping hack -- the model never chooses the
+aspect.
 
 ## How identity is held (no LoRA)
 

@@ -83,7 +83,11 @@ const SUPPORTED_RATIOS: { label: string; value: number }[] = [
   { label: "2:3", value: 2 / 3 },
 ];
 
-/** Snap width/height to the nearest aspect-ratio string a proxied model accepts. */
+/** Snap width/height to the nearest aspect-ratio string a proxied model accepts. We REQUEST this from
+ *  nano-banana so it FRAMES the composition for the target aspect from the start (a full-body
+ *  establishing shot stays composed for 16:9 instead of being shot square and later body-cropped).
+ *  The exact-dimension finish then happens in the caller's normalizeKeyframe, where the crop is
+ *  trivial because the frame already arrived near-target. Two halves of one aspect pin. */
 export function nearestAspectRatio(width: number, height: number): string {
   const r = width > 0 && height > 0 ? width / height : 1;
   let best = SUPPORTED_RATIOS[0];

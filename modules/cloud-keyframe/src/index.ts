@@ -132,10 +132,13 @@ async function downscaleRef(images: ImagesBinding | undefined, bytes: ArrayBuffe
   }
 }
 
-/** Normalize a generated keyframe to EXACTLY width x height (PNG), so the keyframe aspect that drives
- *  the downstream i2v is pinned regardless of what the model returned. FLUX-2 already returns the
- *  requested dimensions (a no-op resize); nano-banana picks its own aspect, so this is what holds it
- *  to 16:9. Best-effort: with no Images binding, the raw bytes pass through. */
+/** Normalize a generated keyframe to EXACTLY width x height (PNG) -- the second half of the aspect
+ *  pin. The first half already ran in image-gen: FLUX-2 was given width/height, and nano-banana was
+ *  asked for the target aspect_ratio so it FRAMED for that shape (no head/feet loss on a full-body
+ *  shot). So by the time we get here the frame is already at (FLUX) or near (nano) the target, and
+ *  this fit:"cover" finish is the exact-dimension trim -- trivial, not a body-cropping hack -- that
+ *  guarantees the keyframe aspect the downstream i2v conforms to. Best-effort: with no Images binding,
+ *  the raw bytes pass through (FLUX is already exact; nano would be near-target but un-finished). */
 async function normalizeKeyframe(
   images: ImagesBinding | undefined,
   bytes: ArrayBuffer,
