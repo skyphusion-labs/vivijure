@@ -29,20 +29,6 @@ flowchart LR
   style clips fill:#fe7,stroke:#c80,stroke-width:2px
 ```
 
-## Contract
-
-- **Hook**: `motion.backend` (cardinality `pick_one`). `provides: i2v-cloud` ("MiniMax Hailuo 2.3
-  Fast (cloud i2v)"), `ui { section: "motion", order: 40 }`.
-- **Input** (`MotionBackendInput`): `shot_id`, `keyframe_url` (a presigned, fetchable URL of the
-  start keyframe), `prompt`, `seconds`.
-- **Config** (`config_schema`): `enable_prompt_expansion` (default on), `go_fast` (default on).
-  Per-shot `seconds` snaps to the nearest allowed duration in **{6, 10}** (<= 8 -> 6, else 10).
-- **Output** (`MotionBackendOutput`): `shot_id`, `clip_key` (the stored clip), `fps` (24), `frames`.
-- **Async**: cloud i2v takes minutes, longer than a Worker request can hold. `POST /invoke` submits
-  to RunPod and returns a poll token immediately; `POST /poll` checks status and, on completion,
-  downloads the clip and stores it to the shared **`vivijure`** R2 bucket (where the film assembler
-  finds it). Bound into the core as `MODULE_MINIMAX_HAILUO`.
-
 ## Configuration
 
 Operator settings to self-host this module.
@@ -65,3 +51,21 @@ schema):
 - `enable_prompt_expansion` (bool, default `true`) -- the provider rewrites/expands the prompt.
 - `go_fast` (bool, default `true`) -- the Fast-mode path.
 - Per-shot `seconds` snaps to the nearest of **{6, 10}** in code (`<= 8 -> 6`, else `10`; not a knob).
+
+## Contract
+
+- **Hook**: `motion.backend` (cardinality `pick_one`). `provides: i2v-cloud` ("MiniMax Hailuo 2.3
+  Fast (cloud i2v)"), `ui { section: "motion", order: 40 }`.
+- **Input** (`MotionBackendInput`): `shot_id`, `keyframe_url` (a presigned, fetchable URL of the
+  start keyframe), `prompt`, `seconds`.
+- **Config** (`config_schema`): `enable_prompt_expansion` (default on), `go_fast` (default on).
+  Per-shot `seconds` snaps to the nearest allowed duration in **{6, 10}** (<= 8 -> 6, else 10).
+- **Output** (`MotionBackendOutput`): `shot_id`, `clip_key` (the stored clip), `fps` (24), `frames`.
+- **Async**: cloud i2v takes minutes, longer than a Worker request can hold. `POST /invoke` submits
+  to RunPod and returns a poll token immediately; `POST /poll` checks status and, on completion,
+  downloads the clip and stores it to the shared **`vivijure`** R2 bucket (where the film assembler
+  finds it). Bound into the core as `MODULE_MINIMAX_HAILUO`.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

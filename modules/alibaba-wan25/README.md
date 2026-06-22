@@ -30,20 +30,6 @@ flowchart LR
   style clips fill:#fe7,stroke:#c80,stroke-width:2px
 ```
 
-## Contract
-
-- **Hook**: `motion.backend` (cardinality `pick_one`). `provides: i2v-cloud` ("Alibaba Wan 2.5
-  (cloud i2v)"), `ui { section: "motion", order: 90 }`.
-- **Input** (`MotionBackendInput`): `shot_id`, `keyframe_url` (a presigned, fetchable URL of the
-  start keyframe), `prompt`, `seconds`.
-- **Config** (`config_schema`): `enable_prompt_expansion` (default off). Output size is **720p**;
-  per-shot `seconds` is clamped to **3--10s**.
-- **Output** (`MotionBackendOutput`): `shot_id`, `clip_key` (the stored clip), `fps` (24), `frames`.
-- **Async**: cloud i2v takes minutes, longer than a Worker request can hold. `POST /invoke` submits
-  to RunPod and returns a poll token immediately; `POST /poll` checks status and, on completion,
-  downloads the clip and stores it to the shared **`vivijure`** R2 bucket (where the film assembler
-  finds it). Bound into the core as `MODULE_ALIBABA_WAN25`.
-
 ## Configuration
 
 Operator settings to self-host this module.
@@ -67,3 +53,21 @@ schema):
   off sends it as-is.
 - Output size is fixed at **720p** and per-shot `seconds` is clamped to **3--10s** in code (not
   knobs).
+
+## Contract
+
+- **Hook**: `motion.backend` (cardinality `pick_one`). `provides: i2v-cloud` ("Alibaba Wan 2.5
+  (cloud i2v)"), `ui { section: "motion", order: 90 }`.
+- **Input** (`MotionBackendInput`): `shot_id`, `keyframe_url` (a presigned, fetchable URL of the
+  start keyframe), `prompt`, `seconds`.
+- **Config** (`config_schema`): `enable_prompt_expansion` (default off). Output size is **720p**;
+  per-shot `seconds` is clamped to **3--10s**.
+- **Output** (`MotionBackendOutput`): `shot_id`, `clip_key` (the stored clip), `fps` (24), `frames`.
+- **Async**: cloud i2v takes minutes, longer than a Worker request can hold. `POST /invoke` submits
+  to RunPod and returns a poll token immediately; `POST /poll` checks status and, on completion,
+  downloads the clip and stores it to the shared **`vivijure`** R2 bucket (where the film assembler
+  finds it). Bound into the core as `MODULE_ALIBABA_WAN25`.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

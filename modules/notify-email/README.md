@@ -30,21 +30,6 @@ flowchart LR
   style note fill:#fe7,stroke:#c80,stroke-width:2px
 ```
 
-## Contract
-
-- **Hook**: `notify` (out-of-band; not in the render path). `provides: notify-email` ("Email
-  notification (Cloudflare Email Service)"), `ui { section: "notify", order: 10 }`.
-- **Input** (`NotifyInput`): `event` (`render.complete`), `film_id`, `project`, optional
-  `download_url`, `seconds`, and `user_email` (the recipient).
-- **Output** (`NotifyOutput`): `delivered` -- e.g. `["email:<to>"]` on a send, or `[]` for a no-op.
-- **Synchronous**: an email send is fast, well within a Worker request. `POST /invoke` composes the
-  render-complete email and sends it, then returns. No recipient or no `EMAIL` binding -> empty
-  `delivered` (a no-op, not an error); a real send failure is returned as `ok:false` (best-effort).
-- **Transport**: the native Cloudflare Email Service `send_email` binding (`EMAIL`). The from-domain
-  (`render@skyphusion.org`) must be onboarded once for Email Sending
-  (`wrangler email sending enable skyphusion.org`). In `wrangler dev` the send is simulated; prod
-  sends for real. Bound into the core as `MODULE_NOTIFY_EMAIL`.
-
 ## Configuration
 
 Operator settings to self-host this module.
@@ -67,3 +52,22 @@ real send (a prerequisite, not part of `wrangler.toml`):
 
 **Render knobs**: none -- `config_schema` is omitted. The recipient comes from the `notify` input
 `user_email` (the film owner); no recipient (or no `EMAIL` binding) -> no-op.
+
+## Contract
+
+- **Hook**: `notify` (out-of-band; not in the render path). `provides: notify-email` ("Email
+  notification (Cloudflare Email Service)"), `ui { section: "notify", order: 10 }`.
+- **Input** (`NotifyInput`): `event` (`render.complete`), `film_id`, `project`, optional
+  `download_url`, `seconds`, and `user_email` (the recipient).
+- **Output** (`NotifyOutput`): `delivered` -- e.g. `["email:<to>"]` on a send, or `[]` for a no-op.
+- **Synchronous**: an email send is fast, well within a Worker request. `POST /invoke` composes the
+  render-complete email and sends it, then returns. No recipient or no `EMAIL` binding -> empty
+  `delivered` (a no-op, not an error); a real send failure is returned as `ok:false` (best-effort).
+- **Transport**: the native Cloudflare Email Service `send_email` binding (`EMAIL`). The from-domain
+  (`render@skyphusion.org`) must be onboarded once for Email Sending
+  (`wrangler email sending enable skyphusion.org`). In `wrangler dev` the send is simulated; prod
+  sends for real. Bound into the core as `MODULE_NOTIFY_EMAIL`.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
