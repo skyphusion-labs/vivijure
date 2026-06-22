@@ -318,20 +318,90 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     }
 
 
-def provision_runpod(repo: Path, s: Secrets, st: State) -> dict:
+RUNPOD_API = "https://rest.runpod.io/v1"  # the current REST API (Bearer key; OpenAPI at /v1/openapi.json)
+BACKEND_IMAGE_TAG = "latest"  # TODO: pin an explicit released tag (e.g. 0.2.27) for reproducibility
+
+
+def rp_api(method: str, path: str, key: str, body: dict | None = None):
+    """RunPod REST v1 call (plain JSON, no envelope; Bearer key in the header)."""
+    return http_json(method, RUNPOD_API + path, key, body)
+
+
+def rp_reconcile(*, kind: str, key: str, list_path: str, create_path: str, create_body: dict,
+                 name: str, name_key: str = "name", id_key: str = "id") -> str:
+    """Idempotent reconcile by NAME against the RunPod REST API -> returns the resource id."""
+    listed = rp_api("GET", list_path, key)
+    items = listed if isinstance(listed, list) else (
+        (listed.get("data") or listed.get("endpoints") or listed.get("templates") or [])
+        if isinstance(listed, dict) else [])
+    for it in items:
+        if isinstance(it, dict) and it.get(name_key) == name:
+            log(f"  RunPod {kind} '{name}' exists ({it.get(id_key)})")
+            return str(it.get(id_key, ""))
+    created = rp_api("POST", create_path, key, create_body)
+    rid = str(created.get(id_key, "")) if isinstance(created, dict) else ""
+    log(f"  RunPod {kind} '{name}' created ({rid})")
+    return rid
+
+
+def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dict:
     """Step 2. RunPod must come BEFORE secret-seeding because RUNPOD_ENDPOINT_ID is a seeded secret.
-    Order within: registry-auth (only if the image is private) -> template (pin GHCR image) ->
-    network volume -> endpoint. Returns {endpoint_name: endpoint_id}. Reconciled by name.
+    Order within: registry-auth (only if the image is private) -> template (pin GHCR image, R2 env) ->
+    network volume -> endpoint. Returns {endpoint_name: endpoint_id}. Reconciled by name. Consumes the
+    R2 S3 creds (cf_derived) for the backend env -- so a real run needs the CF R2-token TODO filled first.
 
     GOTCHA encoded: for a PUBLIC GHCR image, leave containerRegistryAuthId UNSET. A stale/blank-but-
     present auth makes RunPod attempt auth and abort even a public pull."""
-    log("provisioning RunPod (templates, volumes, endpoints) ...")
-    # TODO(phase1): registry_auth = None for a public image; create_if_absent only if private.
-    # TODO(phase1): for ep in RUNPOD_ENDPOINTS: template create (imageName=GHCR_IMAGE, env=R2_S3_*,
-    #               containerRegistryAuthId=registry_auth) -> volume create -> endpoint create
-    #               (templateId, networkVolumeId) -> record endpoint id.
-    # TODO(phase1): optionally pre-seed the volume via the RunPod S3 API (boto3) to avoid a slow first job.
-    raise NotImplementedError("provision_runpod: implement RunPod REST create-if-absent + capture ids")
+    key = s.runpod_api_key
+    log("provisioning RunPod (registry-auth?, templates, volumes, endpoints) ...")
+
+    # Public GHCR image -> NO registry auth (leave containerRegistryAuthId unset; the blank-auth gotcha).
+    registry_auth_id = None  # TODO: for a PRIVATE image, rp_reconcile a containerregistryauth here first.
+
+    # The env the pod reads to reach R2 (S3). From the CF R2-token mint (cf_derived) -- empty until that
+    # TODO is filled, so flag it loudly rather than ship an endpoint that cannot read R2.
+    if not cf_derived.get("R2_S3_ACCESS_KEY_ID"):
+        log("  WARN: R2 S3 creds not minted yet (CF R2-token TODO) -- endpoints will lack R2 access until then")
+    backend_env = [
+        {"key": "R2_S3_ACCESS_KEY_ID", "value": cf_derived.get("R2_S3_ACCESS_KEY_ID", "")},
+        {"key": "R2_S3_SECRET_ACCESS_KEY", "value": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", "")},
+        {"key": "R2_ENDPOINT", "value": cf_derived.get("R2_S3_ENDPOINT", "")},
+        {"key": "R2_BUCKET", "value": R2_BUCKETS[0]},
+    ]
+
+    endpoints: dict = {}
+    for ep in RUNPOD_ENDPOINTS:
+        tmpl_id = rp_reconcile(kind="template", key=key, list_path="/templates", create_path="/templates",
+            create_body={
+                "name": f"{ep}-tmpl",
+                "imageName": f"{GHCR_IMAGE}:{BACKEND_IMAGE_TAG}",
+                "containerDiskInGb": 500,
+                "env": backend_env,
+                **({"containerRegistryAuthId": registry_auth_id} if registry_auth_id else {}),
+            }, name=f"{ep}-tmpl")
+        # Network volume for the model weights (warm cache between jobs). dataCenterId is required +
+        # region-specific -- left as a TODO so the installer/user picks an available DC (GET /datacenters).
+        vol_id = rp_reconcile(kind="network volume", key=key, list_path="/networkvolumes",
+            create_path="/networkvolumes",
+            create_body={"name": f"{ep}-vol", "size": 100},  # TODO: dataCenterId + right size per endpoint
+            name=f"{ep}-vol")
+        ep_id = rp_reconcile(kind="endpoint", key=key, list_path="/endpoints", create_path="/endpoints",
+            create_body={
+                "name": ep, "templateId": tmpl_id, "networkVolumeId": vol_id,
+                "workersMin": 0, "workersMax": 1,
+                # TODO: gpuTypeIds (exact ids from GET /gputypes) + scaler/idle/timeout tuned per endpoint.
+            }, name=ep)
+        endpoints[ep] = ep_id
+        st.put(f"runpod_endpoint_{ep}", ep_id)
+        st.put(f"runpod_template_{ep}", tmpl_id)
+        st.put(f"runpod_volume_{ep}", vol_id)
+
+    # Model seeding: the backend image self-preloads weights from R2 on first cold start (the
+    # R2-mirror-on-cold-start model), so it is not blocking; optionally pre-seed each volume via the
+    # RunPod S3 API (boto3, no pod) to avoid a slow first job.
+    log("  NOTE: model-seeding via the RunPod volume S3 API (boto3) is an optional follow-up; the image "
+        "self-preloads from R2 on first job otherwise.")
+    return endpoints
 
 
 def replace_store_id_placeholder(repo: Path, store_id: str) -> None:
@@ -438,7 +508,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool) -> None:
     st = State.load(repo)
     preflight(repo, s)
     cf_derived = provision_cloudflare_infra(repo, s, st)
-    runpod_endpoints = provision_runpod(repo, s, st)
+    runpod_endpoints = provision_runpod(repo, s, st, cf_derived)
     seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
     run_migrations(repo, s)
     deploy_workers(repo, s)
@@ -450,13 +520,34 @@ def cmd_down(repo: Path, delete_data: bool) -> None:
     """Teardown in reverse dependency order, by recorded id. R2 buckets + D1 hold user data and are
     LEFT in place unless --delete-data is given."""
     st = State.load(repo)
-    log("teardown (reverse order, by recorded id) ...")
-    # TODO(phase1): delete RunPod endpoints -> volumes -> templates -> registry auth (by id from state)
-    # TODO(phase1): delete core + module workers, Access app, AI Gateway, Secrets Store secrets+store
-    # TODO(phase1): if delete_data: delete R2 buckets + D1 (else leave them, warn)
+    s = collect_secrets()  # teardown needs the keys too -- same hidden-prompt handling, never argv
+    log("teardown (reverse dependency order, by recorded id) ...")
+
+    # RunPod first (endpoint -> volume -> template). An endpoint with live workers may need scaling to 0
+    # before delete; surface the API error rather than force.
+    key = s.runpod_api_key
+    for ep in RUNPOD_ENDPOINTS:
+        eid = st.get(f"runpod_endpoint_{ep}")
+        if eid:
+            rp_api("DELETE", f"/endpoints/{eid}", key)
+            log(f"  deleted RunPod endpoint {ep} ({eid})")
+        vid = st.get(f"runpod_volume_{ep}")
+        if vid:
+            rp_api("DELETE", f"/networkvolumes/{vid}", key)
+            log(f"  deleted RunPod volume {ep}")
+        tid = st.get(f"runpod_template_{ep}")
+        if tid:
+            rp_api("DELETE", f"/templates/{tid}", key)
+            log(f"  deleted RunPod template {ep}")
+
+    # CF teardown (core + module workers, Access app, AI Gateway, Secrets Store secrets+store) by id.
+    # Left as a documented TODO -- delete order + the exact delete endpoints to confirm against CF docs.
+    log("  TODO: CF teardown (workers / Access / AI Gateway / Secrets Store) -- delete-by-id, next increment")
+
     if not delete_data:
         log("NOTE: R2 buckets + D1 (your data) left intact. Re-run with --delete-data to remove them.")
-    raise NotImplementedError("cmd_down: implement delete-by-id teardown")
+    else:
+        log("  TODO: --delete-data: delete R2 buckets + D1 (by recorded id) -- guarded destructive op")
 
 
 def main(argv: list[str] | None = None) -> None:
