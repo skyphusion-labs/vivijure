@@ -7,3 +7,6 @@ worker-configuration.d.ts
 .DS_Store
 __pycache__/
 *.pyc
+
+# vivijure-deploy local state (resource ids; never secrets)
+.vivijure-deploy.json
