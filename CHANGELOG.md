@@ -3,6 +3,13 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.2.4
+
+**Cloud i2v duration enum fix.** Unblocks the cloud motion backends for short shots.
+
+- **kling + wan duration snap (#241):** the Kling ({5,10}) and Wan 2.6 ({5,10,15}) cloud i2v modules accept only a discrete duration enum, not a continuous range; the old continuous clamp passed a 4s shot straight through and the provider 400'd at submit (so a cloud talking render failed before any clip rendered). Duration now snaps UP to the smallest allowed value at or above the per-shot seconds (4s -> 5; a 7s shot -> 10, never clipped shorter than the shot). The other six cloud modules likely share the bug; tracked as follow-up.
+- **683 tests**, typecheck-clean.
+
 ## v0.2.3
 
 **Finish-chain self-heal: a GC'd or frozen mid-chain finish step now recovers from R2.** Builds on v0.2.2's silent-render fixes.
