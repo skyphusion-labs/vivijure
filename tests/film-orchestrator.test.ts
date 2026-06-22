@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -30,6 +30,42 @@ describe("applyFinishOutput (chain fold)", () => {
     expect(fs.status).toBe("done");
     expect(fs.applied).toEqual(["interpolate:2x", "face_restore:gfpgan"]);
     expect(fs.clip_key).toBe("clips/after_b.mp4");
+  });
+});
+
+describe("applySpeechOutput (chain fold + honest soft-degrade)", () => {
+  const speechShot = (over: Partial<SpeechShot> = {}): SpeechShot => ({
+    shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01.wav", chain: ["MODULE_SPEECH_UPSCALE"], idx: 0, status: "pending", applied: [], ...over,
+  });
+  it("real enhance: threads the new audio_key forward, records applied, marks done", () => {
+    const ss = speechShot();
+    applySpeechOutput(ss, { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_enh.wav", applied: ["speech-upscale:resemble-enhance"] });
+    expect(ss.audio_key).toBe("renders/p/dialogue/shot_01_enh.wav");
+    expect(ss.applied).toEqual(["speech-upscale:resemble-enhance"]);
+    expect(ss.idx).toBe(1);
+    expect(ss.status).toBe("done");
+    expect(ss.degraded).toBeUndefined();
+  });
+  it("HONEST soft-degrade: keeps the ORIGINAL audio_key (mouth never goes silent), records the reason, no fake applied tag", () => {
+    const ss = speechShot();
+    // even if a buggy module returns a junk key alongside `degraded`, the guard ignores it
+    applySpeechOutput(ss, { shot_id: "shot_01", audio_key: "JUNK-should-be-ignored", applied: [], degraded: "backend down" });
+    expect(ss.audio_key).toBe("renders/p/dialogue/shot_01.wav"); // the ORIGINAL dialogue audio survives
+    expect(ss.degraded).toBe("backend down");
+    expect(ss.applied).toEqual([]); // no fake applied tag
+    expect(ss.status).toBe("done");
+  });
+  it("multi-module chain: stays pending until exhausted, threading enhanced audio between steps", () => {
+    const ss = speechShot({ chain: ["MODULE_A", "MODULE_B"] });
+    applySpeechOutput(ss, { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_a.wav", applied: ["denoise:a"] });
+    expect(ss.idx).toBe(1);
+    expect(ss.status).toBe("pending"); // module B still to run
+    expect(ss.audio_key).toBe("renders/p/dialogue/shot_01_a.wav"); // B enhances A's output
+    applySpeechOutput(ss, { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_b.wav", applied: ["upscale:b"] });
+    expect(ss.idx).toBe(2);
+    expect(ss.status).toBe("done");
+    expect(ss.applied).toEqual(["denoise:a", "upscale:b"]);
+    expect(ss.audio_key).toBe("renders/p/dialogue/shot_01_b.wav");
   });
 });
 
@@ -1271,6 +1307,60 @@ describe("advanceFilmJob dialogue phase injects audio_key into finish (talking c
     expect(finishInputs.length).toBe(1);
     expect((finishInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01.wav");
     // clips_only -> after finish the shard is done
+    expect(r?.job.phase).toBe("done");
+  });
+});
+
+describe("advanceFilmJob speech phase: dialogue -> speech (clean audio) -> finish lip-syncs the CLEANED audio", () => {
+  const job = {
+    film_id: "film-speech-1",
+    project: "p",
+    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+    phase: "dialogue" as const,
+    clips_only: true, // stop after finish -> done (skip assemble), so the tick ends cleanly
+    dialogue_poll: "tok",
+    dialogue_lines: [{ shot_id: "shot_01", text: "We're here.", voice_id: "orion" }],
+    finish_shots: [{ shot_id: "shot_01", clip_key: "renders/p/clips/shot_01.mp4", chain: ["MODULE_LIPSYNC"], idx: 0, status: "pending" as const, applied: [] }],
+  };
+
+  function speechEnv() {
+    const finishInputs: unknown[] = [];
+    const speechInputs: unknown[] = [];
+    const env = {
+      DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey("film-speech-1") ? { text: async () => JSON.stringify(job) } : null),
+        head: async () => null,
+        put: async () => {},
+        list: async () => ({ objects: [] }),
+      },
+      MODULE_DIALOGUE: moduleFetcher(
+        { name: "dialogue-gen", version: "0.1.0", api: "vivijure-module/1", hooks: ["dialogue"], ui: { order: 10 } },
+        { poll: () => ({ ok: true, output: { project: "p", audio: [{ shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01.wav", voice_id: "orion" }], applied: ["dialogue:aura-1"] } }) },
+      ),
+      MODULE_SPEECH_UPSCALE: moduleFetcher(
+        { name: "speech-upscale", version: "0.1.0", api: "vivijure-module/1", hooks: ["speech"], config_schema: { enable: { type: "bool", default: false } }, ui: { section: "speech", order: 10 } },
+        { invoke: (body) => { speechInputs.push((body as { input: unknown }).input); return { ok: true, output: { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_enh.wav", applied: ["speech-upscale:resemble-enhance"] } }; } },
+      ),
+      MODULE_LIPSYNC: moduleFetcher(
+        { name: "finish-lipsync", version: "0.1.0", api: "vivijure-module/1", hooks: ["finish"], ui: { section: "finish", order: 15 } },
+        { invoke: (body) => { finishInputs.push((body as { input: unknown }).input); return { ok: true, output: { shot_id: "shot_01", clip_key: "renders/p/clips/shot_01_ls.mp4", out_fps: 16, frames: 48, applied: ["lipsync:v15"] } }; } },
+      ),
+    } as unknown as Env;
+    return { env, finishInputs, speechInputs };
+  }
+
+  it("speech module enhances the dialogue audio; lip-sync then drives off the CLEANED key", async () => {
+    const { env, finishInputs, speechInputs } = speechEnv();
+    const r = await advanceFilmJob(env, "film-speech-1");
+    // the speech module received the ORIGINAL dialogue audio to enhance
+    expect(speechInputs.length).toBe(1);
+    expect((speechInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01.wav");
+    // dialogue_audio was rewritten to the ENHANCED key
+    expect(r?.job.dialogue_audio).toEqual({ shot_01: "renders/p/dialogue/shot_01_enh.wav" });
+    // lip-sync (finish) received the ENHANCED audio_key -- the whole point of inserting the speech phase
+    expect(finishInputs.length).toBe(1);
+    expect((finishInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01_enh.wav");
     expect(r?.job.phase).toBe("done");
   });
 });
