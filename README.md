@@ -157,6 +157,34 @@ The GPU render backend is [`vivijure-backend`](https://github.com/skyphusion-lab
 (RunPod serverless, SDXL + Wan I2V + ffmpeg assemble). The studio UI lives at
 `vivijure.skyphusion.org` (`/planner`, `/cast`, `/modules`).
 
+## How a render flows
+
+The path from a storyboard to a finished `film.mp4`. The keyframe fans into both the dialogue and the
+motion backend; any of seven motion backends (own-GPU or cloud) renders the clip; the opt-in finish
+chain interpolates, lip-syncs, and upscales it; then the shots gather, assemble, and mux. Drawn out,
+it is a real studio pipeline, not a wrapper.
+
+```mermaid
+flowchart LR
+  SB([Storyboard]) --> KF[Keyframe<br/>SDXL on GPU]
+  KF --> DLG[Dialogue<br/>per-shot TTS]
+  KF --> MB{motion.backend}
+  MB -->|own-gpu| WAN[Wan i2v<br/>your GPU]
+  MB -->|cloud| CLD[Kling / Wan 2.6<br/>Seedance / Hailuo<br/>Veo / Vidu]
+  WAN --> RIFE
+  CLD --> RIFE
+  subgraph FIN [finish chain, opt-in]
+    RIFE[RIFE<br/>interpolate] --> LS[MuseTalk<br/>lip-sync] --> UP[CUDA Real-ESRGAN<br/>upscale] --> OV[text<br/>overlay]
+  end
+  DLG --> LS
+  OV --> ASM[Gather + assemble<br/>keepClipAudio]
+  ASM --> MUX[Mux audio] --> FILM[(film.mp4)]
+```
+
+Motion is backend-agnostic: the same keyframe feeds own-GPU Wan or any cloud i2v module, and the
+finish chain runs the same way over whatever clip comes back. The dialogue track is generated per
+shot, drives the lip-sync, and rides through assembly into the final mux.
+
 ## Develop
 
 ```bash
