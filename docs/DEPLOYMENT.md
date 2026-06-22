@@ -140,6 +140,12 @@ You now have a working Studio for everything except the GPU render itself.
 
 The render backend is the `vivijure-backend` container image, run as a **RunPod Serverless endpoint**.
 
+> **Two version lines, do not conflate them.** The GPU render image is cut from a `backend-vX.Y.Z`
+> git tag in the `vivijure-backend` repo and published to GHCR as `:X.Y.Z` (the image tag drops the
+> `backend-v` prefix). The Studio control plane (this repo) ships on its own `vX.Y.Z` deploy tags. A
+> `backend-v0.2.26` image and a Studio `v0.2.2` deploy are independent release lines; pin the RunPod
+> endpoint to the **GHCR image tag**, not the Studio deploy tag.
+
 1. Build/pull the image. The image is published to GHCR (`ghcr.io/skyphusion-labs/vivijure-backend`);
    build it yourself from the `vivijure-backend` repo, or pull the public image.
 2. In **runpod.io -> Serverless -> New Endpoint**, point it at the image, pick a GPU (H200/B200 class
