@@ -34,5 +34,15 @@ RUN ffmpeg -y \
     && rm -f /tmp/warm.mp3 \
     && echo "audio-mix filter sanity-encode OK"
 
+# Same fail-fast for the /music-upscale chain: the soxr resampler + high-shelf "air" lift. A slim
+# ffmpeg built without libsoxr would fail HERE at build, not at the first /music-upscale request.
+RUN ffmpeg -y \
+        -f lavfi -i "sine=frequency=440:duration=0.2:sample_rate=22050" \
+        -af "aresample=48000:resampler=soxr:precision=28,highshelf=gain=2.5:frequency=9000:width_type=q:width=0.7" \
+        -ac 2 -ar 48000 -c:a pcm_s16le /tmp/soxr.wav \
+    && ffprobe -v error -select_streams a -show_entries stream=sample_rate -of csv=p=0 /tmp/soxr.wav | grep -q 48000 \
+    && rm -f /tmp/soxr.wav \
+    && echo "music-upscale soxr+lift sanity OK"
+
 EXPOSE 8000
 CMD ["python", "app.py"]
