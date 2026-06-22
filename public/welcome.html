@@ -12,8 +12,8 @@
     <meta property="og:title" content="Vivijure: a self-hosted AI film studio" />
     <meta property="og:description" content="Write a storyboard, render it to video on your own GPU. Bring your own GPU and keys, own every artifact, no subscription, no lock-in." />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.jpg" />
-    <meta property="og:video" content="https://assets.skyphusion.net/vivijure/showcase/neon-halflife-run1.mp4" />
+    <meta property="og:image" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.jpg" />
+    <meta property="og:video" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.mp4" />
     <!-- Styles are inlined on purpose: the page is one self-contained file so the only
          vivijure-domain path that needs a public Access bypass is /welcome itself. The
          showcase film and poster live on assets.skyphusion.net (separate public domain). -->
@@ -152,12 +152,13 @@
         </section>
 
         <section id="showcase">
-          <h2>Showcase: three films, three audio modes, three backends</h2>
+          <h2>Showcase: four films -- silent, scored, narrated, and now talking</h2>
           <div class="prose" style="margin-bottom: 28px;">
             <p>
-              Three real films rendered end to end on Vivijure, unedited renders straight off the
-              pipeline. Silent picture, scored with a music bed, and narrated with TTS -- on three
-              different motion backends (own-GPU Wan, Seedance cloud, Kling cloud).
+              Four real films rendered end to end on Vivijure, unedited renders straight off the
+              pipeline: a silent picture, one scored with a music bed, and one narrated with TTS,
+              with motion across own-GPU Wan, Seedance cloud, and Kling cloud backends. The newest,
+              Vivijure Speaks, adds a character lip-synced to its own dialogue, on a self-hosted GPU.
             </p>
           </div>
 
@@ -256,6 +257,40 @@
               MiniMax Speech module directly from the storyboard text, staged to R2, and muxed into
               the final MP4. Narration is a drop-in alternative to the music bed in the same scoring
               chain.
+            </p>
+          </div>
+
+          <h3 style="margin-top: 32px;">Vivijure Speaks (own-GPU Wan i2v)</h3>
+          <figure class="showcase">
+            <video controls preload="metadata" playsinline
+                   poster="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.jpg">
+              <source src="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.mp4" type="video/mp4" />
+              Your browser does not support embedded video.
+              <a href="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.mp4">Download the MP4</a>.
+            </video>
+            <figcaption>
+              <em>Vivijure Speaks</em>: two shots, about two and a half seconds. A talking character
+              lip-synced to its own dialogue and upscaled (per-shot dialogue TTS, then MuseTalk
+              lip-sync and a CUDA Real-ESRGAN pass over an interpolated clip). Motion on a
+              self-hosted GPU (the <code>own-gpu</code> Wan backend).
+            </figcaption>
+          </figure>
+          <div class="badge-row" aria-hidden="false">
+            <span class="badge">1080p</span>
+            <span class="badge">2 shots</span>
+            <span class="badge">~2.6s</span>
+            <span class="badge">own-GPU i2v</span>
+            <span class="badge">talking (lip-sync)</span>
+            <span class="badge">CUDA upscale 2x</span>
+          </div>
+          <div class="prose">
+            <p>
+              The talking mode: per shot, a generated line of dialogue is muxed into the clip,
+              MuseTalk drives the character's mouth to match it, and a CUDA Real-ESRGAN pass upscales
+              the result. It came out silent the first time, and a from-scratch re-fire then surfaced
+              two more orchestration bugs before they could reach anyone; the
+              <a href="https://skyphusion.net/blog/vivijure-talking-character/">writeup</a> tells the
+              honest story of the three fixes that gave it a voice.
             </p>
           </div>
 
