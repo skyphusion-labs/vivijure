@@ -39,11 +39,13 @@ Shapes live in `src/modules/types.ts`.
 |---|---|---|
 | `keyframe` | Storyboard -> start keyframes (SDXL on GPU). | pick one |
 | `motion.backend` | Keyframe (+ motion prompt) -> shot clip. GPU/RunPod and cloud providers are modules. | pick one per shot |
-| `finish` | Post-process a clip: frame interpolation, upscale, face restore. | chain (0..n, ordered) |
+| `finish` | Post-process a clip: frame interpolation, lip-sync (MuseTalk), upscale (CUDA Real-ESRGAN), face restore. | chain (0..n, ordered) |
 | `score` | Add audio to a film: music, narration, beat-sync. | chain (0..n) |
+| `dialogue` | Per-shot dialogue lines -> speech audio (TTS, one voice per cast member). Runs after clips, before finish; its audio feeds the lip-sync finish module. | pick one |
 | `plan.enhance` | Expand a storyboard before render: LLM auto-direction, camera/lighting enrichment. | chain (0..n) |
 | `cast.image` | Portrait + bible -> LoRA training reference images. | pick one |
 | `notify` | Film done -> deliver a render-complete notification (email, webhook, ...). | chain (0..n) |
+| `film.finish` | Assembled + muxed film -> film with opening title / end-credit cards. Post-mux, before done. | chain (0..n) |
 
 `pick one` hooks resolve to a single module (the user's chosen backend). `chain` hooks run every
 installed module in a declared order, each consuming the previous output.

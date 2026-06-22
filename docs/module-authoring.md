@@ -28,11 +28,13 @@ render reaches your hook. **The core never knows who answers** -- it just asks t
 |---|---|---|
 | `keyframe` | storyboard -> start keyframes (SDXL on GPU) | **pick one** |
 | `motion.backend` | keyframe (+ motion prompt) -> shot clip (GPU or cloud) | **pick one** per shot |
-| `finish` | post-process a clip: interpolation / upscale / face restore | **chain** |
+| `finish` | post-process a clip: interpolation / lip-sync / upscale / face restore | **chain** |
 | `score` | add audio to a film: music / narration / beat-sync | **chain** |
+| `dialogue` | per-shot dialogue lines -> speech audio (TTS); feeds the lip-sync finish module | **pick one** |
 | `plan.enhance` | expand a storyboard before render (LLM auto-direction) | **chain** |
 | `cast.image` | portrait + bible -> LoRA training reference images | **pick one** |
 | `notify` | render-complete notification (email / webhook) | **chain** |
+| `film.finish` | assembled + muxed film -> title / credit cards (post-mux) | **chain** |
 
 `pick_one` resolves to a single module (the user picks; default is the first). `chain` folds every
 installed module in `ui.order`, each consuming the previous one's output.
