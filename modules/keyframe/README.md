@@ -37,20 +37,6 @@ The seam is the keyframe key: the backend writes each shot's PNG to the shared `
 module reports the keys, and the core presigns them so the **motion.backend** stage can pull each frame
 and animate it. Freshly trained cast LoRAs are reported back so they are reused across projects.
 
-## Contract
-
-- **Hook**: `keyframe` (one producer; first render stage). `ui { section: "keyframe", order: 10 }`.
-- **Input** (`KeyframeInput`): `project`, `bundle_key` (the storyboard bundle), optional `shot_ids`
-  and `pretrained_loras` (slot -> R2 key of an already-trained adapter to reuse).
-- **Output** (`KeyframeOutput`): `project`, `keyframes[]` (`shot_id` + `keyframe_key`), and optional
-  `trained_loras` (slot -> R2 key) the core records back onto the cast so future renders reuse them.
-- **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
-  `/status/{jobId}` (with the GC-grace window, #141) and returns the keys on completion.
-- **R2 transport**: the backend reads/writes the shared bucket itself; this worker holds no R2 creds.
-
-This is a producer stage, not a polish step: a real failure is an honest `ok:false` (no soft-degrade,
-no fake keyframes), because nothing downstream can animate a frame that was never rendered.
-
 ## Configuration
 
 Config options (the planner-projected `config_schema`; the core clamps each against it):
@@ -74,6 +60,20 @@ To self-host (service `vivijure-module-keyframe`, bound into the core as `MODULE
   its `/run` with `action=preview` (SDXL keyframes). No R2 binding -- the backend writes the keyframe
   PNGs to the shared bucket with its own creds. The same endpoint can also serve `own-gpu` and
   `finish-rife` (different actions).
+
+## Contract
+
+- **Hook**: `keyframe` (one producer; first render stage). `ui { section: "keyframe", order: 10 }`.
+- **Input** (`KeyframeInput`): `project`, `bundle_key` (the storyboard bundle), optional `shot_ids`
+  and `pretrained_loras` (slot -> R2 key of an already-trained adapter to reuse).
+- **Output** (`KeyframeOutput`): `project`, `keyframes[]` (`shot_id` + `keyframe_key`), and optional
+  `trained_loras` (slot -> R2 key) the core records back onto the cast so future renders reuse them.
+- **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
+  `/status/{jobId}` (with the GC-grace window, #141) and returns the keys on completion.
+- **R2 transport**: the backend reads/writes the shared bucket itself; this worker holds no R2 creds.
+
+This is a producer stage, not a polish step: a real failure is an honest `ok:false` (no soft-degrade,
+no fake keyframes), because nothing downstream can animate a frame that was never rendered.
 
 ## License
 
