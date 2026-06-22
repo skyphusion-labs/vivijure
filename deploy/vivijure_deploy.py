@@ -54,6 +54,9 @@ STORE_NAME = "vivijure"  # the account-level Secrets Store name (#237/#238)
 # The placeholder the module wrangler.tomls ship with (#237). After creating the store the installer
 # replaces it with the real store id so the secrets_store_secrets bindings resolve at deploy.
 STORE_ID_PLACEHOLDER = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+# Single-tenant studio gating (config, NOT secrets -- set these for your deploy):
+DEPLOY_DOMAIN = ""    # the studio hostname behind CF Access (match the core worker's route/custom domain)
+OPERATOR_EMAIL = ""   # the one email allowed through the Access self-only policy
 
 # The secrets the studio + module workers read. Seeded into the account-level Cloudflare Secrets Store
 # (see #237/#238), NOT via `wrangler secret put`. Keyed by the binding name the code reads.
@@ -277,6 +280,32 @@ def preflight(repo: Path, s: Secrets) -> None:
     log("preflight ok: deps present, both credentials valid")
 
 
+def provision_access_app(account: str, token: str, st: State) -> None:
+    """Gate the single-tenant studio behind CF Access: a self-hosted app on DEPLOY_DOMAIN with a
+    self-only allow policy (OPERATOR_EMAIL). Shapes confirmed against the CF Access API docs --
+    app = {name, domain, type:'self_hosted', policies:[...]}; policy = {name, decision:'allow',
+    include:[{email:{email}}]}. Reconciled by domain so a re-run does not duplicate. No-op (with a
+    loud warn) if the two config values are unset -- better an explicit ungated warning than a wrong
+    gate."""
+    if not DEPLOY_DOMAIN or not OPERATOR_EMAIL:
+        log("  WARN: DEPLOY_DOMAIN / OPERATOR_EMAIL unset -- skipping Access app (studio would be UNGATED); set them to gate it")
+        return
+    app_id = create_if_absent(kind="Access app", account=account, token=token,
+        list_path="/accounts/{acct}/access/apps", create_path="/accounts/{acct}/access/apps",
+        create_body={
+            "name": "Vivijure Studio",
+            "domain": DEPLOY_DOMAIN,
+            "type": "self_hosted",
+            "policies": [{
+                "name": "operator only",
+                "decision": "allow",
+                "include": [{"email": {"email": OPERATOR_EMAIL}}],
+            }],
+        },
+        name=DEPLOY_DOMAIN, name_key="domain", id_key="id")
+    st.put("access_app_id", app_id)
+
+
 def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
     """Create an account-scoped API token with the R2 read/write permission group and DERIVE the S3
     credentials. Confirmed against developers.cloudflare.com/r2/api/tokens/:
@@ -344,10 +373,9 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     #     + secret ONCE on create; they would be held in memory here for the seed step, NEVER in state.
     # Scoped R2 S3 token: mint + derive (Access Key ID = token id; Secret = SHA-256(token value)).
     r2 = mint_r2_s3_token(acct, tok, st)
-    # Access app + self-only policy gating the studio domain stays the one remaining documented TODO
-    # (the v5 inline-vs-standalone policy shape is the verify-against-docs piece; a wrong shape would
-    # mis-gate the single-tenant studio).
-    log("  TODO: Access app + self-only policy (verify the v5 policy shape) -- remaining CF bit")
+    # Access app + self-only policy gating the single-tenant studio (shapes confirmed against the CF
+    # Access API docs). No-op with a warn if DEPLOY_DOMAIN / OPERATOR_EMAIL are unset.
+    provision_access_app(acct, tok, st)
     return {"GATEWAY_ID": gateway, **r2}
 
 
