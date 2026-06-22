@@ -49,6 +49,10 @@ STATE_FILE = ".vivijure-deploy.json"  # resource ids only, NEVER secrets. Safe t
 # R2 buckets the studio binds (render outputs + the doc/RAG store).
 R2_BUCKETS = ("vivijure", "skyphusion-llm")
 D1_DATABASE = "vivijure-studio"
+STORE_NAME = "vivijure"  # the account-level Secrets Store name (#237/#238)
+# The placeholder the module wrangler.tomls ship with (#237). After creating the store the installer
+# replaces it with the real store id so the secrets_store_secrets bindings resolve at deploy.
+STORE_ID_PLACEHOLDER = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
 
 # The secrets the studio + module workers read. Seeded into the account-level Cloudflare Secrets Store
 # (see #237/#238), NOT via `wrangler secret put`. Keyed by the binding name the code reads.
@@ -162,16 +166,57 @@ def http_json(method: str, url: str, token: str, body: dict | None = None) -> di
     return {}
 
 
-def wrangler(args: list[str], *, cwd: Path, secret_stdin: str | None = None) -> None:
-    """Run `npx wrangler ...`. A secret value (if any) is piped via STDIN, NEVER placed on argv (argv
-    is visible in `ps` and shell history). CLOUDFLARE_API_TOKEN/ACCOUNT_ID are passed via the child
-    env, not the command line."""
+CF_API = "https://api.cloudflare.com/client/v4"
+AI_GATEWAY_ID = "vivijure"  # the AI Gateway slug -> becomes the GATEWAY_ID secret
+
+
+def cf_api(method: str, path: str, token: str, body: dict | None = None):
+    """Cloudflare API v4 call. Unwraps the {result, success, errors} envelope and dies on success:false,
+    surfacing the error MESSAGE only (never the request body, which may carry a secret). `path` is
+    relative to CF_API and may carry an /accounts/{acct}/ prefix."""
+    out = http_json(method, CF_API + path, token, body)
+    if isinstance(out, dict) and out.get("success") is False:
+        msgs = "; ".join(str(e.get("message", e)) for e in (out.get("errors") or [])) or "success:false"
+        die(f"Cloudflare {method} {path.split('?')[0]} -> {msgs}")
+    return out.get("result") if isinstance(out, dict) and "result" in out else out
+
+
+def create_if_absent(*, kind: str, account: str, token: str, list_path: str, create_path: str,
+                     create_body: dict, name: str, name_key: str, id_key: str,
+                     list_unwrap: str | None = None) -> str:
+    """Idempotent reconcile by NAME -> returns the resource id. Lists existing, matches name_key, else
+    POSTs create_body. list_unwrap handles nested list results (e.g. R2 buckets under 'buckets')."""
+    listed = cf_api("GET", list_path.format(acct=account), token)
+    items = (listed.get(list_unwrap) if (list_unwrap and isinstance(listed, dict)) else listed) or []
+    for it in (items if isinstance(items, list) else []):
+        if isinstance(it, dict) and it.get(name_key) == name:
+            rid = str(it.get(id_key, name))
+            log(f"  {kind} '{name}' exists ({rid})")
+            return rid
+    created = cf_api("POST", create_path.format(acct=account), token, create_body)
+    rid = str(created.get(id_key, name)) if isinstance(created, dict) else name
+    log(f"  {kind} '{name}' created ({rid})")
+    return rid
+
+
+def cf_env_for(s: "Secrets") -> dict:
+    """The Cloudflare creds Wrangler reads from the ENVIRONMENT (never argv): token + account id."""
+    return {"CLOUDFLARE_API_TOKEN": s.cf_api_token, "CLOUDFLARE_ACCOUNT_ID": s.cf_account_id}
+
+
+def wrangler(args: list[str], *, cwd: Path, cf_env: dict | None = None, secret_stdin: str | None = None) -> None:
+    """Run `npx wrangler ...`. A secret value (if any) is piped via STDIN, NEVER placed on argv (argv is
+    visible in `ps` and shell history). CLOUDFLARE_API_TOKEN/ACCOUNT_ID ride in the child ENV, not the
+    command line."""
     cmd = ["npx", "wrangler", *args]
-    log("wrangler " + " ".join(a for a in args if not a.startswith("-c") or True))
+    log("wrangler " + " ".join(args[:3]))  # never log a value -- args here are subcommands/flags only
+    child_env = dict(os.environ)
+    if cf_env:
+        child_env.update(cf_env)
     proc = subprocess.run(
         cmd, cwd=str(cwd),
         input=(secret_stdin.encode() if secret_stdin is not None else None),
-        # env is set by the caller (export CLOUDFLARE_* before invoking) -- not modeled in this stub.
+        env=child_env,
     )
     if proc.returncode != 0:
         die(f"wrangler {' '.join(args[:2])} failed (exit {proc.returncode})")
@@ -231,17 +276,46 @@ def preflight(repo: Path, s: Secrets) -> None:
     log("preflight ok: deps present, both credentials valid")
 
 
-def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> None:
-    """Step 1. The CF data-plane resources the workers bind, plus the scoped R2 S3 token the GPU
-    backend uses. Reconciled by name. TODO(phase1): the create_* API calls."""
+def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
+    """Step 1. The CF data-plane resources the workers bind (D1, R2 x2, AI Gateway), reconciled by name.
+    Returns the IN-MEMORY derived values the secret seed needs (GATEWAY_ID slug + R2 S3 creds);
+    identifiers are also recorded in state. Access app + the scoped R2 token are documented TODOs."""
+    acct, tok = s.cf_account_id, s.cf_api_token
     log("provisioning Cloudflare infra (D1, R2 x2, AI Gateway, Access) ...")
-    # TODO(phase1): D1 create_if_absent(D1_DATABASE) -> st.put('d1_id', ...)
-    # TODO(phase1): for b in R2_BUCKETS: r2 create_if_absent(b)
-    # TODO(phase1): AI Gateway create_if_absent -> GATEWAY_ID slug -> st.put('gateway_id', slug)
-    # TODO(phase1): Access app create_if_absent for the studio domain (+ optional bypass service token)
-    # TODO(phase1): mint a scoped R2 S3 API token (Object R/W on the render bucket) ->
-    #               R2_S3_ACCESS_KEY_ID / R2_S3_SECRET_ACCESS_KEY / R2_S3_ENDPOINT (held in memory for seeding)
-    raise NotImplementedError("provision_cloudflare_infra: implement create-if-absent calls (CF API)")
+
+    d1_id = create_if_absent(kind="D1 database", account=acct, token=tok,
+        list_path="/accounts/{acct}/d1/database", create_path="/accounts/{acct}/d1/database",
+        create_body={"name": D1_DATABASE}, name=D1_DATABASE, name_key="name", id_key="uuid")
+    st.put("d1_id", d1_id)
+
+    for b in R2_BUCKETS:
+        create_if_absent(kind="R2 bucket", account=acct, token=tok,
+            list_path="/accounts/{acct}/r2/buckets", create_path="/accounts/{acct}/r2/buckets",
+            create_body={"name": b}, name=b, name_key="name", id_key="name", list_unwrap="buckets")
+    st.put("r2_buckets", list(R2_BUCKETS))
+
+    gateway = create_if_absent(kind="AI Gateway", account=acct, token=tok,
+        list_path="/accounts/{acct}/ai-gateway/gateways", create_path="/accounts/{acct}/ai-gateway/gateways",
+        create_body={"id": AI_GATEWAY_ID, "cache_ttl": 0, "collect_logs": True,
+                     "rate_limiting_interval": 0, "rate_limiting_limit": 0, "rate_limiting_technique": "fixed"},
+        name=AI_GATEWAY_ID, name_key="id", id_key="id")
+    st.put("gateway_id", gateway)  # an identifier (the slug), not a secret -- safe in state
+
+    # FIDDLY BITS, deliberately left as documented TODOs (verify the exact shape against current CF docs
+    # before enabling -- a wrong shape would silently mis-gate the studio or mint a too-broad token):
+    #   - Access application + a self-only policy gating the studio domain (the v5 inline-vs-standalone
+    #     policy shape is the thing to confirm).
+    #   - A scoped R2 S3 API token (Object Read+Write on the render bucket). CF returns the access key id
+    #     + secret ONCE on create; they would be held in memory here for the seed step, NEVER in state.
+    log("  TODO: Access app + scoped R2 S3 token (the two verify-against-docs CF bits) -- next increment")
+    return {
+        "GATEWAY_ID": gateway,
+        # R2 S3 creds: filled by the token mint once implemented. Empty for now -> the seed step skips
+        # R2_S3_* with a warning rather than seeding a blank.
+        "R2_S3_ACCESS_KEY_ID": "",
+        "R2_S3_SECRET_ACCESS_KEY": "",
+        "R2_S3_ENDPOINT": f"https://{acct}.r2.cloudflarestorage.com",
+    }
 
 
 def provision_runpod(repo: Path, s: Secrets, st: State) -> dict:
@@ -260,26 +334,61 @@ def provision_runpod(repo: Path, s: Secrets, st: State) -> dict:
     raise NotImplementedError("provision_runpod: implement RunPod REST create-if-absent + capture ids")
 
 
-def seed_secrets(repo: Path, s: Secrets, st: State, runpod_endpoints: dict) -> None:
+def replace_store_id_placeholder(repo: Path, store_id: str) -> None:
+    """Wire the real Secrets Store id into the module wrangler.tomls (replace the #237 placeholder) so
+    the secrets_store_secrets bindings resolve at deploy. Idempotent: a no-op once already replaced."""
+    n = 0
+    for toml in sorted((repo / "modules").glob("*/wrangler.toml")):
+        text = toml.read_text()
+        if STORE_ID_PLACEHOLDER in text:
+            toml.write_text(text.replace(STORE_ID_PLACEHOLDER, store_id))
+            n += 1
+    log(f"  wired store_id into {n} module wrangler.toml(s)")
+
+
+def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_endpoints: dict) -> None:
     """Step 3. CRITICAL ORDER: seed the Secrets Store BEFORE deploying the workers. A module worker's
     secrets_store_secrets binding references a store secret by name; `wrangler deploy` FAILS if that
     secret does not yet exist (#237). Values flow from: the user's RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID
-    (from step 2), GATEWAY_ID (from step 1), and the scoped R2 S3 creds (from step 1).
+    (step 2), GATEWAY_ID + the scoped R2 S3 creds (step 1).
 
-    Each value is piped to wrangler via STDIN (hidden), never argv. Re-run re-seeds rotated values."""
+    Secret VALUES are sent in the HTTPS request body of the Secrets Store API (never on argv, never
+    logged) -- the non-interactive analogue of wrangler's hidden prompt. Re-run reseeds rotated values."""
+    acct, tok = s.cf_account_id, s.cf_api_token
     log("seeding the Cloudflare Secrets Store (BEFORE deploy) ...")
-    # TODO(phase1): wrangler secrets-store store create-if-absent -> store_id -> st.put('store_id', ...)
-    # TODO(phase1): for name in STORE_SECRETS: resolve its value (from s / runpod_endpoints / step-1
-    #               minted creds) and `wrangler secrets-store secret create <store> --name <name>
-    #               --scopes workers` with the value on STDIN. Never --value, never argv.
-    raise NotImplementedError("seed_secrets: implement Secrets Store seed (stdin-piped, before deploy)")
+
+    store_id = create_if_absent(kind="Secrets Store", account=acct, token=tok,
+        list_path="/accounts/{acct}/secrets_store/stores", create_path="/accounts/{acct}/secrets_store/stores",
+        create_body={"name": STORE_NAME}, name=STORE_NAME, name_key="name", id_key="id")
+    st.put("store_id", store_id)
+    replace_store_id_placeholder(repo, store_id)  # so the deploy's bindings resolve
+
+    values = {
+        "RUNPOD_API_KEY": s.runpod_api_key,
+        "RUNPOD_ENDPOINT_ID": runpod_endpoints.get("vivijure-backend", ""),
+        "GATEWAY_ID": cf_derived.get("GATEWAY_ID", ""),
+        "R2_S3_ACCESS_KEY_ID": cf_derived.get("R2_S3_ACCESS_KEY_ID", ""),
+        "R2_S3_SECRET_ACCESS_KEY": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", ""),
+        "R2_S3_ENDPOINT": cf_derived.get("R2_S3_ENDPOINT", ""),
+    }
+    base = f"/accounts/{acct}/secrets_store/stores/{store_id}/secrets"
+    existing = {x.get("name") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict)}
+    for name in STORE_SECRETS:
+        v = values.get(name, "")
+        if not v:
+            log(f"  skip {name}: value not resolved yet -- re-run once it is available")
+            continue
+        if name in existing:
+            cf_api("PATCH", f"{base}/{name}", tok, {"value": v, "scopes": ["workers"]})
+        else:
+            cf_api("POST", base, tok, {"name": name, "value": v, "scopes": ["workers"]})
+        log(f"  seeded {name}")  # name only, never the value
 
 
 def run_migrations(repo: Path, s: Secrets) -> None:
     """Step 4. D1 schema migrations (Wrangler only -- Terraform cannot do this). Additive, idempotent."""
     log("applying D1 migrations ...")
-    # wrangler d1 migrations apply vivijure-studio --remote   (env carries CLOUDFLARE_*)
-    raise NotImplementedError("run_migrations: wrangler d1 migrations apply (after seed, before/with deploy)")
+    wrangler(["d1", "migrations", "apply", D1_DATABASE, "--remote"], cwd=repo, cf_env=cf_env_for(s))
 
 
 def deploy_workers(repo: Path, s: Secrets) -> None:
@@ -287,9 +396,10 @@ def deploy_workers(repo: Path, s: Secrets) -> None:
     Wrangler bundles + uploads. Only reachable AFTER seed_secrets (the store bindings must resolve)."""
     mods = module_dirs(repo)
     log(f"deploying {len(mods)} module workers, then the core ...")
-    # TODO(phase1): for m in mods: wrangler(["deploy", "-c", f"modules/{m}/wrangler.toml"], cwd=repo)
-    # TODO(phase1): wrangler(["deploy"], cwd=repo)  # the core
-    raise NotImplementedError("deploy_workers: wrangler deploy modules then core (post-seed)")
+    env = cf_env_for(s)
+    for m in mods:
+        wrangler(["deploy", "-c", f"modules/{m}/wrangler.toml"], cwd=repo, cf_env=env)
+    wrangler(["deploy"], cwd=repo, cf_env=env)  # the core, AFTER every module (service bindings)
 
 
 def bring_up_containers(repo: Path) -> None:
@@ -327,9 +437,9 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool) -> None:
     log("credential presence: " + s.presence())  # SET/missing only
     st = State.load(repo)
     preflight(repo, s)
-    provision_cloudflare_infra(repo, s, st)
+    cf_derived = provision_cloudflare_infra(repo, s, st)
     runpod_endpoints = provision_runpod(repo, s, st)
-    seed_secrets(repo, s, st, runpod_endpoints)  # MUST precede deploy
+    seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
     run_migrations(repo, s)
     deploy_workers(repo, s)
     bring_up_containers(repo)
