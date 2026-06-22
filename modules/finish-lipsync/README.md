@@ -40,7 +40,6 @@ it. A shot with no dialogue arrives without an `audio_key` and is an intentional
 - **Hook**: `finish` (cardinality `chain`). `ui { section: "finish", icon: "mic", order: 15 }`.
 - **Input** (`FinishInput`): `shot_id`, `clip_key`, optional `audio_key` (the shot's dialogue audio;
   absent => no-op passthrough), `src_fps`, `frames`, `width`, `height`.
-- **Config** (`config_schema`): `version` (v15/v1), `bbox_shift` (mouth crop shift).
 - **Output** (`FinishOutput`): `shot_id`, `clip_key` (synced clip; fps + frame count preserved),
   `out_fps`, `frames`, `applied`, and `degraded` set ONLY on a real passthrough.
 - **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
@@ -55,8 +54,20 @@ failure, or a backend soft-degrade (e.g. no detectable face) passes the **input*
 unchanged with `degraded` set to the honest reason, so the chain always has a clip. The two cases are
 never indistinguishable. The only hard `ok:false` is malformed input or a bad poll token.
 
-## Deploy
+## Configuration
 
-Service `vivijure-module-finish-lipsync`, bound into the core as `MODULE_FINISH_LIPSYNC`. Secrets (set
-after deploy): `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID` (the vivijure-musetalk endpoint id). See
-`wrangler.toml`.
+Config options (the planner-projected `config_schema`; the core clamps each against it):
+
+| Option | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `version` | enum `v15` / `v1` | `v15` | MuseTalk version (`v15` = v1.5, best) |
+| `bbox_shift` | int (-20..20) | `0` | mouth crop shift |
+
+To self-host (service `vivijure-module-finish-lipsync`, bound into the core as `MODULE_LIPSYNC`):
+
+- **Env at deploy**: `CLOUDFLARE_ACCOUNT_ID` (account_id is injected, never hardcoded).
+- **Secrets** (`wrangler secret put`, after deploy): `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` (YOUR
+  vivijure-musetalk endpoint id; kept a secret, #38).
+- **Provision**: a DEDICATED RunPod serverless endpoint running the `vivijure-musetalk` image (cu128,
+  MuseTalk), SEPARATE from vivijure-backend. No R2 binding -- the endpoint reads `clip_key` +
+  `audio_key` and writes the output in the shared bucket itself.

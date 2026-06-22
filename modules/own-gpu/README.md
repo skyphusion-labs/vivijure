@@ -44,8 +44,6 @@ off that clip.
   order so the own-GPU backend is the default pick over the rented cloud i2v modules.
 - **Input** (`MotionBackendInput`): `shot_id`, `keyframe_url` (presigned, for cloud backends),
   `keyframe_key` (the R2 key this backend reads directly), `prompt`, `seconds`.
-- **Config** (`config_schema`): `quality` (draft/standard/final), `fps`, `flow_shift` (motion amount),
-  additive `negative_prompt`, `seed`.
 - **Output** (`MotionBackendOutput`): `shot_id`, `clip_key`, `fps`, `frames`.
 - **Async**: `POST /invoke` submits `i2v_clip` to RunPod and returns a poll token; `POST /poll` checks
   `/status/{jobId}` (with the GC-grace window, #141) and surfaces the clip on completion.
@@ -55,8 +53,24 @@ off that clip.
 This is a producer stage, not a polish step: a real failure is an honest `ok:false` (no soft-degrade),
 because a missing clip cannot be finished or assembled.
 
-## Deploy
+## Configuration
 
-Service `vivijure-module-own-gpu`, bound into the core as `MODULE_OWN_GPU`. Secrets (set after deploy):
-`RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID` (the vivijure-backend endpoint id, kept secret). See
-`wrangler.toml`.
+Config options (the planner-projected `config_schema`; the core clamps each against it):
+
+| Option | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `quality` | enum `draft` / `standard` / `final` | `standard` | i2v quality tier |
+| `fps` | int (8..30) | `16` | output frame rate |
+| `flow_shift` | float (1..12) | `5.0` | motion amount (lower = faster) |
+| `negative_prompt` | string | `""` | additive negative prompt |
+| `seed` | int (>= -1) | `-1` | seed (`-1` = random) |
+
+To self-host (service `vivijure-module-own-gpu`, bound into the core as `MODULE_OWN_GPU`):
+
+- **Env at deploy**: `CLOUDFLARE_ACCOUNT_ID` (account_id is injected, never hardcoded).
+- **Secrets** (`wrangler secret put`, after deploy): `RUNPOD_API_KEY` (a dedicated, scoped vivijure
+  RunPod key) and `RUNPOD_ENDPOINT_ID` (YOUR own i2v endpoint id; kept a secret, #38).
+- **Provision**: a RunPod serverless endpoint running the `vivijure-backend` image (Wan2.2-I2V); this
+  module calls its `/run` with the `i2v_clip` action. No R2 binding -- the backend shares the bucket
+  and does the clip I/O. The same endpoint can also serve `keyframe` and `finish-rife` (different
+  actions).

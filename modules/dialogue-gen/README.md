@@ -40,8 +40,6 @@ spoken line simply has no audio key, and finish-lipsync no-ops for it.
 - **Hook**: `dialogue` (one producer; per-film batch). `ui { section: "dialogue", order: 10 }`.
 - **Input** (`DialogueInput`): `project` (the R2 key prefix) + `lines[]`, each `shot_id`, `text`, and
   optional `voice_id` (the cast member's Aura-1 speaker; absent/unknown falls back at synth time).
-- **Config** (`config_schema`): none -- the voice and line are authored upstream (cast + script), not
-  module knobs.
 - **Output** (`DialogueOutput`): `project`, `audio[]` (`shot_id`, `audio_key`, the `voice_id` actually
   used post-fallback), and `applied`.
 - **Async**: the blocking Aura-1 synth runs one `step.do` per shot inside a Cloudflare **Workflow**
@@ -52,8 +50,19 @@ spoken line simply has no audio key, and finish-lipsync no-ops for it.
 
 This is a producer stage: a real failure is an honest `ok:false`, not a fake-success tag.
 
-## Deploy
+## Configuration
 
-Service `vivijure-module-dialogue-gen`, bound into the core as `MODULE_DIALOGUE`. Bindings: Workers AI
-(`AI`), the shared R2 bucket (`R2_RENDERS`), and the `DialogueGenWorkflow`. Secret (set after deploy):
-`GATEWAY_ID` (AI Gateway slug). See `wrangler.toml`.
+Config options: **none**. There are no user-facing knobs; the voice is the speaking cast member's
+assigned `voice_id` (resolved by the core) and the line is the shot's dialogue, both authored upstream
+(cast + script), not module config.
+
+To self-host (service `vivijure-module-dialogue-gen`, bound into the core as `MODULE_DIALOGUE`):
+
+- **Env at deploy**: `CLOUDFLARE_ACCOUNT_ID` (account_id is injected, never hardcoded).
+- **Bindings** (in `wrangler.toml`): `AI` (Workers AI; runs Aura-1), `R2_RENDERS` -> R2 bucket
+  `vivijure` (per-shot WAVs + run state), and `DIALOGUE_WORKFLOW` -> the `DialogueGenWorkflow` class
+  (one `step.do` per shot).
+- **Secret** (`wrangler secret put`, after deploy): `GATEWAY_ID` (your AI Gateway slug; Aura-1 is
+  called through the gateway).
+- **Provision**: no RunPod. The model is Deepgram Aura-1 on Workers AI; you need a Cloudflare account
+  with Workers AI + an AI Gateway.

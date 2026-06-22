@@ -42,8 +42,6 @@ and animate it. Freshly trained cast LoRAs are reported back so they are reused 
 - **Hook**: `keyframe` (one producer; first render stage). `ui { section: "keyframe", order: 10 }`.
 - **Input** (`KeyframeInput`): `project`, `bundle_key` (the storyboard bundle), optional `shot_ids`
   and `pretrained_loras` (slot -> R2 key of an already-trained adapter to reuse).
-- **Config** (`config_schema`): `quality_tier` (draft/standard/final), `width`/`height` (default
-  1344x768, 16:9 so the whole chain stays 16:9), `steps`, `guidance_scale`, `seed`.
 - **Output** (`KeyframeOutput`): `project`, `keyframes[]` (`shot_id` + `keyframe_key`), and optional
   `trained_loras` (slot -> R2 key) the core records back onto the cast so future renders reuse them.
 - **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
@@ -53,8 +51,26 @@ and animate it. Freshly trained cast LoRAs are reported back so they are reused 
 This is a producer stage, not a polish step: a real failure is an honest `ok:false` (no soft-degrade,
 no fake keyframes), because nothing downstream can animate a frame that was never rendered.
 
-## Deploy
+## Configuration
 
-Service `vivijure-module-keyframe`, bound into the core as `MODULE_KEYFRAME`. Secrets (set after
-deploy): `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID` (the vivijure-backend endpoint id, kept secret so the
-public repo never exposes it). See `wrangler.toml`.
+Config options (the planner-projected `config_schema`; the core clamps each against it):
+
+| Option | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `quality_tier` | enum `draft` / `standard` / `final` | `final` | render quality tier |
+| `width` | int (512..1536) | `1344` | keyframe width (16:9 so the whole chain stays 16:9) |
+| `height` | int (512..1536) | `768` | keyframe height |
+| `steps` | int (1..60) | `30` | diffusion steps |
+| `guidance_scale` | float (0..20) | `6.5` | prompt adherence |
+| `seed` | int (>= -1) | `-1` | seed (`-1` = random) |
+
+To self-host (service `vivijure-module-keyframe`, bound into the core as `MODULE_KEYFRAME`):
+
+- **Env at deploy**: `CLOUDFLARE_ACCOUNT_ID` (account_id is injected, never hardcoded).
+- **Secrets** (`wrangler secret put`, after deploy): `RUNPOD_API_KEY` (a dedicated, scoped vivijure
+  RunPod key) and `RUNPOD_ENDPOINT_ID` (YOUR vivijure-backend endpoint id; kept a secret so the public
+  repo never exposes it, #38).
+- **Provision**: a RunPod serverless endpoint running the `vivijure-backend` image; this module calls
+  its `/run` with `action=preview` (SDXL keyframes). No R2 binding -- the backend writes the keyframe
+  PNGs to the shared bucket with its own creds. The same endpoint can also serve `own-gpu` and
+  `finish-rife` (different actions).

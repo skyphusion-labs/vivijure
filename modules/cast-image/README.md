@@ -33,8 +33,6 @@ shot renders the character on-model. It is pre-render, off the per-shot path ent
 - **Hook**: `cast.image` (one producer; pre-render). `ui { section: "cast", order: 10 }`.
 - **Input** (`CastImageInput`): `cast_id`, `portrait_url` (presigned), optional `portrait_key`,
   `source_urls`, `bible`, `art_style`.
-- **Config** (`config_schema`): `model` (FLUX 2 Klein 9b/4b, Nano Banana Pro, FLUX 2 dev) and
-  `num_images` (4..TRAINING_PROMPTS.length, default 10).
 - **Output** (`CastImageOutput`): `cast_id`, `images[]` (`key`, `mime`), `applied`.
 - **Async**: `POST /invoke` composes the prompt set and persists run state to R2, returning a stable
   poll pointer; `POST /poll` renders the next prompt(s) (a few per cycle) and returns pending until the
@@ -44,8 +42,27 @@ shot renders the character on-model. It is pre-render, off the per-shot path ent
 This is a producer stage: a real generation failure (post-fallback) is an honest `ok:false`, not a
 fake-success tag.
 
-## Deploy
+## Configuration
 
-Service `vivijure-module-cast-image`, bound into the core as `MODULE_CAST_IMAGE`. Bindings: Workers AI
-(`AI`), the shared R2 bucket (`R2_RENDERS`), optional Cloudflare Images (`IMAGES`, downscales refs to
-<=512px). Secret (set after deploy): `GATEWAY_ID` (AI Gateway slug). See `wrangler.toml`.
+Config options (the planner-projected `config_schema`; the core clamps each against it):
+
+| Option | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `model` | enum (see below) | `@cf/black-forest-labs/flux-2-klein-9b` | image model |
+| `num_images` | int (4..number of training prompts) | `10` | size of the training reference set |
+
+`model` values: `@cf/black-forest-labs/flux-2-klein-9b`, `google/nano-banana-pro`,
+`@cf/black-forest-labs/flux-2-klein-4b`, `@cf/black-forest-labs/flux-2-dev`. A safety-flagged
+generation auto-falls back to the configured fallback model mid-run.
+
+To self-host (service `vivijure-module-cast-image`, bound into the core as `MODULE_CAST_IMAGE`):
+
+- **Env at deploy**: `CLOUDFLARE_ACCOUNT_ID` (account_id is injected, never hardcoded).
+- **Bindings** (in `wrangler.toml`): `AI` (Workers AI; FLUX 2 runs direct on the binding, proxied
+  models via the gateway), `IMAGES` (Cloudflare Images; downscales refs to <=512px, FLUX-2's input
+  cap; optional in code but recommended in prod), and `R2_RENDERS` -> R2 bucket `vivijure` (run state +
+  generated refs).
+- **Secret** (`wrangler secret put`, after deploy): `GATEWAY_ID` (your AI Gateway slug; needed for the
+  nano-banana fallback path).
+- **Provision**: no RunPod. You need a Cloudflare account with Workers AI, an AI Gateway, and (for
+  prod) Cloudflare Images.
