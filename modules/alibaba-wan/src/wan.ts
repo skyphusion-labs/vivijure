@@ -9,10 +9,15 @@
 
 import type { MotionBackendInput } from "./contract";
 
-// Wan 2.6 default shot length is 5 seconds; clamp within a conservative 3-10 range.
+// Wan 2.6 accepts ONLY a discrete duration enum {5, 10, 15} seconds -- NOT a continuous range.
+// Submitting any other value (e.g. a 4s storyboard shot) 400s at the provider:
+//   "field \"duration\" must be one of [5, 10, 15], got number 4".
+// Snap UP to the smallest allowed value >= the per-shot seconds (never shorter than the shot, which
+// would clip the dialogue); clamp to the longest allowed for anything beyond it. A 4s shot -> 5.
+const WAN_DURATIONS = [5, 10, 15] as const;
 export function clampDuration(seconds: number): number {
   const n = Math.round(Number(seconds) || 5);
-  return Math.max(3, Math.min(10, n));
+  return WAN_DURATIONS.find((d) => d >= n) ?? WAN_DURATIONS[WAN_DURATIONS.length - 1];
 }
 
 /** The RunPod /run body for Wan 2.6, mapped from the hook input + the clamped module config. */

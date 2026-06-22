@@ -3,10 +3,15 @@
 
 import type { MotionBackendInput } from "./contract";
 
-// Kling v2.1 Pro accepts a bounded shot length; clamp the storyboard's per-shot seconds in.
+// Kling v2.1 Pro accepts ONLY a discrete duration enum {5, 10} seconds -- NOT a continuous range.
+// Submitting any other value (e.g. a 4s storyboard shot) 400s at the provider:
+//   "field \"duration\" must be one of [5, 10], got number 4".
+// Snap UP to the smallest allowed value >= the per-shot seconds (never shorter than the shot, which
+// would clip the dialogue); clamp to the longest allowed for anything beyond it. A 4s shot -> 5.
+const KLING_DURATIONS = [5, 10] as const;
 export function clampDuration(seconds: number): number {
   const n = Math.round(Number(seconds) || 5);
-  return Math.max(3, Math.min(10, n));
+  return KLING_DURATIONS.find((d) => d >= n) ?? KLING_DURATIONS[KLING_DURATIONS.length - 1];
 }
 
 /** The RunPod /run body for Kling, mapped from the hook input + the clamped module config. */
