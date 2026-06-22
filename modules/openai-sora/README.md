@@ -41,3 +41,24 @@ flowchart LR
   to RunPod and returns a poll token immediately; `POST /poll` checks status and, on completion,
   downloads the clip and stores it to the shared **`vivijure`** R2 bucket (where the film assembler
   finds it). Bound into the core as `MODULE_OPENAI_SORA`.
+
+## Configuration
+
+Operator settings to self-host this module.
+
+**Secrets** (set after deploy, never committed):
+- `RUNPOD_API_KEY` -- the RunPod API key for the endpoint. Use a DEDICATED, scoped vivijure key (one
+  per module, so a leak's blast radius is this module):
+  `npx wrangler secret put RUNPOD_API_KEY -c modules/openai-sora/wrangler.toml`.
+
+**Bindings / env** (`wrangler.toml`):
+- `R2_RENDERS` -> R2 bucket **`vivijure`** (the shared render bucket; the finished clip is written
+  here for the film assembler).
+- `account_id` is injected via the `CLOUDFLARE_ACCOUNT_ID` env var, never hardcoded.
+
+**Model / endpoint**: fixed in code -- `ENDPOINT = https://api.runpod.ai/v2/sora-2-i2v`. Selecting a
+different model means binding a different `motion.backend` module, not changing a knob.
+
+**Render knobs**: none -- `config_schema` is omitted (the simplest backend). Per-shot `seconds` is
+clamped to **4--10s** in code, and the core score/mux chain owns audio (the endpoint exposes no audio
+param).

@@ -44,3 +44,26 @@ flowchart LR
   (`render@skyphusion.org`) must be onboarded once for Email Sending
   (`wrangler email sending enable skyphusion.org`). In `wrangler dev` the send is simulated; prod
   sends for real. Bound into the core as `MODULE_NOTIFY_EMAIL`.
+
+## Configuration
+
+Operator settings to self-host this module.
+
+**Secrets**: none. Email is sent through the native Cloudflare Email Service binding, not an API key.
+
+**Bindings / env** (`wrangler.toml`):
+- `EMAIL` -> the native Cloudflare Email Service `send_email` binding (`[[send_email]] name =
+  "EMAIL"`). There is **no `remote` flag**, so prod sends for real and `wrangler dev` simulates (no
+  send). The binding is optional in code: with no `EMAIL` bound, `/invoke` is a no-op (empty
+  `delivered`), not an error.
+- `account_id` is injected via the `CLOUDFLARE_ACCOUNT_ID` env var, never hardcoded.
+
+**One-time domain onboarding**: the from-domain must be enabled for Email Sending before the first
+real send (a prerequisite, not part of `wrangler.toml`):
+`npx wrangler email sending enable skyphusion.org`.
+
+**From-identity**: fixed in code -- `FROM = render@skyphusion.org` (display name "Vivijure") in
+`src/notify.ts`. To send from a different domain, change `FROM` and onboard that domain.
+
+**Render knobs**: none -- `config_schema` is omitted. The recipient comes from the `notify` input
+`user_email` (the film owner); no recipient (or no `EMAIL` binding) -> no-op.

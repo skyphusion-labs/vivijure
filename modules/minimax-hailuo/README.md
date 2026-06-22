@@ -42,3 +42,26 @@ flowchart LR
   to RunPod and returns a poll token immediately; `POST /poll` checks status and, on completion,
   downloads the clip and stores it to the shared **`vivijure`** R2 bucket (where the film assembler
   finds it). Bound into the core as `MODULE_MINIMAX_HAILUO`.
+
+## Configuration
+
+Operator settings to self-host this module.
+
+**Secrets** (set after deploy, never committed):
+- `RUNPOD_API_KEY` -- the RunPod API key for the endpoint. Use a DEDICATED, scoped vivijure key (one
+  per module, so a leak's blast radius is this module):
+  `npx wrangler secret put RUNPOD_API_KEY -c modules/minimax-hailuo/wrangler.toml`.
+
+**Bindings / env** (`wrangler.toml`):
+- `R2_RENDERS` -> R2 bucket **`vivijure`** (the shared render bucket; the finished clip is written
+  here for the film assembler).
+- `account_id` is injected via the `CLOUDFLARE_ACCOUNT_ID` env var, never hardcoded.
+
+**Model / endpoint**: fixed in code -- `ENDPOINT = https://api.runpod.ai/v2/minimax-hailuo-2-3-fast`.
+Selecting a different model means binding a different `motion.backend` module, not changing a knob.
+
+**Render knobs** (`config_schema`, set per render in the planner; the core clamps against the
+schema):
+- `enable_prompt_expansion` (bool, default `true`) -- the provider rewrites/expands the prompt.
+- `go_fast` (bool, default `true`) -- the Fast-mode path.
+- Per-shot `seconds` snaps to the nearest of **{6, 10}** in code (`<= 8 -> 6`, else `10`; not a knob).
