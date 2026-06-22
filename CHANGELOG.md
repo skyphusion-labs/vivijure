@@ -3,6 +3,13 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.2.3
+
+**Finish-chain self-heal: a GC'd or frozen mid-chain finish step now recovers from R2.** Builds on v0.2.2's silent-render fixes.
+
+- **R2-presence advance for any finish step (#239):** when a finish step's RunPod poll job is GC'd-after-complete (a 404) or freezes IN_PROGRESS (poll pends forever), and that step's OWN expected output is already in R2, the orchestrator folds it in and advances to the next module -- instead of polling a ghost job to the hard deadline. This fixes the wedge where RIFE completed and its output landed in R2 but the finish chain never advanced, so lip-sync was never dispatched and the shot pended forever. Per-step advance on the step's own artifact (not final-artifact adoption), so the remaining modules still run -- it cannot ship a half-finished clip.
+- **682 tests**, typecheck-clean.
+
 ## v0.2.2
 
 **The talking-character showcase fix: a scatter film keeps its voice end to end.** Builds on v0.2.1's self-heal so the orchestration now reliably delivers per-shot dialogue + lip-sync through gather and assemble.
