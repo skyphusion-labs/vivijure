@@ -4,6 +4,9 @@ A `film.finish`-hook module (vivijure-module/1). It burns **time-synced dialogue
 finished film (and/or emits a soft `.srt` sidecar) via the video-finish CPU container's `/subtitle`
 route over Workers VPC.
 
+**Scope:** dialogue captions with **real** per-shot timing. Narration captions are **pending
+per-line narration timing -- intentionally not guessed** (see [Caption timing](#caption-timing-how-cues-are-sourced)).
+
 ## Where it fits
 
 `film.finish` is a **film-level** chain (cardinality `chain`, `0..n`, ordered by `ui.order`) that
@@ -31,6 +34,7 @@ which reads and writes the film itself. It runs on the single-film render path (
 the scatter/gather path does not dispatch it yet.
 
 ## Caption timing (how cues are sourced)
+<a id="caption-timing-how-cues-are-sourced"></a>
 
 Captions MUST sync to the audio, so this module captions **dialogue only** and never guesses timing.
 The **core** computes the cues (`src/captions.ts` `buildCaptionCues`) and hands them in the input;
@@ -41,9 +45,12 @@ durations are the **real** ones the hybrid assembler beat-trims each clip to
 Because each shot's dialogue TTS is baked into that shot's clip, the line is genuinely spoken during
 its window -- the caption lands on the audio.
 
-**Narration is intentionally not captioned.** narration-gen emits a single film-level voiceover track
-with no per-line timestamps, so shot-aligned narration cues would be guessed. When narration grows
-real per-line timings, they slot in as additional cues; they are never faked here.
+**Narration is intentionally not captioned (a flagged follow-up).** This module ships dialogue
+captions with real timing; **narration captions are pending per-line narration timing -- they are
+intentionally not guessed.** narration-gen emits a single film-level voiceover track with no per-line
+timestamps, so shot-aligned narration cues would be fabricated. Captioning narration needs a separate
+score-path change (narration-gen emitting per-line timestamps); when that lands, the cues slot in
+alongside these. They are never faked here.
 
 ## Configuration
 
