@@ -192,6 +192,21 @@ service = "vivijure-module-vidu-q3"
 binding = "MODULE_ALIBABA_WAN"
 service = "vivijure-module-alibaba-wan"
 
+# alibaba-wan-lora: Wan 2.2 i2v 720p on the RunPod PUBLIC managed endpoint wan-2-2-t2v-720-lora, with
+# CUSTOM operator LoRAs (the controllable, GPU-rental-free i2v lane; pairs with the cloud-keyframe
+# module). A motion.backend module, discovered by the registry exactly like any MODULE_* binding.
+#
+# COMMENTED OUT until vivijure-module-alibaba-wan-lora is actually deployed: a [[services]] binding to a
+# service that does not exist makes `wrangler deploy` of THIS core worker FAIL, and CI (tests, not a
+# real prod deploy) would not catch it. DEPLOY ORDERING: deploy the module worker FIRST
+# (`npx wrangler deploy -c modules/alibaba-wan-lora/wrangler.toml`), then uncomment this block in the
+# SAME change so the binding never dangles. Until then the registry simply does not discover an
+# undeployed module (correct -- it is not live yet). The module code, conformance test, and docs in
+# this PR still stand on their own.
+# [[services]]
+# binding = "MODULE_ALIBABA_WAN_LORA"
+# service = "vivijure-module-alibaba-wan-lora"
+
 # plan-enhance-py: the Python on-ramp PROOF module (plan.enhance, deterministic rule-based direction).
 # A CF Python Worker behind the same hook contract as the TS plan-enhance, discovered by the registry
 # exactly like any MODULE_* binding. EXPERIMENTAL (CF Python Workers is open beta) -- additive proof;
