@@ -984,3 +984,52 @@ body.sw-open .sw-dock { transform: none; }
 .mod-field input:focus, .mod-field select:focus { outline: none; border-color: var(--accent); }
 .mod-field-bool { grid-auto-flow: column; justify-content: start; align-items: center; gap: 8px; }
 .mod-field-bool input { width: auto; }
+
+/* --- Settings page (operator install-scope module config) ----------------- */
+/* A projection of the registry's install-scope fields, styled to match the planner / cast forms. */
+.studio-grid-single { grid-template-columns: 1fr; }
+
+.settings-modules { display: grid; gap: 16px; }
+.settings-empty { color: var(--muted); margin: 4px 0 0; }
+
+.settings-module {
+  border: 1px solid var(--line); border-radius: 11px; padding: 16px 18px; background: var(--panel-2);
+}
+.settings-module-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.settings-module-name { margin: 0; font-size: 15px; color: var(--ink); }
+.settings-module-id {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; color: var(--accent);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; background: var(--panel);
+}
+
+.settings-fields {
+  display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin: 12px 0 14px;
+}
+.settings-field { display: grid; gap: 6px; }
+.settings-field-label { color: var(--muted); font-size: 13px; }
+.settings-field input[type="text"], .settings-field input[type="number"], .settings-field select {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); border-radius: 10px;
+  padding: 9px 12px; font: inherit; width: 100%; max-width: 100%;
+}
+.settings-field input:focus, .settings-field select:focus {
+  outline: none; border-color: var(--accent);
+}
+.settings-field-check { display: flex; gap: 10px; align-items: center; color: var(--ink); font-size: 14px; }
+.settings-field-check input { width: auto; }
+
+.settings-module-foot { display: flex; align-items: center; gap: 12px; }
+.settings-save {
+  border-radius: 10px; padding: 9px 16px; font: inherit; font-weight: 700; cursor: pointer;
+  border: 1px solid transparent; color: var(--bg);
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.settings-save:hover:not(:disabled) { filter: brightness(1.08); }
+.settings-save:disabled { opacity: 0.5; cursor: not-allowed; }
+.settings-status { font-size: 12px; color: var(--off); }
+.settings-status-ok { color: var(--accent); }
+.settings-status-error { color: var(--accent-2); }
+
+@media (max-width: 720px) {
+  .settings-fields { grid-template-columns: 1fr; }
+}
