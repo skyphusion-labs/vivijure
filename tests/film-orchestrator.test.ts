@@ -1554,3 +1554,73 @@ describe("advanceFilmJob speech phase: dialogue -> speech (clean audio) -> finis
     expect(r?.job.phase).toBe("done");
   });
 });
+
+// #14: with TWO film.finish modules chained (subtitle ui.order=5, then film-titles ui.order=10), the
+// shared dispatchChain used to reuse ONE presigned GET/PUT pair for the whole chain, so step 2 re-read
+// the ORIGINAL film and overwrote step 1's output (captions lost). The fix presigns a FRESH GET (of the
+// PRIOR step's output) + PUT per serving step, so step 2 reads what step 1 wrote.
+describe("advanceFilmJob film.finish chain: step 2 reads step 1's OUTPUT, not the original (#14)", () => {
+  type FFInput = { film_key?: string; video_url?: string; output_key?: string; output_url?: string };
+  const filmFinishJob = (): FilmJob => ({
+    film_id: "film-ff", project: "neon", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+    keyframe_binding: null, phase: "mux",
+    silent_film_key: "renders/neon/film.mp4",
+    // audio_key UNDEFINED: enterMuxPhase short-circuits (film_key = silent_film_key) straight to
+    // transitionToDone -> applyFilmFinish, so the film.finish chain runs without the mux VPC.
+    created_at: Date.now(),
+  });
+
+  function filmFinishEnv(job: FilmJob) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const subtitleInputs: FFInput[] = [];
+    const titlesInputs: FFInput[] = [];
+    // Each fake film.finish module returns the key it was told to write to (its `output_key`), exactly
+    // as a real module does after writing the carded film there.
+    const ffModule = (name: string, order: number, sink: FFInput[], tag: string) => moduleFetcher(
+      { name, version: "0.1.0", api: "vivijure-module/1", hooks: ["film.finish"], ui: { section: "film.finish", order } },
+      { invoke: (body) => { const inp = (body as { input: FFInput }).input; sink.push(inp); return { ok: true, output: { film_key: inp.output_key, applied: [tag] } }; } },
+    );
+    const env = {
+      DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        head: async () => null,
+        list: async () => ({ objects: [], truncated: false }),
+      },
+      MODULE_SUBTITLE: ffModule("subtitle", 5, subtitleInputs, "subtitle:burned"),
+      MODULE_FILM_TITLES: ffModule("film-titles", 10, titlesInputs, "titles:cards"),
+      R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+    } as unknown as Env;
+    return { env, subtitleInputs, titlesInputs, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  it("step 1 reads the original film; step 2 reads step 1's output (captions survive the title cards)", async () => {
+    const { env, subtitleInputs, titlesInputs, read } = filmFinishEnv(filmFinishJob());
+    const r = await advanceFilmJob(env, "film-ff");
+
+    expect(subtitleInputs.length).toBe(1);
+    expect(titlesInputs.length).toBe(1);
+
+    // Step 1 (subtitle) reads the ORIGINAL muxed film.
+    expect(subtitleInputs[0].video_url).toContain("/renders/neon/film.mp4?");
+    const step1Out = subtitleInputs[0].output_key!; // the key step 1 wrote (and returned as film_key)
+
+    // Step 2 (film-titles) MUST read step 1's OUTPUT, not the original (the #14 regression).
+    expect(titlesInputs[0].film_key).toBe(step1Out);
+    expect(titlesInputs[0].video_url).toContain(step1Out);
+    expect(titlesInputs[0].video_url).not.toContain("/renders/neon/film.mp4?");
+    // And step 2 writes to a FRESH key (its own presigned PUT), distinct from step 1's.
+    expect(titlesInputs[0].output_key).not.toBe(step1Out);
+
+    // The film ends on the LAST step's output, and the chain recorded both modules.
+    const done = read();
+    expect(done.film_key).toBe(titlesInputs[0].output_key);
+    expect(done.film_finish?.applied).toEqual(["subtitle", "film-titles"]);
+    expect(r?.job.phase).toBe("done");
+  });
+});

@@ -954,15 +954,39 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
     sidecar_url: sidecarUrl,
     sidecar_key: sidecarKey,
   };
-  // One film.finish module today (film-titles). A 2nd would need fresh presigned URLs per step;
-  // nextInput keeps the same URLs and is only reached with >1 serving module -- revisit then.
+  // Multiple film.finish modules chain (e.g. subtitle ui.order=5 then film-titles ui.order=10), each
+  // consuming the PRIOR step's output. The seed presigns the FIRST step (read original film, write
+  // outKey); every subsequent step must read what the previous step WROTE, not the original, or it
+  // overwrites the prior step's work (#14: titles re-read the original and dropped the captions). So
+  // nextInput presigns a FRESH GET (of the prior step's film_key) + PUT (to a new key) per step.
   const result = await dispatchChain<typeof seed, FilmFinishChainOutput>(
     envRec,
     modules,
     "film.finish",
     seed,
     { project: job.project, job_id: job.film_id, user_email: job.user_email },
-    { nextInput: (prev) => ({ ...seed, film_key: prev?.film_key ?? job.film_key! }), configFor: () => ({}) },
+    {
+      nextInput: async (prev) => {
+        const prevKey = prev?.film_key ?? job.film_key!;
+        const stepOutKey = job.film_key!.replace(/\.mp4$/i, "") + "-ff-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+        const stepSidecarKey = stepOutKey.replace(/\.mp4$/i, "") + ".srt";
+        const [stepVideoUrl, stepOutputUrl, stepSidecarUrl] = await Promise.all([
+          presignR2Get(env, prevKey, 1800),
+          presignR2Put(env, stepOutKey, 1800),
+          presignR2Put(env, stepSidecarKey, 1800),
+        ]);
+        return {
+          ...seed,
+          film_key: prevKey,
+          video_url: stepVideoUrl,
+          output_url: stepOutputUrl,
+          output_key: stepOutKey,
+          sidecar_url: stepSidecarUrl,
+          sidecar_key: stepSidecarKey,
+        };
+      },
+      configFor: () => ({}),
+    },
   );
   // Record the chain outcome so a degraded or failed film.finish is observable state, not a silent green.
   // The module soft-degrades (passthrough) on a container failure and still returns ok:true, so the only
