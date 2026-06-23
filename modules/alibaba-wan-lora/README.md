@@ -66,9 +66,9 @@ Selecting a different model means binding a different `motion.backend` module, n
 The LoRA lists ride as JSON **strings** because the module contract's config fields are scalar
 (int / float / bool / enum / string) -- there is no array field type -- so a structured list is carried
 as a string the module parses. An unparseable or empty list falls back to plain Wan 2.2 i2v, never an
-error. Output size is fixed at **720p**; per-shot `seconds` becomes the endpoint's integer `duration`,
-rounded and clamped to **[1, 10]s** (a cost guardrail so a malformed storyboard cannot bill an
-unbounded clip). The verified endpoint schema has **no** negative-prompt parameter, so none is sent.
+error. Output size is fixed at **720p**; per-shot `seconds` becomes the endpoint's `duration`, **snapped to the
+endpoint's allowed set {5, 8}s** (`<=6 -> 5, else 8`; the endpoint 400s on any other value, #279). The
+snap is recorded (logged) when it changes the requested timing -- never silent. The verified endpoint schema has **no** negative-prompt parameter, so none is sent.
 
 ## Contract
 

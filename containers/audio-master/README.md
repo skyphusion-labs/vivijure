@@ -1,57 +1,77 @@
-# audio-master container
+# audio-master
 
-The CPU backend for the **`master`** hook (the `audio-master` module worker calls it over Workers VPC).
-A slim ffmpeg HTTP server that "masters" a film's audio bed: an optional **music upscale** (VHQ soxr
-resample to 48 kHz + a gentle high-shelf "air" lift) followed by **two-pass LUFS loudness
-normalization** to a web target. No GPU -- CPU mastering must never touch a GPU/RunPod (GPU money is for
-GPU work only); it runs as an always-on Workers VPC container on the fleet, like audio-mix + video-finish.
+A CPU/ffmpeg **HTTP container** (Workers VPC): film-level **audio mastering** -- an optional **music
+upscale** (VHQ soxr resample to 48 kHz + a gentle high-shelf "air" lift) followed by **two-pass LUFS
+loudness normalization** to a web target. It is reached by the `modules/audio-master` worker over the
+`AUDIO_MASTER_VPC` binding, NEVER RunPod/GPU (CPU mastering is ffmpeg DSP, and GPU money is for GPU work
+only). Stateless and credentialless -- the Worker presigns an R2 GET for the assembled bed + a PUT for
+the mastered output, bytes never touch the Worker, CPU-only ffmpeg.
 
-The DSP was lifted out of `containers/audio-mix` (the old, never-wired `/music-upscale` branch) so the
-mastering pass is a first-class module under `master`, not a buried step in the mixer.
+## Where it fits
 
-## Shape
+The `master` step of the film render: after the silent film is assembled and an audio bed exists, the
+core runs the `master` chain to polish that bed (loudness + music upscale) BEFORE it is muxed onto the
+silent film. `audio-master` is the CPU container behind that step. The seam is **credentialless**: the
+core owns the R2 creds and presigns the bed GET + the mastered PUT, then hands those URLs to the module,
+which forwards them to this container over Workers VPC. The container reads `audioUrl`, masters, and PUTs
+to `outputUrl`; it holds no R2 creds.
 
-- `master_core.py` -- the pure ffmpeg DSP (`master_bed`). STDLIB only; `test_local.py` drives it on
-  local files (no R2, no HTTP).
-- `app.py` -- the aiohttp HTTP server (`GET /health`, `POST /master`). The Worker presigns a short-lived
-  R2 GET URL for the bed + a PUT URL for the output and POSTs them; bytes never touch the Worker.
-- `url_guard.py` -- SSRF allowlist (vendored byte-for-byte from audio-mix): every request-supplied URL
-  is validated (https + R2 host) before any fetch.
-- `Dockerfile` -- `python:3.11-slim` + ffmpeg (with libsoxr) + aiohttp; a build-time sanity-encode
-  proves the soxr + air-lift + loudnorm chain links before the first job. `CMD python app.py`, port 8000.
+```mermaid
+flowchart LR
+  asm["assemble<br/>(silent concat + bed)"] --> master["audio-master<br/>/master (CPU VPC)"]
+  master --> mux["mux<br/>(bed -> film)"] --> done["done"]
+  style master fill:#dff,stroke:#0aa,stroke-width:2px
+```
+
+A `master` miss soft-degrades to the un-mastered bed, so the mux always has audio to lay down (see
+[Soft-degrade](#soft-degrade)).
 
 ## HTTP contract
 
-`GET /health` -> `{ "ok": true }`
+| Route | Method | Purpose |
+|---|---|---|
+| `/health` | GET | readiness (`{ok:true}`) |
+| `/master` | POST | music upscale + two-pass loudnorm of one audio bed -> mastered wav/mp3 |
 
-`POST /master` (the module's `buildMasterBody`):
+`/master` body: `{ audioUrl (presigned GET), outputUrl (presigned PUT), outputKey, targetLufs, upscale
+(bool), format ("wav"|"mp3") }` -> `{ ok, key, bytes, format, durationSeconds, lufs, loudnessTargetLufs,
+upscaled }`. The response reports STRUCTURED facts (`upscaled`, `loudnessTargetLufs`) from which the
+module composes its honest `applied` tags. Failures return as data (`{ok:false, error}`) with a non-2xx
+status.
 
-```json
-{ "audioUrl": "https://<acct>.r2.cloudflarestorage.com/...?sig=get",
-  "outputUrl": "https://<acct>.r2.cloudflarestorage.com/...?sig=put",
-  "outputKey": "renders/<p>/audio/bed_mastered.wav",
-  "targetLufs": -14, "upscale": true, "format": "wav" }
-```
+## DSP
 
-Response (the module composes `applied` from the structured facts):
+ffmpeg, CPU-only (the DSP lives in `master_core.master_bed`):
 
-```json
-{ "ok": true, "key": "renders/<p>/audio/bed_mastered.wav", "bytes": 1234567,
-  "format": "wav", "durationSeconds": 42.0, "lufs": -14.05,
-  "loudnessTargetLufs": -14, "upscaled": true }
-```
+- **Music upscale** (`upscale`): a VHQ `soxr` resample to 48 kHz (precision 28) plus a gentle high-shelf
+  "air" lift (+2.5 dB at 9 kHz) -- it restores presence lost to a low-bitrate source. It sets level and
+  sample rate; it does NOT hallucinate detail. Tagged `music-upscale:soxr48k`. With `upscale` off, a
+  plain 48 kHz resample runs instead (no lift, no tag).
+- **Two-pass loudnorm** (`target_lufs`): measure the bed's loudness, then apply `loudnorm` with the
+  measured values to land at the target (the same measure-then-apply discipline the mixer uses). Tagged
+  `loudnorm:<target>LUFS`.
+- **format**: `wav` (pcm_s16le) or `mp3` (libmp3lame 192k). Mastering may re-encode wav -> mp3.
 
-A failure returns `{ "ok": false, "error": ... }` with a non-2xx status; the module then soft-degrades to
-the ORIGINAL bed (passthrough), never dropping the film (#249 / #77).
+Config (the module's `config_schema`, clamped by the core): `target_lufs` (float, -24..-9, default -14),
+`upscale` (bool, default true), `format` (enum wav/mp3, default wav).
 
-## No credentials
+## Operations
 
-The container holds NO R2 creds. The Worker presigns the GET + PUT URLs (credentials stay on the
-Worker); the container only downloads `audioUrl`, masters, and uploads to `outputUrl`. `url_guard.py`
-rejects any non-R2 / non-https / IP-literal URL before fetching.
+- compose service `audio-master` on `127.0.0.1:8784:8000`, `vivijure` network.
+- Binding: `AUDIO_MASTER_VPC` (in `modules/audio-master/wrangler.toml`). The VPC Service host name MUST
+  match the compose service name (`audio-master`); the `service_id` is a clearly-marked placeholder
+  (`TBD-STRUMMER-AUDIO-MASTER-VPC`) until the Workers VPC Service is created.
+- Deploy on dischord: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build audio-master`;
+  health: `curl http://127.0.0.1:8784/health`.
 
-## Local check
+## Soft-degrade
 
-```bash
-python test_local.py   # needs ffmpeg + ffprobe (with libsoxr) on PATH
-```
+A polish step never fails the render. A missing binding, an unreachable container, a non-2xx response, an
+unreadable / `ok:false` body, or a result with no mastered key passes the INPUT bed through unchanged with
+`degraded` set to the honest reason (e.g. `passthrough:container-failed`) -- never a fake "applied" tag,
+so a degrade is never silent. A master miss therefore ships the un-mastered (but intact) audio; it never
+drops a fully-rendered film.
+
+## License
+
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.

@@ -13,11 +13,10 @@ import { resolveCastLoras, untrainedCastMessage } from "./cast-loras";
 import { normalizeHybridBackends } from "./storyboard-validate";
 import { startCastRefsJob, advanceCastRefsJob, summarizeCastRefs } from "./cast-image-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
-import { getUserEmail, getAccessUserEmail } from "./shared";
 import type { Env } from "./env";
 
 import {
-  listProjectsForUser, getProjectById, createProject, updateProjectMeta, setLastStoryboard, deleteProject,
+  listProjects, getProjectById, createProject, updateProjectMeta, setLastStoryboard, deleteProject,
 } from "./storyboard-projects-db";
 import {
   listCast, getCastById, createCast, updateCast, deleteCast,
@@ -120,35 +119,35 @@ function match(routes: Route[], method: string, pathname: string) {
 // --- projects ------------------------------------------------------------
 // Responses are wrapped by resource name ({projects}/{project}) -- the frontend reads data.projects
 // / data.project. (Migration regression: these used to return bare rows, which crashed create.)
-const hListProjects: Handler = async (req, env) => json({ projects: await listProjectsForUser(env, getUserEmail(req)) });
+const hListProjects: Handler = async (req, env) => json({ projects: await listProjects(env) });
 const hCreateProject: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; prefs?: Record<string, unknown> }>(req);
   if (!b.name) throw badRequest("name required");
-  return json({ project: await createProject(env, getUserEmail(req), { name: b.name, prefs: b.prefs }) }, 201);
+  return json({ project: await createProject(env, { name: b.name, prefs: b.prefs }) }, 201);
 };
 const hGetProject: Handler = async (req, env, _c, p) => {
-  const row = await getProjectById(env, idParam(p.id), getUserEmail(req));
+  const row = await getProjectById(env, idParam(p.id));
   if (!row) throw notFound("project");
   return json({ project: row });
 };
 const hPatchProject: Handler = async (req, env, _c, p) => {
-  const id = idParam(p.id), email = getUserEmail(req);
+  const id = idParam(p.id);
   const b = await readBody<{ name?: string; prefs?: Record<string, unknown>; storyboard?: unknown }>(req);
   const row = b.storyboard !== undefined
-    ? await setLastStoryboard(env, id, email, b.storyboard)
-    : await updateProjectMeta(env, id, email, { name: b.name, prefs: b.prefs });
+    ? await setLastStoryboard(env, id, b.storyboard)
+    : await updateProjectMeta(env, id, { name: b.name, prefs: b.prefs });
   if (!row) throw notFound("project");
   return json({ project: row });
 };
 const hDeleteProject: Handler = async (req, env, _c, p) => {
-  const row = await deleteProject(env, idParam(p.id), getUserEmail(req));
+  const row = await deleteProject(env, idParam(p.id));
   if (!row) throw notFound("project");
   return json({ ok: true, deleted: row.id });
 };
 const hSaveProjectStoryboard: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ storyboard?: unknown }>(req);
   if (b.storyboard === undefined) throw badRequest("storyboard required");
-  const row = await setLastStoryboard(env, idParam(p.id), getUserEmail(req), b.storyboard);
+  const row = await setLastStoryboard(env, idParam(p.id), b.storyboard);
   if (!row) throw notFound("project");
   return json({ project: row });
 };
@@ -361,24 +360,22 @@ const hAddRenderNarration: Handler = async (req, env, _c, p) => {
 async function animatePreviewHandler(
   env: Env,
   renderId: number,
-  email: string,
-  args: Omit<import("./finalize-from-keyframes").AnimateFromPreviewArgs, "parent" | "userEmail">,
+  args: Omit<import("./finalize-from-keyframes").AnimateFromPreviewArgs, "parent">,
 ): Promise<Response> {
   const parent = await getRenderByIdForUser(env, renderId);
   if (!parent) throw notFound("render");
-  const r = await animateFromPreview(env, { parent, userEmail: email, ...args });
+  const r = await animateFromPreview(env, { parent, ...args });
   if (!r.ok) return json({ ok: false, error: r.error }, r.status ?? 400);
   return json({ ok: true, ...r.view }, 201);
 }
 
 const hFinalizePreview: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
   let audioKey: string | undefined;
   try {
     const b = await readBody<{ audioKey?: string; castLoras?: Record<string, string> }>(req);
     audioKey = b.audioKey;
   } catch { /* empty body ok */ }
-  return animatePreviewHandler(env, idParam(p.id), email, {
+  return animatePreviewHandler(env, idParam(p.id), {
     deriveMode: "finalized",
     motionBackend: "own-gpu",
     audioKey,
@@ -386,9 +383,8 @@ const hFinalizePreview: Handler = async (req, env, _c, p) => {
 };
 
 const hAnimateCloud: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
   const b = await readBody<{ model?: string; perShot?: Record<string, string>; audioKey?: string }>(req);
-  return animatePreviewHandler(env, idParam(p.id), email, {
+  return animatePreviewHandler(env, idParam(p.id), {
     deriveMode: "cloud-finalized",
     motionBackend: b.model,
     perShotModels: b.perShot,
@@ -397,7 +393,6 @@ const hAnimateCloud: Handler = async (req, env, _c, p) => {
 };
 
 const hAnimateHybrid: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
   const b = await readBody<{
     backends?: unknown;
     defaultBackend?: "gpu" | "cloud";
@@ -410,7 +405,7 @@ const hAnimateHybrid: Handler = async (req, env, _c, p) => {
   );
   const normalized = normalizeHybridBackends(b.backends, allowed);
   if (normalized.errors.length) throw badRequest(normalized.errors.join("; "));
-  return animatePreviewHandler(env, idParam(p.id), email, {
+  return animatePreviewHandler(env, idParam(p.id), {
     deriveMode: "cloud-finalized",
     hybridBackends: normalized.backends,
     defaultBackend: b.defaultBackend === "cloud" ? "cloud" : "gpu",
@@ -421,7 +416,6 @@ const hAnimateHybrid: Handler = async (req, env, _c, p) => {
 
 // --- render submission / lifecycle ---------------------------------------
 const hSubmitRender: Handler = async (req, env) => {
-  const email = getUserEmail(req);
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
     renderOverrides?: Record<string, unknown>; keyframesOnly?: boolean; audioKey?: string;
@@ -462,9 +456,13 @@ const hSubmitRender: Handler = async (req, env) => {
     bundle_key: b.bundleKey,
     scenes,
     motion_backend: motionBackend,
+    keyframe_backend: mapped.keyframe_backend,
     keyframe_config: mapped.keyframe_config,
     motion_config: mapped.motion_config,
     finish_config: mapped.finish_config,
+    speech_config: mapped.speech_config,
+    film_finish_config: mapped.film_finish_config,
+    master_config: mapped.master_config,
     keyframes_only: !!b.keyframesOnly,
     audio_key: b.keyframesOnly ? undefined : b.audioKey,
     // Opening title + end-credit card TEXT (FilmTitleSpec / FilmCreditSpec); the film.finish chain
@@ -473,7 +471,6 @@ const hSubmitRender: Handler = async (req, env) => {
     film_titles: b.keyframesOnly ? undefined : b.film_titles,
     pretrained_loras: Object.keys(pretrained).length ? pretrained : undefined,
     cast_loras: Object.keys(castIds).length ? castIds : undefined,
-    user_email: email,
   });
   const view = filmJobToPollView(job, null);
   const row: NewRenderRow = {
@@ -490,7 +487,6 @@ const hSubmitRender: Handler = async (req, env) => {
   return json(view, 201);
 };
 const hRenderFromKeyframes: Handler = async (req, env) => {
-  const email = getUserEmail(req);
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
     renderOverrides?: Record<string, unknown>; audioKey?: string; projectId?: unknown;
@@ -531,9 +527,11 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
     motion_backend: motionBackend,
     motion_config: mapped.motion_config,
     finish_config: mapped.finish_config,
+    speech_config: mapped.speech_config,
+    film_finish_config: mapped.film_finish_config,
+    master_config: mapped.master_config,
     derive_mode: "finalized",
     audio_key: b.audioKey,
-    user_email: email,
   });
   if (job.phase === "failed") {
     return json({ error: job.error || "render from keyframes failed" }, 422);
@@ -552,7 +550,6 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
   return json(view, 201);
 };
 const hRegenShot: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
   const renderId = idParam(p.id);
   const b = await readBody<{ shotId?: string }>(req);
   const shotId = typeof b.shotId === "string" ? b.shotId.trim() : "";
@@ -578,9 +575,9 @@ const hRegenShot: Handler = async (req, env, _c, p) => {
     project: row.project,
     bundle_key: row.bundle_key,
     scenes: [{ shot_id: scene.shot_id, prompt: scene.prompt, seconds: scene.seconds }],
+    keyframe_backend: mapped.keyframe_backend,
     keyframe_config: mapped.keyframe_config,
     keyframes_only: true,
-    user_email: email,
   });
   if (job.phase === "failed") {
     return json({ ok: false, error: job.error || "regen submit failed" }, 422);
@@ -634,12 +631,12 @@ const hCancelRender: Handler = async (_req, env, _c, p) => {
   return json(view);
 };
 const hScatterRender: Handler = async (req, env) => {
-  const email = getUserEmail(req);
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
     shotIds?: string[]; shardCount?: number; castLoras?: Record<string, unknown>;
     renderOverrides?: Record<string, unknown>; audioKey?: string; projectId?: unknown;
     motion_backend?: string;
+    film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
   if (!Array.isArray(b.shotIds) || b.shotIds.length < 2) throw badRequest("shotIds[] required (>= 2)");
@@ -657,8 +654,8 @@ const hScatterRender: Handler = async (req, env) => {
       render_overrides: b.renderOverrides,
       motion_backend: b.motion_backend,
       audio_key: b.audioKey,
-      user_email: email,
-      project_id: normalizeProjectIdInput(b.projectId),
+      film_titles: b.film_titles,
+        project_id: normalizeProjectIdInput(b.projectId),
     });
     const view = scatterJobToPollView(job);
     return json({ ok: true, jobId: view.jobId, status: view.status }, 201);
@@ -829,7 +826,7 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   return summary;
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } } }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } } }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
@@ -837,11 +834,11 @@ const hStartFilm: Handler = async (req, env) => {
   const project = a.project ?? deriveProjectFromBundleKey(a.bundle_key);
   const job = await startFilmJob(env, {
     project, bundle_key: a.bundle_key, scenes: a.scenes,
-    motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
+    motion_backend: a.motion_backend, keyframe_backend: a.keyframe_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
     // audio_key: a staged bed (score-bed music/narration) to mux after assemble. startFilmJob runs it
     // through resolveStagedAudioKey; without forwarding it here the mux phase is skipped and the film is
     // silent even when the caller supplied a bed (the scored/narrated render path).
-    finish_config: a.finish_config, audio_key: a.audio_key, film_titles: a.film_titles, user_email: getUserEmail(req),
+    finish_config: a.finish_config, speech_config: a.speech_config, film_finish_config: a.film_finish_config, master_config: a.master_config, audio_key: a.audio_key, film_titles: a.film_titles,
   });
   // Write a renders-table row so this film shows in the history panel (#164), the same way
   // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
@@ -878,7 +875,7 @@ const hEnhance: Handler = async (req, env) => {
     modules,
     "plan.enhance",
     seed,
-    { project: a.project || "enhance", job_id: crypto.randomUUID(), user_email: getUserEmail(req) },
+    { project: a.project || "enhance", job_id: crypto.randomUUID() },
     {
       nextInput: (prev) => ({ storyboard: prev.storyboard, brief: a.brief }),
       configFor: () => a.config,
@@ -923,15 +920,15 @@ const hAudioAnalyze: Handler = async (req, env) => {
 };
 
 // --- misc planner endpoints ----------------------------------------------
-const hWhoami: Handler = async (req) => json({ user: getAccessUserEmail(req) });
+const hWhoami: Handler = async () => json({ user: "studio" });
 const hGetPrefs: Handler = async (req, env) => {
-  const prefs = await getUserPrefs(env, getAccessUserEmail(req));
+  const prefs = await getUserPrefs(env);
   return json({ ok: true, prefs });
 };
 const hPatchPrefs: Handler = async (req, env) => {
   const body = await readBody<Record<string, unknown>>(req);
   if (!body || typeof body !== "object" || Array.isArray(body)) throw badRequest("body must be a prefs object");
-  const prefs = await setUserPrefs(env, getAccessUserEmail(req), body);
+  const prefs = await setUserPrefs(env, body);
   return json({ ok: true, prefs });
 };
 

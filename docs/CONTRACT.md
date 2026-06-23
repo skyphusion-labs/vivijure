@@ -20,8 +20,17 @@ never once needing to open a `.ts` file.
 > The reason is resilience, not bureaucracy: **no one should be the person that knowledge dies with.**
 > The doc IS the institutional memory, so no single head is a point of failure. See section 0.
 
-Contract version: **`vivijure-module/1`** (the `MODULE_API` constant). It bumps only on a breaking
-change to the hook or manifest shapes.
+Contract version: **`vivijure-module/2`** (the `MODULE_API` constant). It bumps only on a breaking
+change to the hook or manifest shapes. The host accepts the SET of currently-supported epochs
+(`SUPPORTED_MODULE_APIS` = {`vivijure-module/1`, `vivijure-module/2`}), so a bump is a deprecation
+WINDOW, not a hard cutover -- a module on an older still-supported epoch keeps loading.
+
+**Epoch history**
+- **`/1` -> `/2`** (the identity strip): `user_email` removed from `NotifyInput` and `InvokeContext`.
+  The studio is single-operator; identity was legacy multi-tenant cruft and a SaaS seam, so it is
+  removed by design (anti-SaaS by architecture). `/1` modules still load (none read `user_email`, and
+  a `/2` host sends none) and migrate opportunistically; the notify recipient now lives in the
+  notify-email module's OWN config (`notify_email`), not in any core-sent field.
 
 Conventions in this doc:
 - "R2 key" = an object key in the `R2_RENDERS` bucket (the studio's render store).
@@ -44,14 +53,33 @@ rules below are how the contract stays true over time without depending on any s
 
 ### 0.1 The version
 
-- **`vivijure-module/1`** is the contract version, carried as the `MODULE_API` constant and echoed on
-  the wire in `GET /api/modules.api` and in every module manifest's `api` field.
+- **`vivijure-module/2`** is the current contract version, carried as the `MODULE_API` constant and
+  echoed on the wire in `GET /api/modules.api` and in every module manifest's `api` field; `/1` is
+  accepted transitionally (see Epoch history).
 - It covers: the 11 hook names + their cardinality, every hook's Input/Output shape, the module
   manifest schema (including the `ConfigField` union), the invoke/poll envelopes, and the
   `GET /api/modules` projection payload.
-- It bumps to `vivijure-module/2` ONLY on a breaking change to those shapes (a removed/renamed hook,
-  a changed required field, a changed envelope). Additive changes (a new optional field, a new hook,
-  a new module) do NOT bump it; they are forward-compatible within `/1`.
+- It bumps to a NEW epoch (the next `/N`) ONLY on a breaking change to those shapes (a removed/renamed
+  hook, a changed required field, a changed envelope -- e.g. the `/1` -> `/2` `user_email` removal).
+  Additive changes (a new optional field, a new hook, a new module) do NOT bump it; they are
+  forward-compatible within the current epoch.
+
+### 0.1.1 Supported versions (the deprecation window)
+
+The host does NOT pin a single epoch. It loads any module whose `api` is in
+`SUPPORTED_MODULE_APIS` -- currently `{ vivijure-module/1, vivijure-module/2 }` -- checked by
+`validateManifest` (the registry gate) and the conformance harness via `.has()`. A version bump is
+therefore a DEPRECATION WINDOW, not a hard cutover:
+
+- When the contract moved to `/2` (the identity strip), the ~28 first-party modules still declaring
+  `/1` keep loading and serving -- they are runtime-compatible because none read the removed
+  `user_email`, and a `/2` host simply sends none.
+- Modules migrate `/1` -> `/2` opportunistically (tracked as a follow-up issue). Once every
+  first-party module is `/2`, `/1` is removed from `SUPPORTED_MODULE_APIS`, closing the window.
+- This generalizes the older exact-match gate (`m.api !== MODULE_API`), which could not express a
+  migration -- a `/2` host under that gate would have rejected all 28 `/1` modules at once.
+
+Only an api NOT in the set is rejected (`unsupported api ...`).
 
 ### 0.2 How the contract evolves (the mechanics)
 
@@ -130,12 +158,13 @@ render. Only malformed I/O fails loud.
 
 ### 1.1 Auth model
 
-The studio is **single-user**. All studio data lives under a fixed owner (`STUDIO_OWNER = "studio"`);
-`getUserEmail()` returns that constant and is **not** an access gate (`getUserEmail` ignores the
-request). The Cloudflare Access identity header `cf-access-authenticated-user-email` is read only for
-provenance / per-user settings (`/api/whoami`, `/api/prefs`) and to stamp the film owner for the
-`notify` hook; a missing header reads as `"anonymous"`. Access gating itself is enforced at the edge
-(CF Access), not in the worker. There is no per-request auth field in any route below.
+The studio is **single-operator and identity-free**. There is no per-user/tenant scoping anywhere:
+all data is global to the one operator, and no route reads an identity field. Access gating is
+enforced at the edge (Cloudflare Access), not in the worker. `/api/whoami` returns a fixed studio
+identity and does NOT echo the Access email (no identity leak). Per-operator settings (`/api/prefs`)
+are a global singleton. The `notify` hook carries completion facts only -- the email recipient lives
+in the notify-email module's OWN config, not in any core-sent field. (The legacy per-user ownership
+key was removed in the identity strip; see Epoch history above.)
 
 ---
 
@@ -246,7 +275,7 @@ isolate (a refresh storm does not re-fetch every module manifest).
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `api` | `"vivijure-module/1"` | Contract version. |
+| `api` | `"vivijure-module/2"` | Contract version (the host also accepts `/1` transitionally). |
 | `modules` | `PublicModule[]` | Every installed module's manifest, **minus** `binding`. Each is the manifest shape from section 4. |
 | `hooks` | `{ [hook]: string[] }` | Map of hook name -> module **names** serving it, **pre-sorted** in canonical `ui.order` then name order (section 5). The frontend consumes this verbatim and never re-sorts. A hook with no installed module is absent from the map. |
 | `catalog` | `HookCatalogEntry[]` | Every hook (independent of what is installed): `{ name, blurb, cardinality }`. |
@@ -592,7 +621,8 @@ a full job: keyframe -> clips -> (dialogue/speech) -> finish -> assemble -> (mas
 | `audio_key` | string | no | -- | Staged audio bed (score/narration) to mux after assemble; absent => silent film. |
 | `film_titles` | `{ title?: { text, subtitle? }, credits?: { lines: string[] } }` | no | -- | Title / credit card text for the `film.finish` chain; absent => no cards. |
 
-Identity: the CF Access email is attached as the film owner (`user_email`) for the `notify` hook.
+Identity: none. The studio is single-operator, so the core sends no identity to the `notify` hook; the
+notify-email module holds its recipient address in its own config (the identity strip).
 Errors: `400 "bundle_key required"`, `400 "scenes[] required"`.
 
 **Response 201:** `{ ok: true, ...FilmSummary, download_url? }` (see 2.21). A renders-table row is
@@ -986,7 +1016,6 @@ independently. A notifier with nothing to do returns an empty `delivered`, never
 | `project` | string | yes | Project name. |
 | `download_url?` | string | no | Presigned link to the finished film. |
 | `seconds?` | number | no | Film length, if known. |
-| `user_email?` | string | no | The owner's address (for an email notifier). |
 
 **NotifyOutput**: `{ delivered: string[] }` (required) -- e.g. `["email:owner@example.com"]`.
 
@@ -1045,7 +1074,7 @@ reads what step N wrote, not the original (#14).
 
 ---
 
-## 4. Module manifest schema (vivijure-module/1)
+## 4. Module manifest schema (vivijure-module/2)
 
 A module serves its manifest at `GET /module.json`. The core validates it (`validateManifest`) and the
 conformance harness (`checkManifest`) proves a candidate module honors it.
@@ -1056,7 +1085,7 @@ conformance harness (`checkManifest`) proves a candidate module honors it.
 |-------|------|-----|---------|
 | `name` | string | yes | Unique module id. |
 | `version` | string | yes | Module version. |
-| `api` | `"vivijure-module/1"` | yes | Contract version (must equal `MODULE_API`). |
+| `api` | `ModuleApi` (`"vivijure-module/2"`; `/1` accepted transitionally) | yes | Contract version (must be in `SUPPORTED_MODULE_APIS`). |
 | `hooks` | `HookName[]` | yes | The hooks this module serves (must be known hook names). |
 | `provides?` | `{ id: string, label: string }[]` | no | User-facing capabilities (each needs `id` + `label`). |
 | `config_schema?` | `{ [field]: ConfigField }` | no | The knobs the module exposes; the UI renders controls from these and the core clamps the user's value against them before invoking. |
@@ -1091,7 +1120,7 @@ is `int, float, bool, enum, string`):
 {
   "name": "finish-rife",
   "version": "0.1.0",
-  "api": "vivijure-module/1",
+  "api": "vivijure-module/2",
   "hooks": ["finish"],
   "provides": [
     { "id": "interpolate", "label": "Smooth motion (RIFE frame interpolation)" },
@@ -1113,7 +1142,7 @@ The core POSTs to a module's `/invoke`:
 
 ```
 InvokeRequest = { hook: HookName, input: <hook input>, config: { ...validated knobs }, context: InvokeContext }
-InvokeContext = { project: string, job_id: string, user_email?: string }   // never secrets
+InvokeContext = { project: string, job_id: string }   // never secrets, never identity
 ```
 
 The module returns one of:
@@ -1265,7 +1294,6 @@ are documented here for total coverage. The API returns them wrapped (`{ cast }`
 | Field | Type | Meaning |
 |-------|------|---------|
 | `id` | number | Primary key. |
-| `user_email` | string | Owner (always `STUDIO_OWNER`). |
 | `slug` | string | URL-safe name slug. |
 | `name` | string | Display name. |
 | `bible` | string \| null | Character description. |
@@ -1286,7 +1314,6 @@ are documented here for total coverage. The API returns them wrapped (`{ cast }`
 | Field | Type | Meaning |
 |-------|------|---------|
 | `id` | number | Primary key. |
-| `user_email` | string | Owner. |
 | `slug` | string | Name slug. |
 | `name` | string | Display name. |
 | `prefs` | object | Per-project preferences. |
@@ -1298,7 +1325,6 @@ are documented here for total coverage. The API returns them wrapped (`{ cast }`
 | Field | Type | Meaning |
 |-------|------|---------|
 | `id` | number | Primary key. |
-| `user_email` | string | Owner. |
 | `job_id` | string | The `film-*` / `scatter-*` job id. |
 | `project` | string | Project namespace. |
 | `bundle_key` | string | Render bundle R2 key. |

@@ -1,52 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { buildRenderEmail, type RenderNotifyInfo } from "../src/render-email";
 import { buildRenderLogText } from "../src/render-log";
 import { readManifest } from "../src/modules/registry";
 import type { RunpodJobView } from "../src/runpod-submit";
 
-// Issue #17 cleanup batch: render-email escaping/encoding/clamping, render-log truncation, and the
-// readManifest discovery timeout. All exercised through the exported pure surface.
-
-const info = (over: Partial<RenderNotifyInfo> = {}): RenderNotifyInfo => ({
-  userEmail: "u@e.com",
-  project: "RUST",
-  status: "COMPLETED",
-  outputKey: "renders/out.mp4",
-  error: null,
-  executionTimeMs: 12000,
-  mode: "full",
-  ...over,
-});
-
-describe("render-email esc() lock (issue #17)", () => {
-  it("escapes & < > and double-quote, but NOT single-quote (safe in double-quoted attrs)", () => {
-    const { html } = buildRenderEmail(info({ project: `a & b < c > d " e ' f` }), "https://skyphusion.org");
-    expect(html).toContain("a &amp; b &lt; c &gt; d &quot; e ' f");
-    expect(html).not.toContain("&#39;");
-    expect(html).not.toContain("&apos;");
-  });
-});
-
-describe("render-email artifact URL encoding (issue #17)", () => {
-  it("per-segment-encodes the output key so '/ # ? & space' survive as a usable link", () => {
-    const { text } = buildRenderEmail(info({ outputKey: "renders/a b#c?d&e.mp4" }), "https://skyphusion.org");
-    // slashes stay literal (route splits on them); the in-segment specials are percent-encoded.
-    expect(text).toContain("https://skyphusion.org/api/artifact/renders/a%20b%23c%3Fd%26e.mp4");
-  });
-});
-
-describe("render-email field clamp (issue #17)", () => {
-  it("truncates a runaway project name", () => {
-    const { subject } = buildRenderEmail(info({ project: "P".repeat(500) }), "https://skyphusion.org");
-    expect(subject).toContain("P".repeat(200) + "...");
-    expect(subject).not.toContain("P".repeat(201));
-  });
-  it("truncates a runaway failure reason", () => {
-    const { text } = buildRenderEmail(info({ status: "FAILED", error: "E".repeat(500) }), "https://skyphusion.org");
-    expect(text).toContain("E".repeat(200) + "...");
-    expect(text).not.toContain("E".repeat(201));
-  });
-});
+// Issue #17 cleanup batch: render-log truncation + the readManifest discovery timeout, exercised
+// through the exported pure surface. (The render-email esc/encode/clamp locks moved out with the
+// legacy core render-email builder when email logic became the notify-email module's sole concern;
+// the live notify path's composer is covered by tests/notify-email.test.ts.)
 
 describe("buildRenderLogText truncation (issue #17)", () => {
   const view = (over: Partial<RunpodJobView> = {}): RunpodJobView => ({

@@ -33,6 +33,7 @@ import {
   extractCost,
   clipKey,
   clampDuration,
+  ALLOWED_DURATIONS,
   encodePoll,
   decodePoll,
   runpodJobGone,
@@ -77,6 +78,16 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
     return { ok: false, error: "motion.backend: input needs shot_id, keyframe_url, and prompt" };
   }
   if (!env.RUNPOD_API_KEY) return { ok: false, error: "alibaba-wan-lora: RUNPOD_API_KEY not configured" };
+  // Non-silent duration snap (#279): the endpoint only accepts ALLOWED_DURATIONS, so record when a
+  // requested per-shot duration is snapped -- the user's timing change must be observable, never silent.
+  const requestedDuration = Math.round(Number(input.seconds) || 5);
+  const snappedDuration = clampDuration(input.seconds);
+  if (snappedDuration !== requestedDuration) {
+    console.log(
+      "alibaba-wan-lora shot " + input.shot_id + ": duration snapped " + requestedDuration +
+      "s -> " + snappedDuration + "s (endpoint allows " + JSON.stringify([...ALLOWED_DURATIONS]) + ")",
+    );
+  }
   try {
     const r = await fetch(ENDPOINT + "/run", {
       method: "POST",

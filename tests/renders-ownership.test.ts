@@ -12,7 +12,7 @@ import type { Env } from "../src/env";
 // classifier (the source of the past cron phantom-fail).
 
 const ROW = {
-  id: 7, user_email: "owner@e.com", job_id: "job-7", project: "hero", bundle_key: "bundles/hero.tar.gz",
+  id: 7, job_id: "job-7", project: "hero", bundle_key: "bundles/hero.tar.gz",
   quality_tier: "final", status: "COMPLETED", submitted_at: 100, updated_at: 100,
   render_overrides: null, output_key: null, output: null, error: null,
   execution_time_ms: null, delay_time_ms: null, completed_at: null, label: null,
@@ -48,7 +48,6 @@ describe("render row access by id (issue #9)", () => {
   it("getRenderByIdForUser returns the row when the id exists", async () => {
     const row = await getRenderByIdForUser(fakeEnv(), 7);
     expect(row?.id).toBe(7);
-    expect(row?.user_email).toBe("owner@e.com");
   });
 
   it("getRenderByIdForUser returns null for a wrong id", async () => {

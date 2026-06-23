@@ -18,7 +18,7 @@ import {
   type MotionBackendInput,
   type MotionBackendOutput,
 } from "./contract";
-import { buildSeedanceBody, extractVideoUrl, clipKey, clampDuration, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./seedance";
+import { buildSeedanceBody, extractVideoUrl, clipKey, clampDuration, MIN_DURATION, MAX_DURATION, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./seedance";
 
 interface Env {
   RUNPOD_API_KEY: string;
@@ -56,6 +56,16 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
     return { ok: false, error: "motion.backend: input needs shot_id, keyframe_url, and prompt" };
   }
   if (!env.RUNPOD_API_KEY) return { ok: false, error: "seedance: RUNPOD_API_KEY not configured" };
+  // Non-silent duration snap (#279): seedance requires duration in [4, 12]; record when a sub-4s shot
+  // is snapped up so the timing change is observable, never silent.
+  const requestedDuration = Math.round(Number(input.seconds) || 5);
+  const sentDuration = clampDuration(input.seconds);
+  if (sentDuration !== requestedDuration) {
+    console.log(
+      "seedance shot " + input.shot_id + ": duration snapped " + requestedDuration + "s -> " +
+      sentDuration + "s (endpoint allows [" + MIN_DURATION + ", " + MAX_DURATION + "])",
+    );
+  }
   try {
     const r = await fetch(ENDPOINT + "/run", {
       method: "POST",
