@@ -5,6 +5,12 @@ checklist, not an automation; nothing here deploys until a human runs it. Cut ta
 (current `main` is `0.2.6`; this cut adds the cloud-keyframe, alibaba-wan-lora, subtitle, AND
 audio-master (master hook) modules, so it is a MINOR bump, see section 3).
 
+> **Status (post-deploy reconciliation):** this cut SHIPPED. v0.3.0 went live with all five new modules
+> (cloud-keyframe, alibaba-wan-lora, subtitle, speech-upscale, audio-master); the follow-ups v0.3.1
+> (keyframe backend selectable), v0.3.2 (`tail_consumers` -> `vivijure-tail` observability), and v0.3.3
+> (cloud i2v duration fixes) are also live. The sections below have been reconciled to that shipped
+> reality (module names, audio-master = CPU VPC container not RunPod, speech-upscale shipped).
+
 Scope decision: this is ONE feature-complete v0.3.0 cut WITH master. The QA contract walk runs after
 master merges and before we tag, so master is merged + green before the tag. The out-of-band fleet
 container rebuild(s) (video-finish, and audio-master if it ships a container) are Strummer's to run at
@@ -135,17 +141,19 @@ binding = "MODULE_SUBTITLE"
 service = "vivijure-module-subtitle"
 ```
 
-### 1.4 speech-upscale -> `MODULE_SPEECH_UPSCALE`  (PLACEHOLDER -- lands via Mackaye's speech cherry-pick)
+### 1.4 speech-upscale -> `MODULE_SPEECH_UPSCALE`  (shipped in v0.3.0)
 
-NOT on `main` at the time of writing. Once Mackaye's speech cherry-pick lands `modules/speech-upscale/`
-(verify the exact dir + service name then), the pattern is identical to alibaba-wan-lora:
+Shipped on `main` as `modules/speech-upscale/` (service `vivijure-module-speech-upscale`). It is a
+RunPod module -- the dedicated `vivijure-audio-upscale` CUDA endpoint, NOT a CPU container -- so the
+deploy pattern matches alibaba-wan-lora; it needs both RunPod secrets:
 
 ```bash
-npx wrangler deploy -c modules/speech-upscale/wrangler.toml         # VERIFY path after cherry-pick
+npx wrangler deploy -c modules/speech-upscale/wrangler.toml
 npx wrangler secret put RUNPOD_API_KEY -c modules/speech-upscale/wrangler.toml
+npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/speech-upscale/wrangler.toml   # = vivijure-audio-upscale
 ```
 
-Core binding (confirm exact name against the merged module before use):
+Core binding:
 
 ```toml
 [[services]]
@@ -153,51 +161,49 @@ binding = "MODULE_SPEECH_UPSCALE"
 service = "vivijure-module-speech-upscale"
 ```
 
-UNKNOWN to confirm before cutting: module dir name, service name, whether it also needs
-`RUNPOD_ENDPOINT_ID`, and whether it relies on a CPU container (and thus a fleet redeploy like 1.0).
+### 1.5 audio-master (the `master` hook module) -> shipped in v0.3.0
 
-### 1.5 audio-master (the `master` hook module) -> IN the cut  (details fold in when Rollins delivers)
+Shipped as `modules/audio-master/` (service `vivijure-module-audio-master`, core binding
+`MODULE_AUDIO_MASTER`). It masters the assembled audio bed (music upscale: soxr 48k + air lift; LUFS
+loudness) on the always-on `audio-master` CPU container on the fleet over Workers VPC -- pure CPU
+ffmpeg, NEVER RunPod/GPU (GPU money is for GPU work only). The module worker is CREDENTIALLESS: it
+holds no R2 creds and no RunPod key, so there are NO secrets to set -- the core presigns the R2 URLs
+and the worker reaches the container over the `AUDIO_MASTER_VPC` binding.
 
-IN the v0.3.0 cut (Conrad's feature-complete target = with master). Rollins is building the
-`audio-master` worker (RunPod CPU bridge: soxr + loudnorm) plus its CPU container handler (crew tasks
-#18/#19/#20). The QA contract walk runs after master merges and before we tag, so master will be merged
-+ green before the tag; we fold its real binding/secret/container details into this section the moment
-Rollins delivers. Expected shape (CONFIRM each against the merged module):
+Deploy the module worker (no secrets):
 
 ```bash
-npx wrangler deploy -c modules/audio-master/wrangler.toml          # name TBD -- VERIFY
-npx wrangler secret put RUNPOD_API_KEY -c modules/audio-master/wrangler.toml   # likely; CONFIRM
+npx wrangler deploy -c modules/audio-master/wrangler.toml
 ```
 
-Core binding (name TBD -- CONFIRM against the merged module; ADD/uncomment in the section-2 commit):
+Core binding (ADD in the section-2 commit):
 
 ```toml
 [[services]]
-binding = "MODULE_AUDIO_MASTER"          # TBD -- confirm
-service = "vivijure-module-audio-master" # TBD -- confirm
+binding = "MODULE_AUDIO_MASTER"
+service = "vivijure-module-audio-master"
 ```
 
-TO CONFIRM when Rollins delivers: binding/service name, secret set, and whether it ships a NEW CPU
-container. The `master` phase runs after assemble, before mux (orchestrator tasks #16/#17 merged), so a
-missing/dangling master binding breaks the core deploy exactly like any other module -- it must be
-deployed before core, same as 1.1-1.3.
+The `master` phase runs after assemble, before mux (orchestrator tasks #16/#17), so a missing/dangling
+master binding breaks the core deploy exactly like any other module -- deploy the module worker before
+core, same as 1.1-1.3.
 
-**Conditional -- IF audio-master ships a NEW CPU container** (the container-vs-worker split in section 0
-applies; a container is NOT a `wrangler` deploy): it needs its own out-of-band fleet build, just like
-video-finish in section 1.0, plus a `[[vpc_services]]` binding in the core `wrangler.toml` (a NEW
-`service_id`, mirrored as a `Fetcher` in `src/env.ts` -- VPC bindings are explicit, NOT covered by the
-`MODULE_${string}` index signature). At deploy time (Strummer, on Conrad's go):
+**Container (REQUIRED -- audio-master ships a CPU container).** The worker reaches the always-on
+`audio-master` container (`containers/audio-master/`, slim ffmpeg) through a `[[vpc_services]]`
+`AUDIO_MASTER_VPC` block in the core `wrangler.toml` (its own `service_id`, mirrored as a `Fetcher` in
+`src/env.ts` -- VPC bindings are explicit, NOT covered by the `MODULE_${string}` index signature). The
+container is NOT a `wrangler` deploy; it needs its own out-of-band fleet build, like video-finish in
+section 1.0. At deploy time (Strummer, on Conrad's go):
 
 ```bash
-# on the fleet host (dischord), prerequisite BEFORE the audio-master module worker is relied on:
-docker compose -f containers/compose.yaml build audio-master    # service name TBD -- VERIFY
+# on the fleet host (dischord), BEFORE the audio-master module worker is relied on:
+docker compose -f containers/compose.yaml build audio-master
 docker compose -f containers/compose.yaml up -d audio-master
 curl -fsS http://<audio-master-host>:<port>/health
 ```
 
-Add the corresponding `[[vpc_services]]` block to core `wrangler.toml` and its `Fetcher` field to
-`src/env.ts` in the section-2 release-prep commit (alongside the service binding). If audio-master is
-worker-only (no container), skip this conditional block entirely.
+Add the `[[vpc_services]]` `AUDIO_MASTER_VPC` block to core `wrangler.toml` and its `Fetcher` field to
+`src/env.ts` in the section-2 release-prep commit (alongside the service binding).
 
 ---
 
@@ -210,23 +216,22 @@ build). This keeps every binding pointing at an already-deployed module.
    - ADD `[[services]] MODULE_CLOUD_KEYFRAME -> vivijure-module-cloud-keyframe` (1.1)
    - UNCOMMENT `[[services]] MODULE_ALIBABA_WAN_LORA -> vivijure-module-alibaba-wan-lora` (1.2)
    - ADD `[[services]] MODULE_SUBTITLE -> vivijure-module-subtitle` (1.3)
-   - ADD `[[services]] MODULE_AUDIO_MASTER -> vivijure-module-audio-master` (1.5, name TBD -- confirm
-     when Rollins delivers; IF it ships a container, ALSO add its `[[vpc_services]]` block, see 1.5)
-   - (speech-upscale only if its cherry-pick has landed -- otherwise leave out)
+   - ADD `[[services]] MODULE_AUDIO_MASTER -> vivijure-module-audio-master` (1.5; audio-master DOES
+     ship a CPU container, so ALSO add its `[[vpc_services]]` `AUDIO_MASTER_VPC` block, see 1.5)
+   - ADD `[[services]] MODULE_SPEECH_UPSCALE -> vivijure-module-speech-upscale` (1.4)
 2. `src/env.ts` (hand-authored `Env`): **no edit needed for the module bindings.** `Env` uses the
    generic template-literal index signature `[key: \`MODULE_${string}\`]: Fetcher | undefined;`
    (confirmed line 71 on `main`, per Joan's audio-stack assessment), so every `MODULE_*` binding
    auto-discovers with no per-binding field. EXCEPTION: a NEW `[[vpc_services]]` binding (e.g. an
-   audio-master CONTAINER, see 1.5) is NOT covered by that index signature and MUST be added as an
-   explicit `Fetcher` field in `Env`, or `npm run typecheck` (the CI gate) fails.
+   audio-master CONTAINER's `AUDIO_MASTER_VPC`, see 1.5) is NOT covered by that index signature and
+   MUST be added as an explicit `Fetcher` field in `Env`, or `npm run typecheck` (the CI gate) fails.
 3. `.github/workflows/ci.yml` deploy loop: add the new module dir names so future tag deploys keep
    them live. Current loop:
    ```
    for module in own-gpu finish-rife finish-upscale finish-lipsync keyframe seedance kling \
      minimax-hailuo google-veo vidu-q3 alibaba-wan text-overlay film-titles dialogue-gen; do
    ```
-   Add: `cloud-keyframe alibaba-wan-lora subtitle audio-master` (audio-master dir name TBD -- confirm;
-   add `speech-upscale` only if it is in the cut). Order within the loop does not matter (all modules
+   Add: `cloud-keyframe alibaba-wan-lora subtitle speech-upscale audio-master`. Order within the loop does not matter (all modules
    deploy before the core); only modules-before-core matters, which the job already guarantees.
 
 Note: the manual `wrangler deploy` of each new module in section 1 is what makes the FIRST tag deploy
@@ -287,14 +292,13 @@ cut; use this split only if master is not ready at go time.
    (film-titles), and the NEW `/subtitle` (subtitle module). The cleanest check is a short
    talking-shot render with subtitles enabled -- assert the structured `film_finish` channel reports
    `applied` includes the subtitle step (NOT a silent degrade to raw clips).
-3. **New module workers healthy.** Confirm each is live and discovered (add `audio-master` once its
-   service name is confirmed):
+3. **New module workers healthy.** Confirm each is live and discovered:
    ```bash
-   for m in cloud-keyframe alibaba-wan-lora subtitle audio-master; do   # audio-master name TBD
+   for m in cloud-keyframe alibaba-wan-lora subtitle speech-upscale audio-master; do
      npx wrangler deployments list --name vivijure-module-$m | head -3
    done
    curl -fsS https://vivijure.skyphusion.org/api/modules | \
-     grep -oE 'cloud-keyframe|alibaba-wan-lora|subtitle|audio-master'   # all should appear
+     grep -oE 'cloud-keyframe|alibaba-wan-lora|subtitle|speech-upscale|audio-master'   # all should appear
    ```
    If audio-master ships a container, also `curl -fsS http://<audio-master-host>:<port>/health` on the
    fleet, same as video-finish (2).
@@ -339,14 +343,14 @@ gated), so old code runs safely against the newer schema.
 
 ## Unknowns / open items (resolve before "go")
 
-- **audio-master (master hook) -- IN the cut, details to fold in:** binding name, service name, secret
-  set, and whether it ships a NEW CPU container all TBD (Rollins, tasks #18/#19/#20). It is part of the
-  feature-complete v0.3.0 (merged + QA-green before the tag); we fold its real values into 1.5 / 2 the
-  moment Rollins delivers. If it brings a container, it needs an out-of-band fleet build + a
-  `[[vpc_services]]` binding + an explicit `Env` `Fetcher` field, not a `wrangler` deploy. (Fallback if
-  it slips: the incremental v0.3.0-then-v0.3.1 split in section 3.)
-- **speech-upscale:** confirm dir/service name, secret set (RUNPOD_API_KEY assumed), and container
-  dependency after Mackaye's speech cherry-pick lands. Only in the cut if landed by go time.
+- **audio-master (master hook) -- RESOLVED, shipped in v0.3.0:** service `vivijure-module-audio-master`,
+  core binding `MODULE_AUDIO_MASTER`, NO secrets (credentialless). It ships a CPU container
+  (`containers/audio-master/`) reached over the `AUDIO_MASTER_VPC` `[[vpc_services]]` binding + an
+  explicit `Env` `Fetcher` field -- a pure CPU VPC container, NEVER RunPod/GPU (the GPU-money tenet).
+  The container needs an out-of-band fleet build, not a `wrangler` deploy. See 1.5 / 2 for the real values.
+- **speech-upscale -- RESOLVED, shipped in v0.3.0:** service `vivijure-module-speech-upscale`, a RunPod
+  module (the `vivijure-audio-upscale` CUDA endpoint, no container). Secrets: `RUNPOD_API_KEY` +
+  `RUNPOD_ENDPOINT_ID`. See 1.4.
 - **src/env.ts mirroring -- RESOLVED:** `Env` uses the generic `[key: \`MODULE_${string}\`]: Fetcher`
   index signature (line 71 on `main`), so `MODULE_*` bindings need NO `Env` edit. Only a NEW
   `[[vpc_services]]` binding (an audio-master container) needs an explicit `Fetcher` field.

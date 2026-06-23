@@ -134,8 +134,9 @@ binding = "MODULE_TEXT_OVERLAY"
 service = "vivijure-module-text-overlay"
 
 # Film titles: a film.finish-chain module (opening title + end credit cards) that runs on the
-# assembled+muxed film via the video-finish /film-titles route. Inert until the orchestrator invokes
-# the film.finish chain (separate change); discovered by the registry now.
+# assembled+muxed film via the video-finish /film-titles route. The orchestrator invokes the
+# film.finish chain (applyFilmFinish, post-mux before done) since v0.3.0, so this runs on every
+# single-film render; discovered by the registry.
 [[services]]
 binding = "MODULE_FILM_TITLES"
 service = "vivijure-module-film-titles"

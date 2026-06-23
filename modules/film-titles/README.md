@@ -41,6 +41,11 @@ the scatter/gather path does not dispatch it yet.
 
 The title / credit text is a runtime input, not part of the schema.
 
+**Styling status:** `title_seconds` / `credit_seconds` are honored by the container. `font` / `color` /
+`bg` are accepted and forwarded in the card spec, but the video-finish container does not read them yet,
+so cards currently render with the built-in defaults (DejaVu Sans, white text, black background). The
+styling pass is tracked separately (M1).
+
 **Self-host**: service `vivijure-module-film-titles`, bound into the core as `MODULE_FILM_TITLES`.
 Binding: `VIDEO_FINISH_VPC` (the video-finish CPU container over Workers VPC). No R2 binding, no
 secrets (it only forwards the card spec). See `wrangler.toml`.
