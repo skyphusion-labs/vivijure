@@ -245,7 +245,7 @@ async function muxScatterAudio(env: Env, job: ScatterJob): Promise<void> {
     job.error = `scatter audio mux failed: HTTP ${resp?.status ?? "?"}`;
     return;
   }
-  let body: { ok?: boolean; error?: string; durationSeconds?: number };
+  let body: { ok?: boolean; error?: string; durationSeconds?: number; shots?: number; clipsReceived?: number };
   try {
     body = (await resp.json()) as typeof body;
   } catch {
@@ -341,7 +341,7 @@ async function assembleScatterClips(
     job.error = `video-finish gather returned ${resp?.status ?? "?"}`;
     return;
   }
-  let body: { ok?: boolean; error?: string; durationSeconds?: number };
+  let body: { ok?: boolean; error?: string; durationSeconds?: number; shots?: number; clipsReceived?: number };
   try {
     body = (await resp.json()) as typeof body;
   } catch {
@@ -365,6 +365,13 @@ async function assembleScatterClips(
     .filter((s) => job.expected_shot_ids.includes(s.shot_id))
     .reduce((sum, s) => sum + (Number.isFinite(s.seconds) && s.seconds > 0 ? s.seconds : 0), 0);
   const assembledSeconds = typeof body.durationSeconds === "number" ? body.durationSeconds : 0;
+  // [#287] instrumentation: clips we SENT vs the container received vs concatenated duration --
+  // definitively locates a 3 -> 1 drop (worker-sent-fewer vs container-side) on the next run.
+  console.log(JSON.stringify({
+    ev: "scatter.assemble.result", scatter_id: job.scatter_id, sent: clips.length,
+    clipsReceived: body.clipsReceived, shots: body.shots, durationSeconds: body.durationSeconds,
+    expectedSeconds,
+  }));
   if (expectedSeconds > 0 && assembledSeconds > 0 && assembledSeconds < expectedSeconds * 0.5) {
     job.phase = "failed";
     job.error = `assemble dropped clips: ${assembledSeconds.toFixed(1)}s assembled vs ~${expectedSeconds.toFixed(1)}s expected across ${job.expected_shot_ids.length} shots`;
@@ -407,6 +414,13 @@ async function advanceScatterGather(env: Env, job: ScatterJob): Promise<void> {
     job.expected_shot_ids.map((shot_id) => ({ shot_id, prompt: "", seconds: 4 })),
     [...clipMap.entries()].map(([shot_id, clip_key]) => ({ shot_id, clip_key })),
   );
+  // [#287] instrumentation: pin where 3 -> 1 happens. Logs shots_expected vs clips_gathered (and
+  // the resolved shot ids) at the assemble decision; the container result is logged below.
+  console.log(JSON.stringify({
+    ev: "scatter.gather.assemble", scatter_id: job.scatter_id,
+    shots_expected: job.expected_shot_ids.length, clips_gathered: clips.length,
+    shot_ids: clips.map((c) => c.shot_id),
+  }));
   if (clips.length !== job.expected_shot_ids.length) {
     const err = "gather: missing clips after finish decision";
     await markFinishFailed(env, job.scatter_id, err);
