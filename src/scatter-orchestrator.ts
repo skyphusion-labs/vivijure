@@ -181,6 +181,7 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
       bundle_key: args.bundle_key,
       scenes: shardScenes,
       motion_backend: motionBackend,
+      keyframe_backend: mapped.keyframe_backend,
       keyframe_config: mapped.keyframe_config,
       motion_config: mapped.motion_config,
       finish_config: mapped.finish_config,

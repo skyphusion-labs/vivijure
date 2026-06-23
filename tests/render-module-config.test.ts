@@ -19,6 +19,20 @@ const keyframeMod = {
     steps: { type: "int" as const, default: 30, min: 1, max: 60 },
     seed: { type: "int" as const, default: -1, min: -1 },
   },
+  ui: { section: "keyframe", order: 10 }, // GPU keyframe leads by ui.order (the default pick)
+} as unknown as RegisteredModule;
+
+const cloudKeyframeMod = {
+  name: "cloud-keyframe",
+  version: "0.1.0",
+  api: "vivijure-module/1" as const,
+  binding: "MODULE_CLOUD_KEYFRAME",
+  hooks: ["keyframe" as const],
+  config_schema: {
+    model: { type: "enum" as const, values: ["flux-2", "nano-banana-pro"], default: "flux-2" },
+    width: { type: "int" as const, default: 1344, min: 512, max: 1536 },
+  },
+  ui: { section: "keyframe", order: 20 }, // loses the ui.order tiebreak -> only reachable via a choice
 } as unknown as RegisteredModule;
 
 const ownGpuMod = {
@@ -109,6 +123,35 @@ describe("resolveModuleRenderConfigs", () => {
     expect(resolved.keyframe_config).toMatchObject({ quality_tier: "standard", steps: 25 });
     expect(resolved.motion_config).toMatchObject({ quality: "standard", fps: 24 });
     expect(resolved.motion_backend).toBe("own-gpu");
+  });
+
+  it("defaults the keyframe backend to the ui.order leader (GPU keyframe) when no choice is submitted", () => {
+    const resolved = resolveModuleRenderConfigs({}, "standard", [keyframeMod, cloudKeyframeMod, ownGpuMod]);
+    // keyframe is pick_one: GPU keyframe (order 10) leads cloud-keyframe (order 20). The bug was this was
+    // the ONLY reachable keyframe backend -- cloud-keyframe could never be selected.
+    expect(resolved.keyframe_backend).toBe("keyframe");
+    expect(resolved.keyframe_config).toMatchObject({ quality_tier: "standard" });
+  });
+
+  it("honors a submitted keyframe_backend, selecting cloud-keyframe over the GPU default", () => {
+    const resolved = resolveModuleRenderConfigs(
+      { keyframe_backend: "cloud-keyframe", config: { "cloud-keyframe": { model: "nano-banana-pro", width: 9999 } } },
+      "standard",
+      [keyframeMod, cloudKeyframeMod, ownGpuMod],
+    );
+    // The fix: the planner's keyframe pick wins over ui.order, so the GPUless cost-door lane is reachable.
+    // The chosen module's config is clamped (width 9999 -> 1536) and threaded as keyframe_config.
+    expect(resolved.keyframe_backend).toBe("cloud-keyframe");
+    expect(resolved.keyframe_config).toMatchObject({ model: "nano-banana-pro", width: 1536 });
+  });
+
+  it("an unknown keyframe_backend resolves to no module (render fails loud, never a silent backend swap)", () => {
+    const resolved = resolveModuleRenderConfigs(
+      { keyframe_backend: "does-not-exist" },
+      "standard",
+      [keyframeMod, cloudKeyframeMod, ownGpuMod],
+    );
+    expect(resolved.keyframe_backend).toBeUndefined();
   });
 
   it("resolves a submitted speech config (by module name) so the speech phase receives it, not just defaults", () => {

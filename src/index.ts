@@ -461,6 +461,7 @@ const hSubmitRender: Handler = async (req, env) => {
     bundle_key: b.bundleKey,
     scenes,
     motion_backend: motionBackend,
+    keyframe_backend: mapped.keyframe_backend,
     keyframe_config: mapped.keyframe_config,
     motion_config: mapped.motion_config,
     finish_config: mapped.finish_config,
@@ -579,6 +580,7 @@ const hRegenShot: Handler = async (req, env, _c, p) => {
     project: row.project,
     bundle_key: row.bundle_key,
     scenes: [{ shot_id: scene.shot_id, prompt: scene.prompt, seconds: scene.seconds }],
+    keyframe_backend: mapped.keyframe_backend,
     keyframe_config: mapped.keyframe_config,
     keyframes_only: true,
     user_email: email,
@@ -830,7 +832,7 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   return summary;
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } } }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } } }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
@@ -838,7 +840,7 @@ const hStartFilm: Handler = async (req, env) => {
   const project = a.project ?? deriveProjectFromBundleKey(a.bundle_key);
   const job = await startFilmJob(env, {
     project, bundle_key: a.bundle_key, scenes: a.scenes,
-    motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
+    motion_backend: a.motion_backend, keyframe_backend: a.keyframe_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
     // audio_key: a staged bed (score-bed music/narration) to mux after assemble. startFilmJob runs it
     // through resolveStagedAudioKey; without forwarding it here the mux phase is skipped and the film is
     // silent even when the caller supplied a bed (the scored/narrated render path).
