@@ -3,10 +3,15 @@
 
 import type { MotionBackendInput } from "./contract";
 
-// Seedance v1.5 Pro accepts a bounded shot length; clamp the storyboard's per-shot seconds in.
+// Seedance v1.5 Pro accepts a CONTINUOUS duration of 4-12 seconds: the endpoint 400s on 3 or below
+// ("Invalid duration ... Must be between 4 and 12 seconds", #279). Clamp the per-shot seconds into
+// [4, 12]; a below-range value snaps UP to MIN_DURATION and is RECORDED at the call site, never a
+// silent change to the user's timing.
+export const MIN_DURATION = 4;
+export const MAX_DURATION = 12;
 export function clampDuration(seconds: number): number {
   const n = Math.round(Number(seconds) || 5);
-  return Math.max(3, Math.min(12, n));
+  return Math.max(MIN_DURATION, Math.min(MAX_DURATION, n));
 }
 
 /** The RunPod /run body for Seedance, mapped from the hook input + the clamped module config. */
