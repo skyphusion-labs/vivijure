@@ -83,8 +83,15 @@ jobs:
           set -eu
           # Explicit, reviewable skip-list (space-separated module DIR names). Empty = deploy all.
           # DO NOT replace this with a hardcoded include-list: that is what drifted (v0.6.0 omitted
-          # 9 modules incl. notify-email, which served config_schema:null). Deploy-by-default.
-          EXCLUDE=""
+          # 9 modules incl. notify-email, which served config_schema:null). Deploy-by-default; the
+          # ONLY way to skip a module is to name it here, with a reason, so the exclusion is reviewed.
+          #
+          # Excluded (not-ready; never been live, so excluding them is not a regression):
+          #   openai-sora     -- WIP; first deploy fails on the workers.dev subdomain API even with
+          #                      workers_dev=false (v0.6.2). Onboard the script, then drop from here.
+          #   alibaba-wan25   -- WIP; not wired into the core yet (not in [[services]]).
+          #   plan-enhance-py -- superseded by the TS plan-enhance module; Python variant not shipped.
+          EXCLUDE="openai-sora alibaba-wan25 plan-enhance-py"
           deployed=0
           found=0
           for toml in modules/*/wrangler.toml; do
