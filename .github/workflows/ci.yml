@@ -62,15 +62,42 @@ jobs:
       # Module workers deploy BEFORE the core. The core binds each module as a [[services]] dependency,
       # and a binding to a not-yet-deployed service makes the core `wrangler deploy` fail. Deploying
       # modules first keeps every MODULE_* binding pointing at a live service.
+      #
+      # DEPLOY-BY-DEFAULT: iterate EVERY modules/*/wrangler.toml, never a hardcoded include-list. A
+      # hardcoded list silently drifts -- a new module (or a new scope:install config field on an
+      # existing one, e.g. notify-email #300) is added to modules/ but forgotten here, so the live
+      # worker stays stale and the registry/UI never sees the change. Worse, the core can bind a
+      # [[services]] target the list omits, turning the next core deploy into a dangling-binding
+      # failure. Deploying every module dir closes both gaps. If a module ever must be skipped, add
+      # its dir name to EXCLUDE below (explicit, reviewable) -- do NOT reintroduce an include-list.
       - name: Deploy module workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          for module in own-gpu finish-rife finish-upscale finish-lipsync keyframe seedance kling minimax-hailuo google-veo vidu-q3 alibaba-wan text-overlay film-titles dialogue-gen cloud-keyframe alibaba-wan-lora subtitle speech-upscale audio-master; do
+          set -euo pipefail
+          # Explicit, reviewable skip-list (space-separated module DIR names). Empty = deploy all.
+          EXCLUDE=""
+          shopt -s nullglob
+          tomls=(modules/*/wrangler.toml)
+          if [ ${#tomls[@]} -eq 0 ]; then
+            echo "::error::no modules/*/wrangler.toml found -- refusing to deploy core with zero modules"
+            exit 1
+          fi
+          deployed=0
+          for toml in "${tomls[@]}"; do
+            module="$(basename "$(dirname "$toml")")"
+            skip=0
+            for ex in $EXCLUDE; do [ "$module" = "$ex" ] && skip=1; done
+            if [ "$skip" -eq 1 ]; then
+              echo "Skipping vivijure-module-${module} (in EXCLUDE)"
+              continue
+            fi
             echo "Deploying vivijure-module-${module}..."
-            npx wrangler deploy -c modules/${module}/wrangler.toml
+            npx wrangler deploy -c "$toml"
+            deployed=$((deployed + 1))
           done
+          echo "Deployed ${deployed} module worker(s) of ${#tomls[@]} module dir(s)."
 
       # Apply D1 schema migrations BEFORE the core deploys, so new code never runs against an old
       # schema. Idempotent: wrangler only runs untracked migrations. Additive migrations only; a
