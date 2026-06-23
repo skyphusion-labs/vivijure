@@ -45,6 +45,32 @@ const speechMod = {
   },
 } as unknown as RegisteredModule;
 
+const subtitleMod = {
+  name: "subtitle",
+  version: "0.1.0",
+  api: "vivijure-module/1" as const,
+  binding: "MODULE_SUBTITLE",
+  hooks: ["film.finish" as const],
+  config_schema: {
+    enabled: { type: "bool" as const, default: true },
+    mode: { type: "enum" as const, values: ["burn", "sidecar", "both"], default: "burn" },
+    font_size: { type: "int" as const, default: 28, min: 8, max: 120 },
+  },
+} as unknown as RegisteredModule;
+
+const audioMasterMod = {
+  name: "audio-master",
+  version: "0.1.0",
+  api: "vivijure-module/1" as const,
+  binding: "MODULE_AUDIO_MASTER",
+  hooks: ["master" as const],
+  config_schema: {
+    target_lufs: { type: "float" as const, default: -14, min: -24, max: -9 },
+    upscale: { type: "bool" as const, default: true },
+    format: { type: "enum" as const, values: ["wav", "mp3"], default: "wav" },
+  },
+} as unknown as RegisteredModule;
+
 describe("parseModuleRenderOverrides", () => {
   it("reads module wire format", () => {
     expect(
@@ -109,6 +135,33 @@ describe("resolveModuleRenderConfigs", () => {
       [keyframeMod, ownGpuMod],
     );
     expect(resolved.speech_config).toEqual({});
+  });
+
+  it("resolves a submitted film.finish (subtitle) config so the post-mux chain styles/toggles it, not just defaults", () => {
+    const resolved = resolveModuleRenderConfigs(
+      { config: { subtitle: { enabled: false, mode: "sidecar", font_size: 200 } } },
+      "standard",
+      [keyframeMod, ownGpuMod, subtitleMod],
+    );
+    // The widened fix: a submitted film.finish config must reach film_finish_config by module name,
+    // clamped (font_size 200 -> 120) -- this is what applyFilmFinish's configFor reads so subtitle sees
+    // enabled:false / mode:sidecar instead of dispatching with {}.
+    expect(resolved.film_finish_config["subtitle"]).toEqual({ enabled: false, mode: "sidecar", font_size: 120 });
+  });
+
+  it("resolves a submitted master (audio-master) config so the master phase applies the knobs, not just defaults", () => {
+    const resolved = resolveModuleRenderConfigs(
+      { config: { "audio-master": { target_lufs: -16, upscale: false, format: "mp3" } } },
+      "standard",
+      [keyframeMod, ownGpuMod, audioMasterMod],
+    );
+    expect(resolved.master_config["audio-master"]).toEqual({ target_lufs: -16, upscale: false, format: "mp3" });
+  });
+
+  it("film_finish_config / master_config carry module defaults when no override is submitted", () => {
+    const resolved = resolveModuleRenderConfigs({}, "standard", [keyframeMod, ownGpuMod, subtitleMod, audioMasterMod]);
+    expect(resolved.film_finish_config["subtitle"]).toMatchObject({ enabled: true, mode: "burn", font_size: 28 });
+    expect(resolved.master_config["audio-master"]).toMatchObject({ target_lufs: -14, upscale: true, format: "wav" });
   });
 });
 

@@ -186,6 +186,8 @@ export async function animateFromPreview(
     motion_config: mapped.motion_config,
     finish_config: mapped.finish_config,
     speech_config: mapped.speech_config,
+    film_finish_config: mapped.film_finish_config,
+    master_config: mapped.master_config,
     derive_mode: args.deriveMode,
     parent_render_id: args.parent.id,
     audio_key: args.audioKey,

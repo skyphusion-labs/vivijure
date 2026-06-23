@@ -1315,8 +1315,10 @@ describe("masteredBedKey (core presigns the PUT for this key)", () => {
   it("inserts _mastered.wav before the extension, beside the source (original survives)", () => {
     expect(masteredBedKey("renders/neon/audio/bed.wav")).toBe("renders/neon/audio/bed_mastered.wav");
   });
-  it("lands on .wav even when the source bed is another format (the master default)", () => {
+  it("defaults to .wav, and follows the requested format so the PUT key matches what the container writes", () => {
     expect(masteredBedKey("renders/neon/audio/bed.mp3")).toBe("renders/neon/audio/bed_mastered.wav");
+    expect(masteredBedKey("renders/neon/audio/bed.wav", "mp3")).toBe("renders/neon/audio/bed_mastered.mp3");
+    expect(masteredBedKey("renders/neon/audio/bed.wav", "wav")).toBe("renders/neon/audio/bed_mastered.wav");
   });
   it("appends when there is no extension, and ignores a dot in the path", () => {
     expect(masteredBedKey("renders/neon/audio/bed")).toBe("renders/neon/audio/bed_mastered.wav");

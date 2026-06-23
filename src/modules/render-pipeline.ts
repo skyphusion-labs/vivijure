@@ -24,6 +24,8 @@ export interface RenderPipelinePlan {
   finish: ResolvedModule[];
   score: ResolvedModule[];
   speech: ResolvedModule[];
+  filmFinish: ResolvedModule[];
+  master: ResolvedModule[];
 }
 
 /** The user's per-hook selection (mirrors the studio UI / window.__pipeline). `config` is keyed by
@@ -57,5 +59,7 @@ export function resolveRenderPipeline(
     finish: chain("finish"),
     score: chain("score"),
     speech: chain("speech"),
+    filmFinish: chain("film.finish"),
+    master: chain("master"),
   };
 }

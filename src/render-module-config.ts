@@ -47,6 +47,8 @@ export interface ResolvedModuleRenderConfigs {
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>;
   speech_config: Record<string, Record<string, unknown>>;
+  film_finish_config: Record<string, Record<string, unknown>>;
+  master_config: Record<string, Record<string, unknown>>;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -148,11 +150,22 @@ export function resolveModuleRenderConfigs(
   const speech_config: Record<string, Record<string, unknown>> = {};
   for (const m of pipeline.speech) speech_config[m.name] = m.config;
 
+  // film.finish (subtitle / film-titles) + master (audio-master) are chain hooks too: clamp each
+  // serving module's planner config by name so the post-mux card / caption styling and the audio
+  // master knobs actually reach the module instead of dispatching with {} (the same dead-config
+  // pattern Conrad caught for speech -- every config_schema-bearing hook is now wired).
+  const film_finish_config: Record<string, Record<string, unknown>> = {};
+  for (const m of pipeline.filmFinish) film_finish_config[m.name] = m.config;
+  const master_config: Record<string, Record<string, unknown>> = {};
+  for (const m of pipeline.master) master_config[m.name] = m.config;
+
   return {
     motion_backend: pipeline.motion_backend?.name,
     keyframe_config,
     motion_config: pipeline.motion_backend?.config ?? {},
     finish_config,
     speech_config,
+    film_finish_config,
+    master_config,
   };
 }

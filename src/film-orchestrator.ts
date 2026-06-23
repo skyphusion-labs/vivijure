@@ -79,6 +79,8 @@ export interface FilmJob {
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>; // per finish module (keyed by module name), validated at enterFinishPhase
   speech_config?: Record<string, Record<string, unknown>>; // per speech module (keyed by module name), validated at enterSpeechOrFinish
+  film_finish_config?: Record<string, Record<string, unknown>>; // per film.finish module (by name), validated in applyFilmFinish
+  master_config?: Record<string, Record<string, unknown>>; // per master module (by name), validated at enterMasterOrMux
   keyframe_binding: string | null;
   phase: "keyframe" | "clips" | "dialogue" | "speech" | "finish" | "assemble" | "master" | "mux" | "done" | "failed";
   keyframe_poll?: string;
@@ -114,6 +116,7 @@ export interface FilmJob {
     attempts?: number;   // transient-retry counter for the CURRENT step (reset when the step advances)
     applied: string[];   // accumulated applied tags across the chain (e.g. ["music-upscale:soxr48k"])
     degraded: string[];  // per-step soft-degrade reasons ("<binding>: <reason>"); a passthrough is never silent
+    configs?: Record<string, unknown>[]; // per-step clamped planner config, aligned to `chain` order (enterMasterOrMux)
   };
   // Opening title + end-credit text for the film.finish chain (title / credit cards). Absent -> no
   // cards; the film.finish module passes the film through unchanged. (#190)
@@ -982,7 +985,10 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
           sidecar_key: stepSidecarKey,
         };
       },
-      configFor: () => ({}),
+      // Per-module planner config (subtitle styling/mode/enabled, film-titles font/color/bg), clamped
+      // by dispatchChain against each module's schema. Without this the film.finish chain dispatched with
+      // {} and every styling/toggle knob was dead from the planner (the dead-config pattern, now closed).
+      configFor: (name) => job.film_finish_config?.[name],
     },
   );
   // Record the chain outcome so a degraded or failed film.finish is observable state, not a silent green.
@@ -1110,13 +1116,13 @@ export function filmSeconds(job: Pick<FilmJob, "scenes">): number | undefined {
  *  survives and each chain step writes a fresh, deterministic key (`renders/p/audio/bed.wav` ->
  *  `renders/p/audio/bed_mastered.wav`). The core presigns a PUT for this key and passes it to the master
  *  module; the extension is `.wav`, the master config default (the master phase does not thread per-user
- *  config today, mirroring the film.finish chain's configFor: () => ({})). A deterministic key makes a
- *  transient-retry re-PUT idempotent (it overwrites, never orphans). */
-export function masteredBedKey(audioKey: string): string {
+ *  the planner's master config (so a user-selected mp3 lands on a `.mp3` key the container PUT matches).
+ *  A deterministic key makes a transient-retry re-PUT idempotent (it overwrites, never orphans). */
+export function masteredBedKey(audioKey: string, format: "wav" | "mp3" = "wav"): string {
   const slash = audioKey.lastIndexOf("/");
   const dot = audioKey.lastIndexOf(".");
   const base = dot > slash ? audioKey.slice(0, dot) : audioKey;
-  return `${base}_mastered.wav`;
+  return `${base}_mastered.${format}`;
 }
 
 /** Pure: fold one master step's SUCCESS output into the chain state, returning the bed key to carry to
@@ -1159,7 +1165,11 @@ async function enterMasterOrMux(env: Env, job: FilmJob): Promise<void> {
   const serving = servingForHook(await discoverModules(envRec), "master"); // ui.order; the full master chain
   const chain = serving.map((mod) => mod.binding);
   if (!chain.length) { job.phase = "mux"; await enterMuxPhase(env, job); return; } // no master installed: mux as-is
-  job.master = { chain, idx: 0, applied: [], degraded: [] };
+  // Per-step planner config, clamped against each module's schema (by name), aligned to chain order --
+  // mirrors enterSpeechOrFinish / the finish chain so the audio-master knobs (target_lufs/upscale/format)
+  // actually reach the module instead of dispatching with {}.
+  const configs = resolveFinishConfigs(serving, job.master_config ?? {});
+  job.master = { chain, idx: 0, applied: [], degraded: [], configs };
   job.phase = "master";
   await advanceMasterPhase(env, job);
 }
@@ -1192,7 +1202,11 @@ async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
       // (the module/container hold no R2 creds), exactly as the film.finish chain does. Each step masters
       // the PRIOR step's output (job.audio_key carries forward), so presign per step from the current bed.
       const audioKey = job.audio_key;
-      const outputKey = masteredBedKey(audioKey);
+      // The step's clamped planner config (target_lufs / upscale / format). The output key extension must
+      // match the format the module/container will write, so derive it from the same config.
+      const cfg = m.configs?.[m.idx] ?? {};
+      const format = cfg.format === "mp3" ? "mp3" : "wav";
+      const outputKey = masteredBedKey(audioKey, format);
       const [audioUrl, outputUrl] = await Promise.all([
         presignR2Get(env, audioKey, 1800), // 30min: covers a multi-minute CPU master
         presignR2Put(env, outputKey, 1800),
@@ -1203,7 +1217,7 @@ async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
           film_id: job.film_id, audio_key: audioKey,
           audio_url: audioUrl, output_url: outputUrl, output_key: outputKey, seconds,
         } as MasterInput,
-        config: {},
+        config: cfg,
         context: { project: job.project, job_id: job.film_id, user_email: job.user_email },
       };
       const r = await invokeModule<MasterInput, MasterOutput>(fetcher, req);
@@ -1346,6 +1360,8 @@ export async function startFilmFromKeyframes(
     motion_configs?: Record<string, Record<string, unknown>>;
     finish_config?: Record<string, Record<string, unknown>>;
     speech_config?: Record<string, Record<string, unknown>>;
+    film_finish_config?: Record<string, Record<string, unknown>>;
+    master_config?: Record<string, Record<string, unknown>>;
     derive_mode: "finalized" | "cloud-finalized";
     parent_render_id?: number;
     audio_key?: string;
@@ -1364,6 +1380,8 @@ export async function startFilmFromKeyframes(
     motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
     speech_config: args.speech_config ?? {},
+    film_finish_config: args.film_finish_config ?? {},
+    master_config: args.master_config ?? {},
     keyframe_binding: null,
     phase: "failed",
     created_at: Date.now(),
@@ -1412,6 +1430,8 @@ export async function startFilmJob(
     motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
     finish_config?: Record<string, Record<string, unknown>>;
     speech_config?: Record<string, Record<string, unknown>>;
+    film_finish_config?: Record<string, Record<string, unknown>>;
+    master_config?: Record<string, Record<string, unknown>>;
     keyframes_only?: boolean;
     clips_only?: boolean;
     pretrained_loras?: Record<string, string>;
@@ -1433,6 +1453,8 @@ export async function startFilmJob(
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
     speech_config: args.speech_config ?? {},
+    film_finish_config: args.film_finish_config ?? {},
+    master_config: args.master_config ?? {},
     keyframes_only: !!args.keyframes_only,
     clips_only: !!args.clips_only,
     audio_key: stagedAudio,

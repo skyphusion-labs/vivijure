@@ -185,6 +185,8 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
       motion_config: mapped.motion_config,
       finish_config: mapped.finish_config,
       speech_config: mapped.speech_config,
+      film_finish_config: mapped.film_finish_config,
+      master_config: mapped.master_config,
       clips_only: true,
       pretrained_loras: shard.pretrainedLoras,
       cast_loras: castIds,
