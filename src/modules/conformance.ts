@@ -56,9 +56,9 @@ export function checkManifest(raw: unknown): ConformanceCheck[] {
     return checks;
   }
   checks.push(ok("manifest", m.name + " v" + m.version));
-  checks.push((SUPPORTED_MODULE_APIS as readonly string[]).includes(String(m.api))
+  checks.push((SUPPORTED_MODULE_APIS as ReadonlySet<string>).has(String(m.api))
     ? ok("api-version", String(m.api))
-    : bad("api-version", String(m.api) + " not in " + SUPPORTED_MODULE_APIS.join("/")));
+    : bad("api-version", String(m.api) + " not in " + [...SUPPORTED_MODULE_APIS].join("/")));
   checks.push(ok("hooks", m.hooks.join(", ")));
   if (m.config_schema) {
     for (const [k, f] of Object.entries(m.config_schema)) checks.push(checkConfigField(k, f));
