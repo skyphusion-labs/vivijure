@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -1308,6 +1308,22 @@ describe("advanceFilmJob dialogue phase injects audio_key into finish (talking c
     expect((finishInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01.wav");
     // clips_only -> after finish the shard is done
     expect(r?.job.phase).toBe("done");
+  });
+});
+
+describe("masteredBedKey (core presigns the PUT for this key)", () => {
+  it("inserts _mastered.wav before the extension, beside the source (original survives)", () => {
+    expect(masteredBedKey("renders/neon/audio/bed.wav")).toBe("renders/neon/audio/bed_mastered.wav");
+  });
+  it("lands on .wav even when the source bed is another format (the master default)", () => {
+    expect(masteredBedKey("renders/neon/audio/bed.mp3")).toBe("renders/neon/audio/bed_mastered.wav");
+  });
+  it("appends when there is no extension, and ignores a dot in the path", () => {
+    expect(masteredBedKey("renders/neon/audio/bed")).toBe("renders/neon/audio/bed_mastered.wav");
+    expect(masteredBedKey("a.b/audio/bed")).toBe("a.b/audio/bed_mastered.wav");
+  });
+  it("is deterministic so a transient-retry re-PUT overwrites (never orphans a key)", () => {
+    expect(masteredBedKey("renders/x/audio/bed.wav")).toBe(masteredBedKey("renders/x/audio/bed.wav"));
   });
 });
 

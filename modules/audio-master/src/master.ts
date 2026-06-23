@@ -1,11 +1,11 @@
-// Pure audio-master logic: build the RunPod request body, derive the output key, parse the result,
-// encode/decode the async poll token, and shape an honest soft-degrade passthrough. No I/O here -- so
-// the contract is unit-tested without runtime or spend (mirrors finish-upscale/src/finish.ts).
+// Pure audio-master logic: clamp the config, build the CPU container request body, parse the container
+// response, and shape an honest soft-degrade passthrough. No I/O here -- so the contract is unit-tested
+// without runtime or spend (mirrors finish-upscale/src/finish.ts and subtitle/src/subtitle.ts).
 
 import type { MasterInput, MasterOutput } from "./contract";
 
 /** Passthrough MasterOutput that records WHY the bed went through unmastered, so a real failure
- *  (misconfig / backend down) is never indistinguishable from a legitimate no-op -- the silent-degrade
+ *  (misconfig / container down) is never indistinguishable from a legitimate no-op -- the silent-degrade
  *  bug of #77 / #249. A genuine degrade tags `applied` with `passthrough:<reason>` and sets `degraded`;
  *  the bed (audio_key) is carried through UNCHANGED -- a polish step never drops the film's audio. Pure. */
 export function passthroughOutput(
@@ -35,7 +35,7 @@ export function defaultConfig(): MasterConfig {
 }
 
 /** Clamp the user's config against the schema (the core already validates, but a module owns its own
- *  clamp so a hand-built request can never push the backend out of range). */
+ *  clamp so a hand-built request can never push the container out of range). */
 export function coerceConfig(cfg: Record<string, unknown>): MasterConfig {
   const base = defaultConfig();
   const lufsRaw = Number(cfg.target_lufs);
@@ -45,98 +45,69 @@ export function coerceConfig(cfg: Record<string, unknown>): MasterConfig {
   return { target_lufs, upscale, format };
 }
 
-/** The mastered bed lands beside the source with a `_mastered` suffix, so the original survives and the
- *  chain hands the new key downstream. `renders/p/audio/bed.wav` -> `renders/p/audio/bed_mastered.<fmt>`.
- *  The output extension follows the requested format (mastering may re-encode wav -> mp3). */
-export function masteredKey(audioKey: string, format: "wav" | "mp3"): string {
-  const slash = audioKey.lastIndexOf("/");
-  const dot = audioKey.lastIndexOf(".");
-  const base = dot > slash ? audioKey.slice(0, dot) : audioKey;
-  return `${base}_mastered.${format}`;
+/** The POST /master body for the audio-master CPU container (Workers VPC). The core presigns the bed GET
+ *  (audio_url) and the mastered PUT (output_url) and owns the output_key; this module just forwards them
+ *  with the clamped knobs. The container downloads audioUrl, masters, and PUTs to outputUrl. */
+export interface MasterBody {
+  audioUrl: string;
+  outputUrl: string;
+  outputKey: string;
+  targetLufs: number;
+  upscale: boolean;
+  format: "wav" | "mp3";
 }
 
-/** The RunPod /run body for the dedicated vivijure-audio-master endpoint (R2 mode: it reads `audio_key`
- *  and writes `output_key` in the shared bucket itself, exactly as the finish endpoints do for clips). */
-export function buildRunPodBody(input: MasterInput, cfg: MasterConfig): { input: Record<string, unknown> } {
+export function buildMasterBody(input: MasterInput, cfg: MasterConfig): MasterBody {
   return {
-    input: {
-      audio_key: input.audio_key,
-      output_key: masteredKey(input.audio_key, cfg.format),
-      target_lufs: cfg.target_lufs,
-      upscale: cfg.upscale,
-      format: cfg.format,
-      seconds: input.seconds,
-    },
+    audioUrl: input.audio_url,
+    outputUrl: input.output_url,
+    outputKey: input.output_key,
+    targetLufs: cfg.target_lufs,
+    upscale: cfg.upscale,
+    format: cfg.format,
   };
 }
 
-// --- poll token (same shape + grace discipline as the finish modules) --------------------------
-
-// submittedAt (epoch ms) lets the stateless /poll measure a grace window before treating a RunPod
-// "job not found" as a real terminal GC vs a post-submit propagation race (issue #141). audioKey is
-// carried so a GC'd / failed job can soft-degrade to the ORIGINAL bed (passthrough), never a drop.
-export interface PollState {
-  jobId: string;
-  filmId: string;
-  audioKey: string;
-  submittedAt?: number;
+/** What the audio-master container returns on success (the POST /master JSON). The container reports
+ *  STRUCTURED facts (it did/did not upscale, the loudness target it hit); the module composes the honest
+ *  `applied` tags from them rather than trusting the request flags (mirrors subtitle's burned/sidecar). */
+export interface MasterContainerResult {
+  ok: boolean;
+  key?: string;
+  bytes?: number;
+  format?: string;
+  durationSeconds?: number;
+  lufs?: number;
+  loudnessTargetLufs?: number;
+  upscaled?: boolean;
 }
 
-export function encodePoll(s: PollState): string {
-  return btoa(JSON.stringify(s));
-}
-
-export function decodePoll(token: string): PollState | null {
-  try {
-    const o = JSON.parse(atob(token)) as PollState;
-    if (o && typeof o.jobId === "string" && typeof o.audioKey === "string") {
-      return {
-        jobId: o.jobId,
-        filmId: typeof o.filmId === "string" ? o.filmId : "",
-        audioKey: o.audioKey,
-        submittedAt: typeof o.submittedAt === "number" ? o.submittedAt : undefined,
-      };
-    }
-  } catch { /* fall through */ }
-  return null;
-}
-
-// How long after submit a RunPod "job not found" is treated as a propagation race vs a real GC.
-export const RUNPOD_NOTFOUND_GRACE_MS = 150_000;
-
-/** Pure: did RunPod report this job as gone? A GC'd job returns HTTP 404 with a body like
- *  {"status":404,...} where `status` is the NUMBER 404, not a run state. (#141) */
-export function runpodJobGone(httpStatus: number, body: { status?: unknown; title?: unknown } | null): boolean {
-  if (httpStatus === 404) return true;
-  if (!body) return false;
-  const st = body.status;
-  if (typeof st === "string" && st.length > 0) return false;
-  if (typeof st === "number") return st === 404;
-  return typeof body.title === "string" && /not\s*found/i.test(body.title);
-}
-
-/** Pure: classify a gone job -- "gone-failed" past the grace window (or for a legacy token without
- *  submittedAt, where a 404 is a real GC not a fresh race); "gone-grace" while still inside it. (#141) */
-export function classifyGoneState(
-  submittedAt: number | undefined,
-  now: number,
-  graceMs: number = RUNPOD_NOTFOUND_GRACE_MS,
-): "gone-failed" | "gone-grace" {
-  if (submittedAt === undefined) return "gone-failed";
-  return now - submittedAt >= graceMs ? "gone-failed" : "gone-grace";
-}
-
-/** What the vivijure-audio-master endpoint returns on completion (R2 mode). */
-export interface BackendOutput {
-  audio_key?: string;  // the mastered key (the handler echoes output_key here)
-  applied?: string[];
-}
-
-export function parseBackendOutput(output: unknown): BackendOutput | null {
-  if (!output || typeof output !== "object") return null;
-  const o = output as Record<string, unknown>;
+export function parseContainerResult(body: unknown): MasterContainerResult | null {
+  if (!body || typeof body !== "object") return null;
+  const o = body as Record<string, unknown>;
   return {
-    audio_key: typeof o.audio_key === "string" ? o.audio_key : undefined,
-    applied: Array.isArray(o.applied) ? (o.applied as string[]) : [],
+    ok: o.ok === true,
+    key: typeof o.key === "string" ? o.key : undefined,
+    bytes: typeof o.bytes === "number" ? o.bytes : undefined,
+    format: typeof o.format === "string" ? o.format : undefined,
+    durationSeconds: typeof o.durationSeconds === "number" ? o.durationSeconds : undefined,
+    lufs: typeof o.lufs === "number" ? o.lufs : undefined,
+    loudnessTargetLufs: typeof o.loudnessTargetLufs === "number" ? o.loudnessTargetLufs : undefined,
+    upscaled: typeof o.upscaled === "boolean" ? o.upscaled : undefined,
+  };
+}
+
+/** Compose the MasterOutput from a SUCCESSFUL container result. `applied` is built from what the
+ *  container ACTUALLY did: a "music-upscale:soxr48k" tag only when it upscaled, then the loudnorm tag at
+ *  the target it hit -- the same honest #77 record the old RunPod handler emitted. The mastered key
+ *  (res.key, echoed from output_key) becomes the carried audio_key. */
+export function masterOutputFromResult(input: MasterInput, res: MasterContainerResult): MasterOutput {
+  const applied: string[] = [];
+  if (res.upscaled) applied.push("music-upscale:soxr48k");
+  const target = typeof res.loudnessTargetLufs === "number" ? res.loudnessTargetLufs : undefined;
+  applied.push(target !== undefined ? `loudnorm:${target}LUFS` : "loudnorm");
+  return {
+    audio_key: res.key && res.key.length > 0 ? res.key : input.output_key,
+    applied,
   };
 }

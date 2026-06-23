@@ -1106,6 +1106,19 @@ export function filmSeconds(job: Pick<FilmJob, "scenes">): number | undefined {
   return total > 0 ? total : undefined;
 }
 
+/** Pure: the mastered bed's R2 key -- beside the source with a `_mastered` suffix, so the original
+ *  survives and each chain step writes a fresh, deterministic key (`renders/p/audio/bed.wav` ->
+ *  `renders/p/audio/bed_mastered.wav`). The core presigns a PUT for this key and passes it to the master
+ *  module; the extension is `.wav`, the master config default (the master phase does not thread per-user
+ *  config today, mirroring the film.finish chain's configFor: () => ({})). A deterministic key makes a
+ *  transient-retry re-PUT idempotent (it overwrites, never orphans). */
+export function masteredBedKey(audioKey: string): string {
+  const slash = audioKey.lastIndexOf("/");
+  const dot = audioKey.lastIndexOf(".");
+  const base = dot > slash ? audioKey.slice(0, dot) : audioKey;
+  return `${base}_mastered.wav`;
+}
+
 /** Pure: fold one master step's SUCCESS output into the chain state, returning the bed key to carry to
  *  the next step (and the mux). Advances idx, resets the step's poll + attempts. `applied` tags
  *  accumulate; a module soft-degrade (ok:true + output.degraded -- it passed the bed through because it
@@ -1174,13 +1187,25 @@ async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
   while (!masterChainDone(m)) {
     const fetcher = asFetcher(envRec[m.chain[m.idx]]);
     if (!fetcher) { degradeMasterStep(m, "module not bound"); continue; }
-    const req = {
-      hook: "master" as const,
-      input: { film_id: job.film_id, audio_key: job.audio_key, seconds } as MasterInput,
-      config: {},
-      context: { project: job.project, job_id: job.film_id, user_email: job.user_email },
-    };
     if (!m.poll) {
+      // CREDENTIALLESS module: the core owns the R2 S3 creds and presigns the bed GET + the mastered PUT
+      // (the module/container hold no R2 creds), exactly as the film.finish chain does. Each step masters
+      // the PRIOR step's output (job.audio_key carries forward), so presign per step from the current bed.
+      const audioKey = job.audio_key;
+      const outputKey = masteredBedKey(audioKey);
+      const [audioUrl, outputUrl] = await Promise.all([
+        presignR2Get(env, audioKey, 1800), // 30min: covers a multi-minute CPU master
+        presignR2Put(env, outputKey, 1800),
+      ]);
+      const req = {
+        hook: "master" as const,
+        input: {
+          film_id: job.film_id, audio_key: audioKey,
+          audio_url: audioUrl, output_url: outputUrl, output_key: outputKey, seconds,
+        } as MasterInput,
+        config: {},
+        context: { project: job.project, job_id: job.film_id, user_email: job.user_email },
+      };
       const r = await invokeModule<MasterInput, MasterOutput>(fetcher, req);
       if (!r.ok) {
         const d = classifyFinishRetry(r.error, m.attempts ?? 0, MASTER_STEP_MAX_ATTEMPTS);

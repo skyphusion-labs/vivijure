@@ -2,7 +2,7 @@
 upscale (VHQ soxr resample to 48 kHz + a gentle high-shelf "air" lift) followed by two-pass LUFS
 loudness normalization to a web target. STDLIB ONLY (no runpod / boto3) so it imports and runs in a
 plain Python with just ffmpeg/ffprobe on PATH -- which is what test_local.py drives directly on local
-files. rp_handler.py is the thin RunPod (R2 in / R2 out) layer over this.
+files. app.py is the thin HTTP server (presigned-R2 GET in / PUT out) layer over this.
 
 Lifted from containers/audio-mix/mix_core.py (the old, never-wired /music-upscale branch) so the
 mastering pass is a first-class module under the `master` hook, not a buried step in the mixer. It is

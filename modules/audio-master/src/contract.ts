@@ -40,18 +40,18 @@ export type InvokeResponse<O = unknown> =
   | { ok: true; pending: true; poll: string }
   | { ok: false; error: string };
 
-export interface PollRequest { poll: string; }
-
-export type PollResponse<O = unknown> =
-  | { ok: true; pending: true }
-  | { ok: true; output: O }
-  | { ok: false; error: string };
-
 // master (v1) -----------------------------------------------------------------------------------
 
+// The core hands the assembled bed and PRESIGNED URLs (it owns the R2 S3 creds; this module stays
+// credentialless and forwards the URLs to the CPU container over Workers VPC), mirroring the subtitle /
+// film.finish modules ("the core presigns the GET + the result PUT"). audio_key / output_key are the R2
+// keys behind those URLs (identity + the key the core gets back); the container never sees R2 creds.
 export interface MasterInput {
   film_id: string;     // the film this bed belongs to (output-key convention + logs)
   audio_key: string;   // R2 key of the assembled audio bed (the mix to master)
+  audio_url: string;   // presigned GET of the assembled bed (the container downloads it)
+  output_url: string;  // presigned PUT for the mastered bed (the container uploads it)
+  output_key: string;  // the R2 key behind output_url (returned to the core)
   seconds?: number;    // film length hint, if known (the backend probes the bed if absent)
 }
 
