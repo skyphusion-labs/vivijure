@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -1272,5 +1272,195 @@ describe("advanceFilmJob dialogue phase injects audio_key into finish (talking c
     expect((finishInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01.wav");
     // clips_only -> after finish the shard is done
     expect(r?.job.phase).toBe("done");
+  });
+});
+
+const masterState = (over: Partial<MasterState> = {}): MasterState => ({
+  chain: ["MODULE_AUDIO_MASTER"], idx: 0, applied: [], degraded: [], ...over,
+});
+
+describe("master chain fold (applyMasterOutput / degradeMasterStep)", () => {
+  it("single-step chain: folds the mastered bed, accumulates applied, advances to done", () => {
+    const m = masterState();
+    const next = applyMasterOutput(m, "audio/bed.wav", {
+      audio_key: "audio/bed_mastered.wav", applied: ["music-upscale:soxr48k", "loudnorm:-14LUFS"],
+    });
+    expect(next).toBe("audio/bed_mastered.wav");
+    expect(m.applied).toEqual(["music-upscale:soxr48k", "loudnorm:-14LUFS"]);
+    expect(m.idx).toBe(1);
+    expect(m.poll).toBeUndefined();
+    expect(m.attempts).toBe(0);
+    expect(masterChainDone(m)).toBe(true);
+  });
+
+  it("multi-step chain: each step chains the previous bed and stays not-done until exhausted", () => {
+    const m = masterState({ chain: ["MODULE_A", "MODULE_B"] });
+    const afterA = applyMasterOutput(m, "audio/bed.wav", { audio_key: "audio/bed_a.wav", applied: ["a:1"] });
+    expect(afterA).toBe("audio/bed_a.wav");
+    expect(m.idx).toBe(1);
+    expect(masterChainDone(m)).toBe(false);
+    const afterB = applyMasterOutput(m, afterA, { audio_key: "audio/bed_b.wav", applied: ["b:1"] });
+    expect(afterB).toBe("audio/bed_b.wav");
+    expect(m.idx).toBe(2);
+    expect(m.applied).toEqual(["a:1", "b:1"]);
+    expect(masterChainDone(m)).toBe(true);
+  });
+
+  it("a module soft-degrade (ok:true + output.degraded) carries the bed through and is recorded, never silent", () => {
+    const m = masterState();
+    const next = applyMasterOutput(m, "audio/bed.wav", {
+      audio_key: "audio/bed.wav", applied: ["passthrough:no-runpod-secrets"], degraded: "no-runpod-secrets",
+    });
+    expect(next).toBe("audio/bed.wav"); // unchanged bed
+    expect(m.degraded).toEqual(["MODULE_AUDIO_MASTER: no-runpod-secrets"]);
+    expect(m.applied).toEqual(["passthrough:no-runpod-secrets"]);
+  });
+
+  it("an empty audio_key from a module keeps the prior bed (never drops it)", () => {
+    const m = masterState();
+    const next = applyMasterOutput(m, "audio/bed.wav", { audio_key: "", applied: [] });
+    expect(next).toBe("audio/bed.wav");
+    expect(m.idx).toBe(1);
+  });
+
+  it("degradeMasterStep passes the bed through, records the reason against the step, advances", () => {
+    const m = masterState({ chain: ["MODULE_A", "MODULE_B"], idx: 1, poll: "tok", attempts: 2 });
+    degradeMasterStep(m, "module not bound");
+    expect(m.degraded).toEqual(["MODULE_B: module not bound"]);
+    expect(m.idx).toBe(2);
+    expect(m.poll).toBeUndefined();
+    expect(m.attempts).toBe(0);
+    expect(masterChainDone(m)).toBe(true);
+  });
+});
+
+describe("filmSeconds (master length hint)", () => {
+  it("sums scene durations", () => {
+    expect(filmSeconds({ scenes: [{ shot_id: "s1", prompt: "", seconds: 3 }, { shot_id: "s2", prompt: "", seconds: 4 }] })).toBe(7);
+  });
+  it("is undefined when there are no durations", () => {
+    expect(filmSeconds({ scenes: [] })).toBeUndefined();
+    expect(filmSeconds({ scenes: [{ shot_id: "s1", prompt: "", seconds: 0 }] })).toBeUndefined();
+  });
+});
+
+describe("master constants", () => {
+  it("bounds step retries and the stall ceiling", () => {
+    expect(MASTER_STEP_MAX_ATTEMPTS).toBeGreaterThanOrEqual(1);
+    expect(MASTER_STALL_SECONDS).toBeGreaterThan(0);
+  });
+});
+
+// End-to-end master phase: advanceFilmJob drives a `master` module over the audio bed (after assemble,
+// before mux), folds the mastered bed back into job.audio_key, then muxes. FAIL-SAFE: a master miss
+// passes the bed through and STILL muxes -- the render never fails on a polish step (#249 / #77).
+function masterEnv(
+  job: FilmJob,
+  invokeResponses: Array<{ status?: number; body?: object }>,
+  pollResponses: Array<{ status?: number; body?: object }> = [],
+) {
+  const filmDoc = filmJobDocKey(job.film_id);
+  let stored = JSON.stringify(job);
+  let invokeCall = 0, pollCall = 0;
+  const vpcCalls: string[] = [];
+  const env = {
+    DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+    R2_RENDERS: {
+      get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+      put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+      head: async () => null,
+      list: async () => ({ objects: [], truncated: false }),
+    },
+    // The master module: 404 on /module.json (so the film.finish/notify discovery in transitionToDone
+    // skips it -- it is not those hooks), and a scripted /invoke + /poll for the master chain.
+    MODULE_AUDIO_MASTER: {
+      fetch: async (url: string) => {
+        const u = String(url);
+        if (u.includes("/module.json")) return new Response("not found", { status: 404 });
+        if (u.includes("/invoke")) {
+          const r = invokeResponses[Math.min(invokeCall, invokeResponses.length - 1)]; invokeCall += 1;
+          return new Response(JSON.stringify(r.body ?? {}), { status: r.status ?? 200, headers: { "content-type": "application/json" } });
+        }
+        if (u.includes("/poll")) {
+          const r = pollResponses[Math.min(pollCall, pollResponses.length - 1)]; pollCall += 1;
+          return new Response(JSON.stringify(r.body ?? {}), { status: r.status ?? 200, headers: { "content-type": "application/json" } });
+        }
+        return new Response("{}", { status: 404 });
+      },
+    },
+    VIDEO_FINISH_VPC: { fetch: async (input: Request | string) => { vpcCalls.push(typeof input === "string" ? input : input.url); return new Response(JSON.stringify({ ok: true, key: "renders/film-master/muxed.mp4" }), { status: 200, headers: { "content-type": "application/json" } }); } },
+    R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+    R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+  } as unknown as Env;
+  return { env, vpcCalls, read: () => JSON.parse(stored) as FilmJob };
+}
+
+const masterJob = (): FilmJob => ({
+  film_id: "film-master", project: "neon", bundle_key: "b",
+  scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+  motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+  keyframe_binding: null, phase: "master",
+  silent_film_key: "renders/film-master/film.mp4",
+  audio_key: "renders/neon/audio/bed.wav",
+  master: { chain: ["MODULE_AUDIO_MASTER"], idx: 0, applied: [], degraded: [] },
+  created_at: Date.now(),
+});
+
+describe("advanceFilmJob master phase (pre-mux audio mastering)", () => {
+  it("a synchronous master folds the mastered bed, records applied, then muxes -> done", async () => {
+    const { env, vpcCalls, read } = masterEnv(masterJob(), [
+      { body: { ok: true, output: { audio_key: "renders/neon/audio/bed_mastered.wav", applied: ["music-upscale:soxr48k", "loudnorm:-14LUFS"] } } },
+    ]);
+    const r = await advanceFilmJob(env, "film-master");
+    const job = read();
+    expect(job.audio_key).toBe("renders/neon/audio/bed_mastered.wav"); // the MASTERED bed is what gets muxed
+    expect(job.master?.applied).toEqual(["music-upscale:soxr48k", "loudnorm:-14LUFS"]);
+    expect(job.master?.degraded).toEqual([]);
+    expect(vpcCalls.length).toBe(1);     // the mux ran (with the mastered bed)
+    expect(r?.job.phase).toBe("done");
+  });
+
+  it("an async master parks on its poll token (tick 1), then folds + muxes on completion (tick 2)", async () => {
+    const { env, vpcCalls, read } = masterEnv(
+      masterJob(),
+      [{ body: { ok: true, pending: true, poll: "tok-1" } }],
+      [{ body: { ok: true, output: { audio_key: "renders/neon/audio/bed_mastered.wav", applied: ["loudnorm:-14LUFS"] } } }],
+    );
+    await advanceFilmJob(env, "film-master");
+    const mid = read();
+    expect(mid.phase).toBe("master");                 // still mastering
+    expect(mid.master?.poll).toBe("tok-1");
+    expect(mid.audio_key).toBe("renders/neon/audio/bed.wav"); // bed not yet rewritten
+    expect(vpcCalls.length).toBe(0);                  // mux not reached yet
+    const r2 = await advanceFilmJob(env, "film-master");
+    const done = read();
+    expect(done.audio_key).toBe("renders/neon/audio/bed_mastered.wav");
+    expect(vpcCalls.length).toBe(1);
+    expect(r2?.job.phase).toBe("done");
+  });
+
+  it("a module soft-degrade (ok:true + passthrough) muxes the ORIGINAL bed, records the reason, never fails", async () => {
+    const { env, vpcCalls, read } = masterEnv(masterJob(), [
+      { body: { ok: true, output: { audio_key: "renders/neon/audio/bed.wav", applied: ["passthrough:no-runpod-secrets"], degraded: "no-runpod-secrets" } } },
+    ]);
+    const r = await advanceFilmJob(env, "film-master");
+    const job = read();
+    expect(job.audio_key).toBe("renders/neon/audio/bed.wav");          // UNCHANGED original bed
+    expect(job.master?.degraded).toEqual(["MODULE_AUDIO_MASTER: no-runpod-secrets"]);
+    expect(vpcCalls.length).toBe(1);                                   // STILL muxed (never dropped)
+    expect(r?.job.phase).toBe("done");                                 // NOT failed
+  });
+
+  it("a terminal master failure (HTTP 400) degrades to passthrough and STILL muxes -> done (never fails the render)", async () => {
+    const { env, vpcCalls, read } = masterEnv(masterJob(), [
+      { status: 400, body: { ok: false, error: "bad request" } },
+    ]);
+    const r = await advanceFilmJob(env, "film-master");
+    const job = read();
+    expect(job.audio_key).toBe("renders/neon/audio/bed.wav");          // original bed muxed
+    expect(job.master?.degraded?.[0]).toMatch(/invoke failed/);
+    expect(vpcCalls.length).toBe(1);
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.phase).not.toBe("failed");
   });
 });

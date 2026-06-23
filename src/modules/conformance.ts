@@ -161,6 +161,11 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
     if (!isStrArr(o.delivered)) return "notify output needs a delivered string[]";
     return null;
   },
+  master: (o) => {
+    if (!isStr(o.audio_key)) return "master output needs a string audio_key";
+    if (!isStrArr(o.applied)) return "master output needs an applied string[]";
+    return null;
+  },
   "film.finish": (o) => {
     if (!isStr(o.film_key)) return "film.finish output needs a string film_key";
     return null;

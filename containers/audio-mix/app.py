@@ -23,7 +23,7 @@ import tempfile
 
 from aiohttp import ClientSession, ClientTimeout, web
 
-from mix_core import DEFAULT_TARGET_LUFS, ROLES, mix_tracks, music_upscale
+from mix_core import DEFAULT_TARGET_LUFS, ROLES, mix_tracks
 from url_guard import validate_fetch_url
 
 PORT = int(os.environ.get("PORT", "8000"))
@@ -154,86 +154,12 @@ async def mix(req):
         shutil.rmtree(work, ignore_errors=True)
 
 
-async def music_upscale_handler(req):
-    """POST /music-upscale -- the no-dialogue branch of the audio finish router: "master" a single
-    music/score bed (VHQ soxr resample to 48k + gentle air lift + two-pass loudnorm). One presigned
-    input track, one presigned output. CPU ffmpeg DSP, sibling to /mix. A non-ok result is a soft-
-    degrade signal to the caller (pass the original bed through), never a drop."""
-    try:
-        body = await req.json()
-    except Exception:
-        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
-
-    audio_url = body.get("audioUrl")
-    output_url = body.get("outputUrl")
-    output_key = body.get("outputKey", "")
-    fmt = str(body.get("format", "wav")).lower()
-
-    if not audio_url:
-        return web.json_response({"ok": False, "error": "audioUrl required"}, status=400)
-    if not output_url:
-        return web.json_response({"ok": False, "error": "outputUrl required"}, status=400)
-    ok, why = validate_fetch_url(output_url)
-    if not ok:
-        return web.json_response({"ok": False, "error": f"outputUrl blocked: {why}"}, status=400)
-    if fmt not in ("mp3", "wav"):
-        return web.json_response({"ok": False, "error": "format must be mp3 or wav"}, status=400)
-    try:
-        target_lufs = float(body.get("loudnessTargetLufs", DEFAULT_TARGET_LUFS))
-    except (TypeError, ValueError):
-        return web.json_response({"ok": False, "error": "loudnessTargetLufs must be numeric"}, status=400)
-
-    work = tempfile.mkdtemp(prefix="amus-")
-    try:
-        src = os.path.join(work, "in.bin")
-        async with ClientSession(timeout=ClientTimeout(total=DOWNLOAD_TIMEOUT_S)) as s:
-            ok, info = await _download(s, audio_url, src, MAX_TRACK_BYTES)
-            if not ok:
-                status = 413 if info == "too large" else (400 if info.startswith("blocked:") else 502)
-                return web.json_response({"ok": False, "error": f"audio {info}"}, status=status)
-
-        loop = asyncio.get_running_loop()
-        try:
-            out_path, result = await loop.run_in_executor(
-                None, music_upscale, work, src, target_lufs, fmt,
-            )
-        except subprocess.CalledProcessError as e:
-            log.exception("ffmpeg failed")
-            return web.json_response({"ok": False, "error": f"ffmpeg failed: {e}"}, status=500)
-        except Exception as e:  # noqa: BLE001
-            log.exception("music-upscale failed")
-            return web.json_response({"ok": False, "error": str(e)}, status=500)
-
-        with open(out_path, "rb") as f:
-            out_bytes = f.read()
-
-        content_type = "audio/mpeg" if fmt == "mp3" else "audio/wav"
-        async with ClientSession(timeout=ClientTimeout(total=UPLOAD_TIMEOUT_S)) as s:
-            async with s.put(output_url, data=out_bytes,
-                             headers={"content-type": content_type}) as r:
-                if r.status not in (200, 201, 204):
-                    return web.json_response({"ok": False, "error": f"output put {r.status}"}, status=502)
-
-        log.info("/music-upscale ok key=%s bytes=%d dur=%.3f lufs=%.2f",
-                 output_key, len(out_bytes), result["durationSeconds"], result["lufs"])
-        return web.json_response({
-            "ok": True,
-            "key": output_key,
-            "bytes": len(out_bytes),
-            "format": fmt,
-            "durationSeconds": result["durationSeconds"],
-            "lufs": result["lufs"],
-            "loudnessTargetLufs": target_lufs,
-            "applied": ["music-upscale:soxr48k+loudnorm"],
-        })
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-
-
 app = web.Application(client_max_size=1024 * 1024)  # JSON bodies are small (URLs only)
 app.router.add_get("/health", health)
 app.router.add_post("/mix", mix)
-app.router.add_post("/music-upscale", music_upscale_handler)
+# The single-bed "master the bed" pass (formerly POST /music-upscale here) was lifted out into its own
+# first-class module under the `master` hook (modules/audio-master + containers/audio-master). This
+# container stays the multi-track MIX + duck only.
 
 if __name__ == "__main__":
     log.info("audio-mix listening on 0.0.0.0:%d", PORT)

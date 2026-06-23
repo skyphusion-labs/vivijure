@@ -109,53 +109,10 @@ def _build_filtergraph(tracks):
     out_label = _combine(final, "mix", parts)
     return ";".join(parts), out_label, did_duck
 
-
-# Music-upscale ("master the bed") DSP. NOT a neural model -- a high-quality soxr resample to 48k plus
-# a gentle high-shelf "air" lift that restores presence lost to a low-bitrate source, then the same
-# two-pass loudnorm the mix uses. It sets a clean, consistent level; it does NOT hallucinate detail.
-MUSIC_LIFT_GAIN_DB = 2.5              # gentle high-shelf boost (dB)
-MUSIC_LIFT_FREQ = 9000.0             # shelf corner (Hz) -- "air" band
-MUSIC_LIFT_Q = 0.7                   # shelf width (Q)
-
-
-def music_upscale(work, in_path, target_lufs=DEFAULT_TARGET_LUFS, fmt="wav"):
-    """CPU "mastering" pass for a music/score bed with no dialogue: VHQ soxr resample to 48 kHz +
-    a gentle high-shelf air lift, then two-pass LUFS loudnorm to `target_lufs`. ffmpeg DSP only.
-    Returns (out_path, {durationSeconds, lufs}). Mirrors mix_tracks' two-pass loudnorm discipline."""
-    # Pass 1: high-quality resample to 48k stereo + gentle high-shelf lift -> lossless intermediate
-    # (pcm so loudnorm measures the true signal, not a re-encoded one).
-    lifted = os.path.join(work, "lifted.wav")
-    _run([
-        "ffmpeg", "-y", "-i", in_path,
-        "-af",
-        "aresample=48000:resampler=soxr:precision=28,"
-        "aformat=sample_fmts=fltp:channel_layouts=stereo,"
-        f"highshelf=gain={MUSIC_LIFT_GAIN_DB}:frequency={MUSIC_LIFT_FREQ}:width_type=q:width={MUSIC_LIFT_Q}",
-        "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le",
-        lifted,
-    ])
-
-    # Pass 2: measure -> apply two-pass loudnorm, then encode (same path as mix_tracks).
-    stats = _measure_loudnorm(lifted, target_lufs)
-    apply_af = (
-        f"loudnorm=I={target_lufs}:TP={LOUDNORM_TP}:LRA={LOUDNORM_LRA}:"
-        f"measured_I={stats['input_i']}:measured_TP={stats['input_tp']}:"
-        f"measured_LRA={stats['input_lra']}:measured_thresh={stats['input_thresh']}:"
-        f"offset={stats['target_offset']}:linear=true:print_format=summary"
-    )
-    out_path = os.path.join(work, f"music.{fmt}")
-    codec = ["-c:a", "libmp3lame", "-b:a", "192k"] if fmt == "mp3" else ["-c:a", "pcm_s16le"]
-    _run([
-        "ffmpeg", "-y", "-i", lifted, "-af", apply_af,
-        "-ar", "48000", "-ac", "2", *codec,
-        out_path,
-    ])
-
-    final_stats = _measure_loudnorm(out_path, target_lufs)
-    return out_path, {
-        "durationSeconds": round(_probe_duration(out_path), 3),
-        "lufs": round(float(final_stats["input_i"]), 2),
-    }
+# The standalone "master the bed" pass (VHQ soxr resample + high-shelf air lift + two-pass loudnorm)
+# was LIFTED OUT of this mixer into its own first-class module under the `master` hook
+# (modules/audio-master + containers/audio-master). This container stays the multi-track MIX + duck;
+# film-level mastering of the assembled bed is the master module's job now.
 
 
 def _measure_loudnorm(path, target_lufs):

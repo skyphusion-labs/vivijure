@@ -21,6 +21,7 @@ export type HookName =
   | "plan.enhance"   // expand a storyboard before render: LLM auto-direction. Chainable.
   | "cast.image"     // character portrait + bible -> LoRA training reference images. Cast-prep, pick one.
   | "notify"         // film done -> deliver a render-complete notification (email / webhook / ...). Chain.
+  | "master"         // assembled film's audio bed -> mastered audio (music upscale + loudness). Pre-mux. Chain.
   | "film.finish";   // assembled+muxed film -> film with title / credit cards. Post-mux, before done. Chain.
 
 export const HOOK_NAMES: readonly HookName[] = [
@@ -32,6 +33,7 @@ export const HOOK_NAMES: readonly HookName[] = [
   "plan.enhance",
   "cast.image",
   "notify",
+  "master",
   "film.finish",
 ];
 
@@ -45,6 +47,7 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
   "plan.enhance": "chain",
   "cast.image": "pick_one",
   notify: "chain",
+  master: "chain",
   "film.finish": "chain",
 };
 
@@ -59,6 +62,7 @@ export const HOOK_BLURBS: Record<HookName, string> = {
   "plan.enhance": "LLM auto-direction",
   "cast.image": "character refs from a portrait + bible",
   notify: "render-complete notification (email / webhook)",
+  master: "film-level audio mastering: music upscale + loudness",
   "film.finish": "title / credit cards on the finished film",
 };
 
@@ -339,6 +343,33 @@ export interface NotifyInput {
 /** What a `notify` module returns: the channels it delivered on (for the core's log / summary). */
 export interface NotifyOutput {
   delivered: string[]; // e.g. ["email:owner@example.com"]
+}
+
+// master (v1) -----------------------------------------------------------------------------------
+
+/** What the core hands a `master` module: the assembled film's AUDIO BED (the mixed score / narration
+ *  track), to polish at FILM level before the final mux. This is the audio sibling of `finish` (which
+ *  polishes a clip) and the dialogue/`speech` lane (which polishes per-shot voice): `master` operates
+ *  once, on the whole film's audio, AFTER the mix is built (score + narration) and BEFORE the audio is
+ *  muxed onto the silent film. `audio_key` is the R2 key of that bed; the module reads it and writes a
+ *  mastered bed back (R2 transport, exactly as a finish backend reads clip_key / writes output_key). A
+ *  music-video maker reaches for `master` as cleanly as a dialogue maker reaches for the voice lane. */
+export interface MasterInput {
+  film_id: string;     // the film this bed belongs to (for the module's output-key convention + logs)
+  audio_key: string;   // R2 key of the assembled audio bed (the mix to master)
+  seconds?: number;    // film length hint, if known (the module probes the bed if absent)
+}
+
+/** What a `master` module returns: the mastered audio bed plus what it did. Length is invariant
+ *  (mastering changes level / sample rate, never duration). HONEST soft-degrade, exactly as a `finish`
+ *  module: when the master cannot run (misconfig / backend down) the module passes the INPUT bed
+ *  through (`audio_key` unchanged) and sets `degraded` with the reason -- never a fake `applied` tag,
+ *  never a dropped bed. A real degrade is therefore never silent (#249 / #77). */
+export interface MasterOutput {
+  audio_key: string;   // R2 key of the MASTERED bed (may equal the input if it passed through / no-op'd)
+  applied: string[];   // e.g. ["music-upscale:soxr48k", "loudnorm:-14LUFS"]; or ["passthrough:<reason>"]
+  degraded?: string;   // set ONLY when the bed was passed through because the master could not run,
+                       // carrying the reason; absent on success + on the intentional no-op (#77)
 }
 
 // --------------------------------------------------------------------------- registry view

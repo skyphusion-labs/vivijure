@@ -96,6 +96,20 @@ describe("conformance: hook output payload", () => {
   it("accepts a well-formed notify output (including an empty delivered)", () => {
     expect(checkHookOutput("notify", { delivered: [] }).pass).toBe(true);
   });
+  it("accepts a well-formed master output", () => {
+    const out = { audio_key: "audio/bed.wav", applied: ["music-upscale:soxr48k", "loudnorm:-14LUFS"] };
+    expect(checkHookOutput("master", out).pass).toBe(true);
+  });
+  it("accepts a master soft-degrade (passthrough bed + degraded reason)", () => {
+    const out = { audio_key: "audio/bed.wav", applied: ["passthrough:no-runpod-secrets"], degraded: "no-runpod-secrets" };
+    expect(checkHookOutput("master", out).pass).toBe(true);
+  });
+  it("rejects a master output missing audio_key (envelope-ok but contract-broken)", () => {
+    expect(checkHookOutput("master", { applied: [] }).pass).toBe(false);
+  });
+  it("rejects a master output missing applied", () => {
+    expect(checkHookOutput("master", { audio_key: "audio/bed.wav" }).pass).toBe(false);
+  });
   it("rejects a non-object output", () => {
     expect(checkHookOutput("finish", null).pass).toBe(false);
   });

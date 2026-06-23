@@ -161,6 +161,13 @@ service = "vivijure-module-narration-gen"
 binding = "MODULE_BEAT_SYNC"
 service = "vivijure-module-beat-sync"
 
+# Audio master: film-level mastering of the assembled audio bed (music upscale + LUFS loudness) on the
+# dedicated vivijure-audio-master RunPod endpoint (CPU ffmpeg). The `master` chain runs after assemble,
+# before the final mux; a master miss soft-degrades to the un-mastered bed (never fails the render).
+[[services]]
+binding = "MODULE_AUDIO_MASTER"
+service = "vivijure-module-audio-master"
+
 # Dialogue: per-shot spoken lines -> Deepgram Aura-1 (Workers AI) in the cast member's voice. The
 # `dialogue` phase runs after clips, before finish; its audio_key feeds the lip-sync finish module.
 [[services]]
