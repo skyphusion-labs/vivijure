@@ -1427,7 +1427,7 @@ export async function startFilmJob(
   env: Env,
   args: {
     project: string; bundle_key: string; scenes: FilmScene[];
-    motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
+    motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
     finish_config?: Record<string, Record<string, unknown>>;
     speech_config?: Record<string, Record<string, unknown>>;
     film_finish_config?: Record<string, Record<string, unknown>>;
@@ -1446,7 +1446,11 @@ export async function startFilmJob(
   const stagedAudio = args.clips_only ? undefined : await resolveStagedAudioKey(env, args.audio_key);
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
-  const kf = servingForHook(modules, "keyframe")[0] ?? null;
+  // Honor the planner's keyframe backend pick (e.g. cloud-keyframe) over the ui.order default, mirroring
+  // motion.backend selection. An explicit-but-unknown choice resolves to null -> the render fails loud
+  // with a clear "keyframe module <choice> not installed" rather than silently swapping backends.
+  const kfServing = servingForHook(modules, "keyframe");
+  const kf = (args.keyframe_backend ? kfServing.find((m) => m.name === args.keyframe_backend) : kfServing[0]) ?? null;
   const job: FilmJob = {
     film_id: "film-" + crypto.randomUUID(),
     project: args.project, bundle_key: args.bundle_key, scenes,
@@ -1468,7 +1472,9 @@ export async function startFilmJob(
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
   if (!kf || !fetcher) {
     job.phase = "failed";
-    job.error = kf ? `keyframe module ${kf.name} (${kf.binding}) is not bound` : "no keyframe module installed";
+    job.error = kf
+      ? `keyframe module ${kf.name} (${kf.binding}) is not bound`
+      : (args.keyframe_backend ? `keyframe module ${args.keyframe_backend} not installed` : "no keyframe module installed");
   } else {
     const config = validateConfig(kf.config_schema, args.keyframe_config);
     const keyframeInput: KeyframeInput = {
