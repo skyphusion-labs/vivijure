@@ -1,6 +1,6 @@
 # Vivijure Module API
 
-> Status: **IMPLEMENTED** (`vivijure-module/1`). The contract the core and modules share. This
+> Status: **IMPLEMENTED** (`vivijure-module/2`; `/1` accepted transitionally). The contract the core and modules share. This
 > document is the design spec; `src/modules/types.ts` is the canonical TypeScript shape.
 
 ## Why this exists
@@ -30,7 +30,7 @@ feature.
 | **Manifest** | A module's self-description: which hooks it serves, what config it exposes, how it surfaces in the UI. |
 | **Registry** | The core's index of installed modules, built from their manifests. Drives the pipeline and feeds the frontend. |
 
-## The hooks (vivijure-module/1)
+## The hooks (vivijure-module/2)
 
 A hook is a contract, not a function. Each has a stable name, a typed input, and a typed output.
 Shapes live in `src/modules/types.ts`.
@@ -59,7 +59,7 @@ Served by the module at `GET /module.json`. The core reads it once to register t
 {
   "name": "finish-rife",                 // unique module id
   "version": "0.1.0",
-  "api": "vivijure-module/1",            // contract version this module targets
+  "api": "vivijure-module/2",            // contract version this module targets (/1 still accepted)
   "hooks": ["finish"],                   // which hooks it serves
   "provides": [                          // user-facing capabilities (one module may offer several)
     { "id": "interpolate", "label": "Smooth motion (frame interpolation)" },
@@ -89,7 +89,7 @@ POST /invoke
   "hook":    "finish",                   // which hook is being asked
   "input":   { ... },                    // the hook's typed input (see below)
   "config":  { ... },                    // the user's values, already validated vs config_schema
-  "context": { "project": "neon", "job_id": "abc", "user_email": "..." }
+  "context": { "project": "neon", "job_id": "abc" }
 }
 ->
 { "ok": true,  "output": { ... } }       // the hook's typed output
@@ -180,7 +180,7 @@ On boot, the core reads each bound module's `module.json` and indexes them by ho
 ```
 GET /api/modules
 {
-  "api": "vivijure-module/1",
+  "api": "vivijure-module/2",
   "modules": [ { "name": "finish-rife", "hooks": ["finish"], "provides": [...], "config_schema": {...}, "ui": {...} } ],
   "hooks": { "finish": ["finish-rife"], "motion.backend": ["motion-runpod"] }
 }
@@ -188,7 +188,7 @@ GET /api/modules
 
 ## Contributor flow
 
-1. `git clone` the module template (a minimal worker + the shared `vivijure-module/1` types).
+1. `git clone` the module template (a minimal worker + the shared `vivijure-module/2` types).
 2. Implement one hook's `invoke(input, config, context) -> output`.
 3. `npm run conformance` until green.
 4. Install it: add a service binding (now) or publish to the dispatch namespace (later).

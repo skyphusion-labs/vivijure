@@ -1,7 +1,7 @@
-// Vendored subset of the Vivijure module contract (vivijure-module/1) for the notify-email module.
+// Vendored subset of the Vivijure module contract (vivijure-module/2) for the notify-email module.
 // Matches src/modules/types.ts for the shapes used here. Dependency-free.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "notify" | "keyframe" | "motion.backend" | "finish" | "score" | "plan.enhance" | "cast.image";
 

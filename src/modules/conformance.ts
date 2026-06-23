@@ -1,4 +1,4 @@
-// Module conformance harness (vivijure-module/1).
+// Module conformance harness (vivijure-module/2; /1 accepted transitionally).
 //
 // The "does this module honor the contract?" checker. Anyone writing a module (in this repo or
 // another) runs these checks against their worker to know it will plug into the core cleanly:
@@ -11,7 +11,7 @@
 // .test.ts) drives them against a deployed module URL. This is the conformance half of the module
 // SDK: the contract is the law, and this is how a contributor proves they obey it.
 
-import { MODULE_API, type HookName } from "./types";
+import { MODULE_API, SUPPORTED_MODULE_APIS, type HookName } from "./types";
 import { validateManifest } from "./registry";
 
 export interface ConformanceCheck {
@@ -56,7 +56,9 @@ export function checkManifest(raw: unknown): ConformanceCheck[] {
     return checks;
   }
   checks.push(ok("manifest", m.name + " v" + m.version));
-  checks.push(m.api === MODULE_API ? ok("api-version", m.api) : bad("api-version", m.api + " != " + MODULE_API));
+  checks.push((SUPPORTED_MODULE_APIS as readonly string[]).includes(String(m.api))
+    ? ok("api-version", String(m.api))
+    : bad("api-version", String(m.api) + " not in " + SUPPORTED_MODULE_APIS.join("/")));
   checks.push(ok("hooks", m.hooks.join(", ")));
   if (m.config_schema) {
     for (const [k, f] of Object.entries(m.config_schema)) checks.push(checkConfigField(k, f));
