@@ -15,6 +15,8 @@ import {
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { presignR2Get, presignR2Put } from "./r2-presign";
+import { readShotDurationsFromBundle } from "./bundle-assembler";
+import { buildCaptionCues } from "./captions";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { coerceShotId } from "./storyboard-validate";
 import { getCastById, markLoraReady } from "./cast-db";
@@ -796,10 +798,20 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   const modules = await discoverModules(envRec);
   if (servingForHook(modules, "film.finish").length === 0) return; // nothing installed -> no-op
   const outKey = job.film_key.replace(/\.mp4$/i, "") + "-titled-" + crypto.randomUUID().slice(0, 8) + ".mp4";
-  const [videoUrl, outputUrl] = await Promise.all([
+  // A soft .srt sidecar for the subtitle module's sidecar / both modes (its own presigned PUT). Cheap
+  // to presign whether or not a subtitle module is installed; ignored by film-titles.
+  const sidecarKey = outKey.replace(/\.mp4$/i, "") + ".srt";
+  const [videoUrl, outputUrl, sidecarUrl] = await Promise.all([
     presignR2Get(env, job.film_key, 1800),
     presignR2Put(env, outKey, 1800),
+    presignR2Put(env, sidecarKey, 1800),
   ]);
+  // Time-synced dialogue captions for the subtitle film.finish module: the cumulative per-shot
+  // windows (real beat-trimmed durations from the bundle, authored seconds as fallback) carrying each
+  // speaking shot's line. Empty when the film has no dialogue -> the subtitle module no-ops. Narration
+  // is NOT captioned (a single film-level track with no per-line timing); see src/captions.ts.
+  const durations = await readShotDurationsFromBundle(env, job.bundle_key);
+  const captions = buildCaptionCues(job.scenes, job.dialogue_lines ?? [], durations);
   const seed = {
     film_key: job.film_key,
     video_url: videoUrl,
@@ -807,6 +819,9 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
     output_key: outKey,
     title: job.film_titles?.title,
     credits: job.film_titles?.credits,
+    captions,
+    sidecar_url: sidecarUrl,
+    sidecar_key: sidecarKey,
   };
   // One film.finish module today (film-titles). A 2nd would need fresh presigned URLs per step;
   // nextInput keeps the same URLs and is only reached with >1 serving module -- revisit then.
