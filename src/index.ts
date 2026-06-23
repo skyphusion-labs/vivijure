@@ -1043,6 +1043,8 @@ const STUDIO_PAGE_ASSETS: Record<string, string> = {
   "/cast/": "/cast.html",
   "/modules": "/modules.html",
   "/modules/": "/modules.html",
+  "/settings": "/settings.html",
+  "/settings/": "/settings.html",
 };
 
 function serveStudioAsset(env: Env, request: Request, url: URL, assetPath: string): Promise<Response> {
