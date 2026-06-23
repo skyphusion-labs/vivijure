@@ -66,6 +66,23 @@ export function filterScenesByShotIds(scenes: FilmScene[], shotIds: string[] | u
   return scenes.filter((s) => allow.has(s.shot_id));
 }
 
+/** Order (and filter) scenes to match an explicit shot-id sequence. The scatter gather assembles its
+ *  clips in expected_shot_ids order (orderFinalClips), regardless of shard completion order, while
+ *  filterScenesByShotIds keeps scenes in their own (bundle) order. The two can differ; feeding captions
+ *  the bundle order would compute each line's cumulative window against the WRONG preceding shots and
+ *  misalign the subtitles. Anchoring the caption scenes to the same shot order the film is assembled in
+ *  keeps buildCaptionCues' cumulative timeline aligned with the cut (#284/#285). Unknown ids are skipped;
+ *  scenes whose id is absent from the sequence are dropped. */
+export function orderScenesByShotIds(scenes: FilmScene[], shotIds: string[]): FilmScene[] {
+  const byId = new Map(scenes.map((s) => [s.shot_id, s]));
+  const out: FilmScene[] = [];
+  for (const id of shotIds) {
+    const s = byId.get(id);
+    if (s) out.push(s);
+  }
+  return out;
+}
+
 /** Stall signal for the UI (#129 / Joan's render-status UX). Surfaced on an IN_PROGRESS render's
  *  output_json so the history UI renders a real "needs attention" state instead of guessing from
  *  updated_at:

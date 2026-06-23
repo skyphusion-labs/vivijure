@@ -4,12 +4,14 @@ import {
   mapRenderOverridesToModuleConfigs,
   normalizeFilmScenes,
   filterScenesByShotIds,
+  orderScenesByShotIds,
   filmJobToPollView,
   filmRowFromJob,
   stallSignal,
 } from "../src/film-render-bridge";
 import type { FilmJob } from "../src/film-orchestrator";
-import { KEYFRAME_STALL_SECONDS } from "../src/film-orchestrator";
+import { KEYFRAME_STALL_SECONDS, orderFinalClips } from "../src/film-orchestrator";
+import { buildCaptionCues } from "../src/captions";
 import type { RegisteredModule } from "../src/modules/types";
 
 describe("isFilmJobId", () => {
@@ -98,6 +100,92 @@ describe("filterScenesByShotIds", () => {
   });
   it("restricts to listed shot ids", () => {
     expect(filterScenesByShotIds(scenes, ["shot_02"])).toEqual([scenes[1]]);
+  });
+});
+
+describe("orderScenesByShotIds (#284/#285: caption scenes must follow the assembled cut order)", () => {
+  const scenes = [
+    { shot_id: "shot_01", prompt: "a", seconds: 4 },
+    { shot_id: "shot_02", prompt: "b", seconds: 4 },
+    { shot_id: "shot_03", prompt: "c", seconds: 4 },
+  ];
+  it("reorders scenes to match the shot-id sequence (not the scenes' own order)", () => {
+    // bundle gives 01,02,03 but the cut is requested as 03,01,02 -> follow the request
+    const out = orderScenesByShotIds(scenes, ["shot_03", "shot_01", "shot_02"]);
+    expect(out.map((s) => s.shot_id)).toEqual(["shot_03", "shot_01", "shot_02"]);
+  });
+  it("drops scenes whose id is not in the sequence (partial-shot scatter)", () => {
+    const out = orderScenesByShotIds(scenes, ["shot_03", "shot_01"]);
+    expect(out.map((s) => s.shot_id)).toEqual(["shot_03", "shot_01"]);
+  });
+  it("skips unknown ids in the sequence", () => {
+    const out = orderScenesByShotIds(scenes, ["shot_99", "shot_02"]);
+    expect(out.map((s) => s.shot_id)).toEqual(["shot_02"]);
+  });
+  it("returns empty for an empty sequence", () => {
+    expect(orderScenesByShotIds(scenes, [])).toEqual([]);
+  });
+});
+
+// THE CRUX (Mackaye review note #1): on the scatter gather the clips assemble in expected_shot_ids
+// order regardless of shard COMPLETION order, and the caption timeline must be computed against that
+// same order or the subtitles drift. This proves the end-to-end chain the gather runs:
+//   out-of-order shard completion -> orderFinalClips(expected order) -> assembled cut
+//   bundle-order scenes          -> orderScenesByShotIds(expected order) -> caption scenes
+//   buildCaptionCues(caption scenes, dialogue) -> windows that line up with the cut.
+describe("scatter caption/clip order alignment (#284/#285 crux)", () => {
+  // expected cut order (what the planner requested); deliberately NOT ascending and NOT the order
+  // the shards finish in, to catch any reliance on completion or bundle order.
+  const expected = ["shot_02", "shot_03", "shot_01"];
+  // bundle stores scenes in a DIFFERENT (ascending) order, with distinct durations so a misordering
+  // would produce visibly wrong cumulative caption windows.
+  const bundleScenes = [
+    { shot_id: "shot_01", prompt: "a", seconds: 5 },
+    { shot_id: "shot_02", prompt: "b", seconds: 2 },
+    { shot_id: "shot_03", prompt: "c", seconds: 3 },
+  ];
+  const dialogue = [
+    { shot_id: "shot_01", text: "third in the cut" },
+    { shot_id: "shot_02", text: "first in the cut" },
+    { shot_id: "shot_03", text: "second in the cut" },
+  ];
+
+  it("assembles in expected order from out-of-order shard completion", () => {
+    // shards report done in completion order 03, 01, 02 (none matches the cut order)
+    const completedClips = [
+      { shot_id: "shot_03", clip_key: "c/shot_03.mp4" },
+      { shot_id: "shot_01", clip_key: "c/shot_01.mp4" },
+      { shot_id: "shot_02", clip_key: "c/shot_02.mp4" },
+    ];
+    const cutScenes = expected.map((shot_id) => ({ shot_id, prompt: "", seconds: 4 }));
+    const cut = orderFinalClips(cutScenes, completedClips);
+    expect(cut.map((c) => c.shot_id)).toEqual(expected);
+  });
+
+  it("captions line up with the assembled cut even when bundle order differs", () => {
+    const captionScenes = orderScenesByShotIds(bundleScenes, expected);
+    // sanity: caption scenes follow the cut, not the bundle
+    expect(captionScenes.map((s) => s.shot_id)).toEqual(expected);
+
+    const cues = buildCaptionCues(captionScenes, dialogue);
+    // cut is 02(2s) -> 03(3s) -> 01(5s). Cumulative windows:
+    //   shot_02 "first":  [0, 2)
+    //   shot_03 "second": [2, 5)
+    //   shot_01 "third":  [5, 10)
+    expect(cues).toEqual([
+      { start: 0, end: 2, text: "first in the cut" },
+      { start: 2, end: 5, text: "second in the cut" },
+      { start: 5, end: 10, text: "third in the cut" },
+    ]);
+  });
+
+  it("REGRESSION guard: bundle-order scenes would misalign (proves the fix is load-bearing)", () => {
+    // Feeding raw bundle order (the pre-fix behavior) yields windows that do NOT match the cut:
+    // bundle is 01(5)->02(2)->03(3), so "first in the cut" (shot_02) would land at [5,7) not [0,2).
+    const wrong = buildCaptionCues(bundleScenes, dialogue);
+    const firstCue = wrong.find((c) => c.text === "first in the cut");
+    expect(firstCue).toEqual({ start: 5, end: 7, text: "first in the cut" });
+    // i.e. without orderScenesByShotIds the first spoken line drifts 5s late -- the bug we closed.
   });
 });
 

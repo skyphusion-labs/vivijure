@@ -923,17 +923,45 @@ async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
 // container was unreachable). The chain is fail-safe, so `degraded` is the only signal that requested
 // cards were not applied; applyFilmFinish records it on the job rather than dropping it.
 
-async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
-  if (!job.film_key) return;
+/** Inputs for runFilmFinish -- job-shape-agnostic so BOTH the single-film path (advanceFilmJob) and the
+ *  scatter gather can run the film.finish chain on an assembled+muxed film (#284/#285). */
+export interface RunFilmFinishInput {
+  film_key: string;
+  scenes: FilmScene[];
+  dialogue_lines?: DialogueLine[];
+  film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
+  film_finish_config?: Record<string, Record<string, unknown>>;
+  bundle_key: string;
+  project: string;
+  job_id: string;
+  user_email?: string;
+}
+export interface RunFilmFinishResult {
+  ran: boolean;      // false when no film.finish module is installed (caller leaves its state untouched)
+  film_key: string;  // carded film key, or the input key on no-op / passthrough
+  applied: string[];
+  errors: string[];
+  steps?: string[];
+  degraded?: string;
+}
+
+/** Run the film.finish chain (subtitle / title / credit cards) on an assembled+muxed film. Reused by the
+ *  single-film path AND the scatter gather. Captions are FILM-LEVEL (buildCaptionCues computes each
+ *  line's start from the cumulative duration of preceding shots), so the caller passes the FULL scenes +
+ *  dialogue_lines in assembled (shot) order. FAIL-SAFE: a module soft-degrade / failure passes the film
+ *  through (recorded in degraded), never drops it. */
+export async function runFilmFinish(env: Env, input: RunFilmFinishInput): Promise<RunFilmFinishResult> {
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
-  if (servingForHook(modules, "film.finish").length === 0) return; // nothing installed -> no-op
-  const outKey = job.film_key.replace(/\.mp4$/i, "") + "-titled-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+  if (servingForHook(modules, "film.finish").length === 0) {
+    return { ran: false, film_key: input.film_key, applied: [], errors: [] }; // nothing installed -> no-op
+  }
+  const outKey = input.film_key.replace(/\.mp4$/i, "") + "-titled-" + crypto.randomUUID().slice(0, 8) + ".mp4";
   // A soft .srt sidecar for the subtitle module's sidecar / both modes (its own presigned PUT). Cheap
   // to presign whether or not a subtitle module is installed; ignored by film-titles.
   const sidecarKey = outKey.replace(/\.mp4$/i, "") + ".srt";
   const [videoUrl, outputUrl, sidecarUrl] = await Promise.all([
-    presignR2Get(env, job.film_key, 1800),
+    presignR2Get(env, input.film_key, 1800),
     presignR2Put(env, outKey, 1800),
     presignR2Put(env, sidecarKey, 1800),
   ]);
@@ -941,15 +969,15 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   // windows (real beat-trimmed durations from the bundle, authored seconds as fallback) carrying each
   // speaking shot's line. Empty when the film has no dialogue -> the subtitle module no-ops. Narration
   // is NOT captioned (a single film-level track with no per-line timing); see src/captions.ts.
-  const durations = await readShotDurationsFromBundle(env, job.bundle_key);
-  const captions = buildCaptionCues(job.scenes, job.dialogue_lines ?? [], durations);
+  const durations = await readShotDurationsFromBundle(env, input.bundle_key);
+  const captions = buildCaptionCues(input.scenes, input.dialogue_lines ?? [], durations);
   const seed: FilmFinishInput = {
-    film_key: job.film_key,
+    film_key: input.film_key,
     video_url: videoUrl,
     output_url: outputUrl,
     output_key: outKey,
-    title: job.film_titles?.title,
-    credits: job.film_titles?.credits,
+    title: input.film_titles?.title,
+    credits: input.film_titles?.credits,
     captions,
     sidecar_url: sidecarUrl,
     sidecar_key: sidecarKey,
@@ -964,11 +992,11 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
     modules,
     "film.finish",
     seed,
-    { project: job.project, job_id: job.film_id, user_email: job.user_email },
+    { project: input.project, job_id: input.job_id, user_email: input.user_email },
     {
       nextInput: async (prev) => {
-        const prevKey = prev?.film_key ?? job.film_key!;
-        const stepOutKey = job.film_key!.replace(/\.mp4$/i, "") + "-ff-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+        const prevKey = prev?.film_key ?? input.film_key;
+        const stepOutKey = input.film_key.replace(/\.mp4$/i, "") + "-ff-" + crypto.randomUUID().slice(0, 8) + ".mp4";
         const stepSidecarKey = stepOutKey.replace(/\.mp4$/i, "") + ".srt";
         const [stepVideoUrl, stepOutputUrl, stepSidecarUrl] = await Promise.all([
           presignR2Get(env, prevKey, 1800),
@@ -988,31 +1016,42 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
       // Per-module planner config (subtitle styling/mode/enabled, film-titles font/color/bg), clamped
       // by dispatchChain against each module's schema. Without this the film.finish chain dispatched with
       // {} and every styling/toggle knob was dead from the planner (the dead-config pattern, now closed).
-      configFor: (name) => job.film_finish_config?.[name],
+      configFor: (name) => input.film_finish_config?.[name],
     },
   );
   // Record the chain outcome so a degraded or failed film.finish is observable state, not a silent green.
   // The module soft-degrades (passthrough) on a container failure and still returns ok:true, so the only
   // signal that cards were NOT applied is `output.degraded`; surface it (and any chain errors) here. (#207)
   const out = result.output;
-  // dispatchChain records a module's soft-degrade (ok:true but it passed the film through) centrally in
-  // result.degraded ("<module>: <reason>"); collapse it onto the job so a degraded run is observable
-  // state, not a silent green. A degrade means cards were requested but NOT applied.
   const degraded = result.degraded.length > 0 ? result.degraded.join("; ") : undefined;
-  job.film_finish = {
-    applied: result.applied,
-    errors: result.errors,
-    steps: out?.applied,
-    degraded,
-  };
-  if (result.errors.length > 0) {
-    console.warn(`film.finish errors for ${job.film_id}: ${result.errors.join("; ")}`);
+  const finalKey = typeof out?.film_key === "string" && out.film_key.length > 0 ? out.film_key : input.film_key;
+  return { ran: true, film_key: finalKey, applied: result.applied, errors: result.errors, steps: out?.applied, degraded };
+}
+
+/** Single-film film.finish: thin wrapper over runFilmFinish that folds the outcome back onto the job
+ *  (behavior-identical to the pre-refactor inline version -- no-op leaves the job untouched). */
+async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
+  if (!job.film_key) return;
+  const r = await runFilmFinish(env, {
+    film_key: job.film_key,
+    scenes: job.scenes,
+    dialogue_lines: job.dialogue_lines,
+    film_titles: job.film_titles,
+    film_finish_config: job.film_finish_config,
+    bundle_key: job.bundle_key,
+    project: job.project,
+    job_id: job.film_id,
+    user_email: job.user_email,
+  });
+  if (!r.ran) return; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
+  if (r.errors.length > 0) {
+    console.warn(`film.finish errors for ${job.film_id}: ${r.errors.join("; ")}`);
   }
-  if (degraded) {
-    console.warn(`film.finish degraded for ${job.film_id}: ${degraded} -- film shipped WITHOUT cards`);
+  if (r.degraded) {
+    console.warn(`film.finish degraded for ${job.film_id}: ${r.degraded} -- film shipped WITHOUT cards`);
   }
-  const next = out?.film_key;
-  if (typeof next === "string" && next.length > 0) job.film_key = next;
+  job.film_finish = { applied: r.applied, errors: r.errors, steps: r.steps, degraded: r.degraded };
+  job.film_key = r.film_key;
 }
 
 async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
