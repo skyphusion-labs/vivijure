@@ -70,25 +70,32 @@ jobs:
       # [[services]] target the list omits, turning the next core deploy into a dangling-binding
       # failure. Deploying every module dir closes both gaps. If a module ever must be skipped, add
       # its dir name to EXCLUDE below (explicit, reviewable) -- do NOT reintroduce an include-list.
+      # POSIX sh ONLY: this job runs in `container: node:22-alpine`, whose /bin/sh is BusyBox ash, and
+      # GitHub's default `run:` shell there is `sh` (not bash). No bash-isms -- no `shopt`, no `arr=()`
+      # arrays, no `${#arr[@]}` -- or the step dies with exit 127 (v0.6.1 failed exactly this way:
+      # `shopt: not found`). A plain glob `for` loop is portable; an unmatched glob stays literal, so
+      # we test `[ -f "$toml" ]` to handle the empty case.
       - name: Deploy module workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -euo pipefail
+          set -eu
           # Explicit, reviewable skip-list (space-separated module DIR names). Empty = deploy all.
+          # DO NOT replace this with a hardcoded include-list: that is what drifted (v0.6.0 omitted
+          # 9 modules incl. notify-email, which served config_schema:null). Deploy-by-default.
           EXCLUDE=""
-          shopt -s nullglob
-          tomls=(modules/*/wrangler.toml)
-          if [ ${#tomls[@]} -eq 0 ]; then
-            echo "::error::no modules/*/wrangler.toml found -- refusing to deploy core with zero modules"
-            exit 1
-          fi
           deployed=0
-          for toml in "${tomls[@]}"; do
-            module="$(basename "$(dirname "$toml")")"
+          found=0
+          for toml in modules/*/wrangler.toml; do
+            # Unmatched glob stays literal in POSIX sh; skip the non-file sentinel.
+            [ -f "$toml" ] || continue
+            found=$((found + 1))
+            module=$(basename "$(dirname "$toml")")
             skip=0
-            for ex in $EXCLUDE; do [ "$module" = "$ex" ] && skip=1; done
+            for ex in $EXCLUDE; do
+              [ "$module" = "$ex" ] && skip=1
+            done
             if [ "$skip" -eq 1 ]; then
               echo "Skipping vivijure-module-${module} (in EXCLUDE)"
               continue
@@ -97,7 +104,11 @@ jobs:
             npx wrangler deploy -c "$toml"
             deployed=$((deployed + 1))
           done
-          echo "Deployed ${deployed} module worker(s) of ${#tomls[@]} module dir(s)."
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no modules/*/wrangler.toml found -- refusing to deploy core with zero modules"
+            exit 1
+          fi
+          echo "Deployed ${deployed} module worker(s) of ${found} module dir(s)."
 
       # Apply D1 schema migrations BEFORE the core deploys, so new code never runs against an old
       # schema. Idempotent: wrangler only runs untracked migrations. Additive migrations only; a
