@@ -9,7 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
-import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput } from "./modules/types";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, MasterInput, MasterOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
@@ -60,7 +60,7 @@ export interface FilmJob {
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>; // per finish module (keyed by module name), validated at enterFinishPhase
   keyframe_binding: string | null;
-  phase: "keyframe" | "clips" | "dialogue" | "finish" | "assemble" | "mux" | "done" | "failed";
+  phase: "keyframe" | "clips" | "dialogue" | "finish" | "assemble" | "master" | "mux" | "done" | "failed";
   keyframe_poll?: string;
   clip_job_id?: string;
   finish_shots?: FinishShot[];
@@ -77,7 +77,23 @@ export interface FilmJob {
   cast_loras?: Record<string, number>;
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   silent_film_key?: string; // silent concat output before optional audio mux
-  audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble
+  audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble (the `master` chain polishes
+                      // THIS key in place: each master step rewrites it to the mastered bed before mux)
+  // Film-level audio mastering (the `master` chain): polish the assembled film's audio BED -- music
+  // upscale (soxr) + LUFS loudness -- AFTER the mix is built (assemble) and BEFORE the final mux. Set
+  // only when there IS an audio_key AND a master module is installed; absent => the bed is muxed as-is.
+  // FAIL-SAFE, like film.finish: a step that fails / degrades passes the CURRENT bed through (records a
+  // reason in `degraded`), never failing the render -- a polish miss must never drop a fully-rendered
+  // film (the #249 / #77 discipline). `chain` is the master module bindings in ui.order; `idx` walks
+  // them; `poll` holds the in-flight step's token; `attempts` is its bounded transient-retry counter.
+  master?: {
+    chain: string[];     // master module env-binding names, in ui.order
+    idx: number;         // current chain step
+    poll?: string;       // in-flight step poll token
+    attempts?: number;   // transient-retry counter for the CURRENT step (reset when the step advances)
+    applied: string[];   // accumulated applied tags across the chain (e.g. ["music-upscale:soxr48k"])
+    degraded: string[];  // per-step soft-degrade reasons ("<binding>: <reason>"); a passthrough is never silent
+  };
   // Opening title + end-credit text for the film.finish chain (title / credit cards). Absent -> no
   // cards; the film.finish module passes the film through unchanged. (#190)
   film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
@@ -930,15 +946,141 @@ async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
   await transitionToDone(env, job);
 }
 
+// --------------------------------------------------------------------------- master (pre-mux audio)
+
+/** The film-level `master` chain state carried on a FilmJob (the master module bindings in ui.order, the
+ *  step cursor, the in-flight poll token, and the accumulated applied / degraded record). */
+export type MasterState = NonNullable<FilmJob["master"]>;
+
+// Bounded transient-retry for a master step, the same discipline as a finish step: a transport blip (the
+// module worker momentarily unreachable / a 5xx) re-dispatches the step under the cap. On EXHAUSTION the
+// step soft-degrades (passthrough) -- it does NOT fail the render, because master is a polish step (#249/#77).
+export const MASTER_STEP_MAX_ATTEMPTS = 3;
+
+// How long the master phase may sit before a frozen step (a RunPod envelope stuck IN_PROGRESS so /poll
+// pends forever) is soft-degraded to a passthrough and the chain advances. Generous: a CPU master of a
+// few-minute bed is well done by now. NOT a hard FAIL (unlike PHASE_HARD_DEADLINE_SECONDS) -- a stuck
+// polish must degrade to the un-mastered bed and still ship the film, never drop it.
+export const MASTER_STALL_SECONDS = 15 * 60;
+
+/** Pure: total film length (seconds) from the scenes -- the optional `seconds` hint a master module gets
+ *  (it probes the bed if absent). Returns undefined for a job with no scene durations. */
+export function filmSeconds(job: Pick<FilmJob, "scenes">): number | undefined {
+  const total = (job.scenes || []).reduce((a, s) => a + (Number(s.seconds) || 0), 0);
+  return total > 0 ? total : undefined;
+}
+
+/** Pure: fold one master step's SUCCESS output into the chain state, returning the bed key to carry to
+ *  the next step (and the mux). Advances idx, resets the step's poll + attempts. `applied` tags
+ *  accumulate; a module soft-degrade (ok:true + output.degraded -- it passed the bed through because it
+ *  could not do the work) is recorded against the step binding, so a passthrough is never silent (#77).
+ *  Returns the input bed unchanged when the module returned no usable audio_key. */
+export function applyMasterOutput(m: MasterState, prevKey: string, out: MasterOutput): string {
+  const binding = m.chain[m.idx] ?? "";
+  const carried = typeof out.audio_key === "string" && out.audio_key.length > 0 ? out.audio_key : prevKey;
+  for (const a of out.applied || []) m.applied.push(a);
+  if (typeof out.degraded === "string" && out.degraded.length > 0) m.degraded.push(`${binding}: ${out.degraded}`);
+  m.idx += 1;
+  m.poll = undefined;
+  m.attempts = 0;
+  return carried;
+}
+
+/** Pure: record a step that could NOT run at all (unbound module, a terminal failure, or a stall) as a
+ *  soft-degrade and advance the cursor. The bed carries through unchanged -- the render never fails on a
+ *  master miss (#249 / #77). */
+export function degradeMasterStep(m: MasterState, reason: string): void {
+  const binding = m.chain[m.idx] ?? "";
+  m.degraded.push(`${binding}: ${reason}`);
+  m.idx += 1;
+  m.poll = undefined;
+  m.attempts = 0;
+}
+
+/** Pure: true once every master step has run (or degraded). */
+export function masterChainDone(m: MasterState): boolean {
+  return m.idx >= m.chain.length;
+}
+
+/** After the silent film is assembled and an audio bed exists: set up the `master` chain (if any master
+ *  module is installed) to polish the bed before mux. No master module -> straight to mux with the bed
+ *  as-is. Mirrors enterDialogueOrFinish -- it kicks the phase and lets advanceMasterPhase drive it. */
+async function enterMasterOrMux(env: Env, job: FilmJob): Promise<void> {
+  const envRec = env as unknown as Record<string, unknown>;
+  const serving = servingForHook(await discoverModules(envRec), "master"); // ui.order; the full master chain
+  const chain = serving.map((mod) => mod.binding);
+  if (!chain.length) { job.phase = "mux"; await enterMuxPhase(env, job); return; } // no master installed: mux as-is
+  job.master = { chain, idx: 0, applied: [], degraded: [] };
+  job.phase = "master";
+  await advanceMasterPhase(env, job);
+}
+
+/** Drive the master chain over the film's audio bed: submit the current step or poll the in-flight one,
+ *  folding each mastered bed back into job.audio_key. FAIL-SAFE -- an unbound / failed / stalled step
+ *  soft-degrades (passes the CURRENT bed through, records the reason) and the chain advances; the render
+ *  NEVER fails on a master miss (#249 / #77). When the chain is exhausted, record the outcome and mux.
+ *  One network round-trip (submit OR poll) per step per tick: a synchronous step folds and continues in
+ *  the same tick; an async step parks on its poll token and returns (the next advanceFilmJob re-enters). */
+async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
+  const m = job.master;
+  if (!m || !job.audio_key) { job.phase = "mux"; await enterMuxPhase(env, job); return; } // defensive: nothing to master
+  const envRec = env as unknown as Record<string, unknown>;
+  const seconds = filmSeconds(job);
+
+  // A step in flight can freeze (a RunPod envelope stuck IN_PROGRESS pends forever). If the phase has sat
+  // past the stall ceiling with a step still pending, soft-degrade THIS step (passthrough) and move on --
+  // a stuck polish ships the un-mastered bed, it never hangs the render or drops the film.
+  if (m.poll && phaseAgeSeconds(job) >= MASTER_STALL_SECONDS) {
+    console.warn(`film ${job.film_id}: master step ${m.chain[m.idx]} stalled; passing the bed through`);
+    degradeMasterStep(m, "stalled");
+  }
+
+  while (!masterChainDone(m)) {
+    const fetcher = asFetcher(envRec[m.chain[m.idx]]);
+    if (!fetcher) { degradeMasterStep(m, "module not bound"); continue; }
+    const req = {
+      hook: "master" as const,
+      input: { film_id: job.film_id, audio_key: job.audio_key, seconds } as MasterInput,
+      config: {},
+      context: { project: job.project, job_id: job.film_id, user_email: job.user_email },
+    };
+    if (!m.poll) {
+      const r = await invokeModule<MasterInput, MasterOutput>(fetcher, req);
+      if (!r.ok) {
+        const d = classifyFinishRetry(r.error, m.attempts ?? 0, MASTER_STEP_MAX_ATTEMPTS);
+        if (d.action === "retry") { m.attempts = d.attempts; return; } // transient: re-submit next tick
+        degradeMasterStep(m, `invoke failed: ${r.error}`); continue;     // terminal: passthrough + advance
+      }
+      if ((r as { pending?: boolean }).pending) { m.poll = (r as { poll: string }).poll; m.attempts = 0; return; }
+      if ("output" in r) { job.audio_key = applyMasterOutput(m, job.audio_key, r.output as MasterOutput); continue; }
+      degradeMasterStep(m, "module returned neither output nor a poll token"); continue;
+    }
+    const p = await pollModule<MasterOutput>(fetcher, { poll: m.poll });
+    if (p.ok && !(p as { pending?: boolean }).pending) {
+      job.audio_key = applyMasterOutput(m, job.audio_key, (p as { output: MasterOutput }).output); continue;
+    }
+    if (p.ok) return; // still mastering -- poll again next tick
+    const d = classifyFinishRetry(p.error, m.attempts ?? 0, MASTER_STEP_MAX_ATTEMPTS);
+    if (d.action === "retry") { m.attempts = d.attempts; return; } // transient poll blip: re-poll next tick
+    degradeMasterStep(m, `poll failed: ${p.error}`); // terminal: passthrough + advance
+  }
+
+  // Chain exhausted: the (maybe mastered) bed is in job.audio_key. A degrade is observable, not a silent green.
+  if (m.degraded.length) console.warn(`film ${job.film_id}: master degraded -- ${m.degraded.join("; ")}`);
+  job.phase = "mux";
+  await enterMuxPhase(env, job);
+}
+
 async function finishAssembledFilm(env: Env, job: FilmJob, silentKey: string): Promise<void> {
   job.silent_film_key = silentKey;
-  if (job.audio_key) {
-    job.phase = "mux";
-    await enterMuxPhase(env, job);
-  } else {
+  if (!job.audio_key) {
     job.film_key = silentKey;
     await transitionToDone(env, job);
+    return;
   }
+  // There IS an audio bed: master it (music upscale + loudness) if a master module is installed, then mux.
+  // enterMasterOrMux soft-degrades to a straight mux when no master module is present (or the polish fails).
+  await enterMasterOrMux(env, job);
 }
 
 async function enterAssemblePhase(
@@ -1425,7 +1567,14 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
     await putFilm(env, job);
   }
 
-  // Phase 5: mux the audio bed onto the silent film via video-finish (VPC remuxAudioOnly).
+  // Phase 4.5: master the assembled film's audio bed (music upscale + loudness) before mux. Pollable
+  // like dialogue; FAIL-SAFE -- a master miss passes the bed through and proceeds to mux (#249 / #77).
+  if (job.phase === "master") {
+    await advanceMasterPhase(env, job);
+    await putFilm(env, job);
+  }
+
+  // Phase 5: mux the (mastered) audio bed onto the silent film via video-finish (VPC remuxAudioOnly).
   if (job.phase === "mux") {
     await enterMuxPhase(env, job);
     await putFilm(env, job);

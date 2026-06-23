@@ -5,6 +5,7 @@
     { hook: "keyframe", title: "Keyframe", pickOne: true },
     { hook: "motion.backend", title: "Motion", pickOne: true },
     { hook: "finish", title: "Finish", chain: true },
+    { hook: "master", title: "Audio master", chain: true },
   ];
 
   function moduleLabel(mod) {

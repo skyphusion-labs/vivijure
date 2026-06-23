@@ -1,0 +1,20 @@
+# audio-master module worker (vivijure-module/1): film-level audio mastering -- music upscale (soxr 48k
+# + air lift) + LUFS loudness normalization -- on the dedicated vivijure-audio-master RunPod endpoint
+# (CPU ffmpeg, no GPU). Bound into the core as MODULE_AUDIO_MASTER; the registry discovers it from
+# GET /module.json.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core. This worker
+# holds no R2 creds -- the endpoint reads/writes the shared bucket by key itself.
+
+name = "vivijure-module-audio-master"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# Secrets, set AFTER deploy (never committed):
+#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/audio-master/wrangler.toml
+#   ! npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/audio-master/wrangler.toml
