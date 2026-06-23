@@ -17,15 +17,15 @@ export interface LoraRef {
   scale: number;
 }
 
-// Duration guardrail. The endpoint takes a free integer `duration` (default 5); pricing scales with it
-// (~$0.35 for 5s, ~$0.56 for 8s). The contract hands a per-shot `seconds`; round it to a whole second
-// and clamp to [1, 10] -- never below 1 (a 0s job is meaningless), and capped at 10s as a COST
-// guardrail so a malformed storyboard cannot bill an unbounded clip. Real shots sit well inside this.
-export const MIN_DURATION = 1;
-export const MAX_DURATION = 10;
+// Duration snap. The wan-2-2-t2v-720-lora endpoint accepts ONLY a discrete set of durations (seconds):
+// it 400s on anything else ("invalid request body: field \"duration\" must be one of [5, 8]"). The
+// contract hands a per-shot `seconds`; we SNAP it to the nearest allowed value (<=6 -> 5, else 8) so the
+// endpoint never rejects the job. The snap is RECORDED at the call site (submit), never a silent change
+// to the user's timing (#279). Pricing scales with duration (~$0.35 for 5s, ~$0.56 for 8s).
+export const ALLOWED_DURATIONS = [5, 8] as const;
 export function clampDuration(seconds: number): number {
   const n = Math.round(Number(seconds) || 5);
-  return Math.max(MIN_DURATION, Math.min(MAX_DURATION, n));
+  return n <= 6 ? 5 : 8; // snap to the endpoint's allowed set {5, 8}
 }
 
 // Default LoRA strength when an entry omits `scale`. 1.0 = the adapter's trained strength.
