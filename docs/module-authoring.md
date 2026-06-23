@@ -22,7 +22,7 @@ The core discovers your module from a `MODULE_<NAME>` service binding, reads you
 you by hook, and renders your stage in the studio UI from your `config_schema`. It invokes you when a
 render reaches your hook. **The core never knows who answers** -- it just asks the hook.
 
-## The hooks (vivijure-module/1)
+## The hooks (vivijure-module/2)
 
 | Hook | Purpose | Cardinality |
 |---|---|---|
@@ -65,7 +65,7 @@ need from [`src/modules/types.ts`](../src/modules/types.ts): `MODULE_API`, the m
 const MANIFEST: ModuleManifest = {
   name: "plan-enhance",
   version: "0.1.0",
-  api: MODULE_API,                       // "vivijure-module/1"
+  api: MODULE_API,                       // "vivijure-module/2"
   hooks: ["plan.enhance"],
   provides: [{ id: "auto-direction", label: "LLM auto-direction" }],
   config_schema: {                       // the UI renders a control per field
@@ -165,7 +165,7 @@ If that is green, your module will plug into the core cleanly.
 
 ## Checklist
 
-- [ ] `GET /module.json` returns a manifest with `api: "vivijure-module/1"`, a `name`, a `version`,
+- [ ] `GET /module.json` returns a manifest with `api: "vivijure-module/2"` (or `/1`, still accepted), a `name`, a `version`,
       and only known `hooks`.
 - [ ] `config_schema` fields each have a valid `type` and a `default` consistent with it.
 - [ ] `POST /invoke` returns HTTP 200 with a well-formed `InvokeResponse` for every input, including
@@ -190,7 +190,7 @@ The shape is identical: serve `GET /module.json` and `POST /invoke`. A minimal e
 import json
 from workers import Response, WorkerEntrypoint
 
-MANIFEST = {"name": "my-module", "version": "0.1.0", "api": "vivijure-module/1", "hooks": ["plan.enhance"]}
+MANIFEST = {"name": "my-module", "version": "0.1.0", "api": "vivijure-module/2", "hooks": ["plan.enhance"]}
 
 def _json(body, status=200):
     return Response(json.dumps(body), status=status, headers={"content-type": "application/json"})

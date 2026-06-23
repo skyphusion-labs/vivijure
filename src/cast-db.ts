@@ -2,13 +2,11 @@
 // survives across storyboards / renders so a character drawn once is
 // reusable in every project.
 //
-// The studio is single-user, so rows are scoped on the cast id (the
-// primary key) alone. The user_email column is retained (legacy
-// provenance, written as the STUDIO_OWNER sentinel on insert) but is no
-// longer a filter: nothing reads it as an access gate.
+// The studio is single-operator, so rows are scoped on the cast id (the primary key) alone;
+// there is no per-user tenancy. The legacy identity column was removed in the identity strip
+// (memory: vivijure-user-email-strip); slugs are globally unique.
 
 import type { Env } from "./env";
-import { STUDIO_OWNER } from "./shared";
 
 export interface CastRefImage {
   key: string;
@@ -19,7 +17,6 @@ export type LoraStatus = "idle" | "training" | "ready" | "failed";
 
 export interface CastMember {
   id: number;
-  user_email: string;
   slug: string;
   name: string;
   bible: string | null;
@@ -46,7 +43,6 @@ export interface CastMember {
 
 interface CastRow {
   id: number;
-  user_email: string;
   slug: string;
   name: string;
   bible: string | null;
@@ -91,7 +87,6 @@ function normalizeLoraStatus(raw: string | null): LoraStatus {
 function rowToCast(row: CastRow): CastMember {
   return {
     id: row.id,
-    user_email: row.user_email,
     slug: row.slug,
     name: row.name,
     bible: row.bible,
@@ -147,7 +142,7 @@ const CAST_LIST_LIMIT = 500;
 
 export async function listCast(env: Env): Promise<CastMember[]> {
   const result = await env.DB.prepare(
-    `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
+    `SELECT id, slug, name, bible, portrait_key, portrait_mime,
             ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
        FROM cast_members
@@ -161,7 +156,7 @@ export async function listCast(env: Env): Promise<CastMember[]> {
 
 export async function getCastById(env: Env, id: number): Promise<CastMember | null> {
   const row = await env.DB.prepare(
-    `SELECT id, user_email, slug, name, bible, portrait_key, portrait_mime,
+    `SELECT id, slug, name, bible, portrait_key, portrait_mime,
             ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
        FROM cast_members
@@ -179,16 +174,15 @@ export async function createCast(
 ): Promise<CastMember> {
   const baseSlug = slugifyCharacter(input.name);
   const slug = await allocateCastSlug(env, baseSlug);
-  // user_email is legacy provenance; the column is NOT NULL, so the insert stamps the
-  // STUDIO_OWNER sentinel. The (user_email, slug) unique index keeps slugs studio-unique.
+  // Slugs are globally unique (idx_cast_slug) -- single operator, no per-user namespace.
   const result = await env.DB.prepare(
-    `INSERT INTO cast_members (user_email, slug, name, bible)
-     VALUES (?, ?, ?, ?)
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+    `INSERT INTO cast_members (slug, name, bible)
+     VALUES (?, ?, ?)
+     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
-    .bind(STUDIO_OWNER, slug, input.name, input.bible ?? null)
+    .bind(slug, input.name, input.bible ?? null)
     .first<CastRow>();
   if (!result) throw new Error("createCast: INSERT...RETURNING produced no row");
   return rowToCast(result);
@@ -221,7 +215,7 @@ export async function updateCast(
   const result = await env.DB.prepare(
     `UPDATE cast_members SET ${fields.join(", ")}
       WHERE id = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -253,7 +247,7 @@ export async function setPortrait(
     `UPDATE cast_members
         SET portrait_key = ?, portrait_mime = ?, updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -267,7 +261,7 @@ export async function clearPortrait(env: Env, id: number): Promise<CastMember | 
     `UPDATE cast_members
         SET portrait_key = NULL, portrait_mime = NULL, updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -278,7 +272,7 @@ export async function clearPortrait(env: Env, id: number): Promise<CastMember | 
 
 // Full cast row column list returned by the CAS array-mutation helper (matches getCastById).
 const CAST_ROW_COLUMNS =
-  `id, user_email, slug, name, bible, portrait_key, portrait_mime,
+  `id, slug, name, bible, portrait_key, portrait_mime,
    ref_keys_json, source_keys_json, created_at, updated_at,
    lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`;
 
@@ -429,7 +423,7 @@ export async function setLoraJob(
             lora_error = NULL,
             updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
                lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -452,7 +446,7 @@ export async function markLoraReady(
             lora_error = NULL,
             updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
                lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -473,7 +467,7 @@ export async function markLoraFailed(
             lora_job_id = NULL,
             updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, user_email, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
                lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )

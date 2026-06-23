@@ -1,8 +1,9 @@
-// v0.139.0: User Preferences. The first per-user settings store. One row per
-// Cloudflare-Access email in the `user_prefs` table, holding a JSON blob so new
-// preferences can be added without a schema change. Reads always return the full
-// shape (missing/invalid keys fall back to defaults), so callers never branch on
-// "is this pref set". Writes are a shallow merge over the current prefs.
+// v0.139.0: User Preferences. Vivijure is a SINGLE-OPERATOR studio, so this is a GLOBAL
+// settings singleton -- one row (id = 1) in the `user_prefs` table holding a JSON blob, so new
+// preferences can be added without a schema change. (The legacy identity key was dropped in the
+// identity strip; memory: vivijure-user-email-strip.) Reads always return the full shape
+// (missing/invalid keys fall back to defaults), so callers never branch on "is this pref set".
+// Writes are a shallow merge over the current prefs.
 //
 // The normalize/merge functions are pure so vitest can assert the contract
 // without a D1 binding (matches the renders-db / runpod-submit split: pure
@@ -45,9 +46,8 @@ export function mergeUserPrefs(current: UserPrefs, patch: unknown): UserPrefs {
   return normalizeUserPrefs({ ...current, ...patchObj });
 }
 
-export async function getUserPrefs(env: Env, userEmail: string): Promise<UserPrefs> {
-  const row = await env.DB.prepare("SELECT prefs_json FROM user_prefs WHERE user_email = ?")
-    .bind(userEmail)
+export async function getUserPrefs(env: Env): Promise<UserPrefs> {
+  const row = await env.DB.prepare("SELECT prefs_json FROM user_prefs WHERE id = 1")
     .first<{ prefs_json: string }>();
   if (!row) return { ...DEFAULT_USER_PREFS };
   let parsed: unknown = null;
@@ -59,20 +59,16 @@ export async function getUserPrefs(env: Env, userEmail: string): Promise<UserPre
   return normalizeUserPrefs(parsed);
 }
 
-export async function setUserPrefs(
-  env: Env,
-  userEmail: string,
-  patch: unknown,
-): Promise<UserPrefs> {
-  const current = await getUserPrefs(env, userEmail);
+export async function setUserPrefs(env: Env, patch: unknown): Promise<UserPrefs> {
+  const current = await getUserPrefs(env);
   const next = mergeUserPrefs(current, patch);
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
-    `INSERT INTO user_prefs (user_email, prefs_json, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(user_email) DO UPDATE SET
+    `INSERT INTO user_prefs (id, prefs_json, updated_at) VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
        prefs_json = excluded.prefs_json, updated_at = excluded.updated_at`,
   )
-    .bind(userEmail, JSON.stringify(next), now)
+    .bind(JSON.stringify(next), now)
     .run();
   return next;
 }

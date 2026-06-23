@@ -83,7 +83,6 @@ export interface StartScatterArgs {
   motion_backend?: string;
   audio_key?: string;
   film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
-  user_email: string;
   project_id?: number | null;
 }
 
@@ -97,7 +96,7 @@ async function resolveDialogueLines(
   shotIds: string[],
 ): Promise<DialogueLine[]> {
   if (args.project_id == null) return [];
-  const project = await getProjectById(env, args.project_id, args.user_email);
+  const project = await getProjectById(env, args.project_id);
   if (!project?.last_storyboard) return [];
   return buildDialogueLines(project.last_storyboard, voices, shotIds);
 }
@@ -157,7 +156,6 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     motion_backend: motionBackend,
     audio_key: stagedAudio,
     has_dialogue: dialogueLines.length > 0,
-    user_email: args.user_email,
     scenes,
     dialogue_lines: dialogueLines,
     film_titles: args.film_titles,
@@ -191,7 +189,6 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
       clips_only: true,
       pretrained_loras: shard.pretrainedLoras,
       cast_loras: castIds,
-      user_email: args.user_email,
       dialogue_lines: shardDialogue,
     });
     scatterJob.shard_film_ids.push(film.film_id);
@@ -331,7 +328,6 @@ async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
     bundle_key: job.bundle_key,
     project: job.project,
     job_id: job.scatter_id,
-    user_email: job.user_email,
   });
   if (!r.ran) { job.film_finish = { applied: [], errors: [] }; return; } // no film.finish module -> mark + skip
   if (r.errors.length > 0) console.warn(`scatter film.finish errors for ${job.scatter_id}: ${r.errors.join("; ")}`);

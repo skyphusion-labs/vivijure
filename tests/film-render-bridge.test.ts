@@ -300,7 +300,6 @@ describe("filmRowFromJob (#164 -- film jobs in render history)", () => {
     keyframe_binding: "MODULE_KEYFRAME",
     phase: "clips",
     created_at: Date.now() - 60_000,
-    user_email: "joan@skyphusion.org",
   };
 
   it("maps a full render job to a renders row (tier defaults to final)", () => {

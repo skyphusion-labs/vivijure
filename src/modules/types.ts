@@ -1,4 +1,4 @@
-// The Vivijure module contract (vivijure-module/1).
+// The Vivijure module contract (vivijure-module/2).
 //
 // This is the typed boundary between the studio CORE and the opt-in MODULE workers that plug into
 // it. The core invokes hooks; it does not know who answers. A module declares which hooks it serves
@@ -8,7 +8,16 @@
 // it must stay portable (a module in another repo vendors this exact contract).
 
 /** The contract version a module targets. Bumped only on a breaking change to these shapes. */
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
+// Contract versions the host + conformance ACCEPT. The host is /2 (the identity strip dropped the
+// legacy per-operator identity field from NotifyInput + InvokeContext -- a breaking narrowing for a
+// consumer that read it, so change-control bumps the version). /1 is accepted TRANSITIONALLY so
+// first-party /1 modules keep loading while they migrate: they never read that field, so a /2 host
+// (which sends none) is functionally fine for them. A simultaneous 28-module cutover would be riskier.
+export type ModuleApi = "vivijure-module/1" | "vivijure-module/2";
+// A SET of currently-supported contract epochs (a deprecation window), not a brittle exact-match:
+// the host loads any module whose api is in the set, so /1 modules keep working while they migrate.
+export const SUPPORTED_MODULE_APIS: ReadonlySet<ModuleApi> = new Set(["vivijure-module/1", "vivijure-module/2"]);
 
 /** The pipeline extension points. `pick one` hooks resolve to a single module; `chain` hooks run
  *  every installed module in `ui.order`, each consuming the previous output. */
@@ -106,7 +115,7 @@ export interface ModuleUi {
 export interface ModuleManifest {
   name: string; // unique module id
   version: string;
-  api: typeof MODULE_API;
+  api: ModuleApi;
   hooks: HookName[];
   provides?: Provides[];
   config_schema?: ConfigSchema;
@@ -119,7 +128,6 @@ export interface ModuleManifest {
 export interface InvokeContext {
   project: string;
   job_id: string;
-  user_email?: string;
 }
 
 /** The single entry point the core calls on a module: POST /invoke. */
@@ -364,7 +372,6 @@ export interface NotifyInput {
   project: string;
   download_url?: string; // presigned link to the finished film (the core presigns it)
   seconds?: number;      // film length, if known
-  user_email?: string;   // the film owner's address (for an email notifier)
 }
 
 /** What a `notify` module returns: the channels it delivered on (for the core's log / summary). */
@@ -489,7 +496,7 @@ export interface RenderConfigProjection {
  *  module view (no internal `binding`); the hook index maps each hook to the module NAMES serving
  *  it, so the frontend has everything it needs to project the pipeline without seeing topology. */
 export interface ModulesResponse {
-  api: typeof MODULE_API;
+  api: ModuleApi;
   modules: PublicModule[];
   hooks: Partial<Record<HookName, string[]>>; // hook -> module names serving it
   catalog: HookCatalogEntry[];                 // every hook (name + blurb + cardinality)
