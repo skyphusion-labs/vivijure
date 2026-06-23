@@ -11,19 +11,23 @@ import {
   runpodJobGone,
   classifyGoneState,
   RUNPOD_NOTFOUND_GRACE_MS,
-  MAX_DURATION,
+  ALLOWED_DURATIONS,
 } from "../modules/alibaba-wan-lora/src/wan-lora";
 import { MANIFEST } from "../modules/alibaba-wan-lora/src/index";
 import { checkManifest, checkHookOutput, allPass, failures } from "../src/modules/conformance";
 
 describe("alibaba-wan-lora pure logic", () => {
-  it("clampDuration rounds to a whole second and clamps to [1, MAX] (cost guardrail)", () => {
+  it("clampDuration snaps to the endpoint allowed set {5,8} (<=6 -> 5, else 8); never an arbitrary value (#279)", () => {
     expect(clampDuration(5)).toBe(5);
+    expect(clampDuration(8)).toBe(8);
+    expect(clampDuration(3)).toBe(5); // 3 was REJECTED by the endpoint (the #279 break)
+    expect(clampDuration(4)).toBe(5); // the test bundle's 4s shots also failed pre-fix
+    expect(clampDuration(6)).toBe(5);
+    expect(clampDuration(7)).toBe(8);
     expect(clampDuration(0)).toBe(5); // 0 -> default 5
-    expect(clampDuration(4.4)).toBe(4);
-    expect(clampDuration(7.6)).toBe(8);
-    expect(clampDuration(0.2)).toBe(1); // never below 1s
-    expect(clampDuration(999)).toBe(MAX_DURATION); // capped so a bad storyboard can't bill unbounded
+    expect(clampDuration(999)).toBe(8); // snaps to the top allowed value
+    // only the allowed set is EVER emitted, for any requested seconds
+    for (let s = 0; s <= 20; s++) expect(ALLOWED_DURATIONS as readonly number[]).toContain(clampDuration(s));
   });
 
   it("parseLoras accepts a JSON string of [{path,scale}] and validates entries", () => {
