@@ -27,6 +27,11 @@ const MANIFEST: ModuleManifest = {
   api: MODULE_API,
   hooks: ["notify"],
   provides: [{ id: "notify-email", label: "Email notification (Cloudflare Email Service)" }],
+  // The recipient lives HERE (operator sets it on install), not in the notify input -- the core
+  // sends completion facts only, no identity (the identity strip).
+  config_schema: {
+    notify_email: { type: "string", default: "", label: "Notify email address (render-done mail recipient)" },
+  },
   ui: { section: "notify", order: 10 },
 };
 
@@ -39,12 +44,14 @@ async function notify(env: Env, req: InvokeRequest<NotifyInput>): Promise<Invoke
   if (!input || input.event !== "render.complete") {
     return { ok: false, error: "notify-email: unsupported event " + String(input?.event) };
   }
-  // No recipient or no EMAIL binding configured -> nothing to deliver (a no-op, not a failure).
-  if (!env.EMAIL || !input.user_email) return { ok: true, output: { delivered: [] } };
+  // Recipient comes from the module CONFIG (operator-set on install), never the input: the core
+  // sends no identity. No recipient or no EMAIL binding -> nothing to deliver (a no-op, not a failure).
+  const to = typeof req.config?.notify_email === "string" ? req.config.notify_email.trim() : "";
+  if (!env.EMAIL || !to) return { ok: true, output: { delivered: [] } };
   try {
     const { subject, html, text } = renderCompleteEmail(input);
-    await env.EMAIL.send({ to: input.user_email, from: FROM, subject, html, text });
-    return { ok: true, output: { delivered: ["email:" + input.user_email] } };
+    await env.EMAIL.send({ to, from: FROM, subject, html, text });
+    return { ok: true, output: { delivered: ["email:" + to] } };
   } catch (e) {
     return { ok: false, error: "notify-email: send failed: " + (e as Error).message };
   }

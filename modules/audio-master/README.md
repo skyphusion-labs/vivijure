@@ -54,8 +54,8 @@ To self-host (service `vivijure-module-audio-master`, bound into the core as `MO
 - **No secrets**: this worker is credentialless. It holds no R2 creds and no API keys -- the core
   presigns the R2 URLs, and the container is reached over the VPC binding.
 - **Binding**: a `[[vpc_services]]` block `AUDIO_MASTER_VPC` pointing at the Workers VPC Service for the
-  always-on `audio-master` CPU container (slim ffmpeg, `containers/audio-master/`). Set the real
-  `service_id` (the committed value is a clearly-marked placeholder until the VPC Service is created).
+  always-on `audio-master` CPU container (slim ffmpeg, `containers/audio-master/`). The committed
+  `service_id` is the live VPC Service (created + bound for v0.3.0); self-hosters replace it with their own.
 - **Provision**: deploy the `audio-master` container on the fleet (CPU ffmpeg, SEPARATE from the GPU
   backends) and create the Workers VPC Service that fronts it.
 

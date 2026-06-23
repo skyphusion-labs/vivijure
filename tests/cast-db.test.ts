@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { addRef, addRefs, removeRef, listCast } from "../src/cast-db";
-import { listProjectsForUser } from "../src/storyboard-projects-db";
+import { listProjects } from "../src/storyboard-projects-db";
 import { listUserTags } from "../src/renders-db";
 import type { Env } from "../src/env";
 
@@ -10,7 +10,7 @@ import type { Env } from "../src/env";
 // `injectConcurrentWrites` rewrites the stored value just before a CAS lands, forcing the miss/retry.
 
 const baseRow = (refsJson: string | null) => ({
-  id: 1, user_email: "u@e.com", slug: "hero", name: "Hero", bible: null,
+  id: 1, slug: "hero", name: "Hero", bible: null,
   portrait_key: null, portrait_mime: null,
   ref_keys_json: refsJson, source_keys_json: null,
   created_at: "t", updated_at: "t",
@@ -147,11 +147,11 @@ describe("bounded list queries (issue #12)", () => {
     expect(captured.bound).toEqual([500]);
   });
 
-  it("listProjectsForUser is LIMIT-bound", async () => {
+  it("listProjects is LIMIT-bound", async () => {
     const { env, captured } = captureAll();
-    await listProjectsForUser(env, "u@e.com");
+    await listProjects(env);
     expect(captured.sql).toMatch(/LIMIT \?/);
-    expect(captured.bound).toEqual(["u@e.com", 500]);
+    expect(captured.bound).toEqual([500]);
   });
 
   it("listUserTags scans only the most recent tagged renders (ORDER BY + LIMIT)", async () => {

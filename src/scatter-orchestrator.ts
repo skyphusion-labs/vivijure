@@ -12,10 +12,11 @@ import {
   filmPhaseToShardStatus,
   orderFinalClips,
   startFilmJob,
+  runFilmFinish,
   type FilmJob,
   type FilmScene,
 } from "./film-orchestrator";
-import { filmJobToPollView, filterScenesByShotIds, mapRenderOverridesToModuleConfigs } from "./film-render-bridge";
+import { filmJobToPollView, filterScenesByShotIds, orderScenesByShotIds, mapRenderOverridesToModuleConfigs } from "./film-render-bridge";
 import { presignR2Get, presignR2Put } from "./r2-presign";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { discoverModules, servingForHook } from "./modules/registry";
@@ -36,6 +37,7 @@ import {
   getFinishState,
   getRenderIdByJobId,
   insertRender,
+  buildInsertRenderStmt,
   markFinishDone,
   markFinishFailed,
   markRenderFailedByJobId,
@@ -43,7 +45,7 @@ import {
 } from "./renders-db";
 import { resolveCastLoras } from "./cast-loras";
 import { fireNotifyForScatter } from "./scatter-notify";
-import { isTransientD1Error } from "./d1-retry";
+import { isTransientD1Error, withD1Retry, d1ErrorCode } from "./d1-retry";
 
 export type { ScatterJob } from "./scatter-orchestrator-types";
 export { isScatterParentJobId as isScatterJobId };
@@ -80,7 +82,7 @@ export interface StartScatterArgs {
   render_overrides?: Record<string, unknown>;
   motion_backend?: string;
   audio_key?: string;
-  user_email: string;
+  film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   project_id?: number | null;
 }
 
@@ -94,7 +96,7 @@ async function resolveDialogueLines(
   shotIds: string[],
 ): Promise<DialogueLine[]> {
   if (args.project_id == null) return [];
-  const project = await getProjectById(env, args.project_id, args.user_email);
+  const project = await getProjectById(env, args.project_id);
   if (!project?.last_storyboard) return [];
   return buildDialogueLines(project.last_storyboard, voices, shotIds);
 }
@@ -154,23 +156,20 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     motion_backend: motionBackend,
     audio_key: stagedAudio,
     has_dialogue: dialogueLines.length > 0,
-    user_email: args.user_email,
+    scenes,
+    dialogue_lines: dialogueLines,
+    film_titles: args.film_titles,
+    film_finish_config: mapped.film_finish_config,
+    project_id: args.project_id ?? null,
+    render_overrides: args.render_overrides,
     phase: "shards",
     created_at: Date.now(),
   };
 
-  await insertRender(env, {
-    jobId: scatterId,
-    project: args.project,
-    bundleKey: args.bundle_key,
-    qualityTier: args.quality_tier,
-    renderOverrides: args.render_overrides,
-    status: "IN_QUEUE",
-    mode: "full",
-    projectId: args.project_id ?? null,
-  });
-  const parentId = await getRenderIdByJobId(env, scatterId);
-
+  // RUNNABILITY-FIRST (#289): build the shard FILM jobs (their docs live in R2), collecting the
+  // render-row specs to persist to D1 afterwards. The D1 rows are a UI-list PROJECTION, not what
+  // makes the render runnable -- so we never write them before the runnable R2 state.
+  const shardRows: { jobId: string; status: string }[] = [];
   for (const shard of shards) {
     const shardScenes = filterScenesByShotIds(scenes, shard.shots);
     // Each shard runs its own finish chain (incl. lip-sync), so it carries only its shots' dialogue.
@@ -186,31 +185,77 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
       motion_config: mapped.motion_config,
       finish_config: mapped.finish_config,
       speech_config: mapped.speech_config,
-      film_finish_config: mapped.film_finish_config,
       master_config: mapped.master_config,
       clips_only: true,
       pretrained_loras: shard.pretrainedLoras,
       cast_loras: castIds,
-      user_email: args.user_email,
       dialogue_lines: shardDialogue,
     });
     scatterJob.shard_film_ids.push(film.film_id);
-    const view = filmJobToPollView(film, null);
-    await insertRender(env, {
-      jobId: film.film_id,
-      project: args.project,
-      bundleKey: args.bundle_key,
-      qualityTier: args.quality_tier,
-      renderOverrides: args.render_overrides,
-      status: view.status,
-      mode: "full",
-      projectId: args.project_id ?? null,
-      parentId: parentId ?? undefined,
-    });
+    shardRows.push({ jobId: film.film_id, status: filmJobToPollView(film, null).status });
   }
 
-  await saveScatterJob(env, scatterJob);
+  await finalizeScatterSubmit(env, scatterJob, shardRows);
   return scatterJob;
+}
+
+/** Persist a scatter submit so it can NEVER orphan a render (#289).
+ *
+ *  The runnable R2 doc is written FIRST: the poll/advance path runs entirely off it
+ *  (loadScatterJob), so once it lands the render is runnable and a later transient cannot strand
+ *  it. The D1 render rows are a UI-list projection, written AFTER, best-effort: the parent (so the
+ *  shards can FK it), then the shard rows as one all-or-nothing env.DB.batch, each wrapped in
+ *  withD1Retry. A persistent D1 failure is logged as a structured d1.error and SWALLOWED -- the
+ *  submit still succeeds (render is runnable) and the missing rows self-heal on the first poll
+ *  (ensureScatterRenderRow). This is the cure for the orphan-row 422: a mid-submit blip can no
+ *  longer leave a row with no job, nor fail the whole submit. The submit spans two stores (D1 rows
+ *  + R2 docs), so a single DB.batch cannot make it truly atomic; runnability-first ordering plus
+ *  self-heal makes the residual gap benign. */
+export async function finalizeScatterSubmit(
+  env: Env,
+  scatterJob: ScatterJob,
+  shardRows: { jobId: string; status: string }[],
+): Promise<void> {
+  await saveScatterJob(env, scatterJob); // <- render is RUNNABLE from here
+
+  try {
+    await withD1Retry(
+      () =>
+        insertRender(env, {
+          jobId: scatterJob.scatter_id,
+          project: scatterJob.project,
+          bundleKey: scatterJob.bundle_key,
+          qualityTier: scatterJob.quality_tier,
+          renderOverrides: scatterJob.render_overrides,
+          status: "IN_QUEUE",
+          mode: "full",
+          projectId: scatterJob.project_id ?? null,
+        }),
+      { label: "scatter.submit.parent" },
+    );
+    const parentId = await getRenderIdByJobId(env, scatterJob.scatter_id);
+    if (shardRows.length) {
+      const stmts = shardRows.map((r) =>
+        buildInsertRenderStmt(env, {
+          jobId: r.jobId,
+          project: scatterJob.project,
+          bundleKey: scatterJob.bundle_key,
+          qualityTier: scatterJob.quality_tier,
+          renderOverrides: scatterJob.render_overrides,
+          status: r.status,
+          mode: "full",
+          projectId: scatterJob.project_id ?? null,
+          parentId: parentId ?? undefined,
+        }),
+      );
+      await withD1Retry(() => env.DB.batch(stmts), { label: "scatter.submit.shards" });
+    }
+  } catch (e) {
+    // Render is already runnable off the R2 doc; the rows self-heal on first poll. Log, don't throw.
+    console.log(JSON.stringify({
+      ev: "d1.error", op: "scatter.submit.rows", scatter_id: scatterJob.scatter_id, code: d1ErrorCode(e),
+    }));
+  }
 }
 
 async function muxScatterAudio(env: Env, job: ScatterJob): Promise<void> {
@@ -240,7 +285,7 @@ async function muxScatterAudio(env: Env, job: ScatterJob): Promise<void> {
     job.error = `scatter audio mux failed: HTTP ${resp?.status ?? "?"}`;
     return;
   }
-  let body: { ok?: boolean; error?: string };
+  let body: { ok?: boolean; error?: string; durationSeconds?: number; shots?: number; clipsReceived?: number };
   try {
     body = (await resp.json()) as typeof body;
   } catch {
@@ -261,7 +306,35 @@ async function maybeFinalizeScatter(env: Env, job: ScatterJob): Promise<void> {
   if (job.phase !== "done" || !job.film_key) return;
   const st = await getFinishState(env, job.scatter_id);
   if (st?.finish_state === "done") return;
+  await runScatterFilmFinish(env, job);
   await finalizeScatterDone(env, job);
+}
+
+/** Run the film.finish chain (subtitle / title / credit cards) on the assembled+muxed scatter film,
+ *  mirroring the single-film path's inline film.finish (#284/#285). The assembled clip order ==
+ *  expected_shot_ids order (orderFinalClips), so the FULL scenes + dialogue_lines give correctly aligned
+ *  cumulative captions. FAIL-SAFE + idempotent: guarded by job.film_finish so a re-driven finalize never
+ *  double-runs, and runFilmFinish soft-degrades (a card miss never drops the assembled film). */
+async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
+  if (job.film_finish || !job.film_key) return; // already run (or nothing to card)
+  const r = await runFilmFinish(env, {
+    film_key: job.film_key,
+    // Caption scenes in the SAME order the gather assembles the clips (expected_shot_ids), NOT bundle
+    // order, so buildCaptionCues' cumulative timeline matches the cut (the crux, #284/#285).
+    scenes: orderScenesByShotIds(job.scenes ?? [], job.expected_shot_ids),
+    dialogue_lines: job.dialogue_lines,
+    film_titles: job.film_titles,
+    film_finish_config: job.film_finish_config,
+    bundle_key: job.bundle_key,
+    project: job.project,
+    job_id: job.scatter_id,
+  });
+  if (!r.ran) { job.film_finish = { applied: [], errors: [] }; return; } // no film.finish module -> mark + skip
+  if (r.errors.length > 0) console.warn(`scatter film.finish errors for ${job.scatter_id}: ${r.errors.join("; ")}`);
+  if (r.degraded) console.warn(`scatter film.finish degraded for ${job.scatter_id}: ${r.degraded} -- film shipped WITHOUT cards`);
+  job.film_finish = { applied: r.applied, errors: r.errors, steps: r.steps, degraded: r.degraded };
+  job.film_key = r.film_key;
+  await saveScatterJob(env, job); // persist carded key + outcome before finalize records it
 }
 
 async function assembleScatterClips(
@@ -307,7 +380,7 @@ async function assembleScatterClips(
     job.error = `video-finish gather returned ${resp?.status ?? "?"}`;
     return;
   }
-  let body: { ok?: boolean; error?: string };
+  let body: { ok?: boolean; error?: string; durationSeconds?: number; shots?: number; clipsReceived?: number };
   try {
     body = (await resp.json()) as typeof body;
   } catch {
@@ -318,6 +391,29 @@ async function assembleScatterClips(
   if (!body.ok) {
     job.phase = "failed";
     job.error = `video-finish gather failed: ${body.error || "unknown"}`;
+    return;
+  }
+  // Fail loud: a scatter render must NEVER silently complete a PARTIAL film. If the assembled film
+  // is materially shorter than the sum of the cut shots' durations, clips were dropped in the
+  // assemble (a fetch miss or a concat truncation) -- error instead of shipping a 1-of-N film. This
+  // closes the gap that let a 3-shot render COMPLETE with one shot; per-shot clips stay intact in R2
+  // for a re-driven assemble. The 0.5 ratio catches a gross partial (v4 shipped 36%) while tolerating
+  // legitimate per-clip tail/beat-trim (music films) without false alarms; the container-side guard
+  // (output vs its actual normalized inputs) is the precise, false-positive-free backstop.
+  const expectedSeconds = (job.scenes ?? [])
+    .filter((s) => job.expected_shot_ids.includes(s.shot_id))
+    .reduce((sum, s) => sum + (Number.isFinite(s.seconds) && s.seconds > 0 ? s.seconds : 0), 0);
+  const assembledSeconds = typeof body.durationSeconds === "number" ? body.durationSeconds : 0;
+  // [#287] instrumentation: clips we SENT vs the container received vs concatenated duration --
+  // definitively locates a 3 -> 1 drop (worker-sent-fewer vs container-side) on the next run.
+  console.log(JSON.stringify({
+    ev: "scatter.assemble.result", scatter_id: job.scatter_id, sent: clips.length,
+    clipsReceived: body.clipsReceived, shots: body.shots, durationSeconds: body.durationSeconds,
+    expectedSeconds,
+  }));
+  if (expectedSeconds > 0 && assembledSeconds > 0 && assembledSeconds < expectedSeconds * 0.5) {
+    job.phase = "failed";
+    job.error = `assemble dropped clips: ${assembledSeconds.toFixed(1)}s assembled vs ~${expectedSeconds.toFixed(1)}s expected across ${job.expected_shot_ids.length} shots`;
     return;
   }
   job.silent_film_key = outputKey;
@@ -357,6 +453,13 @@ async function advanceScatterGather(env: Env, job: ScatterJob): Promise<void> {
     job.expected_shot_ids.map((shot_id) => ({ shot_id, prompt: "", seconds: 4 })),
     [...clipMap.entries()].map(([shot_id, clip_key]) => ({ shot_id, clip_key })),
   );
+  // [#287] instrumentation: pin where 3 -> 1 happens. Logs shots_expected vs clips_gathered (and
+  // the resolved shot ids) at the assemble decision; the container result is logged below.
+  console.log(JSON.stringify({
+    ev: "scatter.gather.assemble", scatter_id: job.scatter_id,
+    shots_expected: job.expected_shot_ids.length, clips_gathered: clips.length,
+    shot_ids: clips.map((c) => c.shot_id),
+  }));
   if (clips.length !== job.expected_shot_ids.length) {
     const err = "gather: missing clips after finish decision";
     await markFinishFailed(env, job.scatter_id, err);
@@ -389,6 +492,39 @@ export function shardStatusForOutcome(outcome: ShardAdvanceOutcome): string {
   return outcome.reason === "doc_missing" ? "FAILED" : "IN_PROGRESS";
 }
 
+/** Self-heal the D1 render row from the runnable R2 doc (#289). Cheap read first -- a no-op once
+ *  the row exists (the normal path). Only when the row is MISSING (a submit whose best-effort D1
+ *  write lost the flaky window) does it insert the row at the doc's current status and, when
+ *  terminal, fill status/output via updateRenderFromView. Never aborts the advance: a transient is
+ *  left for the next poll; a non-transient is logged. */
+export async function ensureScatterRenderRow(
+  env: Env,
+  job: ScatterJob,
+  ctx?: ExecutionContext,
+): Promise<void> {
+  try {
+    if ((await getRenderIdByJobId(env, job.scatter_id)) != null) return;
+    const view = scatterJobToPollView(job);
+    await insertRender(env, {
+      jobId: job.scatter_id,
+      project: job.project,
+      bundleKey: job.bundle_key,
+      qualityTier: job.quality_tier,
+      renderOverrides: job.render_overrides,
+      status: view.status,
+      mode: "full",
+      projectId: job.project_id ?? null,
+    });
+    if (view.status !== "IN_PROGRESS") await updateRenderFromView(env, view, ctx);
+    console.log(JSON.stringify({ ev: "scatter.selfheal.row", scatter_id: job.scatter_id, status: view.status }));
+  } catch (e) {
+    if (!isTransientD1Error(e)) {
+      console.log(JSON.stringify({ ev: "d1.error", op: "scatter.selfheal.row", scatter_id: job.scatter_id, code: d1ErrorCode(e) }));
+    }
+    // never abort the advance for a projection-row write; a transient retries on the next poll.
+  }
+}
+
 export async function advanceScatterJob(
   env: Env,
   scatterId: string,
@@ -396,6 +532,10 @@ export async function advanceScatterJob(
 ): Promise<RunpodJobView | null> {
   const job = await loadScatterJob(env, scatterId);
   if (!job) return null;
+  // #289 self-heal: the submit writes the R2 doc before the D1 rows, so a mid-submit blip can
+  // leave a runnable render whose UI-list row never got written. Insert it if missing (cheap read
+  // first; no-op once it exists) so the render shows up and its terminal status/output get logged.
+  await ensureScatterRenderRow(env, job, ctx);
   if (job.cancelled) return scatterJobToPollView(job);
   if (job.phase === "done" || job.phase === "failed") return scatterJobToPollView(job);
 

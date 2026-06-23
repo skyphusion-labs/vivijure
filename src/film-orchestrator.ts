@@ -161,7 +161,6 @@ export interface FilmJob {
   clips_recovered?: boolean;
   error?: string;
   created_at: number;
-  user_email?: string; // film owner; passed to the `notify` hook on done (e.g. for an email notifier)
 }
 
 interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
@@ -298,8 +297,7 @@ function completeKeyframesOnly(job: FilmJob, kfOut: KeyframeOutput): void {
  *  adapter to a character-stable key (survives project deletion), and mark the cast member ready.
  *  Reused slots (backend reports the already-banked key) and unmapped slots are no-ops; a versioned
  *  stable key keyed on job.created_at makes a retry idempotent. Best-effort but LOUD on failure
- *  (unlike the silent state-tar restore it replaces). Keyed on cast id (PK) only -- NOT the
- *  half-stripped user_email. */
+ *  (unlike the silent state-tar restore it replaces). Keyed on cast id (PK) only. */
 async function recordTrainedLorasToCast(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
   const trained = kfOut.trained_loras;
   const castIds = job.cast_loras;
@@ -877,9 +875,9 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
     const download_url = await presignR2Get(env, job.film_key, 86400); // 24h link, matches the poll summary
     const input: NotifyInput = {
       event: "render.complete", film_id: job.film_id, project: job.project,
-      download_url, user_email: job.user_email,
+      download_url,
     };
-    const context = { project: job.project, job_id: job.film_id, user_email: job.user_email };
+    const context = { project: job.project, job_id: job.film_id };
     for (const m of notifiers) {
       const fetcher = asFetcher(envRec[m.binding]);
       if (!fetcher) continue;
@@ -923,17 +921,44 @@ async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
 // container was unreachable). The chain is fail-safe, so `degraded` is the only signal that requested
 // cards were not applied; applyFilmFinish records it on the job rather than dropping it.
 
-async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
-  if (!job.film_key) return;
+/** Inputs for runFilmFinish -- job-shape-agnostic so BOTH the single-film path (advanceFilmJob) and the
+ *  scatter gather can run the film.finish chain on an assembled+muxed film (#284/#285). */
+export interface RunFilmFinishInput {
+  film_key: string;
+  scenes: FilmScene[];
+  dialogue_lines?: DialogueLine[];
+  film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
+  film_finish_config?: Record<string, Record<string, unknown>>;
+  bundle_key: string;
+  project: string;
+  job_id: string;
+}
+export interface RunFilmFinishResult {
+  ran: boolean;      // false when no film.finish module is installed (caller leaves its state untouched)
+  film_key: string;  // carded film key, or the input key on no-op / passthrough
+  applied: string[];
+  errors: string[];
+  steps?: string[];
+  degraded?: string;
+}
+
+/** Run the film.finish chain (subtitle / title / credit cards) on an assembled+muxed film. Reused by the
+ *  single-film path AND the scatter gather. Captions are FILM-LEVEL (buildCaptionCues computes each
+ *  line's start from the cumulative duration of preceding shots), so the caller passes the FULL scenes +
+ *  dialogue_lines in assembled (shot) order. FAIL-SAFE: a module soft-degrade / failure passes the film
+ *  through (recorded in degraded), never drops it. */
+export async function runFilmFinish(env: Env, input: RunFilmFinishInput): Promise<RunFilmFinishResult> {
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
-  if (servingForHook(modules, "film.finish").length === 0) return; // nothing installed -> no-op
-  const outKey = job.film_key.replace(/\.mp4$/i, "") + "-titled-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+  if (servingForHook(modules, "film.finish").length === 0) {
+    return { ran: false, film_key: input.film_key, applied: [], errors: [] }; // nothing installed -> no-op
+  }
+  const outKey = input.film_key.replace(/\.mp4$/i, "") + "-titled-" + crypto.randomUUID().slice(0, 8) + ".mp4";
   // A soft .srt sidecar for the subtitle module's sidecar / both modes (its own presigned PUT). Cheap
   // to presign whether or not a subtitle module is installed; ignored by film-titles.
   const sidecarKey = outKey.replace(/\.mp4$/i, "") + ".srt";
   const [videoUrl, outputUrl, sidecarUrl] = await Promise.all([
-    presignR2Get(env, job.film_key, 1800),
+    presignR2Get(env, input.film_key, 1800),
     presignR2Put(env, outKey, 1800),
     presignR2Put(env, sidecarKey, 1800),
   ]);
@@ -941,15 +966,15 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   // windows (real beat-trimmed durations from the bundle, authored seconds as fallback) carrying each
   // speaking shot's line. Empty when the film has no dialogue -> the subtitle module no-ops. Narration
   // is NOT captioned (a single film-level track with no per-line timing); see src/captions.ts.
-  const durations = await readShotDurationsFromBundle(env, job.bundle_key);
-  const captions = buildCaptionCues(job.scenes, job.dialogue_lines ?? [], durations);
+  const durations = await readShotDurationsFromBundle(env, input.bundle_key);
+  const captions = buildCaptionCues(input.scenes, input.dialogue_lines ?? [], durations);
   const seed: FilmFinishInput = {
-    film_key: job.film_key,
+    film_key: input.film_key,
     video_url: videoUrl,
     output_url: outputUrl,
     output_key: outKey,
-    title: job.film_titles?.title,
-    credits: job.film_titles?.credits,
+    title: input.film_titles?.title,
+    credits: input.film_titles?.credits,
     captions,
     sidecar_url: sidecarUrl,
     sidecar_key: sidecarKey,
@@ -964,11 +989,11 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
     modules,
     "film.finish",
     seed,
-    { project: job.project, job_id: job.film_id, user_email: job.user_email },
+    { project: input.project, job_id: input.job_id },
     {
       nextInput: async (prev) => {
-        const prevKey = prev?.film_key ?? job.film_key!;
-        const stepOutKey = job.film_key!.replace(/\.mp4$/i, "") + "-ff-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+        const prevKey = prev?.film_key ?? input.film_key;
+        const stepOutKey = input.film_key.replace(/\.mp4$/i, "") + "-ff-" + crypto.randomUUID().slice(0, 8) + ".mp4";
         const stepSidecarKey = stepOutKey.replace(/\.mp4$/i, "") + ".srt";
         const [stepVideoUrl, stepOutputUrl, stepSidecarUrl] = await Promise.all([
           presignR2Get(env, prevKey, 1800),
@@ -988,31 +1013,41 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
       // Per-module planner config (subtitle styling/mode/enabled, film-titles font/color/bg), clamped
       // by dispatchChain against each module's schema. Without this the film.finish chain dispatched with
       // {} and every styling/toggle knob was dead from the planner (the dead-config pattern, now closed).
-      configFor: (name) => job.film_finish_config?.[name],
+      configFor: (name) => input.film_finish_config?.[name],
     },
   );
   // Record the chain outcome so a degraded or failed film.finish is observable state, not a silent green.
   // The module soft-degrades (passthrough) on a container failure and still returns ok:true, so the only
   // signal that cards were NOT applied is `output.degraded`; surface it (and any chain errors) here. (#207)
   const out = result.output;
-  // dispatchChain records a module's soft-degrade (ok:true but it passed the film through) centrally in
-  // result.degraded ("<module>: <reason>"); collapse it onto the job so a degraded run is observable
-  // state, not a silent green. A degrade means cards were requested but NOT applied.
   const degraded = result.degraded.length > 0 ? result.degraded.join("; ") : undefined;
-  job.film_finish = {
-    applied: result.applied,
-    errors: result.errors,
-    steps: out?.applied,
-    degraded,
-  };
-  if (result.errors.length > 0) {
-    console.warn(`film.finish errors for ${job.film_id}: ${result.errors.join("; ")}`);
+  const finalKey = typeof out?.film_key === "string" && out.film_key.length > 0 ? out.film_key : input.film_key;
+  return { ran: true, film_key: finalKey, applied: result.applied, errors: result.errors, steps: out?.applied, degraded };
+}
+
+/** Single-film film.finish: thin wrapper over runFilmFinish that folds the outcome back onto the job
+ *  (behavior-identical to the pre-refactor inline version -- no-op leaves the job untouched). */
+async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
+  if (!job.film_key) return;
+  const r = await runFilmFinish(env, {
+    film_key: job.film_key,
+    scenes: job.scenes,
+    dialogue_lines: job.dialogue_lines,
+    film_titles: job.film_titles,
+    film_finish_config: job.film_finish_config,
+    bundle_key: job.bundle_key,
+    project: job.project,
+    job_id: job.film_id,
+  });
+  if (!r.ran) return; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
+  if (r.errors.length > 0) {
+    console.warn(`film.finish errors for ${job.film_id}: ${r.errors.join("; ")}`);
   }
-  if (degraded) {
-    console.warn(`film.finish degraded for ${job.film_id}: ${degraded} -- film shipped WITHOUT cards`);
+  if (r.degraded) {
+    console.warn(`film.finish degraded for ${job.film_id}: ${r.degraded} -- film shipped WITHOUT cards`);
   }
-  const next = out?.film_key;
-  if (typeof next === "string" && next.length > 0) job.film_key = next;
+  job.film_finish = { applied: r.applied, errors: r.errors, steps: r.steps, degraded: r.degraded };
+  job.film_key = r.film_key;
 }
 
 async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
@@ -1218,7 +1253,7 @@ async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
           audio_url: audioUrl, output_url: outputUrl, output_key: outputKey, seconds,
         } as MasterInput,
         config: cfg,
-        context: { project: job.project, job_id: job.film_id, user_email: job.user_email },
+        context: { project: job.project, job_id: job.film_id },
       };
       const r = await invokeModule<MasterInput, MasterOutput>(fetcher, req);
       if (!r.ok) {
@@ -1365,7 +1400,6 @@ export async function startFilmFromKeyframes(
     derive_mode: "finalized" | "cloud-finalized";
     parent_render_id?: number;
     audio_key?: string;
-    user_email?: string;
   },
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
@@ -1389,7 +1423,6 @@ export async function startFilmFromKeyframes(
     derive_mode: args.derive_mode,
     parent_render_id: args.parent_render_id,
     audio_key: stagedAudio,
-    user_email: args.user_email,
   };
   if (!matched.length) {
     job.error = `no keyframes matched requested shots (missing: ${missing.join(", ")})`;
@@ -1436,7 +1469,6 @@ export async function startFilmJob(
     clips_only?: boolean;
     pretrained_loras?: Record<string, string>;
     audio_key?: string;
-    user_email?: string;
     dialogue_lines?: DialogueLine[];
     cast_loras?: Record<string, number>;
     film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
@@ -1465,7 +1497,6 @@ export async function startFilmJob(
     film_titles: args.film_titles,
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
     phase_started_at: Date.now(),
-    user_email: args.user_email,
     dialogue_lines: args.dialogue_lines && args.dialogue_lines.length ? args.dialogue_lines : undefined,
     cast_loras: args.cast_loras && Object.keys(args.cast_loras).length ? args.cast_loras : undefined,
   };

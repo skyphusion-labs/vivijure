@@ -28,7 +28,6 @@ describe("parseStoryboardScenes", () => {
 
 const previewRow = (over: Partial<RenderRow> = {}): RenderRow => ({
   id: 1,
-  user_email: "studio",
   job_id: "film-prev",
   project: "demo",
   bundle_key: "bundles/demo.tar.gz",

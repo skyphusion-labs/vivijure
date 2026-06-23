@@ -11,8 +11,8 @@
 // discovered by the registry (src/modules/registry.ts). Not statically listed; a deployment installs
 // only the modules it wants.
 
-// RPC surface of the skyphusion-email Worker's EmailService entrypoint (render-email.ts uses it to
-// send a render-complete mail). Kept minimal + local so this repo does not depend on that package.
+// RPC surface of the skyphusion-email Worker's EmailService entrypoint (the notify-email module
+// uses it to send render-complete mail). Kept minimal + local so this repo does not depend on that package.
 export interface EmailServiceBinding {
   send(req: {
     to: string | string[];

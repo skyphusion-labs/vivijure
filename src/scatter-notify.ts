@@ -22,9 +22,8 @@ export async function fireNotifyForScatter(env: Env, job: ScatterJob): Promise<v
       film_id: job.scatter_id,
       project: job.project,
       download_url,
-      user_email: job.user_email,
     };
-    const context = { project: job.project, job_id: job.scatter_id, user_email: job.user_email };
+    const context = { project: job.project, job_id: job.scatter_id };
     for (const m of notifiers) {
       const fetcher = asFetcher(envRec[m.binding]);
       if (!fetcher) continue;
