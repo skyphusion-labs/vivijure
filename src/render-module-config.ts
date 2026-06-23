@@ -46,6 +46,7 @@ export interface ResolvedModuleRenderConfigs {
   keyframe_config: Record<string, unknown>;
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>;
+  speech_config: Record<string, Record<string, unknown>>;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -141,10 +142,17 @@ export function resolveModuleRenderConfigs(
   const finish_config: Record<string, Record<string, unknown>> = {};
   for (const m of pipeline.finish) finish_config[m.name] = m.config;
 
+  // speech is a chain hook exactly like finish: clamp each serving speech module's config (planner ->
+  // render_overrides -> here) by module name, so the speech phase's enable/denoise toggles actually
+  // reach the module instead of always defaulting (the dead-config gap closed pre-v0.3.0).
+  const speech_config: Record<string, Record<string, unknown>> = {};
+  for (const m of pipeline.speech) speech_config[m.name] = m.config;
+
   return {
     motion_backend: pipeline.motion_backend?.name,
     keyframe_config,
     motion_config: pipeline.motion_backend?.config ?? {},
     finish_config,
+    speech_config,
   };
 }

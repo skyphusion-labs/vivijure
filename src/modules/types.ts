@@ -438,14 +438,18 @@ export interface FilmFinishInput {
 }
 
 /** What a `film.finish` module returns: the (maybe new) film key plus what it did. The chain is
- *  FAIL-SAFE -- a module that cannot run passes the film through (`film_key` omitted or unchanged) and
- *  reports it via the soft-degrade convention, never dropping a fully-rendered film (#190). `applied`
- *  carries the module name on success, or a "passthrough:<reason>" / "noop:no-cards" tag on a
- *  soft-degrade; `degraded` (the shared chain convention, as on FinishOutput / MasterOutput / SpeechOutput)
- *  is set ONLY when the film shipped UNCARDED, carrying the reason -- the one signal that requested cards
- *  were NOT applied (#207). The core records the chain outcome on the job rather than dropping it. */
+ *  FAIL-SAFE -- a module that cannot run passes the film through with `film_key` UNCHANGED (the input
+ *  film key, never omitted) and reports it via the soft-degrade convention, never dropping a
+ *  fully-rendered film (#190). `applied` carries the module name on success, or a "passthrough:<reason>"
+ *  / "noop:no-cards" tag on a soft-degrade; `degraded` (the shared chain convention, as on FinishOutput
+ *  / MasterOutput / SpeechOutput) is set ONLY when the film shipped UNCARDED, carrying the reason -- the
+ *  one signal that requested cards were NOT applied (#207). The core records the chain outcome on the
+ *  job rather than dropping it. */
 export interface FilmFinishOutput {
-  film_key?: string;  // R2 key of the carded film; omitted / unchanged => passed through (no new film)
+  film_key: string;   // R2 key of the film; on a passthrough it is the INPUT film_key UNCHANGED (never
+                      // omitted), so the core always gets a usable key. REQUIRED to match the
+                      // conformance checker (HOOK_OUTPUT_CHECKS["film.finish"]) and every shipping
+                      // module (subtitle / film-titles both always return it).
   applied?: string[]; // module name on success; "passthrough:<reason>" / "noop:no-cards" on a soft-degrade
   degraded?: string;  // set ONLY when the film was passed through UNCARDED, carrying the reason (#207)
 }

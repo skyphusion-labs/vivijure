@@ -1345,6 +1345,7 @@ export async function startFilmFromKeyframes(
     motion_config?: Record<string, unknown>;
     motion_configs?: Record<string, Record<string, unknown>>;
     finish_config?: Record<string, Record<string, unknown>>;
+    speech_config?: Record<string, Record<string, unknown>>;
     derive_mode: "finalized" | "cloud-finalized";
     parent_render_id?: number;
     audio_key?: string;
@@ -1362,6 +1363,7 @@ export async function startFilmFromKeyframes(
     motion_backend: args.motion_backend ?? null,
     motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
+    speech_config: args.speech_config ?? {},
     keyframe_binding: null,
     phase: "failed",
     created_at: Date.now(),
@@ -1409,6 +1411,7 @@ export async function startFilmJob(
     project: string; bundle_key: string; scenes: FilmScene[];
     motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
     finish_config?: Record<string, Record<string, unknown>>;
+    speech_config?: Record<string, Record<string, unknown>>;
     keyframes_only?: boolean;
     clips_only?: boolean;
     pretrained_loras?: Record<string, string>;
@@ -1429,6 +1432,7 @@ export async function startFilmJob(
     project: args.project, bundle_key: args.bundle_key, scenes,
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
+    speech_config: args.speech_config ?? {},
     keyframes_only: !!args.keyframes_only,
     clips_only: !!args.clips_only,
     audio_key: stagedAudio,
