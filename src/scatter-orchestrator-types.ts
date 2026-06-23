@@ -22,6 +22,11 @@ export interface ScatterJob {
   film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   film_finish_config?: Record<string, Record<string, unknown>>;
   film_finish?: { applied: string[]; errors: string[]; steps?: string[]; degraded?: string };
+  // #289 (atomic submit / self-heal): the doc is written to R2 BEFORE the D1 render rows, so the
+  // poll path can reconstruct a missing UI-list row entirely from the doc (project_id is the FK to
+  // storyboard_projects; render_overrides round-trips the submit knobs). Optional / back-compat.
+  project_id?: number | null;
+  render_overrides?: Record<string, unknown>;
   phase: "shards" | "gather" | "mux" | "done" | "failed";
   film_key?: string;
   silent_film_key?: string;

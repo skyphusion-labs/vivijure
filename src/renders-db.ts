@@ -165,7 +165,10 @@ export function classifyMissingJob(
   return nowSec - submittedAtSec < graceSec ? "confirming" : "phantom";
 }
 
-export async function insertRender(env: Env, row: NewRenderRow): Promise<void> {
+/** Build the bound INSERT for a render row, idempotent on job_id (ON CONFLICT DO NOTHING).
+ *  Returned UNEXECUTED so a caller can `.run()` it directly (insertRender) or compose several
+ *  into one all-or-nothing `env.DB.batch([...])` -- the atomic scatter submit (#289). */
+export function buildInsertRenderStmt(env: Env, row: NewRenderRow) {
   const now = nowSeconds();
   const overrides = row.renderOverrides ? JSON.stringify(row.renderOverrides) : null;
   const mode = row.mode ?? "full";
@@ -175,29 +178,31 @@ export async function insertRender(env: Env, row: NewRenderRow): Promise<void> {
   const parentId = typeof row.parentId === "number" && row.parentId > 0
     ? row.parentId
     : null;
-  await env.DB.prepare(
+  return env.DB.prepare(
     `INSERT INTO renders (
       user_email, job_id, project, bundle_key, quality_tier,
       render_overrides, status, submitted_at, updated_at, mode,
       project_id, parent_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(job_id) DO NOTHING`,
-  )
-    .bind(
-      STUDIO_OWNER,
-      row.jobId,
-      row.project,
-      row.bundleKey,
-      row.qualityTier,
-      overrides,
-      row.status,
-      now,
-      now,
-      mode,
-      projectId,
-      parentId,
-    )
-    .run();
+  ).bind(
+    STUDIO_OWNER,
+    row.jobId,
+    row.project,
+    row.bundleKey,
+    row.qualityTier,
+    overrides,
+    row.status,
+    now,
+    now,
+    mode,
+    projectId,
+    parentId,
+  );
+}
+
+export async function insertRender(env: Env, row: NewRenderRow): Promise<void> {
+  await buildInsertRenderStmt(env, row).run();
 }
 
 // Best-effort UPDATE from a poll / cancel response. No-op when no row
