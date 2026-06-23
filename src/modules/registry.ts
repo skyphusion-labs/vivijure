@@ -367,7 +367,11 @@ export async function dispatchChain<I = unknown, O = unknown>(
   seed: I,
   context: InvokeContext,
   opts: {
-    nextInput: (prevOutput: O, seed: I) => I;
+    // Map a module's output to the next module's input. May be async: a chain whose steps thread
+    // through R2 (film.finish reading the PRIOR step's output) presigns a fresh GET/PUT pair per step
+    // here, so step N+1 reads what step N wrote instead of re-reading the seed (#14). A sync mapper
+    // (plan.enhance) just returns I; `await` on a non-promise is a no-op.
+    nextInput: (prevOutput: O, seed: I) => I | Promise<I>;
     configFor?: (moduleName: string) => Record<string, unknown> | undefined;
   },
 ): Promise<ChainResult<O>> {
@@ -386,7 +390,7 @@ export async function dispatchChain<I = unknown, O = unknown>(
     const r = await awaitInvoke<I, O>(fetcher, { hook, input: current, config, context });
     if (r.ok) {
       last = r.output;
-      current = opts.nextInput(r.output, seed);
+      current = await opts.nextInput(r.output, seed);
       applied.push(module.name);
       // A module can return ok:true yet report a SOFT-DEGRADE via the `output.degraded` convention (a
       // reason string) -- it passed its input through because it could not do its work. Without this, a

@@ -180,6 +180,13 @@ service = "vivijure-module-dialogue-gen"
 binding = "MODULE_LIPSYNC"
 service = "vivijure-module-finish-lipsync"
 
+# Speech upscale (the `speech` hook): aviation-grade speech cleanup / enhancement on the dialogue
+# audio_key before lip-sync consumes it. Its own per-module worker; the registry discovers it as a
+# MODULE_* binding.
+[[services]]
+binding = "MODULE_SPEECH_UPSCALE"
+service = "vivijure-module-speech-upscale"
+
 # Cloud i2v motion.backend modules (RunPod-hosted), joining own-gpu / seedance / kling. Each is its
 # own per-module worker with a scoped RUNPOD_API_KEY; the registry discovers them as MODULE_* bindings.
 # These deploy ahead of the core (see ci.yml), so the bindings never dangle.

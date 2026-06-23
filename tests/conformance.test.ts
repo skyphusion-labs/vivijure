@@ -74,6 +74,18 @@ describe("conformance: hook output payload", () => {
     const out = { shot_id: "s1", clip_key: "k.mp4", out_fps: 24, frames: 48 };
     expect(checkHookOutput("finish", out).pass).toBe(false);
   });
+  it("accepts a well-formed speech output", () => {
+    const out = { shot_id: "s1", audio_key: "renders/neon/dialogue/s1_enh.wav", applied: ["speech-upscale:resemble-enhance"] };
+    expect(checkHookOutput("speech", out).pass).toBe(true);
+  });
+  it("accepts a soft-degraded speech output (passthrough audio_key, empty applied, degraded reason)", () => {
+    const out = { shot_id: "s1", audio_key: "renders/neon/dialogue/s1.wav", applied: [], degraded: "backend down" };
+    expect(checkHookOutput("speech", out).pass).toBe(true);
+  });
+  it("rejects a speech output missing audio_key (envelope-ok but contract-broken)", () => {
+    const out = { shot_id: "s1", applied: [] };
+    expect(checkHookOutput("speech", out).pass).toBe(false);
+  });
   it("accepts a well-formed plan.enhance output", () => {
     const out = { storyboard: { scenes: [{ prompt: "x" }] }, notes: ["did a thing"] };
     expect(checkHookOutput("plan.enhance", out).pass).toBe(true);
