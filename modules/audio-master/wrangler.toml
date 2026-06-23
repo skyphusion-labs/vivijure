@@ -20,11 +20,10 @@ enabled = true
 # calls the /master route synchronously. Mirrors the subtitle (VIDEO_FINISH_VPC) + beat-sync
 # (AUDIO_BEAT_SYNC_VPC) VPC blocks.
 #
-# PLACEHOLDER service_id: Strummer/Mackaye replace "TBD-STRUMMER-AUDIO-MASTER-VPC" with the real Workers
-# VPC Service id at integration (the service is being created in parallel). Until then this binding will
-# not resolve, which is SAFE: an unbound MODULE_AUDIO_MASTER soft-degrades the master phase to the
-# un-mastered bed (#249 / #77), it never drops the film.
+# AUDIO_MASTER_VPC -> the always-on audio-master CPU container on dischord. Workers VPC Service created
+# 2026-06-23, resolving over the dischord-local tunnel d0835ae0. An unbound binding soft-degrades the
+# master phase to the un-mastered bed (#249 / #77); it never drops the film.
 [[vpc_services]]
 binding = "AUDIO_MASTER_VPC"
-service_id = "TBD-STRUMMER-AUDIO-MASTER-VPC"
+service_id = "019ef2c3-9fe9-7000-bbca-5e6c7f655ee0"
 remote = true
