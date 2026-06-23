@@ -358,12 +358,14 @@ async function assembleScatterClips(
   // is materially shorter than the sum of the cut shots' durations, clips were dropped in the
   // assemble (a fetch miss or a concat truncation) -- error instead of shipping a 1-of-N film. This
   // closes the gap that let a 3-shot render COMPLETE with one shot; per-shot clips stay intact in R2
-  // for a re-driven assemble. The 0.7 ratio tolerates per-clip tail/beat-trim without false alarms.
+  // for a re-driven assemble. The 0.5 ratio catches a gross partial (v4 shipped 36%) while tolerating
+  // legitimate per-clip tail/beat-trim (music films) without false alarms; the container-side guard
+  // (output vs its actual normalized inputs) is the precise, false-positive-free backstop.
   const expectedSeconds = (job.scenes ?? [])
     .filter((s) => job.expected_shot_ids.includes(s.shot_id))
     .reduce((sum, s) => sum + (Number.isFinite(s.seconds) && s.seconds > 0 ? s.seconds : 0), 0);
   const assembledSeconds = typeof body.durationSeconds === "number" ? body.durationSeconds : 0;
-  if (expectedSeconds > 0 && assembledSeconds > 0 && assembledSeconds < expectedSeconds * 0.7) {
+  if (expectedSeconds > 0 && assembledSeconds > 0 && assembledSeconds < expectedSeconds * 0.5) {
     job.phase = "failed";
     job.error = `assemble dropped clips: ${assembledSeconds.toFixed(1)}s assembled vs ~${expectedSeconds.toFixed(1)}s expected across ${job.expected_shot_ids.length} shots`;
     return;

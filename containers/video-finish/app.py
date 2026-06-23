@@ -164,6 +164,9 @@ async def finish(req):
             "bytes": len(out_bytes),
             "durationSeconds": round(secs, 3),
             "shots": len(srcs),
+            # [assemble] instrumentation (#287): clips received vs downloaded vs output duration,
+            # so a partial assemble is diagnosable from logs (worker-sent-fewer vs fetch-dropped).
+            "clipsReceived": len(clips),
             "hasAudio": has_audio,
             "width": width,
             "height": height,
