@@ -1,13 +1,24 @@
 # Vivijure Studio: Frontend <-> Backend Contract (ICD)
 
 This document is the **complete** interface-control reference for the Vivijure Studio worker. It is
-authored so the FULL contract schema -- every HTTP route, every hook input/output, every manifest
-field, every projection rule -- can be reproduced faithfully WITHOUT opening a single `.ts` file.
+authored to the aviation standard: **total coverage, no omissions.** Every HTTP route, every request
+and response field (required AND optional), every enum value, every default, every status/error code,
+every hook input/output, every manifest field, and the rules that turn the registry into the UI are
+documented here. Where something is intentionally undocumented-by-design (internal-only topology), it
+says so explicitly rather than omit.
 
-Every shape here is transcribed from a canonical source in the tree (`src/index.ts` router,
-`src/modules/types.ts`, `src/modules/registry.ts`, `src/modules/conformance.ts`,
-`src/film-orchestrator.ts`, `src/render-module-config.ts`, `src/voices.ts`). Where a field is
-optional the contract marks it optional; where the core defaults it, the default is stated.
+The test of this document: a reader reproduces the ENTIRE contract schema from CONTRACT.md alone,
+never once needing to open a `.ts` file.
+
+> ## MAINTAINER RULE (read first)
+>
+> **This doc is the source of truth, and changes cannot bypass it.** Any change to the contract --
+> a new route, a new hook, a new field, a new manifest config type, a new enum value, a changed
+> default -- MUST be made in this document **in the same PR** as the typed source change. The contract
+> evolves only through the doc and the typed sources moving together, never silently in code.
+>
+> The reason is resilience, not bureaucracy: **no one should be the person that knowledge dies with.**
+> The doc IS the institutional memory, so no single head is a point of failure. See section 0.
 
 Contract version: **`vivijure-module/1`** (the `MODULE_API` constant). It bumps only on a breaking
 change to the hook or manifest shapes.
@@ -16,7 +27,59 @@ Conventions in this doc:
 - "R2 key" = an object key in the `R2_RENDERS` bucket (the studio's render store).
 - "presigned GET / PUT" = a time-limited signed URL the core mints so a module (or a browser) can
   fetch / upload an R2 object directly without bucket credentials.
-- A double hyphen `--` stands in for a dash (house style: no em/en dashes).
+- A field name suffixed `?` is optional. "req" column: yes = required, no = optional.
+- A double hyphen `--` stands in for a dash (house style: no em/en dashes, including in diagrams).
+- Unless a route documents otherwise, every JSON request body that fails to parse returns
+  `400 { "error": "invalid JSON body" }`, and every numeric `:id` that is not a positive integer
+  returns `400 { "error": "invalid id" }`. A successful body is JSON with
+  `content-type: application/json; charset=utf-8`.
+
+---
+
+## 0. Contract versioning & change control
+
+**Why this section exists.** "You document it, you change control it, because no one should be the
+person that knowledge dies with." The contract is institutional memory. The version + the change
+rules below are how the contract stays true over time without depending on any single person's head.
+
+### 0.1 The version
+
+- **`vivijure-module/1`** is the contract version, carried as the `MODULE_API` constant and echoed on
+  the wire in `GET /api/modules.api` and in every module manifest's `api` field.
+- It covers: the 11 hook names + their cardinality, every hook's Input/Output shape, the module
+  manifest schema (including the `ConfigField` union), the invoke/poll envelopes, and the
+  `GET /api/modules` projection payload.
+- It bumps to `vivijure-module/2` ONLY on a breaking change to those shapes (a removed/renamed hook,
+  a changed required field, a changed envelope). Additive changes (a new optional field, a new hook,
+  a new module) do NOT bump it; they are forward-compatible within `/1`.
+
+### 0.2 How the contract evolves (the mechanics)
+
+Each kind of change moves the same set of artifacts together, in one PR, with this doc:
+
+| Change | Typed-source edits (all in the same PR as this doc) |
+|--------|-----------------------------------------------------|
+| **New hook** | Add to `HookName` union + `HOOK_NAMES` + `HOOK_CARDINALITY` + `HOOK_BLURBS`; add a named `XInput` / `XOutput` interface in `src/modules/types.ts`; add a branch to `HOOK_OUTPUT_CHECKS` in `src/modules/conformance.ts` (tsc's `Record<HookName, ...>` FORCES this, so a missing branch fails the typecheck gate); orchestrate it; add a section here. |
+| **New manifest config field type** | Add to the `ConfigField` union in `src/modules/types.ts`; add to `FIELD_TYPES` + a `checkConfigField` branch in `src/modules/conformance.ts`; document it in section 4.1 here. |
+| **New / changed API route** | Add to `API_ROUTES` (or the inline dispatch) in `src/index.ts` with its handler; document the full request/response schema + status codes in section 2 here. |
+| **New hook field** | Add to the `XInput`/`XOutput` interface; if required, add to the conformance validator; update the field table here. |
+| **New render quality tier / render projection field** | Edit `QUALITY_TIERS` / `RenderConfigProjection` in `src/render-module-config.ts`; update section 2.2.1 / 2.2 here. |
+
+The `Record<HookName, ...>` maps (`HOOK_CARDINALITY`, `HOOK_BLURBS`, `HOOK_OUTPUT_CHECKS`) are the
+enforcement spine: TypeScript will not compile if a hook is added to the union without filling in
+every map, so a new hook cannot ship half-wired.
+
+### 0.3 Governance
+
+- **Conventional Commits**: `feat(...)`, `fix(...)`, `docs(...)`, etc. The body explains the WHY; the
+  footer lists files touched.
+- **PRs are reviewed** before merge; the crew lead integrates. A contract change without the matching
+  CONTRACT.md update in the same PR is incomplete and should be sent back.
+- **SemVer + tag-gated deploy**: studio releases are SemVer `vX.Y.Z`; the studio deploys ONLY on a
+  SemVer tag. PATCH for fixes / backend-only tweaks, MINOR for new features.
+- **The promise:** because the typed sources are the law (tsc gates them) and this doc must move with
+  them in the same reviewed PR, the contract cannot drift silently. If it is not in this doc, it is
+  not in the contract.
 
 ---
 
@@ -35,8 +98,25 @@ The core discovers modules from its env bindings, fetches each manifest, and bui
 
 > **The frontend is a projection of the registry.** The studio UI does not hardcode the pipeline. It
 > reads `GET /api/modules` and renders the panels, choosers, and config controls from that payload.
-> Install a module (bind it) and it appears in the UI; remove it and it disappears. There is one
-> source of truth (the registry), and the frontend is a view of it.
+> Install a module (bind it) and it appears in the UI; remove it and it disappears. One source of
+> truth (the registry); the frontend is a view of it.
+
+```mermaid
+flowchart TD
+  subgraph core[Studio core worker]
+    REG[(registry: discovered module manifests)]
+    MOD[GET /api/modules]
+    REG --> MOD
+  end
+  MOD -->|api, modules, hooks, catalog, render| FE[Frontend studio UI]
+  FE --> PANEL[Render-config panel:<br/>keyframe, motion.backend, speech,<br/>finish, master, film.finish]
+  FE --> BESPOKE[Bespoke surfaces]
+  BESPOKE --> S1[dialogue: storyboard]
+  BESPOKE --> S2[score: audio-bed]
+  BESPOKE --> S3[plan.enhance: auto-direct]
+  BESPOKE --> S4[cast.image: cast page]
+  BESPOKE --> S5[notify: toggle]
+```
 
 There are **11 hooks** (extension points). A hook is either:
 - **`pick_one`** -- exactly one installed module serves it (rendered as a chooser), or
@@ -48,13 +128,14 @@ and the core degrades; it does not crash. Polish steps (finish, speech, score, m
 soft-degrade (pass their input through honestly with a `degraded` reason) rather than fail the
 render. Only malformed I/O fails loud.
 
-### Auth model
+### 1.1 Auth model
 
 The studio is **single-user**. All studio data lives under a fixed owner (`STUDIO_OWNER = "studio"`);
-`getUserEmail()` returns that constant and is NOT an access gate. The Cloudflare Access identity
-header `cf-access-authenticated-user-email` is read only for provenance / per-user settings
-(`/api/whoami`, `/api/prefs`) and for the `notify` hook; a missing header reads as `"anonymous"`.
-Access gating itself is enforced at the edge (CF Access), not in the worker.
+`getUserEmail()` returns that constant and is **not** an access gate (`getUserEmail` ignores the
+request). The Cloudflare Access identity header `cf-access-authenticated-user-email` is read only for
+provenance / per-user settings (`/api/whoami`, `/api/prefs`) and to stamp the film owner for the
+`notify` hook; a missing header reads as `"anonymous"`. Access gating itself is enforced at the edge
+(CF Access), not in the worker. There is no per-request auth field in any route below.
 
 ---
 
@@ -62,93 +143,102 @@ Access gating itself is enforced at the edge (CF Access), not in the worker.
 
 ### 2.0 Dispatch + global behavior
 
-- `GET /health` -> `200 { "ok": true, "service": "vivijure-studio", "phase": 1 }`.
-- `GET /api/modules` is handled inline (with a 60s per-isolate discovery cache); see 2.1.
-- Studio HTML/JS/CSS pages are served from the `ASSETS` binding for `GET`/`HEAD`.
+- `GET /health` and `GET /api/modules` are handled inline (before the route table).
+- Studio HTML/JS/CSS pages are served from the `ASSETS` binding for `GET`/`HEAD` (static assets, not
+  part of the API contract).
 - All other API routes dispatch through the `API_ROUTES` table (method + path pattern -> handler).
-- Path patterns use `:param` (single segment) and `*param` (greedy, captures the rest, e.g. an R2 key
-  with slashes).
-- Errors: a handler throwing `HttpError` returns `{ "error": "<message>" }` with that status (e.g.
-  `badRequest` -> 400, `notFound` -> 404). An uncaught error returns `500 { "error": "internal error" }`.
-- Success bodies are JSON unless noted (artifact + marker export return raw bytes).
-- A `:id` for a film job is the `film-<...>` id; render-library ids are numeric.
+- Path patterns use `:param` (one URL segment, percent-decoded) and `*param` (greedy trailing
+  catch-all that captures the rest of the path, slashes included -- used for R2 keys). A pattern with
+  no star must match the path segment count exactly; a star pattern matches when the path has at
+  least as many segments.
+- Errors: a handler throwing an `HttpError` returns `{ "error": "<message>" }` with that status
+  (`badRequest` -> 400, `notFound` -> 404). Some handlers return a non-throw error body directly
+  (e.g. `503`, `422`, `502`, `504`); those are documented per route. Any other uncaught error returns
+  `500 { "error": "internal error" }`.
+- A `:id` that addresses a film job is the `film-<...>` string id; a `:jobId` may be `film-*` or
+  `scatter-*`. Render-library / cast / project ids are positive integers.
+- No route requires a request auth field (see 1.1).
 
 ### 2.1 Full route enumeration
 
-Every route the worker serves that the frontend (or an API client such as the Slate/Discord bot)
-calls. Contract-critical routes have a detailed schema in 2.2+.
+Every route the worker serves. The detail subsection for each follows in 2.2+. (Count: 64.)
 
-| # | Method | Path | Purpose |
-|---|--------|------|---------|
-| 1 | GET | `/health` | Liveness probe. |
-| 2 | GET | `/api/modules` | **The projection payload** the frontend renders the pipeline from (catalog, hooks, modules, render tiers). See 2.2. |
-| 3 | GET | `/api/voices` | Dialogue voice catalog (Aura-1 speakers). See 2.3. |
-| 4 | GET | `/api/storyboard/projects` | List storyboard projects. |
-| 5 | POST | `/api/storyboard/projects` | Create a project. Body `{ name?, prefs?, storyboard? }`. |
-| 6 | GET | `/api/storyboard/projects/:id` | Get one project (with last storyboard). |
-| 7 | PATCH | `/api/storyboard/projects/:id` | Update name / prefs / storyboard. |
-| 8 | POST | `/api/storyboard/projects/:id/storyboard` | Save the project's storyboard. Body `{ storyboard }`. |
-| 9 | DELETE | `/api/storyboard/projects/:id` | Delete a project. |
-| 10 | GET | `/api/cast` | List cast members. `{ cast: CastRow[] }`. |
-| 11 | POST | `/api/cast` | Create a cast member. Body `{ name, bible? }`. |
-| 12 | GET | `/api/cast/:id` | Get one cast member. `{ cast: CastRow }`. |
-| 13 | PATCH | `/api/cast/:id` | Update `{ name?, bible?, voice_id? }` (voice_id validated). |
-| 14 | DELETE | `/api/cast/:id` | Delete a cast member. `{ ok, deleted }`. |
-| 15 | POST | `/api/cast/:id/portrait` | Set portrait (binary upload, `{key,mime}`, or `{from_chat_artifact}`). |
-| 16 | DELETE | `/api/cast/:id/portrait` | Clear the portrait. |
-| 17 | POST | `/api/cast/:id/ref` | Add a training reference image. |
-| 18 | DELETE | `/api/cast/:id/ref` (or `/refs/*refKey`) | Remove a reference image by key. |
-| 19 | POST | `/api/cast/:id/source` | Add a human-uploaded source photo. |
-| 20 | DELETE | `/api/cast/:id/source` (or `/source/*sourceKey`) | Remove a source photo by key. |
-| 21 | POST | `/api/cast/:id/generate-refs` | Start the `cast.image` ref-generation job. See 2.6. |
-| 22 | GET | `/api/cast/:id/refs-job/:jobId` | Poll the ref-generation job. See 2.6. |
-| 23 | POST | `/api/cast/:id/train-lora` | Start cast LoRA training. |
-| 24 | GET | `/api/cast/:id/lora-status` | Poll cast LoRA training status. |
-| 25 | POST | `/api/upload` | Upload raw image bytes -> `{ key, mime, size }`. See 2.7. |
-| 26 | GET | `/api/artifact/*key` | Serve an R2 object by key (no-cache-ish). See 2.4. |
-| 27 | POST | `/api/storyboard/preflight` | Pre-render validation of a storyboard. |
-| 28 | POST | `/api/storyboard/plan` | LLM plan a storyboard from a brief. |
-| 29 | POST | `/api/storyboard/refine` | LLM refine an existing storyboard. |
-| 30 | POST | `/api/chat` | Planner chat assistant. |
-| 31 | POST | `/api/storyboard/score-bed` (alias `/music-generate`) | Generate a music/score bed (async). |
-| 32 | GET | `/api/job/:id` | Poll a score-bed generation job. |
-| 33 | POST | `/api/storyboard/enhance` | Run the `plan.enhance` chain (auto-direction). See 2.5. |
-| 34 | GET | `/api/storyboard/models` | List planner LLM models. `{ models }`. |
-| 35 | POST | `/api/storyboard/yaml` | Serialize a storyboard to YAML. `{ ok, yaml }`. |
-| 36 | POST | `/api/storyboard/markers` | Export timeline markers (raw file download). |
-| 37 | POST | `/api/storyboard/bundle` | Assemble a render bundle tarball. `{ ok, bundleKey, ... }`. |
-| 38 | POST | `/api/storyboard/audio-upload` | Upload an audio bed -> `{ key, mime, size }`. |
-| 39 | POST | `/api/storyboard/character-ref` | Upload a character ref image -> `{ key, mime, size }`. |
-| 40 | POST | `/api/audio/analyze` | Analyze audio beats. `{ ok, output, module }`. |
-| 41 | POST | `/api/storyboard/render` | Submit a module-path render (keyframe + motion). See 2.8. |
-| 42 | POST | `/api/storyboard/render-plan` | Dry-run: resolve the render pipeline without submitting. |
-| 43 | POST | `/api/render/clips` | Start a per-shot clips job. |
-| 44 | GET | `/api/render/clips/:id` | Poll a clips job. |
-| 45 | POST | `/api/render/film` | **Start a full film job.** See 2.9. |
-| 46 | GET | `/api/render/film/:id` | **Poll a film job** (FilmSummary). See 2.10. |
-| 47 | POST | `/api/storyboard/renders/:id/regen-shot` | Regenerate a single shot. |
-| 48 | POST | `/api/storyboard/render/scatter` | Scatter (sharded) render submission. |
-| 49 | POST | `/api/storyboard/render-from-keyframes` | Animate from injected keyframes. See 2.8. |
-| 50 | GET | `/api/storyboard/render/:jobId` | Poll a storyboard render (RunPod-shaped view). See 2.8. |
-| 51 | DELETE | `/api/storyboard/render/:jobId` | Cancel a render. |
-| 52 | GET | `/api/storyboard/renders` | List renders (`?project_id`, `?limit`). `{ renders }`. |
-| 53 | GET | `/api/storyboard/renders/tags` | List render tags. `{ tags }`. |
-| 54 | PATCH | `/api/storyboard/renders/:id` | Update label / lockedShots / folderPath / tags. |
-| 55 | DELETE | `/api/storyboard/renders/:id` | Delete a render. |
-| 56 | POST | `/api/storyboard/renders/:id/add-audio` | Mux an audio bed onto a finished render. |
-| 57 | POST | `/api/storyboard/renders/:id/add-narration` | Add narration to a finished render. |
-| 58 | POST | `/api/storyboard/renders/:id/finalize` | Finalize a keyframes-only preview (GPU animate). |
-| 59 | POST | `/api/storyboard/renders/:id/animate-cloud` | Animate a preview via cloud i2v. |
-| 60 | POST | `/api/storyboard/renders/:id/animate-hybrid` | Animate a preview via mixed GPU/cloud backends. |
-| 61 | POST | `/api/storyboard/renders/adopt` | Adopt an externally-produced render into history. |
-| 62 | GET | `/api/whoami` | CF Access identity. `{ user }`. |
-| 63 | GET | `/api/prefs` | Get per-user prefs. `{ ok, prefs }`. |
-| 64 | PATCH | `/api/prefs` | Update per-user prefs. `{ ok, prefs }`. |
+| # | Method | Path | Detail |
+|---|--------|------|--------|
+| 1 | GET | `/health` | 2.2 |
+| 2 | GET | `/api/modules` | 2.3 |
+| 3 | GET | `/api/voices` | 2.4 |
+| 4 | GET | `/api/storyboard/projects` | 2.5 |
+| 5 | POST | `/api/storyboard/projects` | 2.5 |
+| 6 | GET | `/api/storyboard/projects/:id` | 2.5 |
+| 7 | PATCH | `/api/storyboard/projects/:id` | 2.5 |
+| 8 | POST | `/api/storyboard/projects/:id/storyboard` | 2.5 |
+| 9 | DELETE | `/api/storyboard/projects/:id` | 2.5 |
+| 10 | GET | `/api/cast` | 2.6 |
+| 11 | POST | `/api/cast` | 2.6 |
+| 12 | GET | `/api/cast/:id` | 2.6 |
+| 13 | PATCH | `/api/cast/:id` | 2.6 |
+| 14 | DELETE | `/api/cast/:id` | 2.6 |
+| 15 | POST | `/api/cast/:id/portrait` | 2.7 |
+| 16 | DELETE | `/api/cast/:id/portrait` | 2.7 |
+| 17 | POST | `/api/cast/:id/ref` | 2.7 |
+| 18 | DELETE | `/api/cast/:id/ref` (or `/refs/*refKey`) | 2.7 |
+| 19 | POST | `/api/cast/:id/source` | 2.7 |
+| 20 | DELETE | `/api/cast/:id/source` (or `/source/*sourceKey`) | 2.7 |
+| 21 | POST | `/api/cast/:id/generate-refs` | 2.8 |
+| 22 | GET | `/api/cast/:id/refs-job/:jobId` | 2.8 |
+| 23 | POST | `/api/cast/:id/train-lora` | 2.9 |
+| 24 | GET | `/api/cast/:id/lora-status` | 2.9 |
+| 25 | POST | `/api/upload` | 2.10 |
+| 26 | GET | `/api/artifact/*key` | 2.11 |
+| 27 | POST | `/api/storyboard/preflight` | 2.12 |
+| 28 | POST | `/api/storyboard/plan` | 2.13 |
+| 29 | POST | `/api/storyboard/refine` | 2.13 |
+| 30 | POST | `/api/chat` | 2.13 |
+| 31 | POST | `/api/storyboard/score-bed` (alias `/music-generate`) | 2.14 |
+| 32 | GET | `/api/job/:id` | 2.14 |
+| 33 | POST | `/api/storyboard/enhance` | 2.15 |
+| 34 | GET | `/api/storyboard/models` | 2.16 |
+| 35 | POST | `/api/storyboard/yaml` | 2.16 |
+| 36 | POST | `/api/storyboard/markers` | 2.16 |
+| 37 | POST | `/api/storyboard/bundle` | 2.16 |
+| 38 | POST | `/api/storyboard/audio-upload` | 2.10 |
+| 39 | POST | `/api/storyboard/character-ref` | 2.10 |
+| 40 | POST | `/api/audio/analyze` | 2.17 |
+| 41 | POST | `/api/storyboard/render` | 2.18 |
+| 42 | POST | `/api/storyboard/render-plan` | 2.18 |
+| 43 | POST | `/api/render/clips` | 2.19 |
+| 44 | GET | `/api/render/clips/:id` | 2.19 |
+| 45 | POST | `/api/render/film` | 2.20 |
+| 46 | GET | `/api/render/film/:id` | 2.21 |
+| 47 | POST | `/api/storyboard/renders/:id/regen-shot` | 2.22 |
+| 48 | POST | `/api/storyboard/render/scatter` | 2.23 |
+| 49 | POST | `/api/storyboard/render-from-keyframes` | 2.18 |
+| 50 | GET | `/api/storyboard/render/:jobId` | 2.24 |
+| 51 | DELETE | `/api/storyboard/render/:jobId` | 2.24 |
+| 52 | GET | `/api/storyboard/renders` | 2.25 |
+| 53 | GET | `/api/storyboard/renders/tags` | 2.25 |
+| 54 | PATCH | `/api/storyboard/renders/:id` | 2.25 |
+| 55 | DELETE | `/api/storyboard/renders/:id` | 2.25 |
+| 56 | POST | `/api/storyboard/renders/:id/add-audio` | 2.26 |
+| 57 | POST | `/api/storyboard/renders/:id/add-narration` | 2.26 |
+| 58 | POST | `/api/storyboard/renders/:id/finalize` | 2.27 |
+| 59 | POST | `/api/storyboard/renders/:id/animate-cloud` | 2.27 |
+| 60 | POST | `/api/storyboard/renders/:id/animate-hybrid` | 2.27 |
+| 61 | POST | `/api/storyboard/renders/adopt` | 2.28 |
+| 62 | GET | `/api/whoami` | 2.29 |
+| 63 | GET | `/api/prefs` | 2.29 |
+| 64 | PATCH | `/api/prefs` | 2.29 |
 
-### 2.2 GET /api/modules -- the projection payload
+### 2.2 GET /health
+
+**Request:** none. **Response 200:** `{ "ok": true, "service": "vivijure-studio", "phase": 1 }`.
+
+### 2.3 GET /api/modules -- the projection payload
 
 The single payload the frontend renders the whole pipeline from. Unauthenticated-safe: the internal
-env `binding` that serves each hook is **stripped** (info-disclosure guard). Cached 60s per isolate.
+env `binding` that serves each hook is **stripped** (info-disclosure guard, #18). Cached 60s per
+isolate (a refresh storm does not re-fetch every module manifest).
 
 **Request:** no params, no body.
 
@@ -158,15 +248,14 @@ env `binding` that serves each hook is **stripped** (info-disclosure guard). Cac
 |-------|------|---------|
 | `api` | `"vivijure-module/1"` | Contract version. |
 | `modules` | `PublicModule[]` | Every installed module's manifest, **minus** `binding`. Each is the manifest shape from section 4. |
-| `hooks` | `{ [hook]: string[] }` | Map of hook name -> module **names** serving it, **pre-sorted** in canonical `ui.order` then name order (section 5). The frontend consumes this verbatim and never re-sorts. |
-| `catalog` | `HookCatalogEntry[]` | Every hook (independent of what is installed): `{ name, blurb, cardinality }`. Source: `HOOK_NAMES` x `HOOK_BLURBS` x `HOOK_CARDINALITY`. |
-| `render` | `RenderConfigProjection` | Core-owned render config: `{ quality_tiers: { value, label, blurb }[], default_tier }`. See 2.2.1. |
+| `hooks` | `{ [hook]: string[] }` | Map of hook name -> module **names** serving it, **pre-sorted** in canonical `ui.order` then name order (section 5). The frontend consumes this verbatim and never re-sorts. A hook with no installed module is absent from the map. |
+| `catalog` | `HookCatalogEntry[]` | Every hook (independent of what is installed): `{ name, blurb, cardinality }`. |
+| `render` | `RenderConfigProjection` | Core-owned render config: `{ quality_tiers: { value, label, blurb }[], default_tier }`. See 2.3.1. |
 
 `HookCatalogEntry`: `{ name: HookName, blurb: string, cardinality: "pick_one" | "chain" }`.
-
 `PublicModule` = the `ModuleManifest` (section 4) with `binding` removed.
 
-#### 2.2.1 render.quality_tiers (canonical values)
+#### 2.3.1 render.quality_tiers (canonical values)
 
 Sourced from `QUALITY_TIERS` / `DEFAULT_QUALITY_TIER`. `default_tier` = `"final"`.
 
@@ -176,172 +265,344 @@ Sourced from `QUALITY_TIERS` / `DEFAULT_QUALITY_TIER`. `default_tier` = `"final"
 | `standard` | standard | 8-step keyframes + 20-step EasyCache i2v; balanced |
 | `final` | final | 97 frames, 22 steps; production quality |
 
-### 2.3 GET /api/voices
+### 2.4 GET /api/voices
 
 **Request:** none.
 **Response 200:** `{ "voices": { "id": string, "label": string }[] }`.
 
-The catalog is the Aura-1 speakers, in this stable order (the `id` set): `angus`, `asteria`, `arcas`,
-`orion`, `orpheus`, `athena`, `luna`, `zeus`, `perseus`, `helios`, `hera`, `stella`. The cast voice
-picker renders from this; one source of truth.
+The catalog is the Aura-1 speakers, in this stable order (the `id` values): `angus`, `asteria`,
+`arcas`, `orion`, `orpheus`, `athena`, `luna`, `zeus`, `perseus`, `helios`, `hera`, `stella`. The
+cast voice picker renders from this; one source of truth. These 12 ids are the **only** valid
+`voice_id` values (see cast PATCH, 2.6).
 
-### 2.4 GET /api/artifact/*key
+### 2.5 Storyboard projects
 
-Serve an R2 object by its key (the `*key` captures the full slashed key).
+Responses are wrapped by resource name: list -> `{ projects: [...] }`, item -> `{ project: {...} }`.
+The persisted row is `StoryboardProject` (Appendix A.2).
 
-**Request:** path = the R2 key (e.g. `renders/film-abc/film.mp4`). No body.
-**Response 200:** raw object bytes. Headers: `content-type` (from the object's stored metadata, else
-`application/octet-stream`), `content-length`, `cache-control: private, max-age=300`.
+| Route | Body | Response | Errors |
+|-------|------|----------|--------|
+| GET `/api/storyboard/projects` | none | `200 { projects: StoryboardProject[] }` | -- |
+| POST `/api/storyboard/projects` | `{ name (req), prefs? }` | `201 { project }` | 400 if `name` missing |
+| GET `/api/storyboard/projects/:id` | none | `200 { project }` | 404 if unknown |
+| PATCH `/api/storyboard/projects/:id` | `{ name?, prefs?, storyboard? }` | `200 { project }` | 404 if unknown |
+| POST `/api/storyboard/projects/:id/storyboard` | `{ storyboard (req) }` | `200 { project }` | 400 if `storyboard` missing; 404 if unknown |
+| DELETE `/api/storyboard/projects/:id` | none | `200 { ok: true, deleted: <id> }` | 404 if unknown |
+
+PATCH note: if `storyboard` is present it is saved as the project's last storyboard; otherwise `name`
+/ `prefs` are updated. `storyboard` is opaque to this route (validated only at preflight / render).
+
+### 2.6 Cast members
+
+Responses wrapped: list -> `{ cast: [...] }`, item -> `{ cast: {...} }`. The persisted row is
+`CastMember` (Appendix A.1).
+
+| Route | Body | Response | Errors |
+|-------|------|----------|--------|
+| GET `/api/cast` | none | `200 { cast: CastMember[] }` | -- |
+| POST `/api/cast` | `{ name (req), bible? }` | `201 { cast }` | 400 if `name` missing |
+| GET `/api/cast/:id` | none | `200 { cast }` | 404 if unknown |
+| PATCH `/api/cast/:id` | `{ name?, bible?, voice_id? }` | `200 { cast }` | 400 if `voice_id` invalid; 404 if unknown |
+| DELETE `/api/cast/:id` | none | `200 { ok: true, deleted: <id> }` | 404 if unknown |
+
+`voice_id` validation: `null` or `""` clears it; otherwise it MUST be one of the 12 voice ids (2.4),
+else `400 { "error": "voice_id must be one of: angus, asteria, ..." }`. `bible` may be `null`.
+
+### 2.7 Cast media (portrait / ref / source)
+
+Each of these registers an image onto a cast member. The request body is one of three forms:
+1. **Raw binary** -- the body IS the image bytes; `Content-Type` is the image mime.
+2. **Staged key** -- JSON `{ key, mime }` referencing an already-uploaded R2 object (from `/api/upload`).
+3. **Chat artifact copy** -- JSON `{ from_chat_artifact: <key> }` to copy a chat-generated image in.
+
+| Route | Purpose | Response |
+|-------|---------|----------|
+| POST `/api/cast/:id/portrait` | Set the portrait (the identity seed). | `200 { cast }` |
+| DELETE `/api/cast/:id/portrait` | Clear the portrait (deletes the R2 object best-effort). | `200 { cast }` |
+| POST `/api/cast/:id/ref` | Add a LoRA training reference image. | `200 { cast }` |
+| DELETE `/api/cast/:id/ref` | Remove a reference; body `{ key }` OR path `/refs/*refKey`. | `200 { cast }` |
+| POST `/api/cast/:id/source` | Add a human-uploaded source photo (extra conditioning). | `200 { cast }` |
+| DELETE `/api/cast/:id/source` | Remove a source; body `{ key }` OR path `/source/*sourceKey`. | `200 { cast }` |
+
+Errors: `400` on a missing key (DELETE with neither body `key` nor path key), `404` on an unknown
+cast member.
+
+### 2.8 Cast ref generation (the `cast.image` hook)
+
+Async run/poll across requests (a multi-image set cannot finish in one request). POST starts the job;
+GET advances + polls it.
+
+**POST `/api/cast/:id/generate-refs`** -- start. Body:
+
+| Field | Type | Req | Meaning |
+|-------|------|-----|---------|
+| `config` | object | no | Module config overrides (clamped against the `cast.image` module's `config_schema`). |
+| `art_style` | string | no | Art-style lead (e.g. `"anime"`); blank keeps the photographic templates. |
+| `source_keys` | string[] | no | R2 keys of human-uploaded source photos (extra conditioning). |
+| `choice` | string | no | Module selection when several `cast.image` modules are installed. |
+
+**GET `/api/cast/:id/refs-job/:jobId`** -- advance + poll.
+
+Both respond `200 { ok: true, ...CastRefsSummary }` (POST: `201`). `CastRefsSummary`:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `job_id` | string | The ref-generation job id. |
+| `cast_id` | number | The cast member. |
+| `phase` | `"generating" \| "done" \| "failed"` | Job phase. |
+| `module?` | string | The `cast.image` module that ran. |
+| `registered` | number | Count of generated images registered onto the member so far. |
+| `images` | `{ key, mime }[]` | The generated reference images (R2 keys + mime). |
+| `error?` | string | Set when `phase === "failed"`. |
+
+Errors: `404` if the cast member (POST) or job (GET) is unknown.
+
+### 2.9 Cast LoRA training
+
+| Route | Body | Response | Errors |
+|-------|------|----------|--------|
+| POST `/api/cast/:id/train-lora` | `{ renderOverrides? }` | `200 { ok: true, jobId, status, statusRaw, bundleKey, loraDestKey, cast }` | `404 { error: "cast not found" }`; `500 { error: "bundle assembly failed", details }`; `502 { error }` on submit failure |
+| GET `/api/cast/:id/lora-status` | none | `200` LoRA status view (the cast member's `lora_status`, `lora_job_id`, `lora_error`, etc.) | `404` if unknown |
+
+`lora_status` enum (on the cast row): `"idle" | "training" | "ready" | "failed"`. The training submit
+banks the freshly-trained adapter back onto the cast member (`lora_status` -> `ready`) so a
+character's LoRA is trained ONCE and reused across every project.
+
+### 2.10 Uploads (binary -> staged key)
+
+Three sibling routes accept raw bytes and return a staged R2 key. The body IS the bytes; the
+`Content-Type` header is the mime. All respond `201 { "key": string, "mime": string, "size": number }`
+and `400` on an empty body or over-size.
+
+| Route | Accepted mimes | Max size | Key prefix |
+|-------|----------------|----------|------------|
+| POST `/api/upload` | `image/png`, `image/jpeg`, `image/webp`, `image/gif` (else `bin`) | 25 MB | (per the upload handler) |
+| POST `/api/storyboard/character-ref` | same image mimes | 25 MB | `character-refs/` |
+| POST `/api/storyboard/audio-upload` | `audio/mpeg|mp3|wav|x-wav|aac|mp4|x-m4a|ogg|webm` (else `bin`) | 32 MB | `audio/` |
+
+The returned `key` is then registered (e.g. onto a cast member via 2.7, or passed as `audioKey` to a
+render route).
+
+### 2.11 GET /api/artifact/*key
+
+Serve an R2 object by its full (slashed) key.
+
+**Request:** path `*key` = the R2 key (e.g. `renders/film-abc/film.mp4`). No body.
+**Response 200:** raw object bytes. Headers: `content-type` (the object's stored content type, else
+`application/octet-stream`), `content-length` (= the object size), `cache-control: private, max-age=300`.
 **404** `{ "error": "artifact not found" }` if the key is missing.
 
-> Render outputs mutate (a render can re-finish in place), so artifact serving is deliberately
-> conservative caching. History-preview bursts limit concurrency client-side, not via long caching.
+> Render outputs mutate (a render can re-finish in place), so artifact serving is short-lived caching
+> only. History-preview bursts limit concurrency client-side, not via long caching.
 
-### 2.5 POST /api/storyboard/enhance -- run the plan.enhance chain
+### 2.12 POST /api/storyboard/preflight
+
+Pre-render validation. A storyboard with problems is **data**, not an HTTP error: this returns `200`
+with `ok:false` + the issues so the panel renders the reasons.
+
+**Request body (envelope):** `{ storyboard (req), castBindings?, bundleKey?, audioKey? }`.
+`castBindings` is `{ [slot]: cast_id }`.
+
+**Response 200** (`PreflightResult`):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `ok` | boolean | `true` iff `counts.error === 0`. |
+| `counts` | `{ error: number, warning: number, info: number }` | Issue counts by level. |
+| `issues` | `PreflightIssue[]` | `{ level: "error"\|"warning"\|"info", scope: string, message: string }`. |
+
+A malformed request body (non-JSON) still returns `400` via `readBody`. A structurally invalid
+storyboard returns `200` with the shape errors surfaced as `level:"error"` issues.
+
+### 2.13 Planner LLM routes (plan / refine / chat)
+
+These call LLM providers via the AI Gateway. They return `422` on a model/LLM failure (not `500`) so
+the client renders the reason.
+
+**POST `/api/storyboard/plan`** -- plan a storyboard from a brief. Body `PlanStoryboardArgs`:
+`{ brief (req), model (req), characters?, beatBlock? }` (`characters` defaults to `[]`).
+Response `200 { ok: true, storyboard: StoryboardValidated, raw, provider, model, logId }` or
+`422 { ok: false, errors: string[], raw, provider, model, logId }`. `400` if `brief` or `model`
+missing. `StoryboardValidated` is in Appendix A.4.
+
+**POST `/api/storyboard/refine`** -- refine an existing storyboard. Body `{ storyboard (req),
+message (req), model (req) }`. Response shape mirrors plan (`200` ok / `422` fail). `400` if any of
+`storyboard`, `message`, `model` missing.
+
+**POST `/api/chat`** -- planner assistant. Body `{ model (req), user_input (req), ... }`. The model
+type routes the response:
+- Image model: `200 { model, model_type: "image", output, output_artifact: { key, mime }, latency_ms,
+  ai_gateway_log_id }` or `502 { error, model }`.
+- Text model: `200 { output, model, logId }` or `422 { error, model }`.
+
+`400` if `model` or `user_input` missing.
+
+### 2.14 Score / narration bed generation (async)
+
+**POST `/api/storyboard/score-bed`** (alias **POST `/api/storyboard/music-generate`**) -- start an
+audio-bed generation. Body:
+
+| Field | Type | Req | Meaning |
+|-------|------|-----|---------|
+| `kind` | `"music" \| "narration"` | no | Defaults `"music"`. |
+| `prompt` | string | for music | Music prompt (required when `kind` is music). |
+| `text` | string | for narration | Narration text (required for narration unless `storyboard` is given). |
+| `storyboard` | `PlanEnhanceStoryboard` | no | Source for narration text when `text` is absent. |
+| `module` | string | no | Score module selection. |
+| `seconds` | number | no | Target length. |
+| `config` | object | no | Module config. |
+
+Response `200 { status, id, module, label }`; `422 { error }` on a start failure. `400` if a music
+request has no `prompt`, or a narration request has neither `text` nor `storyboard`.
+
+**GET `/api/job/:id?module=<name>`** -- poll a score-bed job. The `module` query param is REQUIRED.
+Response `200`: `{ status: "pending" }`, or `{ status: "done", output_artifact: { key, mime } }`, or
+`{ status: "failed", job_error: string }`. `400` if the `module` query param is missing.
+
+### 2.15 POST /api/storyboard/enhance -- run the plan.enhance chain
 
 Runs the `plan.enhance` **chain** (LLM auto-direction) over a storyboard.
 
 **Request body:**
 
-| Field | Type | Required | Meaning |
-|-------|------|----------|---------|
+| Field | Type | Req | Meaning |
+|-------|------|-----|---------|
 | `storyboard` | `PlanEnhanceStoryboard` | yes | Must have a `scenes[]`; structural passthrough (modules rewrite `scenes[].prompt`, preserve all else). |
 | `brief` | string | no | The original brief, for context. |
 | `project` | string | no | Project id (defaults to `"enhance"`). |
 | `config` | object | no | Config passed to each chain module. |
 
-**Response 200:**
+**Response 200:** `{ ok: true, storyboard, applied: string[], errors: string[], notes: string[] }`.
+`storyboard` is the enriched storyboard (or the input unchanged if no module ran). `400` if
+`storyboard` or its `scenes[]` is missing.
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `ok` | `true` | |
-| `storyboard` | `PlanEnhanceStoryboard` | The enriched storyboard (or the input unchanged if no module ran). |
-| `applied` | string[] | Module names that ran, in order. |
-| `errors` | string[] | Chain errors (skipped / failed modules). |
-| `notes` | string[] | Human-readable notes from the modules. |
+### 2.16 Authoring helpers (models / yaml / markers / bundle)
 
-### 2.6 Cast ref generation (cast.image)
+| Route | Body | Response | Errors |
+|-------|------|----------|--------|
+| GET `/api/storyboard/models` | none | `200 { models: ModelEntry[] }` (the planning catalog) | -- |
+| POST `/api/storyboard/yaml` | `{ storyboard (req) }` | `200 { ok: true, yaml: string }` | 400 if missing |
+| POST `/api/storyboard/markers` | `{ storyboard (req), format (req), fps? }` | `200` raw file download (`content-disposition: attachment`) | 400 if `storyboard` or `format` missing |
+| POST `/api/storyboard/bundle` | `AssembleBundleArgs` `{ storyboard (req), characterRefs (req), ... }` | `201 { ok: true, bundleKey }` or `400 { ok: false, error }` | 400 if `storyboard` or `characterRefs` missing |
 
-Async run/poll across requests (a multi-image set cannot finish in one request).
+`markers.format` enum: `"premiere_csv" | "resolve_csv"`. The markers response is a CSV file, not JSON.
 
-**POST `/api/cast/:id/generate-refs`** -- start. Body:
+### 2.17 POST /api/audio/analyze
 
-| Field | Type | Required | Meaning |
-|-------|------|----------|---------|
-| `config` | object | no | Module config overrides. |
-| `art_style` | string | no | Art-style lead (e.g. `"anime"`); blank keeps photographic templates. |
-| `source_keys` | string[] | no | R2 keys of human-uploaded source photos (extra conditioning). |
-| `choice` | string | no | Module selection when several `cast.image` modules exist. |
+Analyze an audio bed for beat / duration slicing.
 
-Response `201 { ok: true, ...castRefsSummary }` (job id + status + progress). `404` if the cast member
-is unknown.
+**Request body** (`AudioAnalyzeRequest` + `module?`):
 
-**GET `/api/cast/:id/refs-job/:jobId`** -- advance + poll. Response `200 { ok: true, ...castRefsSummary }`.
-`404` if the job is unknown.
+| Field | Type | Req | Default | Meaning |
+|-------|------|-----|---------|---------|
+| `audioKey` | string | yes | -- | R2 key of the audio. |
+| `clipSeconds` | number | no | 8.0 | Target clip length. |
+| `mode` | `"beat" \| "duration"` | no | `"beat"` | Slicing strategy. |
+| `minSceneS` | number | no | 2.5 | Min scene seconds (beat mode). |
+| `maxSceneS` | number | no | 12.0 | Max scene seconds (beat mode). |
+| `forceShots` | number | no | -- | Override slice count (duration mode only). |
+| `module` | string | no | -- | Beat-analyze module selection. |
 
-### 2.7 POST /api/upload
+**Response 200:** `{ ok: true, output: <beat plan>, module: string }`; `502 { ok: false, error }` on
+analysis failure. `400` if `audioKey` missing.
 
-Upload raw image bytes (the body IS the bytes; `Content-Type` is the image mime).
-
-**Request:** raw bytes; `Content-Type` one of `image/png|jpeg|webp|gif`. Max 25 MB.
-**Response 201:** `{ "key": string, "mime": string, "size": number }`. The key is then registered on a
-cast member via the portrait/ref/source routes.
-**400** on empty body or over-size.
-
-Siblings: `POST /api/storyboard/audio-upload` (audio mimes, max 32 MB) and
-`POST /api/storyboard/character-ref` (image, max 25 MB), each returning the same `{ key, mime, size }`.
-
-### 2.8 The storyboard render path (module render bridge)
+### 2.18 Storyboard render path (module render bridge)
 
 `POST /api/storyboard/render` (`hSubmitRender`) submits a render through the **module pipeline**
 (keyframe + motion). `POST /api/storyboard/render-from-keyframes` animates from injected keyframes.
-Both return, and `GET /api/storyboard/render/:jobId` polls, a **RunPod-shaped poll view** so the
-planner's existing poll loop understands a module render identically to a raw RunPod job.
+Both return, and `GET /api/storyboard/render/:jobId` (2.24) polls, a **RunPod-shaped poll view** so
+the planner's existing poll loop understands a module render identically to a raw RunPod job.
 
 **POST `/api/storyboard/render` body:**
 
-| Field | Type | Required | Meaning |
-|-------|------|----------|---------|
-| `bundleKey` | string | yes | R2 key of the render bundle (storyboard + cast refs/LoRAs). |
-| `project` | string | no | Defaults from the bundle key. |
-| `qualityTier` | `"draft"\|"standard"\|"final"` | no | Defaults `"final"`. Injected into keyframe + motion configs. |
-| `renderOverrides` | object | no | Per-module config overrides; see 2.8.1. |
-| `keyframesOnly` | bool | no | Stop after keyframes (preview), no i2v/assemble. |
-| `audioKey` | string | no | Staged audio bed to mux after assemble (ignored when `keyframesOnly`). |
-| `processShotIds` | string[] | no | Subset of shots to render. |
-| `projectId` | number/string | no | History project id. |
-| `scenes` | `FilmScene[]` | yes | Storyboard shots: `{ shot_id, prompt, seconds }` (normalized; `seconds` defaults 4). |
-| `motion_backend` | string | no | Explicit motion module choice (else resolved from overrides). |
-| `castLoras` | `{ [slot]: cast_id }` | no | Bound cast LoRAs. A bound-but-not-ready LoRA **fails hard** (no silent inline retrain). |
+| Field | Type | Req | Default | Meaning |
+|-------|------|-----|---------|---------|
+| `bundleKey` | string | yes | -- | R2 key of the render bundle (storyboard + cast refs/LoRAs). |
+| `project` | string | no | derived from `bundleKey` | Project namespace. |
+| `qualityTier` | `"draft"\|"standard"\|"final"` | no | `"final"` | Injected into keyframe + motion configs. |
+| `renderOverrides` | object | no | -- | Per-module config overrides; see 2.18.1. |
+| `keyframesOnly` | bool | no | false | Stop after keyframes (preview), no i2v/assemble. |
+| `audioKey` | string | no | -- | Staged audio bed to mux after assemble (ignored when `keyframesOnly`). |
+| `processShotIds` | string[] | no | all | Subset of shots to render. |
+| `projectId` | number/string | no | -- | History project id (FK). |
+| `scenes` | `FilmScene[]` | yes | -- | `{ shot_id, prompt, seconds }`; `seconds` defaults 4 on normalize. |
+| `motion_backend` | string | no | resolved | Explicit motion module choice. |
+| `castLoras` | `{ [slot]: cast_id }` | no | -- | Bound cast LoRAs. A bound-but-not-ready LoRA FAILS HARD (no silent inline retrain). |
 
-Guards: `503` if no `keyframe` module is installed; `400` if a full render has no `motion.backend`
-module; `400` if `scenes[]` is empty; `400` (untrained cast message) if a bound cast LoRA is not ready.
+Guards / errors: `503 { error: "no keyframe module installed (bind MODULE_KEYFRAME)" }`;
+`400 "no motion.backend module installed for full render"`; `400 "scenes[] required ..."`;
+`400` (untrained-cast message) if a bound cast LoRA is not ready; `400 "bundleKey required"`.
+**Response 201:** the RunPod-shaped poll view (2.24.1).
 
-**Response 201:** the RunPod-shaped poll view (2.8.2).
+**POST `/api/storyboard/render-from-keyframes` body:** `{ bundleKey (req), project?, qualityTier?
+(default final), renderOverrides?, audioKey?, projectId?, motion_backend? (default "own-gpu") }`.
+Reads scenes + injected keyframes from the bundle. Errors: `400 "bundleKey required"`;
+`503 "no motion.backend module installed"`; `400 "bundle has no storyboard scenes"`;
+`400 "bundle has no injected keyframes (clips/<id>_keyframe.png)"`; `422 { error }` if the job fails
+to start. **Response 201:** the RunPod-shaped poll view.
 
-**POST `/api/storyboard/render-from-keyframes` body:** `{ bundleKey (req), project?, qualityTier?,
-renderOverrides?, audioKey?, projectId?, motion_backend? }`. Reads scenes + injected keyframes from
-the bundle. `503` if no `motion.backend`; `400` if the bundle has no scenes or no injected keyframes;
-`422` if the job fails to start.
+**POST `/api/storyboard/render-plan`** (dry run, no submission): body `{ selection?:
+RenderPipelineSelection }`; response `200 { ok: true, plan: <resolved pipeline> }` -- which module
+serves each render hook with its clamped config. Execution is NOT triggered.
 
-#### 2.8.1 renderOverrides shape
+#### 2.18.1 renderOverrides shape
 
-Two accepted forms (both parsed by `parseModuleRenderOverrides`):
+Two accepted forms (`parseModuleRenderOverrides`):
 
 1. **Module wire form** (canonical): `{ motion_backend?: string, config?: { [moduleName]: { ...knobs } } }`.
    Each `config[moduleName]` is clamped against that module's `config_schema`.
 2. **Legacy namespaced form** `{ keyframe, i2v, lora }` (older rows / expert JSON), best-effort mapped:
-   - `keyframe`: `{ steps?, guidance_scale?, seed?, resolution? "WxH" }` -> the keyframe module config
-     (`resolution` splits to `width`/`height`).
+   - `keyframe`: `{ steps?, guidance_scale?, seed?, resolution? ("WxH") }` -> the keyframe module
+     config (`resolution` splits into `width`/`height`).
    - `i2v`: `{ fps?, flow_shift?, seed? }` -> the `own-gpu` motion config.
    - `lora`: reserved namespace (cast LoRA envelope; not a render-config knob here).
 
-The core then injects the `quality_tier` into the keyframe module config and `quality` into any
-motion module that declares a `quality` knob.
+The core then injects `quality_tier` into the keyframe module config and `quality` into any motion
+module that declares a `quality` knob.
 
-#### 2.8.2 RunPod-shaped poll view (RunpodJobView)
+### 2.19 Per-shot clips job (`motion.backend` orchestration)
 
-Returned by the storyboard render submit + `GET /api/storyboard/render/:jobId`.
+**POST `/api/render/clips`** -- start. Body `{ project? (default "clips"), shots (req): ClipShotInput[],
+motion_backend?, config? }`. `ClipShotInput`: `{ shot_id, keyframe_url, keyframe_key?, prompt, seconds,
+motion_backend? }`. `400` if `shots[]` is empty.
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `jobId` | string | The `film-<...>` job id. |
-| `status` | `"IN_PROGRESS"\|"COMPLETED"\|"FAILED"\|"CANCELLED"` | Folded from the film phase. |
-| `statusRaw` | string | The raw phase (or `"CANCELLED"`). |
-| `output` | object \| undefined | On COMPLETED: `{ output_key, project, mode }` (+ `keyframes`/`scenes` for keyframes-only, + `clips`/`model` for derived animation). While IN_PROGRESS: phase progress `{ phase, scene_index, scene_total, project, progress?, last_progress_at, stalled?, stall_seconds? }`. |
-| `error` | string \| undefined | Set on FAILED. |
-| `executionTimeMs` | number | Wall-clock since job creation. |
+**GET `/api/render/clips/:id`** -- advance + poll. `404` if unknown.
 
-### 2.9 POST /api/render/film -- start a film job
+Both respond `200 { ok: true, job_id, motion_backend, total, done, failed, pending, complete,
+shots: [...] }` where each shot is `{ shot_id, status, error }` (POST) or `{ shot_id, status,
+clip_key, error }` (GET). `status` is `"pending" | "done" | "failed"`.
 
-The direct film-render entry (used by the planner film render and by API clients such as the Slate
-bot). Submits a full job: keyframe -> clips -> (dialogue/speech) -> finish -> assemble -> (master) ->
-mux -> (film.finish) -> done.
+### 2.20 POST /api/render/film -- start a film job
+
+The direct film-render entry (the planner film render and API clients such as the Slate bot). Submits
+a full job: keyframe -> clips -> (dialogue/speech) -> finish -> assemble -> (master) -> mux ->
+(film.finish) -> done.
 
 **Request body:**
 
-| Field | Type | Required | Meaning |
-|-------|------|----------|---------|
-| `bundle_key` | string | yes | R2 key of the render bundle. |
-| `scenes` | `FilmScene[]` | yes | `{ shot_id, prompt, seconds }[]`; non-empty. |
-| `project` | string | no | Defaults from the bundle key. |
-| `motion_backend` | string | no | Motion module choice. |
-| `keyframe_config` | object | no | Keyframe module config. |
-| `motion_config` | object | no | Motion module config. |
-| `finish_config` | `{ [moduleName]: object }` | no | Per-finish-module config. |
-| `audio_key` | string | no | Staged audio bed (score/narration) to mux after assemble. Forwarded to the mux phase; absent => silent film. |
-| `film_titles` | `{ title?: { text, subtitle? }, credits?: { lines: string[] } }` | no | Title / credit card text for the `film.finish` chain; absent => no cards. |
+| Field | Type | Req | Default | Meaning |
+|-------|------|-----|---------|---------|
+| `bundle_key` | string | yes | -- | R2 key of the render bundle. |
+| `scenes` | `FilmScene[]` | yes | -- | `{ shot_id, prompt, seconds }[]`; non-empty. |
+| `project` | string | no | derived from `bundle_key` | Project namespace. |
+| `motion_backend` | string | no | -- | Motion module choice. |
+| `keyframe_config` | object | no | -- | Keyframe module config. |
+| `motion_config` | object | no | -- | Motion module config. |
+| `finish_config` | `{ [moduleName]: object }` | no | -- | Per-finish-module config. |
+| `audio_key` | string | no | -- | Staged audio bed (score/narration) to mux after assemble; absent => silent film. |
+| `film_titles` | `{ title?: { text, subtitle? }, credits?: { lines: string[] } }` | no | -- | Title / credit card text for the `film.finish` chain; absent => no cards. |
 
 Identity: the CF Access email is attached as the film owner (`user_email`) for the `notify` hook.
+Errors: `400 "bundle_key required"`, `400 "scenes[] required"`.
 
-**Response 201:** `{ ok: true, ...FilmSummary, download_url? }` (see 2.10). A renders-table row is
+**Response 201:** `{ ok: true, ...FilmSummary, download_url? }` (see 2.21). A renders-table row is
 inserted so the film shows in history.
 
 `FilmScene`: `{ shot_id: string, prompt: string, seconds: number }`.
 
-### 2.10 GET /api/render/film/:id -- poll a film job
+### 2.21 GET /api/render/film/:id -- poll a film job
 
-Advances the job one tick and returns its summary. Keeps the history row in sync.
+Advances the job one tick and returns its summary; keeps the history row in sync.
 
 **Request:** path `:id` = the `film-<...>` id. No body.
 
@@ -352,12 +613,143 @@ Advances the job one tick and returns its summary. Keeps the history row in sync
 | `film_id` | string | The job id. |
 | `phase` | FilmPhase | One of `keyframe, clips, dialogue, speech, finish, assemble, master, mux, done, failed` (section 6). |
 | `error` | string \| undefined | Set when `phase === "failed"`. |
-| `clips` | `JobSummary` \| undefined | Per-shot clip progress, when a clips job exists. |
+| `clips` | `JobSummary` \| undefined | `{ total, done, failed, pending, complete }`, when a clips job exists. |
 | `finish` | `{ total, done, failed, pending }` \| undefined | Finish-chain progress, when finish shots exist. |
 | `film_key` | string \| undefined | R2 key of the assembled film, present once `phase === "done"`. |
-| `download_url` | string \| undefined | Presigned GET of the finished film (24h), added only when `phase === "done"` and `film_key` is set. |
+| `download_url` | string \| undefined | Presigned GET of the finished film (24h TTL), added only when `phase === "done"` and `film_key` is set. |
 
 **404** `{ "error": "film job not found" }` for an unknown id.
+
+### 2.22 POST /api/storyboard/renders/:id/regen-shot
+
+Regenerate a single shot's keyframe from a COMPLETED render's bundle (keyframes-only).
+
+**Request body:** `{ shotId (req) }`. **Response 200:** `{ ok: true, jobId, status }`.
+Errors: `400 "shotId required"`; `404 "render"`; `400 "render must be COMPLETED"`;
+`400 "render has no bundle_key"`; `400 "shot <id> not in bundle storyboard"`;
+`503 { ok:false, error: "no keyframe module installed ..." }`; `422 { ok:false, error }` on submit failure.
+
+### 2.23 POST /api/storyboard/render/scatter
+
+Sharded (scatter) render submission: split shots across shards.
+
+**Request body:**
+
+| Field | Type | Req | Default | Meaning |
+|-------|------|-----|---------|---------|
+| `bundleKey` | string | yes | -- | Render bundle. |
+| `shotIds` | string[] | yes (>= 2) | -- | Shots to render. |
+| `shardCount` | number | no | 2 | Shard count. |
+| `project` | string | no | derived | Project namespace. |
+| `qualityTier` | tier | no | `"final"` | Quality. |
+| `castLoras` | `{ [slot]: cast_id }` | no | `{}` | Bound cast LoRAs. |
+| `renderOverrides` | object | no | -- | Per-module overrides. |
+| `motion_backend` | string | no | -- | Motion choice. |
+| `audioKey` | string | no | -- | Audio bed. |
+| `projectId` | number/string | no | -- | History project id. |
+
+**Response 201:** `{ ok: true, jobId, status }`. Errors: `400 "bundleKey required"`;
+`400 "shotIds[] required (>= 2)"`; `422 { ok: false, error }` on submit failure. Poll a `scatter-*`
+job id via `GET /api/storyboard/render/:jobId` (2.24).
+
+### 2.24 GET / DELETE /api/storyboard/render/:jobId -- poll / cancel
+
+`:jobId` may be `film-*` or `scatter-*`. A legacy / unknown id returns `404 { error: "unknown or
+legacy render job id (film-* or scatter-* only)", jobId }`.
+
+- **GET** advances the job one tick and returns the RunPod-shaped poll view (2.24.1). For a
+  cloud-finalized job it also writes cloud/hybrid progress to the history row.
+- **DELETE** cancels the job and returns the (cancelled) poll view. `404` if the job is unknown.
+
+#### 2.24.1 RunPod-shaped poll view (RunpodJobView)
+
+Returned by the storyboard render submit + this route + the regen/scatter submits.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `jobId` | string | The `film-<...>` / `scatter-<...>` job id. |
+| `status` | `"IN_PROGRESS"\|"COMPLETED"\|"FAILED"\|"CANCELLED"` | Folded from the job phase. |
+| `statusRaw` | string | The raw phase (or `"CANCELLED"`). |
+| `output` | object \| undefined | On COMPLETED: `{ output_key, project, mode }` (+ `keyframes`/`scenes` for keyframes-only, + `clips`/`model` for derived animation). While IN_PROGRESS: phase progress `{ phase, scene_index, scene_total, project, progress?, last_progress_at, stalled?, stall_seconds? }`. |
+| `error` | string \| undefined | Set on FAILED. |
+| `executionTimeMs` | number | Wall-clock since job creation. |
+
+`mode` enum: `"full" | "keyframes-only" | "finalized" | "cloud-finalized"`. The IN_PROGRESS `phase`
+label maps `clips` -> `"i2v"` (and otherwise matches the phase name).
+
+### 2.25 Render library (history)
+
+| Route | Body / query | Response | Errors |
+|-------|--------------|----------|--------|
+| GET `/api/storyboard/renders` | `?project_id`, `?limit` (default 100) | `200 { renders: RenderRow[] }` | -- |
+| GET `/api/storyboard/renders/tags` | none | `200 { tags: string[] }` | -- |
+| PATCH `/api/storyboard/renders/:id` | `{ label?, lockedShots?, folderPath?, tags? }` | `200 <RenderRow>` | 404 if unknown |
+| DELETE `/api/storyboard/renders/:id` | none | `200 { ok: true }` | 404 if unknown |
+
+PATCH applies any present field: `label` (`string|null`), `lockedShots`, `folderPath`, `tags` (each
+normalized). `RenderRow` is Appendix A.3.
+
+### 2.26 Add audio / narration to a finished render
+
+**POST `/api/storyboard/renders/:id/add-audio`** -- mux a staged bed onto a render. Body
+`{ audioKey (req) }`. Response `200 { ok: true, output_key }`; `422 { error }` on mux failure;
+`400 "audioKey required"`.
+
+**POST `/api/storyboard/renders/:id/add-narration`** -- generate narration then mux it. Body
+`{ text (req), module?, config? }`. Generates the narration bed (inline-polled up to ~40 ticks of 3s)
+then muxes it. Response `200 { ok: true, output_key, module, label }`;
+`422 { error }` on generation / mux failure; `504 { error: "narration timed out; try again later" }`
+if generation does not finish in the bounded wait; `400 "text required"`.
+
+### 2.27 Animate a keyframes-only preview
+
+Each derives a new render from a parent preview (`getRenderByIdForUser`). All respond
+`201 { ok: true, ...RunpodJobView }` or `{ ok: false, error }` with the handler's status
+(`404` if the parent render is unknown, else `400` or the derive's own status).
+
+| Route | Body | Behavior |
+|-------|------|----------|
+| POST `/api/storyboard/renders/:id/finalize` | `{ audioKey?, castLoras? }` (empty body ok) | GPU finalize (motion backend `own-gpu`). |
+| POST `/api/storyboard/renders/:id/animate-cloud` | `{ model?, perShot?, audioKey? }` | Cloud i2v finalize (`perShot` = per-shot model map). |
+| POST `/api/storyboard/renders/:id/animate-hybrid` | `{ backends?, defaultBackend? ("gpu"\|"cloud", default "gpu"), defaultCloudModel?, audioKey? }` | Mixed GPU/cloud backends; `backends` validated against installed `motion.backend` modules (excluding `own-gpu`). `400` if the backend set is invalid. |
+
+### 2.28 POST /api/storyboard/renders/adopt
+
+Adopt an externally-produced render into the history (`handleAdoptRender`). Body + response are
+defined by the adopt handler; on success the render appears in the library. (Provenance / import
+route; not part of the module hook contract.)
+
+### 2.29 Identity + preferences
+
+| Route | Body | Response |
+|-------|------|----------|
+| GET `/api/whoami` | none | `200 { user: <cf-access email or "anonymous"> }` |
+| GET `/api/prefs` | none | `200 { ok: true, prefs: object }` |
+| PATCH `/api/prefs` | a prefs object | `200 { ok: true, prefs }`; `400` if the body is not an object |
+
+These are the only routes that read the CF Access identity header (for per-user provenance). They do
+not gate access (see 1.1).
+
+### 2.30 Film render lifecycle (sequence)
+
+```mermaid
+sequenceDiagram
+  participant C as Client (planner / bot)
+  participant W as Studio worker
+  participant M as Module workers
+  C->>W: POST /api/render/film {bundle_key, scenes[], audio_key?, film_titles?}
+  W-->>C: 201 {ok:true, film_id, phase:"keyframe"}
+  loop poll until done/failed
+    C->>W: GET /api/render/film/:id
+    W->>M: invoke hooks for the current phase (keyframe / motion / finish / ...)
+    M-->>W: {ok:true, output} or {ok:true, pending, poll} or {ok:false, error}
+    W-->>C: 200 {ok:true, phase, clips?, finish?}
+  end
+  C->>W: GET /api/render/film/:id  (phase == "done")
+  W-->>C: 200 {ok:true, phase:"done", film_key, download_url}
+  C->>W: GET /api/artifact/<film_key>   (or follow download_url)
+  W-->>C: 200 mp4 bytes
+```
 
 ---
 
@@ -365,10 +757,9 @@ Advances the job one tick and returns its summary. Keeps the history row in sync
 
 The hooks are the typed contract between the core and module workers. Source of truth: `HOOK_NAMES`,
 `HOOK_CARDINALITY`, `HOOK_BLURBS`, and the `*Input` / `*Output` interfaces in `src/modules/types.ts`.
-The core invokes a hook with `InvokeRequest { hook, input, config, context }` and reads back
-`InvokeResponse` (sync `{ ok:true, output }`, async `{ ok:true, pending:true, poll }`, or
-`{ ok:false, error }`). Conformance (`src/modules/conformance.ts`) enforces the REQUIRED output fields
-per hook; optional hint fields are not demanded.
+The core invokes a hook with `InvokeRequest { hook, input, config, context }` and reads back an
+`InvokeResponse`. Conformance (`src/modules/conformance.ts`) enforces the REQUIRED output fields per
+hook; optional hint fields are not demanded.
 
 ### 3.0 Hook summary
 
@@ -387,6 +778,26 @@ per hook; optional hint fields are not demanded.
 | `film.finish` | chain | title / credit cards on the finished film |
 
 Legend for the field tables: `?` after a field name = optional.
+
+### 3.0.1 dispatchChain fold (how a chain hook runs)
+
+A `chain` hook folds every serving module in `ui.order`, each consuming the previous output. A failed
+module is skipped (recorded in `errors`), not fatal. A module that returns `ok:true` but reports a
+soft-degrade (`output.degraded`) is recorded centrally in `degraded`. For `film.finish` the per-step
+`nextInput` presigns a FRESH GET (of the prior step's film) + PUT (to a new key) + sidecar PUT, so
+step N+1 reads what step N wrote (#14).
+
+```mermaid
+flowchart LR
+  SEED[seed input] --> M1[module 1<br/>ui.order asc]
+  M1 -->|ok: output| NI1[nextInput:<br/>presign fresh GET/PUT/sidecar]
+  NI1 --> M2[module 2]
+  M2 -->|ok: output| NI2[nextInput: presign step N+1]
+  NI2 --> M3[module 3]
+  M3 --> OUT[ChainResult:<br/>output, applied[], errors[], degraded[]]
+  M1 -.ok:false.-> ERR[record in errors, skip, continue]
+  M2 -.degraded reason.-> DEG[record in degraded, continue]
+```
 
 ### 3.1 keyframe (pick_one)
 
@@ -407,7 +818,7 @@ Project-level pass: trains/reuses cast LoRAs once and emits every shot's start k
 |-------|------|-----|---------|
 | `project` | string | yes | Echo of the project. |
 | `keyframes` | `{ shot_id, keyframe_key }[]` | yes | Each generated start keyframe (PNG R2 key). |
-| `trained_loras?` | `{ [slot]: string }` | no | slot -> R2 key of the LoRA this render trained or reused; the core banks it onto the cast member (lora_status=ready). |
+| `trained_loras?` | `{ [slot]: string }` | no | slot -> R2 key of the LoRA this render trained or reused; the core banks it onto the cast member (`lora_status` -> ready). |
 
 ### 3.2 motion.backend (pick_one)
 
@@ -482,7 +893,8 @@ Add audio (music / narration / beat-sync) to the assembled film.
 
 Synthesize every speaking shot's line in ONE batch (one submit+poll for a film's dialogue).
 
-**DialogueLine**: `{ shot_id: string, text: string, voice_id?: string }` (voice resolved by the core).
+**DialogueLine**: `{ shot_id: string, text: string, voice_id?: string }` (voice resolved by the core;
+absent/unknown falls back to a default speaker at synth time).
 
 **DialogueInput**
 
@@ -628,8 +1040,8 @@ reads what step N wrote, not the original (#14).
 | `applied?` | string[] | no | Module name on success; `"passthrough:<reason>"` / `"noop:no-cards"` on a soft-degrade. |
 | `degraded?` | string | no | Set ONLY when the film shipped UNCARDED, carrying the reason -- the one signal cards were NOT applied (#207). |
 
-> Note: `FilmFinishCaption` (`{ start, end, text }`) is declared in the contract so a module in another
-> repo vendoring `types.ts` gets the caption shape without importing a core-only module.
+> `FilmFinishCaption` (`{ start, end, text }`) is declared in the contract so a module in another repo
+> vendoring `types.ts` gets the caption shape without importing a core-only module.
 
 ---
 
@@ -648,26 +1060,30 @@ conformance harness (`checkManifest`) proves a candidate module honors it.
 | `hooks` | `HookName[]` | yes | The hooks this module serves (must be known hook names). |
 | `provides?` | `{ id: string, label: string }[]` | no | User-facing capabilities (each needs `id` + `label`). |
 | `config_schema?` | `{ [field]: ConfigField }` | no | The knobs the module exposes; the UI renders controls from these and the core clamps the user's value against them before invoking. |
-| `ui?` | `{ section?: string, icon?: string, order?: number }` | no | Self-assembling-UI hints. `order` is the fold/render order within a chain hook (default 100). |
+| `ui?` | `{ section?: string, icon?: string, order?: number }` | no | Self-assembling-UI hints. `order` is the fold/render order within a chain hook (default 100 when absent). |
 
-Internal-only (NEVER on the wire): `RegisteredModule = ModuleManifest & { binding: string }`. The
-`binding` (the env binding that serves the module) is stripped to `PublicModule` for `GET /api/modules`.
+Internal-only, **intentionally NEVER on the wire**: `RegisteredModule = ModuleManifest & { binding:
+string }`. The `binding` (the env binding that serves the module) is stripped to `PublicModule` for
+`GET /api/modules`. This omission is by design (info-disclosure guard #18), not an oversight.
 
 ### 4.1 ConfigField types
 
-A `config_schema` field is one of (validated by `checkConfigField`; valid types are
-`int, float, bool, enum, string`):
+A `config_schema` field is one of the following (validated by `checkConfigField`; the valid type set
+is `int, float, bool, enum, string`):
 
-| type | shape | notes |
-|------|-------|-------|
-| `int` | `{ type:"int", default:number, min?, max?, label?, enum_labels? }` | default must be a number. |
-| `float` | `{ type:"float", default:number, min?, max?, label?, enum_labels? }` | default must be a number. |
-| `bool` | `{ type:"bool", default:boolean, label? }` | default must be a boolean. |
-| `enum` | `{ type:"enum", values:string[], default:string, label? }` | `values` non-empty; default must be one of `values`. |
-| `string` | `{ type:"string", default:string, label? }` | default must be a string. |
+| type | shape | validation |
+|------|-------|------------|
+| `int` | `{ type:"int", default:number, min?, max?, label?, enum_labels? }` | default must be a number |
+| `float` | `{ type:"float", default:number, min?, max?, label?, enum_labels? }` | default must be a number |
+| `bool` | `{ type:"bool", default:boolean, label? }` | default must be a boolean |
+| `enum` | `{ type:"enum", values:string[], default:string, label? }` | `values` non-empty; default in `values` |
+| `string` | `{ type:"string", default:string, label? }` | default must be a string |
 
-> An `array` ConfigField type is a **planned addition** to the contract (not yet present); only the
-> five types above are valid today.
+`enum_labels?` (on int/float) maps a numeric value to a display label. `label?` is the control label.
+
+> An **`array`** ConfigField type is a **planned addition** to the contract (not yet present). Only
+> the five types above are valid today; a candidate `array` field fails conformance until it is added
+> to the `ConfigField` union + `FIELD_TYPES` + `checkConfigField` (and this table), per section 0.2.
 
 ### 4.2 Example manifest (verbatim, finish-rife)
 
@@ -712,6 +1128,25 @@ For async work the core POSTs `{ poll: string }` to the module's `/poll` until i
 `{ ok:true, output }` (done) or `{ ok:false, error }` (failed); `{ ok:true, pending:true }` means keep
 polling.
 
+```mermaid
+sequenceDiagram
+  participant Core
+  participant Module
+  Core->>Module: POST /invoke {hook, input, config, context}
+  alt synchronous
+    Module-->>Core: {ok:true, output}
+  else async
+    Module-->>Core: {ok:true, pending:true, poll}
+    loop until not pending
+      Core->>Module: POST /poll {poll}
+      Module-->>Core: {ok:true, pending:true}
+    end
+    Module-->>Core: {ok:true, output}
+  else failure (data, not a crash)
+    Module-->>Core: {ok:false, error}
+  end
+```
+
 ---
 
 ## 5. Projection + ordering rules
@@ -726,8 +1161,8 @@ the pipeline** -- it consumes `GET /api/modules` verbatim.
 ```
 
 `data.hooks[hook]` is shipped **pre-sorted** in exactly that order. The same comparator backs
-`servingForHook` (the dispatch order), so the order the frontend renders is byte-for-byte the order the
-core folds a chain in. Module order is therefore guaranteed identical everywhere.
+`servingForHook` (the dispatch order), so the order the frontend renders is byte-for-byte the order
+the core folds a chain in. Module order is therefore guaranteed identical everywhere.
 
 **(b) Where each hook surfaces.** Hooks that render in the planner's render-config panel:
 `keyframe`, `motion.backend`, `speech`, `finish`, `master`, `film.finish`. The rest project onto
@@ -745,6 +1180,21 @@ core folds a chain in. Module order is therefore guaranteed identical everywhere
 selected). A `chain` hook renders as **stacked config blocks** (every installed module, each with its
 `config_schema` controls), folded in `ui.order`.
 
+```mermaid
+flowchart TD
+  R[GET /api/modules] --> CAT[catalog: 11 hooks + cardinality]
+  R --> HK[hooks: hook -> module names, pre-sorted]
+  R --> MODS[modules: manifests + config_schema]
+  R --> RND[render: quality_tiers]
+  CAT --> DECIDE{cardinality?}
+  DECIDE -->|pick_one| CHOOSER[chooser control]
+  DECIDE -->|chain| STACK[stacked config blocks in ui.order]
+  HK --> CHOOSER
+  HK --> STACK
+  MODS --> STACK
+  RND --> PANEL[render-config panel tiers]
+```
+
 ---
 
 ## 6. Render lifecycle
@@ -757,20 +1207,27 @@ keyframe -> clips -> dialogue -> speech -> finish -> assemble -> master -> mux -
 ```
 
 ```mermaid
-flowchart LR
-  KF[keyframe] --> CL[clips]
-  CL --> DI[dialogue]
-  DI --> SP[speech]
-  SP --> FI[finish]
-  FI --> AS[assemble]
-  AS --> MA[master]
-  MA --> MU[mux]
-  MU --> DN((done))
-  KF -.fail.-> FA((failed))
-  CL -.fail.-> FA
-  FI -.fail.-> FA
-  classDef chain fill:#eef,stroke:#557;
-  class SP,FI,MA chain;
+stateDiagram-v2
+  [*] --> keyframe
+  keyframe --> clips: pollable
+  clips --> dialogue: pollable
+  dialogue --> speech: module poll
+  speech --> finish: module poll
+  finish --> assemble: pollable
+  assemble --> master: pollable
+  master --> mux
+  mux --> done: pollable
+  done --> [*]
+  keyframe --> failed
+  clips --> failed
+  finish --> failed
+  assemble --> failed
+  mux --> failed
+  failed --> [*]
+  note right of done
+    film.finish chain runs at the
+    done-transition, then notify fires
+  end note
 ```
 
 - **Pollable phases** (advanced one tick per `GET /api/render/film/:id`, with stall recovery):
@@ -779,14 +1236,15 @@ flowchart LR
 - **`plan.enhance` and `film.finish` are CHAINS, not parked phases.** They run via `dispatchChain`:
   - `plan.enhance` runs synchronously on `POST /api/storyboard/enhance` (pre-render), not inside the
     film job.
-  - `film.finish` runs at the `transitionToDone` step (post-mux), then the job marks `done` and fires
-    `notify`. `dispatchChain` presigns fresh GET/PUT/sidecar URLs per step (so step N+1 reads what step
-    N wrote, #14), and records the chain outcome (`applied`, `errors`, `degraded`) onto the job so a
-    degraded run (e.g. cards requested but the container was unreachable) is observable state, not a
+  - `film.finish` runs at the `transitionToDone` step (post-mux); then the job marks `done` and fires
+    `notify`. `dispatchChain` presigns fresh GET/PUT/sidecar URLs per step (so step N+1 reads what
+    step N wrote, #14), and records the chain outcome (`applied`, `errors`, `degraded`) onto the job so
+    a degraded run (cards requested but the container was unreachable) is observable state, not a
     silent green.
 - **Soft-degrade discipline:** the polish phases (`finish`, `speech`, `score`, `master`,
-  `film.finish`) never fail the render on a miss; they pass their input through and record a `degraded`
-  reason. Structural failures (a keyframe / motion / assemble failure) fail loud to `failed`.
+  `film.finish`) never fail the render on a miss; they pass their input through and record a
+  `degraded` reason. Structural failures (a keyframe / motion / assemble failure) fail loud to
+  `failed`.
 - **Conditional phases:** `dialogue`/`speech` run only when there are dialogue lines; `master` runs
   only when there is an `audio_key` AND a `master` module is installed; `mux` runs only when there is
   both a silent film and an audio bed; `film.finish` runs only when a `film.finish` module is
@@ -796,7 +1254,102 @@ flowchart LR
 
 ---
 
-## Source-of-truth index
+## Appendix A: persisted row shapes
+
+The studio persists three resource rows (D1). These are app-state, not the module hook contract, but
+are documented here for total coverage. The API returns them wrapped (`{ cast }`, `{ project }`,
+`{ renders }`).
+
+### A.1 CastMember
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | number | Primary key. |
+| `user_email` | string | Owner (always `STUDIO_OWNER`). |
+| `slug` | string | URL-safe name slug. |
+| `name` | string | Display name. |
+| `bible` | string \| null | Character description. |
+| `portrait_key` | string \| null | R2 key of the portrait (identity seed). |
+| `portrait_mime` | string \| null | Portrait mime. |
+| `ref_keys` | `{ key, mime }[]` | LoRA training reference images. |
+| `source_keys` | `{ key, mime }[]` | Human-uploaded source photos (multi-ref conditioning). |
+| `created_at` / `updated_at` | string | Timestamps. |
+| `lora_key` | string \| null | R2 key of the trained LoRA. |
+| `lora_status` | `"idle"\|"training"\|"ready"\|"failed"` | Training state. |
+| `lora_job_id` | string \| null | In-flight training job. |
+| `lora_error` | string \| null | Last training error. |
+| `lora_trained_at` | string \| null | When trained. |
+| `voice_id` | string \| null | Aura-1 speaker (one of the 12; see 2.4). null = unassigned. |
+
+### A.2 StoryboardProject
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | number | Primary key. |
+| `user_email` | string | Owner. |
+| `slug` | string | Name slug. |
+| `name` | string | Display name. |
+| `prefs` | object | Per-project preferences. |
+| `last_storyboard` | unknown \| null | The last saved storyboard (opaque here). |
+| `created_at` / `updated_at` | string | Timestamps. |
+
+### A.3 RenderRow (history)
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | number | Primary key. |
+| `user_email` | string | Owner. |
+| `job_id` | string | The `film-*` / `scatter-*` job id. |
+| `project` | string | Project namespace. |
+| `bundle_key` | string | Render bundle R2 key. |
+| `quality_tier` | string | The tier used. |
+| `render_overrides` | object \| null | The overrides used. |
+| `status` | string | `IN_PROGRESS \| COMPLETED \| FAILED \| CANCELLED`. |
+| `output_key` | string \| null | R2 key of the output film. |
+| `output` | unknown | The poll-view output blob. |
+| `error` | string \| null | Failure reason. |
+| `execution_time_ms` / `delay_time_ms` | number \| null | Timing. |
+| `submitted_at` / `updated_at` / `completed_at` | number / number / number\|null | Timestamps (epoch ms). |
+| `label` | string \| null | User label. |
+| `keyframes` | `KeyframeRef[]` \| null | Keyframe refs (keyframes-only previews). |
+| `mode` | `"full"\|"keyframes-only"\|"finalized"\|"cloud-finalized"` | Render mode. |
+| `locked_shots` | string[] \| null | Shots locked in a preview. |
+| `project_id` | number \| null | FK to a StoryboardProject. |
+| `folder_path` | string \| null | History folder. |
+| `tags` | string[] | History tags (deduped, lowercased). |
+
+### A.4 StoryboardValidated (planner output)
+
+The validated storyboard returned by `POST /api/storyboard/plan` / `refine`:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `title` | string | Film title. |
+| `projectName` | string | Path-safe project slug. |
+| `full_prompt` | string | Composed prompt. |
+| `duration_seconds` | number \| undefined | Total film length. |
+| `clip_seconds` | number \| undefined | Per-clip length. |
+| `style_prefix` / `style_category` / `style_preset` | string | Style fields. |
+| `use_characters` | SlotId[] | Character slots in use. |
+| `cast_rules` | string | Cast guidance. |
+| `refs_dir?` | string | Reference dir. |
+| `scenes` | `StoryboardScene[]` | The shots (A.5). |
+
+### A.5 StoryboardScene
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id?` | string | Shot id. |
+| `prompt` | string | The shot prompt. |
+| `character_slots?` | SlotId[] | Characters in the shot. |
+| `start?` / `end?` / `target_seconds?` | number | Timing. |
+| `act?` | string | Act label. |
+| `start_image?` | string | Start-image hint. |
+| `dialogue?` | `{ slot: SlotId, text: string }` | Spoken line (talking characters); `slot` must be one of this shot's `character_slots`. Absent => silent shot. |
+
+---
+
+## Appendix B: source-of-truth index
 
 | Concern | Canonical file |
 |---------|----------------|
@@ -805,9 +1358,13 @@ flowchart LR
 | Conformance checks (manifest, invoke response, per-hook output) | `src/modules/conformance.ts` |
 | Router (`API_ROUTES`), all HTTP handlers, `GET /api/modules` inline | `src/index.ts` |
 | Film job (`FilmJob`, phases), `applyFilmFinish`, `transitionToDone`, summaries | `src/film-orchestrator.ts` |
+| Per-shot clip job (`ClipJob`, `JobSummary`, `summarizeJob`) | `src/render-orchestrator.ts` |
 | Render-override parsing, quality tiers, `RenderConfigProjection` | `src/render-module-config.ts` |
 | RunPod-shaped poll view, override mapping, scene normalization | `src/film-render-bridge.ts` |
+| Scatter orchestration | `src/scatter-orchestrator.ts` |
 | Voice catalog | `src/voices.ts` |
 | Caption cue timing (FilmFinishCaption source) | `src/captions.ts` |
+| Cast / project / render row schemas | `src/cast-db.ts`, `src/storyboard-projects-db.ts`, `src/renders-db.ts` |
+| Preflight | `src/preflight.ts` |
+| Planner LLM (plan / refine / chat) + validated storyboard | `src/planner.ts`, `src/storyboard-validate.ts` |
 </content>
-</invoke>
