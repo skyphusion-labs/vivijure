@@ -37,7 +37,7 @@ Shapes live in `src/modules/types.ts`.
 
 | Hook | Purpose | Cardinality |
 |---|---|---|
-| `keyframe` | Storyboard -> start keyframes (SDXL on GPU). | pick one |
+| `keyframe` | Storyboard -> start keyframes. Backend-selectable: GPU SDXL or GPUless cloud (e.g. cloud-keyframe) are modules. | pick one |
 | `motion.backend` | Keyframe (+ motion prompt) -> shot clip. GPU/RunPod and cloud providers are modules. | pick one per shot |
 | `finish` | Post-process a clip: frame interpolation, lip-sync (MuseTalk), upscale (CUDA Real-ESRGAN), face restore. | chain (0..n, ordered) |
 | `score` | Add audio to a film: music, narration, beat-sync. | chain (0..n) |
