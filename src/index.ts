@@ -428,6 +428,7 @@ const hSubmitRender: Handler = async (req, env) => {
     processShotIds?: string[]; projectId?: unknown;
     scenes?: unknown; motion_backend?: string;
     castLoras?: Record<string, unknown>;
+    film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
   const tier = coerceQualityTier(b.qualityTier) ?? "final";
@@ -466,6 +467,10 @@ const hSubmitRender: Handler = async (req, env) => {
     finish_config: mapped.finish_config,
     keyframes_only: !!b.keyframesOnly,
     audio_key: b.keyframesOnly ? undefined : b.audioKey,
+    // Opening title + end-credit card TEXT (FilmTitleSpec / FilmCreditSpec); the film.finish chain
+    // reads it off the job. Mirrors hStartFilm. Skipped on a keyframes-only preview (no assembled
+    // film to card), exactly like audio_key above.
+    film_titles: b.keyframesOnly ? undefined : b.film_titles,
     pretrained_loras: Object.keys(pretrained).length ? pretrained : undefined,
     cast_loras: Object.keys(castIds).length ? castIds : undefined,
     user_email: email,

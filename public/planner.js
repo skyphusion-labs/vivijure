@@ -205,6 +205,23 @@ function collectRenderOverrides() {
   return window.plannerRenderConfig.collectForSubmit(readVal("#planner-render-overrides"));
 }
 
+// Film title + credit-card TEXT for the film.finish chain. Shapes FilmTitleSpec{text,subtitle?} +
+// FilmCreditSpec{lines}: the title rides only with a non-empty text (a subtitle alone is dropped --
+// FilmTitleSpec requires text), and credits are the non-blank textarea lines. Returns undefined when
+// nothing is set, so an empty section never widens the submit body (the core then sets no cards).
+function collectFilmTitles() {
+  const title = readVal("#planner-film-title").trim();
+  const subtitle = readVal("#planner-film-subtitle").trim();
+  const lines = readVal("#planner-film-credits")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const out = {};
+  if (title) out.title = subtitle ? { text: title, subtitle } : { text: title };
+  if (lines.length) out.credits = { lines };
+  return Object.keys(out).length ? out : undefined;
+}
+
 const FIELD_HELP = {};
 
 let _fieldHelpPop = null;
@@ -663,6 +680,9 @@ function collectRenderStageState() {
     renderOverridesText: overridesEl ? overridesEl.value : "",
     moduleOverrides: window.plannerRenderConfig ? window.plannerRenderConfig.collect() : null,
     keyframesOnly: kfOnlyEl ? kfOnlyEl.checked : false,
+    filmTitle: readVal("#planner-film-title"),
+    filmSubtitle: readVal("#planner-film-subtitle"),
+    filmCredits: readVal("#planner-film-credits"),
     // v0.44.0: persist the render start timestamp so an elapsed +
     // ETA computation survives a page refresh. null means "no in-
     // flight render observed yet"; the updater anchors it lazily.
@@ -940,6 +960,20 @@ function restoreRenderStagePanel(saved) {
   }
   const kfOnlyEl = $("#planner-keyframes-only");
   if (kfOnlyEl) kfOnlyEl.checked = !!saved.keyframesOnly;
+  // Restore the title / credit-card text, and open the section if any was set so the
+  // restored values are visible rather than hidden behind a collapsed <details>.
+  const setFilmField = (sel, v) => {
+    if (typeof v !== "string") return;
+    const el = $(sel);
+    if (el) el.value = v;
+  };
+  setFilmField("#planner-film-title", saved.filmTitle);
+  setFilmField("#planner-film-subtitle", saved.filmSubtitle);
+  setFilmField("#planner-film-credits", saved.filmCredits);
+  if ((saved.filmTitle || saved.filmSubtitle || saved.filmCredits || "").toString().trim().length > 0) {
+    const ft = $(".planner-film-titles");
+    if (ft) ft.open = true;
+  }
   if (typeof saved.startedAt === "number" && saved.startedAt > 0) {
     renderState.startedAt = saved.startedAt;
   }
@@ -1458,6 +1492,9 @@ function applyProjectPrefs(prefs) {
   if (typeof prefs.renderOverridesText === "string") {
     setVal("#planner-render-overrides", prefs.renderOverridesText);
   }
+  setVal("#planner-film-title", prefs.filmTitle);
+  setVal("#planner-film-subtitle", prefs.filmSubtitle);
+  setVal("#planner-film-credits", prefs.filmCredits);
 }
 
 function gatherProjectPrefs() {
@@ -1480,6 +1517,9 @@ function gatherProjectPrefs() {
     seed: readVal("#planner-seed"),
     faceLockMode: readVal("#planner-face-lock-mode"),
     renderOverridesText: readVal("#planner-render-overrides"),
+    filmTitle: readVal("#planner-film-title"),
+    filmSubtitle: readVal("#planner-film-subtitle"),
+    filmCredits: readVal("#planner-film-credits"),
   };
 }
 
@@ -3742,6 +3782,12 @@ async function submitRender() {
   // audio_key from the job input, downloads, and muxes via
   // export_film(with_audio=True).
   if (planState.audioKey) reqBody.audioKey = planState.audioKey;
+  // Forward the title / credit-card TEXT. The film.finish chain (film-titles) reads it off the job
+  // (job.film_titles -> FilmFinishInput.title/credits); without this the cards never rendered from the
+  // planner. Omitted when empty, and the core ignores it on a keyframes-only preview (no assembled film
+  // to card), mirroring audioKey.
+  const filmTitles = collectFilmTitles();
+  if (filmTitles && !keyframesOnly) reqBody.film_titles = filmTitles;
   // v0.55.0: pin the render row to the active project so the history
   // list can filter by project. Skipped on transient (no-project)
   // submits, which matches the pre-0.55 behavior.
