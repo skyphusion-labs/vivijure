@@ -9,7 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
-import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput } from "./modules/types";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
@@ -913,15 +913,12 @@ async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
   await fireNotify(env, job);
 }
 
-/** The film.finish module output the core reads back: the (maybe new) film key, the per-step detail
- *  (`applied`: the module name on success, or a "passthrough:..."/"noop:..." reason on a soft-degrade),
- *  and `degraded` -- set when the film was passed through UNCARDED (e.g. the video-finish container was
- *  unreachable). The chain is fail-safe, so `degraded` is the only signal that requested cards were not
- *  applied; applyFilmFinish records it on the job rather than dropping it. */
-interface FilmFinishChainOutput {
-  film_key?: string;
-  applied?: string[];
-}
+// The film.finish hook I/O is the named FilmFinishInput / FilmFinishOutput pair in ./modules/types
+// (every hook has one). The core reads FilmFinishOutput back: the (maybe new) film key, the per-step
+// detail (`applied`: the module name on success, or a "passthrough:..."/"noop:..." reason on a
+// soft-degrade), and `degraded` -- set when the film was passed through UNCARDED (e.g. the video-finish
+// container was unreachable). The chain is fail-safe, so `degraded` is the only signal that requested
+// cards were not applied; applyFilmFinish records it on the job rather than dropping it.
 
 async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   if (!job.film_key) return;
@@ -943,7 +940,7 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   // is NOT captioned (a single film-level track with no per-line timing); see src/captions.ts.
   const durations = await readShotDurationsFromBundle(env, job.bundle_key);
   const captions = buildCaptionCues(job.scenes, job.dialogue_lines ?? [], durations);
-  const seed = {
+  const seed: FilmFinishInput = {
     film_key: job.film_key,
     video_url: videoUrl,
     output_url: outputUrl,
@@ -959,7 +956,7 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   // outKey); every subsequent step must read what the previous step WROTE, not the original, or it
   // overwrites the prior step's work (#14: titles re-read the original and dropped the captions). So
   // nextInput presigns a FRESH GET (of the prior step's film_key) + PUT (to a new key) per step.
-  const result = await dispatchChain<typeof seed, FilmFinishChainOutput>(
+  const result = await dispatchChain<FilmFinishInput, FilmFinishOutput>(
     envRec,
     modules,
     "film.finish",

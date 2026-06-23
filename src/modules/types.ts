@@ -399,6 +399,52 @@ export interface MasterOutput {
                        // carrying the reason; absent on success + on the intentional no-op (#77)
 }
 
+// film.finish (v1) ------------------------------------------------------------------------------
+
+/** One time-synced caption cue handed to a `film.finish` subtitle module, in seconds from the
+ *  assembled film's 0-based start. Structurally mirrors src/captions.ts CaptionCue; declared here so
+ *  the contract stays self-contained -- a module in another repo vendoring this file gets the caption
+ *  shape too, without importing a core-only module. */
+export interface FilmFinishCaption {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** What the core hands a `film.finish` module: the assembled+muxed film to put title / credit cards
+ *  (and/or burned-or-sidecar subtitles) on, by R2 transport. The module reads `video_url` (a presigned
+ *  GET of the input film) and writes its result to `output_url` (a presigned PUT at `output_key`),
+ *  exactly as a finish backend reads/writes a clip. `title` / `credits` carry the card text (absent =>
+ *  no cards, the module passes the film through); `captions` carries the time-synced dialogue cues for a
+ *  subtitle module (empty => it no-ops); `sidecar_url` / `sidecar_key` are a presigned PUT for an
+ *  optional .srt sidecar. This runs POST-mux, before done, as a `chain`: every installed film.finish
+ *  module folds in `ui.order`, and the core presigns a FRESH GET (of the PRIOR step's film) + PUT (to a
+ *  new key) per step, so step N+1 reads what step N wrote rather than the original (#14). */
+export interface FilmFinishInput {
+  film_key: string;    // R2 key of the input film (the prior step's output, or the original on step 1)
+  video_url: string;   // presigned GET of the input film (the module fetches it)
+  output_url: string;  // presigned PUT the module writes the carded film to
+  output_key: string;  // the R2 key behind output_url (so the core knows where the result landed)
+  title?: { text: string; subtitle?: string }; // opening title card text; absent => no title card
+  credits?: { lines: string[] };               // end-credit lines; absent => no credit card
+  captions: FilmFinishCaption[];                // time-synced dialogue cues; empty => subtitle no-op
+  sidecar_url: string; // presigned PUT for an optional .srt subtitle sidecar (ignored by non-subtitle modules)
+  sidecar_key: string; // the R2 key behind sidecar_url
+}
+
+/** What a `film.finish` module returns: the (maybe new) film key plus what it did. The chain is
+ *  FAIL-SAFE -- a module that cannot run passes the film through (`film_key` omitted or unchanged) and
+ *  reports it via the soft-degrade convention, never dropping a fully-rendered film (#190). `applied`
+ *  carries the module name on success, or a "passthrough:<reason>" / "noop:no-cards" tag on a
+ *  soft-degrade; `degraded` (the shared chain convention, as on FinishOutput / MasterOutput / SpeechOutput)
+ *  is set ONLY when the film shipped UNCARDED, carrying the reason -- the one signal that requested cards
+ *  were NOT applied (#207). The core records the chain outcome on the job rather than dropping it. */
+export interface FilmFinishOutput {
+  film_key?: string;  // R2 key of the carded film; omitted / unchanged => passed through (no new film)
+  applied?: string[]; // module name on success; "passthrough:<reason>" / "noop:no-cards" on a soft-degrade
+  degraded?: string;  // set ONLY when the film was passed through UNCARDED, carrying the reason (#207)
+}
+
 // --------------------------------------------------------------------------- registry view
 
 /** One registered module, INTERNAL to the core: the manifest plus the env binding that serves it.
