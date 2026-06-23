@@ -29,6 +29,14 @@ export function isTransientD1Error(err: unknown): boolean {
   return D1_TRANSIENT.test(msg);
 }
 
+/** A short, queryable signature for a D1 error -- the first line, truncated. Goes into the
+ *  structured d1.retry / d1.exhausted / d1.error log lines so a blip is greppable in
+ *  observability rather than a multi-line stack buried in a console.warn. */
+export function d1ErrorCode(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return (msg.split("\n")[0] || "unknown").slice(0, 120);
+}
+
 export interface D1RetryOptions {
   /** Total attempts including the first (default 4: initial + 3 retries). */
   attempts?: number;
@@ -36,6 +44,8 @@ export interface D1RetryOptions {
   baseDelayMs?: number;
   /** Injectable sleep so tests don't wait on the wall clock. */
   sleep?: (ms: number) => Promise<void>;
+  /** Short op name for the structured d1.retry / d1.exhausted log lines (observability). */
+  label?: string;
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -53,7 +63,16 @@ export async function withD1Retry<T>(fn: () => Promise<T>, opts: D1RetryOptions 
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (i === attempts - 1 || !isTransientD1Error(err)) throw err;
+      const transient = isTransientD1Error(err);
+      if (i === attempts - 1 || !transient) {
+        // A non-transient error fails fast; an EXHAUSTED transient blip is logged so a recurring
+        // D1 flaky window shows up as a queryable d1.exhausted count, not a silent throw.
+        if (transient) {
+          console.log(JSON.stringify({ ev: "d1.exhausted", op: opts.label, attempts: i + 1, code: d1ErrorCode(err) }));
+        }
+        throw err;
+      }
+      console.log(JSON.stringify({ ev: "d1.retry", op: opts.label, attempt: i + 1, code: d1ErrorCode(err) }));
       const jitter = Math.floor(Math.random() * base);
       await sleep(base * 2 ** i + jitter);
     }

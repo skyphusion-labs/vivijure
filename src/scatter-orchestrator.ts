@@ -37,6 +37,7 @@ import {
   getFinishState,
   getRenderIdByJobId,
   insertRender,
+  buildInsertRenderStmt,
   markFinishDone,
   markFinishFailed,
   markRenderFailedByJobId,
@@ -44,7 +45,7 @@ import {
 } from "./renders-db";
 import { resolveCastLoras } from "./cast-loras";
 import { fireNotifyForScatter } from "./scatter-notify";
-import { isTransientD1Error } from "./d1-retry";
+import { isTransientD1Error, withD1Retry, d1ErrorCode } from "./d1-retry";
 
 export type { ScatterJob } from "./scatter-orchestrator-types";
 export { isScatterParentJobId as isScatterJobId };
@@ -161,22 +162,16 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     dialogue_lines: dialogueLines,
     film_titles: args.film_titles,
     film_finish_config: mapped.film_finish_config,
+    project_id: args.project_id ?? null,
+    render_overrides: args.render_overrides,
     phase: "shards",
     created_at: Date.now(),
   };
 
-  await insertRender(env, {
-    jobId: scatterId,
-    project: args.project,
-    bundleKey: args.bundle_key,
-    qualityTier: args.quality_tier,
-    renderOverrides: args.render_overrides,
-    status: "IN_QUEUE",
-    mode: "full",
-    projectId: args.project_id ?? null,
-  });
-  const parentId = await getRenderIdByJobId(env, scatterId);
-
+  // RUNNABILITY-FIRST (#289): build the shard FILM jobs (their docs live in R2), collecting the
+  // render-row specs to persist to D1 afterwards. The D1 rows are a UI-list PROJECTION, not what
+  // makes the render runnable -- so we never write them before the runnable R2 state.
+  const shardRows: { jobId: string; status: string }[] = [];
   for (const shard of shards) {
     const shardScenes = filterScenesByShotIds(scenes, shard.shots);
     // Each shard runs its own finish chain (incl. lip-sync), so it carries only its shots' dialogue.
@@ -200,22 +195,70 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
       dialogue_lines: shardDialogue,
     });
     scatterJob.shard_film_ids.push(film.film_id);
-    const view = filmJobToPollView(film, null);
-    await insertRender(env, {
-      jobId: film.film_id,
-      project: args.project,
-      bundleKey: args.bundle_key,
-      qualityTier: args.quality_tier,
-      renderOverrides: args.render_overrides,
-      status: view.status,
-      mode: "full",
-      projectId: args.project_id ?? null,
-      parentId: parentId ?? undefined,
-    });
+    shardRows.push({ jobId: film.film_id, status: filmJobToPollView(film, null).status });
   }
 
-  await saveScatterJob(env, scatterJob);
+  await finalizeScatterSubmit(env, scatterJob, shardRows);
   return scatterJob;
+}
+
+/** Persist a scatter submit so it can NEVER orphan a render (#289).
+ *
+ *  The runnable R2 doc is written FIRST: the poll/advance path runs entirely off it
+ *  (loadScatterJob), so once it lands the render is runnable and a later transient cannot strand
+ *  it. The D1 render rows are a UI-list projection, written AFTER, best-effort: the parent (so the
+ *  shards can FK it), then the shard rows as one all-or-nothing env.DB.batch, each wrapped in
+ *  withD1Retry. A persistent D1 failure is logged as a structured d1.error and SWALLOWED -- the
+ *  submit still succeeds (render is runnable) and the missing rows self-heal on the first poll
+ *  (ensureScatterRenderRow). This is the cure for the orphan-row 422: a mid-submit blip can no
+ *  longer leave a row with no job, nor fail the whole submit. The submit spans two stores (D1 rows
+ *  + R2 docs), so a single DB.batch cannot make it truly atomic; runnability-first ordering plus
+ *  self-heal makes the residual gap benign. */
+export async function finalizeScatterSubmit(
+  env: Env,
+  scatterJob: ScatterJob,
+  shardRows: { jobId: string; status: string }[],
+): Promise<void> {
+  await saveScatterJob(env, scatterJob); // <- render is RUNNABLE from here
+
+  try {
+    await withD1Retry(
+      () =>
+        insertRender(env, {
+          jobId: scatterJob.scatter_id,
+          project: scatterJob.project,
+          bundleKey: scatterJob.bundle_key,
+          qualityTier: scatterJob.quality_tier,
+          renderOverrides: scatterJob.render_overrides,
+          status: "IN_QUEUE",
+          mode: "full",
+          projectId: scatterJob.project_id ?? null,
+        }),
+      { label: "scatter.submit.parent" },
+    );
+    const parentId = await getRenderIdByJobId(env, scatterJob.scatter_id);
+    if (shardRows.length) {
+      const stmts = shardRows.map((r) =>
+        buildInsertRenderStmt(env, {
+          jobId: r.jobId,
+          project: scatterJob.project,
+          bundleKey: scatterJob.bundle_key,
+          qualityTier: scatterJob.quality_tier,
+          renderOverrides: scatterJob.render_overrides,
+          status: r.status,
+          mode: "full",
+          projectId: scatterJob.project_id ?? null,
+          parentId: parentId ?? undefined,
+        }),
+      );
+      await withD1Retry(() => env.DB.batch(stmts), { label: "scatter.submit.shards" });
+    }
+  } catch (e) {
+    // Render is already runnable off the R2 doc; the rows self-heal on first poll. Log, don't throw.
+    console.log(JSON.stringify({
+      ev: "d1.error", op: "scatter.submit.rows", scatter_id: scatterJob.scatter_id, code: d1ErrorCode(e),
+    }));
+  }
 }
 
 async function muxScatterAudio(env: Env, job: ScatterJob): Promise<void> {
@@ -453,6 +496,39 @@ export function shardStatusForOutcome(outcome: ShardAdvanceOutcome): string {
   return outcome.reason === "doc_missing" ? "FAILED" : "IN_PROGRESS";
 }
 
+/** Self-heal the D1 render row from the runnable R2 doc (#289). Cheap read first -- a no-op once
+ *  the row exists (the normal path). Only when the row is MISSING (a submit whose best-effort D1
+ *  write lost the flaky window) does it insert the row at the doc's current status and, when
+ *  terminal, fill status/output via updateRenderFromView. Never aborts the advance: a transient is
+ *  left for the next poll; a non-transient is logged. */
+export async function ensureScatterRenderRow(
+  env: Env,
+  job: ScatterJob,
+  ctx?: ExecutionContext,
+): Promise<void> {
+  try {
+    if ((await getRenderIdByJobId(env, job.scatter_id)) != null) return;
+    const view = scatterJobToPollView(job);
+    await insertRender(env, {
+      jobId: job.scatter_id,
+      project: job.project,
+      bundleKey: job.bundle_key,
+      qualityTier: job.quality_tier,
+      renderOverrides: job.render_overrides,
+      status: view.status,
+      mode: "full",
+      projectId: job.project_id ?? null,
+    });
+    if (view.status !== "IN_PROGRESS") await updateRenderFromView(env, view, ctx);
+    console.log(JSON.stringify({ ev: "scatter.selfheal.row", scatter_id: job.scatter_id, status: view.status }));
+  } catch (e) {
+    if (!isTransientD1Error(e)) {
+      console.log(JSON.stringify({ ev: "d1.error", op: "scatter.selfheal.row", scatter_id: job.scatter_id, code: d1ErrorCode(e) }));
+    }
+    // never abort the advance for a projection-row write; a transient retries on the next poll.
+  }
+}
+
 export async function advanceScatterJob(
   env: Env,
   scatterId: string,
@@ -460,6 +536,10 @@ export async function advanceScatterJob(
 ): Promise<RunpodJobView | null> {
   const job = await loadScatterJob(env, scatterId);
   if (!job) return null;
+  // #289 self-heal: the submit writes the R2 doc before the D1 rows, so a mid-submit blip can
+  // leave a runnable render whose UI-list row never got written. Insert it if missing (cheap read
+  // first; no-op once it exists) so the render shows up and its terminal status/output get logged.
+  await ensureScatterRenderRow(env, job, ctx);
   if (job.cancelled) return scatterJobToPollView(job);
   if (job.phase === "done" || job.phase === "failed") return scatterJobToPollView(job);
 
