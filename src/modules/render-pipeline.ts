@@ -1,8 +1,8 @@
 // Render-pipeline resolution: the core's half of render-flow dispatch.
 //
 // Given the installed module registry and the user's per-hook selection (from the self-assembling
-// pipeline UI), DECIDE which module serves each render hook: motion.backend (pick one), finish and
-// score (chains, in ui.order), each with its user config clamped against the module's schema. The
+// pipeline UI), DECIDE which module serves each render hook: motion.backend (pick one), finish,
+// score, and speech (chains, in ui.order), each with its user config clamped against the module's schema. The
 // core only RESOLVES here; EXECUTION of these hooks happens on the GPU/cloud side (the backend, or a
 // downstream invoker) -- this is the plan it hands off. Pure + dependency-free, so it unit-tests
 // without bindings.
@@ -23,6 +23,9 @@ export interface RenderPipelinePlan {
   motion_backend: ResolvedModule | null;
   finish: ResolvedModule[];
   score: ResolvedModule[];
+  speech: ResolvedModule[];
+  filmFinish: ResolvedModule[];
+  master: ResolvedModule[];
 }
 
 /** The user's per-hook selection (mirrors the studio UI / window.__pipeline). `config` is keyed by
@@ -55,5 +58,8 @@ export function resolveRenderPipeline(
     motion_backend: motion ? resolve(motion, cfg[motion.name]) : null,
     finish: chain("finish"),
     score: chain("score"),
+    speech: chain("speech"),
+    filmFinish: chain("film.finish"),
+    master: chain("master"),
   };
 }
