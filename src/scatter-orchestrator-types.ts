@@ -14,7 +14,6 @@ export interface ScatterJob {
   // audio into each clip, so the gather must keep per-clip audio through the concat (keepClipAudio)
   // or the assembled film comes out silent. Mirrors the single-film assemble's dialogue_audio gate.
   has_dialogue?: boolean;
-  user_email?: string;
   // film.finish on the scatter gather (#284/#285): the FULL (unfiltered) film-level inputs persisted so
   // the gather can run subtitle/title/credits on the assembled film with aggregated captions.
   scenes?: { shot_id: string; prompt: string; seconds: number }[];

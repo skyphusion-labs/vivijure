@@ -119,7 +119,6 @@ export interface ModuleManifest {
 export interface InvokeContext {
   project: string;
   job_id: string;
-  user_email?: string;
 }
 
 /** The single entry point the core calls on a module: POST /invoke. */
@@ -364,7 +363,6 @@ export interface NotifyInput {
   project: string;
   download_url?: string; // presigned link to the finished film (the core presigns it)
   seconds?: number;      // film length, if known
-  user_email?: string;   // the film owner's address (for an email notifier)
 }
 
 /** What a `notify` module returns: the channels it delivered on (for the core's log / summary). */

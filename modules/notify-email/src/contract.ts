@@ -24,7 +24,7 @@ export interface ModuleManifest {
   ui?: ModuleUi;
 }
 
-export interface InvokeContext { project: string; job_id: string; user_email?: string; }
+export interface InvokeContext { project: string; job_id: string; }
 export interface InvokeRequest<I = unknown> {
   hook: HookName;
   input: I;
@@ -43,7 +43,6 @@ export interface NotifyInput {
   project: string;
   download_url?: string;
   seconds?: number;
-  user_email?: string;
 }
 export interface NotifyOutput {
   delivered: string[];

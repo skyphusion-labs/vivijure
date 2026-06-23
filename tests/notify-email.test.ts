@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { renderCompleteEmail, escapeHtml, FROM } from "../modules/notify-email/src/notify";
+import worker from "../modules/notify-email/src/index";
 
 describe("notify-email composition", () => {
   it("renderCompleteEmail builds subject/text/html from the notify input", () => {
@@ -31,5 +32,57 @@ describe("notify-email composition", () => {
 
   it("FROM is the Vivijure render identity", () => {
     expect(FROM.email).toBe("render@skyphusion.org");
+  });
+});
+
+
+// The identity strip: the core sends NO recipient (NotifyInput has no user_email). The module's
+// recipient is its OWN config field (notify_email), set by the operator on install. These lock that.
+describe("notify-email delivery: recipient from the module config (not the input)", () => {
+  function invoke(config: Record<string, unknown>, env: unknown) {
+    return worker.fetch(
+      new Request("https://m/invoke", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          hook: "notify",
+          input: { event: "render.complete", film_id: "f", project: "RUST", download_url: "https://r2/x" },
+          config,
+          context: { project: "RUST", job_id: "f" },
+        }),
+      }),
+      env as never,
+    );
+  }
+
+  it("delivers to the address configured on the module", async () => {
+    const sent: Array<{ to: unknown }> = [];
+    const env = { EMAIL: { send: async (r: { to: unknown }) => { sent.push(r); return { messageId: "m1" }; } } };
+    const res = await invoke({ notify_email: "ops@studio.test" }, env);
+    const body = await res.json() as { ok: boolean; output: { delivered: string[] } };
+    expect(body.ok).toBe(true);
+    expect(body.output.delivered).toEqual(["email:ops@studio.test"]);
+    expect(sent[0].to).toBe("ops@studio.test");
+  });
+
+  it("no-ops (delivered:[], not an error) when no recipient is configured", async () => {
+    const env = { EMAIL: { send: async () => ({ messageId: "x" }) } };
+    const res = await invoke({}, env);
+    const body = await res.json() as { ok: boolean; output: { delivered: string[] } };
+    expect(body.ok).toBe(true);
+    expect(body.output.delivered).toEqual([]);
+  });
+
+  it("no-ops when the EMAIL binding is unset", async () => {
+    const res = await invoke({ notify_email: "ops@studio.test" }, {});
+    const body = await res.json() as { ok: boolean; output: { delivered: string[] } };
+    expect(body.ok).toBe(true);
+    expect(body.output.delivered).toEqual([]);
+  });
+
+  it("exposes notify_email in the manifest config_schema (operator-set recipient)", async () => {
+    const res = await worker.fetch(new Request("https://m/module.json"), {} as never);
+    const m = await res.json() as { config_schema?: Record<string, { type: string }> };
+    expect(m.config_schema?.notify_email?.type).toBe("string");
   });
 });

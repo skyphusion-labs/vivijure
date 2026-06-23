@@ -7,8 +7,8 @@
 //
 // Ownership: the studio is single-operator; list/get/patch/delete are scoped by
 // row id (and optional project_id on list) only. Edge auth is Cloudflare Access.
-// The user_email column is retained as legacy provenance (written as the
-// STUDIO_OWNER sentinel on insert; the column is NOT NULL) but is not a filter.
+// (The legacy per-operator identity column was removed in the identity strip; memory:
+// vivijure-user-email-strip -- the studio is single-operator, nothing scopes by identity.)
 // Poll / cancel proxy to RunPod regardless of DB state (so jobs submitted before
 // v0.34.0 are still pollable directly via their jobId); the row UPDATE is a no-op
 // when no row exists for that jobId.
@@ -16,7 +16,6 @@
 import type { Env } from "./env";
 import type { RunpodJobView } from "./runpod-submit";
 import { writeRenderLog } from "./render-log";
-import { STUDIO_OWNER } from "./shared";
 import { withD1Retry } from "./d1-retry";
 
 // Surface a corrupted *_json column instead of swallowing it silently (issue #15).
@@ -62,7 +61,6 @@ export interface KeyframeRef {
 // parsed back to a JS object (or null when the row has none).
 export interface RenderRow {
   id: number;
-  user_email: string;
   job_id: string;
   project: string;
   bundle_key: string;
@@ -180,13 +178,12 @@ export function buildInsertRenderStmt(env: Env, row: NewRenderRow) {
     : null;
   return env.DB.prepare(
     `INSERT INTO renders (
-      user_email, job_id, project, bundle_key, quality_tier,
+      job_id, project, bundle_key, quality_tier,
       render_overrides, status, submitted_at, updated_at, mode,
       project_id, parent_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(job_id) DO NOTHING`,
   ).bind(
-    STUDIO_OWNER,
     row.jobId,
     row.project,
     row.bundleKey,
@@ -208,8 +205,8 @@ export async function insertRender(env: Env, row: NewRenderRow): Promise<void> {
 // Best-effort UPDATE from a poll / cancel response. No-op when no row
 // exists for the jobId (matches the "back-compat for pre-v0.34.0 jobs"
 // policy). Ownership is NOT checked here; the route handler enforces
-// authn via Cloudflare Access at the edge and authz via user_email at
-// the list endpoint.
+// authn via Cloudflare Access at the edge; the single-operator studio does no per-identity
+// authz (the list endpoint is unscoped).
 export async function updateRenderFromView(
   env: Env,
   view: RunpodJobView,
@@ -476,7 +473,6 @@ export async function markFinishDone(
 // The decision is made exactly once even when the owner has notifications off
 // (the caller claims, then checks prefs, then maybe sends).
 export interface RenderNotifyRow {
-  user_email: string;
   project: string;
   status: string;
   output_key: string | null;
@@ -500,7 +496,7 @@ export async function claimRenderNotify(
     .run();
   if ((res.meta?.changes ?? 0) !== 1) return null;
   const row = await env.DB.prepare(
-    `SELECT user_email, project, status, output_key, error, execution_time_ms, mode
+    `SELECT project, status, output_key, error, execution_time_ms, mode
        FROM renders WHERE job_id = ?`,
   )
     .bind(jobId)
@@ -713,7 +709,7 @@ export async function getRenderByIdForUser(
 ): Promise<RenderRow | null> {
   const r = await env.DB.prepare(
     `SELECT
-      id, user_email, job_id, project, bundle_key, quality_tier,
+      id, job_id, project, bundle_key, quality_tier,
       render_overrides, status, output_key, output_json AS output,
       error, execution_time_ms, delay_time_ms,
       submitted_at, updated_at, completed_at, label, keyframes_json, mode,
@@ -783,7 +779,7 @@ export async function listRendersForUser(
   // Clamp limit so a runaway client cannot drain the DB binding.
   const cap = Math.min(Math.max(1, Math.floor(limit)), 200);
   const baseSelect = `SELECT
-      id, user_email, job_id, project, bundle_key, quality_tier,
+      id, job_id, project, bundle_key, quality_tier,
       render_overrides, status, output_key, output_json AS output,
       error, execution_time_ms, delay_time_ms,
       submitted_at, updated_at, completed_at, label, keyframes_json, mode,
@@ -850,7 +846,6 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
 
   return {
     id: Number(r.id),
-    user_email: String(r.user_email),
     job_id: String(r.job_id),
     project: String(r.project),
     bundle_key: String(r.bundle_key),

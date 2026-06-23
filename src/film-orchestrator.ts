@@ -161,7 +161,6 @@ export interface FilmJob {
   clips_recovered?: boolean;
   error?: string;
   created_at: number;
-  user_email?: string; // film owner; passed to the `notify` hook on done (e.g. for an email notifier)
 }
 
 interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
@@ -298,8 +297,7 @@ function completeKeyframesOnly(job: FilmJob, kfOut: KeyframeOutput): void {
  *  adapter to a character-stable key (survives project deletion), and mark the cast member ready.
  *  Reused slots (backend reports the already-banked key) and unmapped slots are no-ops; a versioned
  *  stable key keyed on job.created_at makes a retry idempotent. Best-effort but LOUD on failure
- *  (unlike the silent state-tar restore it replaces). Keyed on cast id (PK) only -- NOT the
- *  half-stripped user_email. */
+ *  (unlike the silent state-tar restore it replaces). Keyed on cast id (PK) only. */
 async function recordTrainedLorasToCast(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
   const trained = kfOut.trained_loras;
   const castIds = job.cast_loras;
@@ -877,9 +875,9 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
     const download_url = await presignR2Get(env, job.film_key, 86400); // 24h link, matches the poll summary
     const input: NotifyInput = {
       event: "render.complete", film_id: job.film_id, project: job.project,
-      download_url, user_email: job.user_email,
+      download_url,
     };
-    const context = { project: job.project, job_id: job.film_id, user_email: job.user_email };
+    const context = { project: job.project, job_id: job.film_id };
     for (const m of notifiers) {
       const fetcher = asFetcher(envRec[m.binding]);
       if (!fetcher) continue;
@@ -934,7 +932,6 @@ export interface RunFilmFinishInput {
   bundle_key: string;
   project: string;
   job_id: string;
-  user_email?: string;
 }
 export interface RunFilmFinishResult {
   ran: boolean;      // false when no film.finish module is installed (caller leaves its state untouched)
@@ -992,7 +989,7 @@ export async function runFilmFinish(env: Env, input: RunFilmFinishInput): Promis
     modules,
     "film.finish",
     seed,
-    { project: input.project, job_id: input.job_id, user_email: input.user_email },
+    { project: input.project, job_id: input.job_id },
     {
       nextInput: async (prev) => {
         const prevKey = prev?.film_key ?? input.film_key;
@@ -1041,7 +1038,6 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
     bundle_key: job.bundle_key,
     project: job.project,
     job_id: job.film_id,
-    user_email: job.user_email,
   });
   if (!r.ran) return; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
   if (r.errors.length > 0) {
@@ -1257,7 +1253,7 @@ async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
           audio_url: audioUrl, output_url: outputUrl, output_key: outputKey, seconds,
         } as MasterInput,
         config: cfg,
-        context: { project: job.project, job_id: job.film_id, user_email: job.user_email },
+        context: { project: job.project, job_id: job.film_id },
       };
       const r = await invokeModule<MasterInput, MasterOutput>(fetcher, req);
       if (!r.ok) {
@@ -1404,7 +1400,6 @@ export async function startFilmFromKeyframes(
     derive_mode: "finalized" | "cloud-finalized";
     parent_render_id?: number;
     audio_key?: string;
-    user_email?: string;
   },
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
@@ -1428,7 +1423,6 @@ export async function startFilmFromKeyframes(
     derive_mode: args.derive_mode,
     parent_render_id: args.parent_render_id,
     audio_key: stagedAudio,
-    user_email: args.user_email,
   };
   if (!matched.length) {
     job.error = `no keyframes matched requested shots (missing: ${missing.join(", ")})`;
@@ -1475,7 +1469,6 @@ export async function startFilmJob(
     clips_only?: boolean;
     pretrained_loras?: Record<string, string>;
     audio_key?: string;
-    user_email?: string;
     dialogue_lines?: DialogueLine[];
     cast_loras?: Record<string, number>;
     film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
@@ -1504,7 +1497,6 @@ export async function startFilmJob(
     film_titles: args.film_titles,
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
     phase_started_at: Date.now(),
-    user_email: args.user_email,
     dialogue_lines: args.dialogue_lines && args.dialogue_lines.length ? args.dialogue_lines : undefined,
     cast_loras: args.cast_loras && Object.keys(args.cast_loras).length ? args.cast_loras : undefined,
   };
