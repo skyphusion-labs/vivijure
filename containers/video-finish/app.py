@@ -340,6 +340,15 @@ def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade
     else:
         _concat_hard(norms, silent)  # -c copy; preserves per-clip audio when ensure_audio kept it
 
+    # Fail loud: the concat must NEVER silently drop a clip (a scatter render once shipped 1 of 3
+    # shots). If the assembled film is materially shorter than the sum of its (tail-trimmed) inputs,
+    # a clip was dropped at concat -- raise so the caller fails rather than ship a partial film.
+    _sil = _probe_duration(silent) or 0.0
+    _sum_in = sum((_probe_duration(n) or 0.0) for n in norms)
+    if _sum_in > 0 and _sil < _sum_in * 0.85:
+        raise RuntimeError(
+            f"concat dropped clips: assembled {_sil:.2f}s < sum of {len(norms)} inputs {_sum_in:.2f}s")
+
     out = os.path.join(work, "final.mp4")
     has_bed = bool(audio_path) and os.path.isfile(audio_path)
     if has_bed and keep_clip_audio:

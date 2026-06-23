@@ -245,7 +245,7 @@ async function muxScatterAudio(env: Env, job: ScatterJob): Promise<void> {
     job.error = `scatter audio mux failed: HTTP ${resp?.status ?? "?"}`;
     return;
   }
-  let body: { ok?: boolean; error?: string };
+  let body: { ok?: boolean; error?: string; durationSeconds?: number };
   try {
     body = (await resp.json()) as typeof body;
   } catch {
@@ -341,7 +341,7 @@ async function assembleScatterClips(
     job.error = `video-finish gather returned ${resp?.status ?? "?"}`;
     return;
   }
-  let body: { ok?: boolean; error?: string };
+  let body: { ok?: boolean; error?: string; durationSeconds?: number };
   try {
     body = (await resp.json()) as typeof body;
   } catch {
@@ -352,6 +352,20 @@ async function assembleScatterClips(
   if (!body.ok) {
     job.phase = "failed";
     job.error = `video-finish gather failed: ${body.error || "unknown"}`;
+    return;
+  }
+  // Fail loud: a scatter render must NEVER silently complete a PARTIAL film. If the assembled film
+  // is materially shorter than the sum of the cut shots' durations, clips were dropped in the
+  // assemble (a fetch miss or a concat truncation) -- error instead of shipping a 1-of-N film. This
+  // closes the gap that let a 3-shot render COMPLETE with one shot; per-shot clips stay intact in R2
+  // for a re-driven assemble. The 0.7 ratio tolerates per-clip tail/beat-trim without false alarms.
+  const expectedSeconds = (job.scenes ?? [])
+    .filter((s) => job.expected_shot_ids.includes(s.shot_id))
+    .reduce((sum, s) => sum + (Number.isFinite(s.seconds) && s.seconds > 0 ? s.seconds : 0), 0);
+  const assembledSeconds = typeof body.durationSeconds === "number" ? body.durationSeconds : 0;
+  if (expectedSeconds > 0 && assembledSeconds > 0 && assembledSeconds < expectedSeconds * 0.7) {
+    job.phase = "failed";
+    job.error = `assemble dropped clips: ${assembledSeconds.toFixed(1)}s assembled vs ~${expectedSeconds.toFixed(1)}s expected across ${job.expected_shot_ids.length} shots`;
     return;
   }
   job.silent_film_key = outputKey;
