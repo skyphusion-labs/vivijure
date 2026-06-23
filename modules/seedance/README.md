@@ -54,7 +54,7 @@ schema):
 - `generate_audio` (bool, default `false`) -- native provider audio; off lets the core score/mux
   chain own audio.
 - `seed` (int, default `-1` = random; min `-1`).
-- Per-shot `seconds` is clamped to **3--12s** in code (not a knob).
+- Per-shot `seconds` is clamped to **4--12s** in code (not a knob).
 
 ## Contract
 
@@ -64,7 +64,7 @@ schema):
   start keyframe), `prompt`, `seconds`.
 - **Config** (`config_schema`): `resolution` (480p / 720p / 1080p, default 720p), `aspect_ratio`
   (16:9 / 9:16 / 1:1), `camera_fixed`, `generate_audio` (default off -- the core score/mux chain
-  owns audio), `seed` (-1 = random). Per-shot `seconds` is clamped to **3--12s**.
+  owns audio), `seed` (-1 = random). Per-shot `seconds` is clamped to **4--12s**.
 - **Output** (`MotionBackendOutput`): `shot_id`, `clip_key` (the stored clip), `fps` (24), `frames`.
 - **Async**: cloud i2v takes minutes, longer than a Worker request can hold. `POST /invoke` submits
   to RunPod and returns a poll token immediately; `POST /poll` checks status and, on completion,
