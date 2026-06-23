@@ -82,8 +82,11 @@ describe("notify-email delivery: recipient from the module config (not the input
 
   it("exposes notify_email in the manifest config_schema (operator-set recipient)", async () => {
     const res = await worker.fetch(new Request("https://m/module.json"), {} as never);
-    const m = await res.json() as { config_schema?: Record<string, { type: string }> };
+    const m = await res.json() as { config_schema?: Record<string, { type: string; scope?: string }> };
     expect(m.config_schema?.notify_email?.type).toBe("string");
+    // projection-consistency lock: the recipient is operator-set-once install config, so the studio
+    // settings UI (which reads the manifest) and the core's install-config store both key off this.
+    expect(m.config_schema?.notify_email?.scope).toBe("install");
   });
 });
 

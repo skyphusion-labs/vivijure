@@ -24,6 +24,7 @@ const ok = (name: string, detail = "ok"): ConformanceCheck => ({ name, pass: tru
 const bad = (name: string, detail: string): ConformanceCheck => ({ name, pass: false, detail });
 
 const FIELD_TYPES = ["int", "float", "bool", "enum", "string"];
+const FIELD_SCOPES = ["render", "install"];
 
 /** One config_schema field has a valid type and a default consistent with that type. */
 function checkConfigField(key: string, f: unknown): ConformanceCheck {
@@ -32,6 +33,10 @@ function checkConfigField(key: string, f: unknown): ConformanceCheck {
   const ff = f as Record<string, unknown>;
   const t = ff.type;
   if (typeof t !== "string" || !FIELD_TYPES.includes(t)) return bad(label, "bad field type " + String(t));
+  // scope is optional (omitted => "render", a per-render knob); when present it must be a known scope.
+  if (ff.scope !== undefined && (typeof ff.scope !== "string" || !FIELD_SCOPES.includes(ff.scope))) {
+    return bad(label, "bad field scope " + String(ff.scope));
+  }
   if (t === "enum") {
     if (!Array.isArray(ff.values) || ff.values.length === 0) return bad(label, "enum needs a non-empty values[]");
     if (typeof ff.default !== "string" || !(ff.values as unknown[]).includes(ff.default)) {

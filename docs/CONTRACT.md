@@ -89,6 +89,7 @@ Each kind of change moves the same set of artifacts together, in one PR, with th
 |--------|-----------------------------------------------------|
 | **New hook** | Add to `HookName` union + `HOOK_NAMES` + `HOOK_CARDINALITY` + `HOOK_BLURBS`; add a named `XInput` / `XOutput` interface in `src/modules/types.ts`; add a branch to `HOOK_OUTPUT_CHECKS` in `src/modules/conformance.ts` (tsc's `Record<HookName, ...>` FORCES this, so a missing branch fails the typecheck gate); orchestrate it; add a section here. |
 | **New manifest config field type** | Add to the `ConfigField` union in `src/modules/types.ts`; add to `FIELD_TYPES` + a `checkConfigField` branch in `src/modules/conformance.ts`; document it in section 4.1 here. |
+| **New config field scope** | Add to the `ConfigScope` union in `src/modules/types.ts`; add to `FIELD_SCOPES` in `src/modules/conformance.ts`; if it needs a new value source, wire it into the invoke path; document it in section 4.1.1 here. |
 | **New / changed API route** | Add to `API_ROUTES` (or the inline dispatch) in `src/index.ts` with its handler; document the full request/response schema + status codes in section 2 here. |
 | **New hook field** | Add to the `XInput`/`XOutput` interface; if required, add to the conformance validator; update the field table here. |
 | **New render quality tier / render projection field** | Edit `QUALITY_TIERS` / `RenderConfigProjection` in `src/render-module-config.ts`; update section 2.2.1 / 2.2 here. |
@@ -258,6 +259,8 @@ Every route the worker serves. The detail subsection for each follows in 2.2+. (
 | 62 | GET | `/api/whoami` | 2.29 |
 | 63 | GET | `/api/prefs` | 2.29 |
 | 64 | PATCH | `/api/prefs` | 2.29 |
+| 65 | GET | `/api/modules/:name/config` | 4.1.2 |
+| 66 | PATCH | `/api/modules/:name/config` | 4.1.2 |
 
 ### 2.2 GET /health
 
@@ -1110,7 +1113,7 @@ conformance harness (`checkManifest`) proves a candidate module honors it.
 | `api` | `ModuleApi` (`"vivijure-module/2"`; `/1` accepted transitionally) | yes | Contract version (must be in `SUPPORTED_MODULE_APIS`). |
 | `hooks` | `HookName[]` | yes | The hooks this module serves (must be known hook names). |
 | `provides?` | `{ id: string, label: string }[]` | no | User-facing capabilities (each needs `id` + `label`). |
-| `config_schema?` | `{ [field]: ConfigField }` | no | The knobs the module exposes; the UI renders controls from these and the core clamps the user's value against them before invoking. |
+| `config_schema?` | `{ [field]: ConfigField }` | no | The knobs the module exposes; the UI renders controls from these and the core clamps the user's value against them before invoking. A field's `scope?` (4.1.1) marks it per-render (default) or operator install config. |
 | `ui?` | `{ section?: string, icon?: string, order?: number }` | no | Self-assembling-UI hints. `order` is the fold/render order within a chain hook (default 100 when absent). |
 
 Internal-only, **intentionally NEVER on the wire**: `RegisteredModule = ModuleManifest & { binding:
@@ -1124,13 +1127,46 @@ is `int, float, bool, enum, string`):
 
 | type | shape | validation |
 |------|-------|------------|
-| `int` | `{ type:"int", default:number, min?, max?, label?, enum_labels? }` | default must be a number |
-| `float` | `{ type:"float", default:number, min?, max?, label?, enum_labels? }` | default must be a number |
-| `bool` | `{ type:"bool", default:boolean, label? }` | default must be a boolean |
-| `enum` | `{ type:"enum", values:string[], default:string, label? }` | `values` non-empty; default in `values` |
-| `string` | `{ type:"string", default:string, label? }` | default must be a string |
+| `int` | `{ type:"int", default:number, min?, max?, label?, enum_labels?, scope? }` | default must be a number |
+| `float` | `{ type:"float", default:number, min?, max?, label?, enum_labels?, scope? }` | default must be a number |
+| `bool` | `{ type:"bool", default:boolean, label?, scope? }` | default must be a boolean |
+| `enum` | `{ type:"enum", values:string[], default:string, label?, scope? }` | `values` non-empty; default in `values` |
+| `string` | `{ type:"string", default:string, label?, scope? }` | default must be a string |
 
 `enum_labels?` (on int/float) maps a numeric value to a display label. `label?` is the control label.
+
+#### 4.1.1 `scope?` -- render config vs operator install config
+
+Every `ConfigField` may carry an optional `scope?: "render" | "install"` (validated by
+`checkConfigField`; an unknown scope value fails conformance). It declares **where the field's value
+comes from**:
+
+| scope | meaning | value source | UI surface |
+|-------|---------|--------------|------------|
+| `"render"` (default when omitted) | a per-render knob chosen at submit time (e.g. a quality control) | the per-render config path (clamped against `config_schema` per render) | the render/pipeline panel |
+| `"install"` | operator-set-**once**, instance-wide config (e.g. `notify-email`'s `notify_email` recipient) | the **operator-config store** (D1 `operator_module_config`), injected into the invoke at hook time | the studio **settings** page |
+
+`scope` is **additive and narrows nothing**: a field with no `scope` behaves exactly as a `"render"`
+field always has, so every existing module and every vendored `/1` contract stays valid (no
+`MODULE_API` bump). The field's `scope` marker travels on the public `GET /api/modules` projection (so
+the settings UI can render install controls), but an install field's stored **value** does NOT -- it
+is read/written only via the authenticated `GET/PATCH /api/modules/:name/config` endpoint (4.1.2).
+
+#### 4.1.2 Operator install-config endpoint (`/api/modules/:name/config`)
+
+The persistence + retrieval surface for `scope:"install"` fields. Behind the studio's Access gate
+(operator-only); no service-token path (added only if a real headless-provisioning need appears).
+
+| method | request | response |
+|--------|---------|----------|
+| `GET /api/modules/:name/config` | none | `200 { ok:true, module, config }` -- `config` is every install field, missing ones at their schema default. `404` if the module is unknown or has no install-scope field. |
+| `PATCH /api/modules/:name/config` | a `{ field: value }` object | `200 { ok:true, module, config }`. The patch is clamped against the module's **install subschema** (the same `validateConfig` clamp the invoke uses): unknown and **render-scope** keys are dropped (never writable here). `400` if the body is not an object; `404` as above. |
+
+The store is **instance-scoped** (keyed on `(module_name, field_key)`), not per-user: the identity
+strip (#292) zeroed `user_email`, so there is no per-user dimension. At a `notify` (or any) hook
+invoke, the core loads the module's stored install-config and passes it as the user-config to
+`validateConfig` before invoking, so an operator-set `notify_email` reaches the module at
+`render.complete`.
 
 > An **`array`** ConfigField type is a **planned addition** to the contract (not yet present). Only
 > the five types above are valid today; a candidate `array` field fails conformance until it is added

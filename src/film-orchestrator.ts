@@ -9,6 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
+import { loadInstallConfig } from "./operator-config";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
@@ -882,8 +883,11 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
       const fetcher = asFetcher(envRec[m.binding]);
       if (!fetcher) continue;
       try {
+        // Inject the operator-set install-config (e.g. notify-email's notify_email recipient) as the
+        // user config, then clamp through the contract; render-scope fields stay at their defaults.
+        const installConfig = await loadInstallConfig(env, m.name, m.config_schema);
         await invokeModule<NotifyInput, NotifyOutput>(fetcher, {
-          hook: "notify", input, config: validateConfig(m.config_schema ?? {}, {}), context,
+          hook: "notify", input, config: validateConfig(m.config_schema ?? {}, installConfig), context,
         });
       } catch { /* best-effort per notifier -- a delivery failure never fails the render */ }
     }
