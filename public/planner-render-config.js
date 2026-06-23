@@ -130,7 +130,13 @@
     const fields = document.createElement("div");
     fields.className = "planner-overrides-fields";
     const schema = mod.config_schema || {};
-    const keys = Object.keys(schema).filter((k) => k !== "quality_tier" && k !== "quality");
+    // quality_tier / quality are the core-owned render tier (set by the tier picker above), and
+    // scope:"install" fields are operator-set-once knobs that live on the Settings page (GET/PATCH
+    // /api/modules/:name/config), NOT per-render config. Skip both here so an install field never
+    // double-renders: it belongs only on Settings, the render panel only shows per-render knobs.
+    const keys = Object.keys(schema).filter(
+      (k) => k !== "quality_tier" && k !== "quality" && schema[k] && schema[k].scope !== "install",
+    );
     if (!keys.length) {
       const p = document.createElement("p");
       p.className = "planner-overrides-hint";
