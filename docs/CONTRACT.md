@@ -59,9 +59,27 @@ rules below are how the contract stays true over time without depending on any s
 - It covers: the 11 hook names + their cardinality, every hook's Input/Output shape, the module
   manifest schema (including the `ConfigField` union), the invoke/poll envelopes, and the
   `GET /api/modules` projection payload.
-- It bumps to `vivijure-module/2` ONLY on a breaking change to those shapes (a removed/renamed hook,
-  a changed required field, a changed envelope). Additive changes (a new optional field, a new hook,
-  a new module) do NOT bump it; they are forward-compatible within `/1`.
+- It bumps to a NEW epoch (the next `/N`) ONLY on a breaking change to those shapes (a removed/renamed
+  hook, a changed required field, a changed envelope -- e.g. the `/1` -> `/2` `user_email` removal).
+  Additive changes (a new optional field, a new hook, a new module) do NOT bump it; they are
+  forward-compatible within the current epoch.
+
+### 0.1.1 Supported versions (the deprecation window)
+
+The host does NOT pin a single epoch. It loads any module whose `api` is in
+`SUPPORTED_MODULE_APIS` -- currently `{ vivijure-module/1, vivijure-module/2 }` -- checked by
+`validateManifest` (the registry gate) and the conformance harness via `.has()`. A version bump is
+therefore a DEPRECATION WINDOW, not a hard cutover:
+
+- When the contract moved to `/2` (the identity strip), the ~28 first-party modules still declaring
+  `/1` keep loading and serving -- they are runtime-compatible because none read the removed
+  `user_email`, and a `/2` host simply sends none.
+- Modules migrate `/1` -> `/2` opportunistically (tracked as a follow-up issue). Once every
+  first-party module is `/2`, `/1` is removed from `SUPPORTED_MODULE_APIS`, closing the window.
+- This generalizes the older exact-match gate (`m.api !== MODULE_API`), which could not express a
+  migration -- a `/2` host under that gate would have rejected all 28 `/1` modules at once.
+
+Only an api NOT in the set is rejected (`unsupported api ...`).
 
 ### 0.2 How the contract evolves (the mechanics)
 
