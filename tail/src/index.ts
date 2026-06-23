@@ -15,7 +15,8 @@ export interface Env {
 
 interface TailLog { timestamp?: number; level?: string; message?: unknown[]; }
 interface TailException { timestamp?: number; name?: string; message?: string; }
-interface TailItem { scriptName?: string; outcome?: string; eventTimestamp?: number; logs?: TailLog[]; exceptions?: TailException[]; }
+interface TailEvent { request?: { url?: string; method?: string; path?: string }; response?: { status?: number }; cron?: string; scheduledTime?: number; }
+interface TailItem { scriptName?: string; outcome?: string; eventTimestamp?: number; event?: TailEvent; logs?: TailLog[]; exceptions?: TailException[]; }
 
 interface Labels { worker: string; level: string; phase: string; module: string; }
 interface LokiStream { stream: Labels; values: [string, string][]; }
@@ -95,6 +96,22 @@ export function shapeEventsToLoki(events: TailItem[]): LokiStream[] {
   };
   for (const item of events || []) {
     const worker = item.scriptName || "unknown";
+    // Invocation summary -- emitted for EVERY tail event so routine traffic + the live pipeline
+    // are visible even when the request makes no console.* calls (CF's auto invocation record is
+    // NOT in logs[]). Render detail (console.warn degrades/phases) still rides logs[] below.
+    {
+      const ev = item.event || {};
+      let summary: string;
+      if (ev.request) summary = (ev.request.method || "GET") + " " + (ev.request.path || ev.request.url || "/") + (ev.response && ev.response.status != null ? " " + ev.response.status : "");
+      else if (ev.cron) summary = "cron " + ev.cron;
+      else if (ev.scheduledTime != null) summary = "scheduled";
+      else summary = "invocation";
+      const oc = item.outcome || "ok";
+      const ilevel: "info" | "warn" | "error" = oc === "ok" ? "info" : (oc === "exception" || oc === "exceededCpu" ? "error" : "warn");
+      const idf = deriveFields(summary);
+      add({ worker, level: ilevel, phase: idf.phase, module: idf.module }, nanos(item.eventTimestamp),
+        JSON.stringify({ msg: summary, kind: "invocation", outcome: oc, status: ev.response?.status, path: ev.request?.path }));
+    }
     for (const log of item.logs || []) {
       const text = flatten(log.message);
       if (!text) continue;
