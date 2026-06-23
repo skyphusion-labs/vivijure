@@ -97,7 +97,13 @@ function controlFor(moduleName, key, field) {
 function renderModuleConfig(host, mod) {
   host.replaceChildren();
   const schema = mod && mod.config_schema;
-  const keys = schema ? Object.keys(schema) : [];
+  // scope:"install" fields are operator-set-once knobs that live on the Settings page
+  // (GET/PATCH /api/modules/:name/config), not per-render config. This pipeline overview shows
+  // per-render stage knobs only; an install field would be a dead control here (nothing submits it),
+  // so skip it -- install config is presented in exactly one place, Settings.
+  const keys = schema
+    ? Object.keys(schema).filter((k) => schema[k] && schema[k].scope !== "install")
+    : [];
   if (!keys.length) {
     host.append(el("p", "mod-nosettings", "No settings exposed"));
     return;
