@@ -30,7 +30,9 @@ const MANIFEST: ModuleManifest = {
   // The recipient lives HERE (operator sets it on install), not in the notify input -- the core
   // sends completion facts only, no identity (the identity strip).
   config_schema: {
-    notify_email: { type: "string", default: "", label: "Notify email address (render-done mail recipient)" },
+    // scope:"install" -- operator sets this once on the studio settings page; the core persists it in
+    // the operator-config store and injects it at notify-invoke time (it is NOT a per-render field).
+    notify_email: { type: "string", default: "", label: "Notify email address (render-done mail recipient)", scope: "install" },
   },
   ui: { section: "notify", order: 10 },
 };

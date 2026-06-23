@@ -79,6 +79,19 @@ The `config_schema` is the single source of truth for a module's knobs. The fron
 controls from it; the core clamps/validates against it before invoking. One declaration, one hop,
 same words down. No separate override grab-bag.
 
+A field may carry an optional `"scope"`:
+
+- **`"render"`** (the default when omitted): a per-render knob, chosen at submit time, flowing through
+  the per-render config path -- the behavior every field has always had.
+- **`"install"`**: operator-set-**once**, instance-wide config (e.g. `notify-email`'s `notify_email`
+  recipient). The operator sets it on the studio **settings** page; the core persists it in the
+  operator-config store and injects it into the module invoke at hook time. The value lives only in
+  that store, read/written via `GET/PATCH /api/modules/:name/config` -- it never rides the public
+  `/api/modules` projection (only the schema marker does, so the settings UI can render the control).
+
+`scope` is additive: an unmarked field is a `"render"` field, so adding it broke nothing and bumped no
+contract version. See CONTRACT.md 4.1.1 / 4.1.2 for the full spec.
+
 ## Invocation contract
 
 The core calls a module over a **service binding** (RPC) or HTTP. One entry point per module:

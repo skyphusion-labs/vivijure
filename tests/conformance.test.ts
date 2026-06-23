@@ -40,6 +40,22 @@ describe("conformance: manifest", () => {
     expect(allPass(checks)).toBe(false);
   });
 
+  it("accepts a config field marked scope:install (operator-set-once)", () => {
+    const checks = checkManifest({
+      ...goodManifest,
+      config_schema: { recipient: { type: "string", default: "", scope: "install" } },
+    });
+    expect(allPass(checks), JSON.stringify(failures(checks))).toBe(true);
+  });
+
+  it("fails a config field with an unknown scope", () => {
+    const checks = checkManifest({
+      ...goodManifest,
+      config_schema: { recipient: { type: "string", default: "", scope: "bogus" } },
+    });
+    expect(allPass(checks)).toBe(false);
+  });
+
   it("fails a provides entry missing a label", () => {
     const checks = checkManifest({ ...goodManifest, provides: [{ id: "x" }] });
     expect(allPass(checks)).toBe(false);

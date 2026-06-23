@@ -68,6 +68,7 @@ import { emitMarkers, type MarkersFormat } from "./markers";
 import { assembleBundle, type AssembleBundleArgs } from "./bundle-assembler";
 import { presignR2Get } from "./r2-presign";
 import { getUserPrefs, setUserPrefs } from "./user-prefs";
+import { loadInstallConfig, setInstallConfig, hasInstallConfig } from "./operator-config";
 import { analyzeAudioBeats } from "./beat-analyze";
 import { startScoreBedGenerate, pollScoreBedGenerate } from "./score-bed";
 import { muxAudioOntoRender } from "./render-mux";
@@ -932,6 +933,31 @@ const hPatchPrefs: Handler = async (req, env) => {
   return json({ ok: true, prefs });
 };
 
+// --- operator install-config (per-module, instance-scoped; backs config_schema scope:"install") ----
+// GET/PATCH the operator-set-once config for one module (e.g. notify-email's notify_email). The
+// VALUE lives only here, never on the unauthenticated /api/modules projection; only the schema marker
+// crosses there. Render-scope / unknown keys are rejected by the store's install-subschema clamp.
+async function resolveModuleByName(env: Env, name: string) {
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  return modules.find((m) => m.name === name) ?? null;
+}
+const hGetModuleConfig: Handler = async (_req, env, _ctx, p) => {
+  const mod = await resolveModuleByName(env, p.name);
+  if (!mod) throw notFound("module");
+  if (!hasInstallConfig(mod.config_schema)) throw notFound("module has no install-scope config");
+  const config = await loadInstallConfig(env, mod.name, mod.config_schema);
+  return json({ ok: true, module: mod.name, config });
+};
+const hPatchModuleConfig: Handler = async (req, env, _ctx, p) => {
+  const mod = await resolveModuleByName(env, p.name);
+  if (!mod) throw notFound("module");
+  if (!hasInstallConfig(mod.config_schema)) throw notFound("module has no install-scope config");
+  const body = await readBody<Record<string, unknown>>(req);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw badRequest("body must be a config object");
+  const config = await setInstallConfig(env, mod.name, mod.config_schema, body);
+  return json({ ok: true, module: mod.name, config });
+};
+
 // --- route table ---------------------------------------------------------
 const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/storyboard/projects",                        handler: hListProjects },
@@ -999,6 +1025,8 @@ const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/whoami",                          handler: hWhoami },
   { method: "GET",    pattern: "/api/prefs",                           handler: hGetPrefs },
   { method: "PATCH",  pattern: "/api/prefs",                           handler: hPatchPrefs },
+  { method: "GET",    pattern: "/api/modules/:name/config",            handler: hGetModuleConfig },
+  { method: "PATCH",  pattern: "/api/modules/:name/config",            handler: hPatchModuleConfig },
 ];
 
 // Pretty studio page paths (vivijure.skyphusion.org/planner, /cast, /modules). Served

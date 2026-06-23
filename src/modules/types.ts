@@ -81,6 +81,14 @@ export const HOOK_BLURBS: Record<HookName, string> = {
 
 // --------------------------------------------------------------------------- manifest
 
+/** Where a config field's value is sourced from.
+ *  - "render"  (default when omitted): per-render config, chosen at submit time (e.g. quality_tier).
+ *  - "install": operator-set-once, instance-wide config, persisted in the operator-config store and
+ *    injected at invoke time (e.g. notify-email's recipient address). The UI surfaces these on a
+ *    studio settings page, not the per-render panel. ADDITIVE: a field with no `scope` is "render",
+ *    so this marker narrows nothing -- every existing module + vendored /1 contract stays valid. */
+export type ConfigScope = "render" | "install";
+
 /** One configurable knob a module exposes. The UI renders the control from this; the core clamps
  *  the user's value against it before invoking. One declaration, one hop, same words down. */
 export type ConfigField =
@@ -91,10 +99,11 @@ export type ConfigField =
       max?: number;
       label?: string;
       enum_labels?: Record<string, string>;
+      scope?: ConfigScope;
     }
-  | { type: "bool"; default: boolean; label?: string }
-  | { type: "enum"; values: string[]; default: string; label?: string }
-  | { type: "string"; default: string; label?: string };
+  | { type: "bool"; default: boolean; label?: string; scope?: ConfigScope }
+  | { type: "enum"; values: string[]; default: string; label?: string; scope?: ConfigScope }
+  | { type: "string"; default: string; label?: string; scope?: ConfigScope };
 
 export type ConfigSchema = Record<string, ConfigField>;
 

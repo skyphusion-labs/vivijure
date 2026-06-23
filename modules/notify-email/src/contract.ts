@@ -5,11 +5,12 @@ export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "notify" | "keyframe" | "motion.backend" | "finish" | "score" | "plan.enhance" | "cast.image";
 
+export type ConfigScope = "render" | "install";
 export type ConfigField =
-  | { type: "int" | "float"; default: number; min?: number; max?: number; label?: string; enum_labels?: Record<string, string> }
-  | { type: "bool"; default: boolean; label?: string }
-  | { type: "enum"; values: string[]; default: string; label?: string }
-  | { type: "string"; default: string; label?: string };
+  | { type: "int" | "float"; default: number; min?: number; max?: number; label?: string; enum_labels?: Record<string, string>; scope?: ConfigScope }
+  | { type: "bool"; default: boolean; label?: string; scope?: ConfigScope }
+  | { type: "enum"; values: string[]; default: string; label?: string; scope?: ConfigScope }
+  | { type: "string"; default: string; label?: string; scope?: ConfigScope };
 export type ConfigSchema = Record<string, ConfigField>;
 
 export interface Provides { id: string; label: string; }
