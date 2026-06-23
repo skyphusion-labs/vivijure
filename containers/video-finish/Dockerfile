@@ -57,5 +57,18 @@ RUN ffmpeg -y -f lavfi -i testsrc=size=320x240:rate=24:duration=0.1 \
     && rm -f /tmp/drawtext_warm.mp4 \
     && echo "drawtext sanity-encode OK"
 
+# Build-time subtitles (libass) sanity-check: the /subtitle route burns captions
+# via `-vf subtitles=<srt>`, which needs ffmpeg built WITH libass. Debian's ffmpeg
+# is, but prove it: write a 1-cue SRT and burn it. Fails the build fast if a slim
+# image ever ships an ffmpeg without the subtitles filter, instead of every
+# /subtitle call erroring at runtime. force_style exercises the same font path
+# (fontconfig -> DejaVu Sans) the module uses.
+RUN printf '1\n00:00:00,000 --> 00:00:00,100\nvivijure\n' > /tmp/warm.srt \
+    && ffmpeg -y -f lavfi -i testsrc=size=320x240:rate=24:duration=0.1 \
+        -vf "subtitles=/tmp/warm.srt:force_style='FontName=DejaVu Sans,FontSize=18'" \
+        -c:v libx264 -preset ultrafast -pix_fmt yuv420p /tmp/subs_warm.mp4 \
+    && rm -f /tmp/warm.srt /tmp/subs_warm.mp4 \
+    && echo "subtitles (libass) sanity-encode OK"
+
 EXPOSE 8000
 CMD ["python", "app.py"]
