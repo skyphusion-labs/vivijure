@@ -86,3 +86,32 @@ describe("notify-email delivery: recipient from the module config (not the input
     expect(m.config_schema?.notify_email?.type).toBe("string");
   });
 });
+
+
+// Ported from the retired core render-email.ts cleanup-17 suite: the SPECIFIC adversarial inputs that
+// fixed real bugs in issue #17, re-asserted against the LIVE module composer so they cannot silently
+// regress. (The encodeArtifactKey lock did not port: the notify path uses the core-presigned
+// download_url, not an outputKey-built artifact URL; its equivalent is the URL & -escaping lock below.)
+describe("notify-email composer: ported issue-#17 regression locks", () => {
+  const inp = (over: Record<string, unknown>) =>
+    ({ event: "render.complete", film_id: "f", project: "P", download_url: "", ...over }) as never;
+
+  it("esc lock: escapes & < > and double-quote in the HTML body, but NOT single-quote", () => {
+    const { html } = renderCompleteEmail(inp({ project: `a & b < c > d " e ' f` }));
+    expect(html).toContain("a &amp; b &lt; c &gt; d &quot; e ' f");
+    expect(html).not.toContain("&#39;");
+    expect(html).not.toContain("&apos;");
+  });
+
+  it("URL & -escaping lock: the download URL's & is escaped inside the href", () => {
+    const { html } = renderCompleteEmail(inp({ download_url: "https://r2/x?a=1&b=2" }));
+    expect(html).toContain("a=1&amp;b=2");
+  });
+
+  it("clamp lock: truncates a runaway project name in subject AND html (#17 MAX_EMAIL_FIELD)", () => {
+    const { subject, html } = renderCompleteEmail(inp({ project: "P".repeat(500) }));
+    expect(subject).toContain("P".repeat(200) + "...");
+    expect(subject).not.toContain("P".repeat(201));
+    expect(html).toContain("P".repeat(200) + "...");
+  });
+});

@@ -10,9 +10,17 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// Bound a notification field so a runaway project name can't bloat the email (ported from the
+// legacy render-email builder, issue #17). esc-not-single-quote + this clamp are the hardening
+// the composer must keep now that it is the sole email logic.
+const MAX_EMAIL_FIELD = 200;
+function clampField(s: string): string {
+  return s.length > MAX_EMAIL_FIELD ? `${s.slice(0, MAX_EMAIL_FIELD)}...` : s;
+}
+
 /** Build the render-complete email (subject/html/text) from the notify input. Pure. */
 export function renderCompleteEmail(input: NotifyInput): { subject: string; html: string; text: string } {
-  const title = input.project || "your film";
+  const title = clampField(input.project || "your film");
   const url = input.download_url || "";
   return {
     subject: `Your film "${title}" is ready`,
