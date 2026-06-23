@@ -166,7 +166,9 @@ core (this worker)
   '-- notify             --> render-done email / webhook (optional)
 ```
 
-The module contract is `vivijure-module/1` in [`src/modules/types.ts`](src/modules/types.ts).
+The module contract is `vivijure-module/2` in [`src/modules/types.ts`](src/modules/types.ts)
+(the host also accepts `/1` transitionally; the `/1` -> `/2` bump removed `user_email` from
+the hook context, an anti-SaaS identity strip -- see [docs/CONTRACT.md](docs/CONTRACT.md)).
 A module is a Cloudflare Worker that serves `GET /module.json` (manifest) and `POST /invoke`
 (run a hook). That is the whole interface; a module in another language, on another platform,
 works fine as long as it speaks JSON over HTTP.

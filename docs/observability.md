@@ -93,6 +93,48 @@ So to parse structured fields you unwrap twice: `| json | line_format "{{.msg}}"
 {worker="vivijure-studio", level="error"}
 ```
 
+```logql
+# D1 durability events (scatter submit hardening, #290): retries, exhaustion, swallowed errors.
+# Healthy = silent. A spike here is the early warning that the D1 path is flapping.
+{worker="vivijure-studio"} |~ "d1\\.(retry|exhausted|error)"
+```
+
+## Reaching Loki from off-fleet (the jello / crew-agent caveat)
+
+Loki and Grafana run on **dischord** (`10.1.1.2`), on the private fleet estate.
+Two facts decide how you query them:
+
+- **Grafana UI is public** at `grafana.skyphusion.org` (cloudflared + Access, same
+  pattern as `status.skyphusion.org -> gatus`). From a laptop browser this Just
+  Works; it is the default path for a human.
+- **Loki itself is network-isolated** (`3100/tcp`, no public port; the tail worker
+  pushes to it over the Cloudflare VPC connector, not a public endpoint).
+
+**The caveat for crew agents:** the WARP mesh is **retired** from the fleet, and
+public `:22` is closed fleet-wide. A crew agent running on **jello** therefore has
+**no direct route** to `10.1.1.2:3100` (a `curl http://10.1.1.2:3100/...` returns
+`000` / timeout, NOT a worker fault). To query Loki directly from off-fleet you
+must first cross the **lagwagon bastion**:
+
+```bash
+# option A: jump host for a one-shot docker-network query on dischord
+ssh -J lagwagon dischord "docker run --rm --network monitoring_default \
+  curlimages/curl:latest -s \
+  --data-urlencode 'query={worker=\"vivijure-studio\"}' \
+  --data-urlencode since=1h \
+  http://monitoring-loki-1:3100/loki/api/v1/query_range"
+
+# option B: route the whole private estate locally, then curl as if on-fleet
+sshuttle --dns -r conrad@lagwagon.internal 10.1.0.0/16
+```
+
+If neither bastion path is set up in your shell (e.g. a non-interactive crew
+session with no `~/.ssh/config` for lagwagon), **use the Grafana web UI or the CF
+Workers Observability API instead**; both are reachable without fleet access, and
+CF-obs already carries the invocation truth (status, timing, cron). Do not read an
+unreachable Loki as a missing-logs / broken-pipeline signal; confirm reachability
+first.
+
 ## Direct Loki API (from the fleet, no Grafana UI)
 
 Loki has no published host port (it is `3100/tcp`, network-internal on dischord).
