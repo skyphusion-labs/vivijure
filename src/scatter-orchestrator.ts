@@ -12,10 +12,11 @@ import {
   filmPhaseToShardStatus,
   orderFinalClips,
   startFilmJob,
+  runFilmFinish,
   type FilmJob,
   type FilmScene,
 } from "./film-orchestrator";
-import { filmJobToPollView, filterScenesByShotIds, mapRenderOverridesToModuleConfigs } from "./film-render-bridge";
+import { filmJobToPollView, filterScenesByShotIds, orderScenesByShotIds, mapRenderOverridesToModuleConfigs } from "./film-render-bridge";
 import { presignR2Get, presignR2Put } from "./r2-presign";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { discoverModules, servingForHook } from "./modules/registry";
@@ -80,6 +81,7 @@ export interface StartScatterArgs {
   render_overrides?: Record<string, unknown>;
   motion_backend?: string;
   audio_key?: string;
+  film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   user_email: string;
   project_id?: number | null;
 }
@@ -155,6 +157,10 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     audio_key: stagedAudio,
     has_dialogue: dialogueLines.length > 0,
     user_email: args.user_email,
+    scenes,
+    dialogue_lines: dialogueLines,
+    film_titles: args.film_titles,
+    film_finish_config: mapped.film_finish_config,
     phase: "shards",
     created_at: Date.now(),
   };
@@ -186,7 +192,6 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
       motion_config: mapped.motion_config,
       finish_config: mapped.finish_config,
       speech_config: mapped.speech_config,
-      film_finish_config: mapped.film_finish_config,
       master_config: mapped.master_config,
       clips_only: true,
       pretrained_loras: shard.pretrainedLoras,
@@ -261,7 +266,36 @@ async function maybeFinalizeScatter(env: Env, job: ScatterJob): Promise<void> {
   if (job.phase !== "done" || !job.film_key) return;
   const st = await getFinishState(env, job.scatter_id);
   if (st?.finish_state === "done") return;
+  await runScatterFilmFinish(env, job);
   await finalizeScatterDone(env, job);
+}
+
+/** Run the film.finish chain (subtitle / title / credit cards) on the assembled+muxed scatter film,
+ *  mirroring the single-film path's inline film.finish (#284/#285). The assembled clip order ==
+ *  expected_shot_ids order (orderFinalClips), so the FULL scenes + dialogue_lines give correctly aligned
+ *  cumulative captions. FAIL-SAFE + idempotent: guarded by job.film_finish so a re-driven finalize never
+ *  double-runs, and runFilmFinish soft-degrades (a card miss never drops the assembled film). */
+async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
+  if (job.film_finish || !job.film_key) return; // already run (or nothing to card)
+  const r = await runFilmFinish(env, {
+    film_key: job.film_key,
+    // Caption scenes in the SAME order the gather assembles the clips (expected_shot_ids), NOT bundle
+    // order, so buildCaptionCues' cumulative timeline matches the cut (the crux, #284/#285).
+    scenes: orderScenesByShotIds(job.scenes ?? [], job.expected_shot_ids),
+    dialogue_lines: job.dialogue_lines,
+    film_titles: job.film_titles,
+    film_finish_config: job.film_finish_config,
+    bundle_key: job.bundle_key,
+    project: job.project,
+    job_id: job.scatter_id,
+    user_email: job.user_email,
+  });
+  if (!r.ran) { job.film_finish = { applied: [], errors: [] }; return; } // no film.finish module -> mark + skip
+  if (r.errors.length > 0) console.warn(`scatter film.finish errors for ${job.scatter_id}: ${r.errors.join("; ")}`);
+  if (r.degraded) console.warn(`scatter film.finish degraded for ${job.scatter_id}: ${r.degraded} -- film shipped WITHOUT cards`);
+  job.film_finish = { applied: r.applied, errors: r.errors, steps: r.steps, degraded: r.degraded };
+  job.film_key = r.film_key;
+  await saveScatterJob(env, job); // persist carded key + outcome before finalize records it
 }
 
 async function assembleScatterClips(

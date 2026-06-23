@@ -643,6 +643,7 @@ const hScatterRender: Handler = async (req, env) => {
     shotIds?: string[]; shardCount?: number; castLoras?: Record<string, unknown>;
     renderOverrides?: Record<string, unknown>; audioKey?: string; projectId?: unknown;
     motion_backend?: string;
+    film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
   if (!Array.isArray(b.shotIds) || b.shotIds.length < 2) throw badRequest("shotIds[] required (>= 2)");
@@ -660,6 +661,7 @@ const hScatterRender: Handler = async (req, env) => {
       render_overrides: b.renderOverrides,
       motion_backend: b.motion_backend,
       audio_key: b.audioKey,
+      film_titles: b.film_titles,
       user_email: email,
       project_id: normalizeProjectIdInput(b.projectId),
     });
