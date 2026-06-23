@@ -1,43 +1,42 @@
 // audio-master: a `master` module worker (vivijure-module/1). Film-level audio mastering -- music
-// upscale (VHQ soxr resample to 48k + gentle high-shelf air lift) + LUFS loudness normalization --
-// dispatched to the dedicated vivijure-audio-master RunPod endpoint (CPU ffmpeg, no GPU).
+// upscale (VHQ soxr resample to 48k + gentle high-shelf air lift) + LUFS loudness normalization -- via
+// the always-on audio-master CPU container on the fleet over Workers VPC (AUDIO_MASTER_VPC).
+//
+// CPU mastering is ffmpeg DSP, so it must NEVER touch a GPU/RunPod (GPU money is for GPU work only). The
+// work runs on the CPU VPC container, the same pattern as the audio-mix + subtitle modules.
 //
 // It is the audio sibling of `finish` (which polishes a clip) and the dialogue / speech lane (which
 // polishes per-shot voice): `master` runs ONCE, on the whole film's assembled audio bed, AFTER the mix
 // is built (score + narration) and BEFORE the bed is muxed onto the silent film. A music-video maker
 // reaches for it as cleanly as a dialogue maker reaches for the voice lane.
 //
-// ASYNC: a two-pass ffmpeg master (measure -> apply loudnorm, plus a soxr resample) can exceed a Worker
-// request budget, so the work runs on RunPod and the core polls:
+// SYNCHRONOUS: a two-pass ffmpeg master of a few-minute bed completes within the Worker request budget,
+// so there is ONE round-trip and no /poll:
 //   GET  /module.json -> manifest
-//   POST /invoke      -> submit to RunPod, return { ok, pending, poll } immediately
-//   POST /poll        -> check job status; return output on completion
+//   POST /invoke      -> one synchronous AUDIO_MASTER_VPC.fetch to the container; return the output
 //
-// R2 transport: the endpoint reads `audio_key` and writes `output_key` in the shared bucket itself (as
-// the finish endpoints do for clips), so this worker holds no R2 creds.
+// CREDENTIALLESS by design: the core presigns the bed GET + the mastered PUT and hands them in the input
+// (audio_url / output_url / output_key); this worker forwards them to the container and reports the
+// output key. It never touches R2 or holds S3 creds.
 //
 // Failures are DATA, never an exception across the wire. master is a POLISH step, so the soft degrade
-// (pass the INPUT bed through unchanged, but RECORDED) is preferred over a hard ok:false unless the job
-// cannot be submitted at all -- a master miss must never drop a fully-rendered film (#249 / #77).
+// (pass the INPUT bed through unchanged, but RECORDED) is preferred over a hard ok:false unless the input
+// itself is malformed -- a master miss must never drop a fully-rendered film (#249 / #77).
 
 import {
   MODULE_API,
   type ModuleManifest,
   type InvokeRequest,
   type InvokeResponse,
-  type PollRequest,
-  type PollResponse,
   type MasterInput,
   type MasterOutput,
 } from "./contract";
 import {
-  coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
-  runpodJobGone, classifyGoneState,
+  coerceConfig, buildMasterBody, parseContainerResult, masterOutputFromResult, passthroughOutput,
 } from "./master";
 
 interface Env {
-  RUNPOD_API_KEY: string;
-  RUNPOD_ENDPOINT_ID: string;
+  AUDIO_MASTER_VPC: { fetch(url: RequestInfo, init?: RequestInit): Promise<Response> };
 }
 
 const MANIFEST: ModuleManifest = {
@@ -60,16 +59,8 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function runpodBase(env: Env): string {
-  return `https://api.runpod.ai/v2/${env.RUNPOD_ENDPOINT_ID}`;
-}
-
-function auth(env: Env) {
-  return { authorization: "Bearer " + env.RUNPOD_API_KEY };
-}
-
 /** Soft degrade: pass the INPUT bed through unchanged (a no-op beats a drop in the render), but ALWAYS
- *  record why -- `passthroughOutput` tags `applied` and sets `degraded`, so a real misconfig / backend
+ *  record why -- `passthroughOutput` tags `applied` and sets `degraded`, so a real misconfig / container
  *  failure is never indistinguishable from a no-op (#77). A real degrade is also warned. */
 function passthrough(
   input: MasterInput,
@@ -81,76 +72,41 @@ function passthrough(
   return { ok: true, output };
 }
 
-async function submit(env: Env, req: InvokeRequest<MasterInput>): Promise<InvokeResponse<MasterOutput>> {
+async function invoke(env: Env, req: InvokeRequest<MasterInput>): Promise<InvokeResponse<MasterOutput>> {
   const input = req.input;
-  if (!input?.film_id || !input?.audio_key) {
-    return { ok: false, error: "audio-master: input needs film_id and audio_key" };
+  if (!input?.film_id || !input?.audio_key || !input?.audio_url || !input?.output_url || !input?.output_key) {
+    return { ok: false, error: "audio-master: input needs film_id, audio_key, audio_url, output_url, output_key" };
   }
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
-    return passthrough(input, "no-runpod-secrets");  // not configured: degrade, but say so
-  }
+  if (!env.AUDIO_MASTER_VPC) return passthrough(input, "no-vpc-binding");  // not configured: degrade, but say so
 
   const cfg = coerceConfig(req.config);
+
+  let resp: Response;
   try {
-    const r = await fetch(runpodBase(env) + "/run", {
+    // Absolute URL (the host is the VPC service, ignored by the binding). A bare "/master" is not a valid
+    // URL and throws in the Workers runtime, which the catch below would mask as "container-unreachable",
+    // silently shipping the bed unmastered. (The #207 film-titles lesson, mirrored from subtitle.)
+    resp = await env.AUDIO_MASTER_VPC.fetch("http://audio-master/master", {
       method: "POST",
-      headers: { ...auth(env), "content-type": "application/json" },
-      body: JSON.stringify(buildRunPodBody(input, cfg)),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(buildMasterBody(input, cfg)),
     });
-    if (!r.ok) return passthrough(input, "runpod-run-failed", { detail: "HTTP " + r.status });
-    const jobId = ((await r.json()) as { id?: string }).id;
-    if (!jobId) return passthrough(input, "no-jobid");
-    return {
-      ok: true,
-      pending: true,
-      poll: encodePoll({ jobId, filmId: input.film_id, audioKey: input.audio_key, submittedAt: Date.now() }),
-    };
   } catch (e) {
-    return passthrough(input, "exception", { detail: (e as Error).message });
+    return passthrough(input, "container-unreachable", { detail: (e as Error).message });
   }
-}
+  if (!resp.ok) return passthrough(input, "container-failed", { detail: "HTTP " + resp.status });
 
-async function poll(env: Env, body: PollRequest): Promise<PollResponse<MasterOutput>> {
-  const st = decodePoll(body.poll);
-  if (!st) return { ok: false, error: "audio-master: bad poll token" };
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) return { ok: false, error: "audio-master: not configured" };
-
-  // A terminal failure passes the ORIGINAL bed through (passthrough), it does NOT fail the render --
-  // master is a polish step (#249 / #77). The token carries the input bed for exactly this.
-  const degrade = (reason: string, detail?: string): PollResponse<MasterOutput> => ({
-    ok: true,
-    output: passthroughOutput({ film_id: st.filmId, audio_key: st.audioKey }, reason, detail ? { detail } : {}),
-  });
-
-  let httpStatus: number;
-  let s: { status?: string; output?: unknown; error?: unknown };
+  let body: unknown;
   try {
-    const resp = await fetch(runpodBase(env) + "/status/" + st.jobId, { headers: auth(env) });
-    httpStatus = resp.status;
-    s = await resp.json() as typeof s;
+    body = await resp.json();
   } catch {
-    return { ok: true, pending: true };
+    return passthrough(input, "container-bad-response");
   }
-  // RunPod GC'd the job (HTTP 404 / numeric "status":404): past the grace window soft-degrade to the
-  // original bed; inside it keep polling (post-submit race). (#141)
-  if (runpodJobGone(httpStatus, s)) {
-    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") {
-      return degrade("runpod-job-gone", "GC'd or never ran");
-    }
-    return { ok: true, pending: true };
-  }
-  if (s.status === "FAILED") return degrade("runpod-job-failed", JSON.stringify(s.error ?? s).slice(0, 200));
-  if (s.status !== "COMPLETED") return { ok: true, pending: true };
+  const res = parseContainerResult(body);
+  if (!res || !res.ok) return passthrough(input, "container-failed");
+  if (!res.key) return passthrough(input, "no-output-key", { detail: "container returned no mastered key" });
 
-  const out = parseBackendOutput(s.output);
-  if (!out?.audio_key) return degrade("no-audio-key", "backend returned no mastered key");
-  return {
-    ok: true,
-    output: {
-      audio_key: out.audio_key,
-      applied: out.applied ?? [],
-    },
-  };
+  return { ok: true, output: masterOutputFromResult(input, res) };
 }
 
 export default {
@@ -164,15 +120,7 @@ export default {
       try { req = await request.json() as InvokeRequest<MasterInput>; }
       catch { return json({ ok: false, error: "invalid JSON body" } as InvokeResponse); }
       if (req.hook !== "master") return json({ ok: false, error: "unsupported hook " + String(req.hook) } as InvokeResponse);
-      return json(await submit(env, req));
-    }
-
-    if (request.method === "POST" && url.pathname === "/poll") {
-      let body: PollRequest;
-      try { body = await request.json() as PollRequest; }
-      catch { return json({ ok: false, error: "invalid JSON body" } as PollResponse); }
-      if (!body?.poll || typeof body.poll !== "string") return json({ ok: false, error: "poll token required" } as PollResponse);
-      return json(await poll(env, body));
+      return json(await invoke(env, req));
     }
 
     return json({ ok: false, error: "not found" }, 404);

@@ -1,6 +1,6 @@
 """Local DSP check for the audio-master container -- runs master_core.master_bed directly on a
-synthesized bed (no R2, no RunPod, just ffmpeg/ffprobe on PATH). Mirrors containers/audio-mix/
-test_local.py: it validates the ffmpeg mastering chain, the layer rp_handler.py wraps with R2 I/O.
+synthesized bed (no R2, no HTTP, just ffmpeg/ffprobe on PATH). Mirrors containers/audio-mix/
+test_local.py: it validates the ffmpeg mastering chain, the layer app.py wraps with presigned-R2 HTTP I/O.
 
     python test_local.py
 """

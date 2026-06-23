@@ -2,8 +2,9 @@
 
 A **`master`**-chain module (vivijure-module/1). It masters a film's audio at **film level** -- a
 **music upscale** (VHQ soxr resample to 48 kHz + a gentle high-shelf "air" lift) followed by **two-pass
-LUFS loudness normalization** to a web target -- dispatched to the dedicated **vivijure-audio-master**
-RunPod endpoint (CPU ffmpeg, no GPU).
+LUFS loudness normalization** to a web target -- via the always-on **audio-master CPU container** on the
+fleet over **Workers VPC** (CPU ffmpeg, no GPU; CPU mastering must never touch a GPU/RunPod -- GPU money
+is for GPU work only).
 
 It is the audio sibling of **`finish`** (which polishes a clip) and the **dialogue / speech** lane
 (which polishes per-shot voice). Where `finish` and `speech` work per shot, `master` runs **once, on the
@@ -50,33 +51,39 @@ Config options (the planner-projected `config_schema`; the core clamps each agai
 To self-host (service `vivijure-module-audio-master`, bound into the core as `MODULE_AUDIO_MASTER`):
 
 - **Env at deploy**: `CLOUDFLARE_ACCOUNT_ID` (account_id is injected, never hardcoded).
-- **Secrets** (`wrangler secret put`, after deploy): `RUNPOD_API_KEY` and `RUNPOD_ENDPOINT_ID` (YOUR
-  vivijure-audio-master endpoint id; kept a secret, #38).
-- **Provision**: a DEDICATED RunPod serverless endpoint running the `vivijure-audio-master` image
-  (slim CPU ffmpeg, `containers/audio-master/`), SEPARATE from the GPU backends. No R2 binding -- the
-  endpoint reads `audio_key` and writes the output in the shared bucket itself.
+- **No secrets**: this worker is credentialless. It holds no R2 creds and no API keys -- the core
+  presigns the R2 URLs, and the container is reached over the VPC binding.
+- **Binding**: a `[[vpc_services]]` block `AUDIO_MASTER_VPC` pointing at the Workers VPC Service for the
+  always-on `audio-master` CPU container (slim ffmpeg, `containers/audio-master/`). Set the real
+  `service_id` (the committed value is a clearly-marked placeholder until the VPC Service is created).
+- **Provision**: deploy the `audio-master` container on the fleet (CPU ffmpeg, SEPARATE from the GPU
+  backends) and create the Workers VPC Service that fronts it.
 
 ## Contract
 
 - **Hook**: `master` (cardinality `chain`). `ui { section: "master", icon: "sliders", order: 10 }`.
-- **Input** (`MasterInput`): `film_id`, `audio_key` (the assembled bed), optional `seconds` (a length
-  hint; the backend probes the bed if absent).
+- **Input** (`MasterInput`): `film_id`, `audio_key` (the assembled bed), `audio_url` (presigned GET),
+  `output_url` (presigned PUT), `output_key` (the R2 key behind the PUT), optional `seconds` (a length
+  hint; the container probes the bed if absent). The core presigns the URLs; this module stays
+  credentialless and just forwards them to the container.
 - **Output** (`MasterOutput`): `audio_key` (the mastered bed, beside the source with a `_mastered`
   suffix), `applied`, and `degraded` set ONLY on a real passthrough.
-- **Async**: `POST /invoke` submits to RunPod and returns a poll token; `POST /poll` checks
-  `/status/{jobId}` (with the GC-grace window, #141) and returns the output on completion.
-- **R2 transport**: the endpoint reads `audio_key` and writes the output in the shared bucket itself;
-  this worker holds no R2 creds.
+- **Synchronous**: `POST /invoke` makes ONE `AUDIO_MASTER_VPC.fetch("http://audio-master/master", ...)`
+  round-trip and returns the output -- a two-pass master of a few-minute bed completes within the Worker
+  budget, so there is no `/poll`.
+- **Credentialless transport**: the core presigns the bed GET + the mastered PUT; the container
+  downloads `audioUrl`, masters, and PUTs to `outputUrl`. This worker holds no R2 creds.
 
 ## Soft-degrade
 
 *A polish step: never fail the render, never fake the tag (#249 / #77).*
 
-A missing endpoint or any backend failure (run rejected, no job id, GC'd job, FAILED job, missing
-output) passes the **input** `audio_key` through unchanged with `applied: ["passthrough:<reason>"]` and
-`degraded` set to the honest reason, so the mux always has a bed to lay down. The only hard `ok:false`
-is malformed input (no `film_id` / `audio_key`) or a bad poll token. A master miss therefore degrades to
-the un-mastered (but intact) audio; it never drops a fully-rendered film.
+A missing VPC binding or any container failure (unreachable, non-2xx, an unreadable / `ok:false` body, a
+result with no mastered key) passes the **input** `audio_key` through unchanged with
+`applied: ["passthrough:<reason>"]` and `degraded` set to the honest reason, so the mux always has a bed
+to lay down. The only hard `ok:false` is malformed input (missing `film_id` / `audio_key` / `audio_url` /
+`output_url` / `output_key`). A master miss therefore degrades to the un-mastered (but intact) audio; it
+never drops a fully-rendered film.
 
 ## License
 

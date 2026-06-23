@@ -4,7 +4,8 @@ FROM python:3.11-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PORT=8000
 
 # ffmpeg ships ffprobe too. The master is pure ffmpeg DSP (soxr resample + high-shelf lift +
 # two-pass loudnorm) plus libmp3lame for the mp3 output, all of which the slim-image ffmpeg
@@ -17,7 +18,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY master_core.py rp_handler.py .
+COPY master_core.py url_guard.py app.py .
 
 # Build-time sanity-encode: prove the exact filter chain the master relies on links and runs in this
 # slim ffmpeg -- the soxr resampler + high-shelf "air" lift + two-pass-capable loudnorm + libmp3lame.
@@ -31,4 +32,5 @@ RUN ffmpeg -y \
     && rm -f /tmp/warm.mp3 \
     && echo "audio-master soxr+lift+loudnorm sanity OK"
 
-CMD ["python", "rp_handler.py"]
+EXPOSE 8000
+CMD ["python", "app.py"]

@@ -378,12 +378,17 @@ export interface NotifyOutput {
  *  track), to polish at FILM level before the final mux. This is the audio sibling of `finish` (which
  *  polishes a clip) and the dialogue/`speech` lane (which polishes per-shot voice): `master` operates
  *  once, on the whole film's audio, AFTER the mix is built (score + narration) and BEFORE the audio is
- *  muxed onto the silent film. `audio_key` is the R2 key of that bed; the module reads it and writes a
- *  mastered bed back (R2 transport, exactly as a finish backend reads clip_key / writes output_key). A
- *  music-video maker reaches for `master` as cleanly as a dialogue maker reaches for the voice lane. */
+ *  muxed onto the silent film. `audio_key` is the R2 key of that bed; the core presigns a GET of it
+ *  (`audio_url`) and a PUT for the mastered output (`output_url` / `output_key`) so the module stays
+ *  CREDENTIALLESS and forwards them to its CPU container -- exactly as the subtitle / film.finish modules
+ *  get a presigned video_url + output_url. A music-video maker reaches for `master` as cleanly as a
+ *  dialogue maker reaches for the voice lane. */
 export interface MasterInput {
-  film_id: string;     // the film this bed belongs to (for the module's output-key convention + logs)
+  film_id: string;     // the film this bed belongs to (for the output-key convention + logs)
   audio_key: string;   // R2 key of the assembled audio bed (the mix to master)
+  audio_url: string;   // presigned GET of the assembled bed (the container downloads it)
+  output_url: string;  // presigned PUT for the mastered bed (the container uploads it)
+  output_key: string;  // the R2 key behind output_url (returned to the core)
   seconds?: number;    // film length hint, if known (the module probes the bed if absent)
 }
 
