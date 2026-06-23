@@ -677,10 +677,32 @@ Sharded (scatter) render submission: split shots across shards.
 | `motion_backend` | string | no | -- | Motion choice. |
 | `audioKey` | string | no | -- | Audio bed. |
 | `projectId` | number/string | no | -- | History project id. |
+| `film_titles` | `{ title: {text, subtitle?}, credits: {lines[]} }` | no | -- | Title + credit cards (#273); same shape as 2.20 `hStartFilm`. |
 
 **Response 201:** `{ ok: true, jobId, status }`. Errors: `400 "bundleKey required"`;
 `400 "shotIds[] required (>= 2)"`; `422 { ok: false, error }` on submit failure. Poll a `scatter-*`
 job id via `GET /api/storyboard/render/:jobId` (2.24).
+
+**Submit durability (runnability-first, #290).** A scatter submit spans **two stores** (D1
+render rows + the R2 scatter doc), so no single `DB.batch` can make it atomic. The ordering is
+therefore deliberate and DB-agnostic:
+
+1. Write the **R2 docs first** -- per-shard film docs, then the scatter doc (`saveScatterJob`).
+   The render is **runnable the instant the scatter doc lands**, because the poll/advance path
+   (2.24) loads ONLY the R2 doc. (`finalizeScatterSubmit` owns this.)
+2. Then write the D1 rows: the parent insert, then the shard rows as **one all-or-nothing
+   `DB.batch`**, each statement wrapped in `withD1Retry`. The D1 rows are the UI-list projection,
+   not the runnability gate.
+3. A persistent D1 row-write failure is **logged (`d1.error`) and swallowed, never failing the
+   submit**; the render is already runnable from step 1.
+4. **Self-heal:** the poll/advance path calls `ensureScatterRenderRow`, which reconstructs a
+   missing UI-list row from the R2 doc (the doc carries `project_id` + `render_overrides` for a
+   faithful rebuild; a cheap existence read makes it a no-op once present).
+
+This closes the orphan-row class (a UI row with no runnable doc) that the old D1-first ordering
+produced on any blip between steps. The retry/error events (`d1.retry`, `d1.exhausted`,
+`d1.error`) are queryable in Loki (see `docs/observability.md`), so the next blip is a greppable
+histogram rather than a silent throw.
 
 ### 2.24 GET / DELETE /api/storyboard/render/:jobId -- poll / cancel
 
