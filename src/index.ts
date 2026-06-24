@@ -33,6 +33,7 @@ import {
   handleCastSourceRemove,
   deleteCastArtifacts,
 } from "./cast-media";
+import { exportCastBundle, importCastBundle } from "./cast-bundle";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
 import {
@@ -245,6 +246,17 @@ const hPollCastRefs: Handler = async (_req, env, _c, p) => {
   const job = await advanceCastRefsJob(env, id, p.jobId);
   if (!job) throw notFound("cast refs job");
   return json({ ok: true, ...summarizeCastRefs(job) });
+};
+
+// Cast bundle import/export (issue #324): share a whole character (portrait + refs + sources +
+// LoRA + bible + voice) as one portable `.vvcast` tar between users/instances. Export is
+// side-effect-free (GET is canonical so the UI can use a plain download link; POST is also
+// accepted to match the issue's speced verb). Import re-keys every asset into THIS instance and
+// allocates a fresh local id.
+const hExportCast: Handler = async (_req, env, _c, p) => exportCastBundle(env, idParam(p.id));
+const hImportCast: Handler = async (req, env) => {
+  const buf = new Uint8Array(await req.arrayBuffer());
+  return importCastBundle(env, buf);
 };
 
 // --- artifact upload + serve --------------------------------------------
@@ -1005,6 +1017,9 @@ const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/voices",                          handler: hListVoices },
   { method: "GET",    pattern: "/api/cast",                            handler: hListCast },
   { method: "POST",   pattern: "/api/cast",                            handler: hCreateCast },
+  { method: "GET",    pattern: "/api/cast/export/:id",                 handler: hExportCast },
+  { method: "POST",   pattern: "/api/cast/export/:id",                 handler: hExportCast },
+  { method: "POST",   pattern: "/api/cast/import",                     handler: hImportCast },
   { method: "GET",    pattern: "/api/cast/:id",                        handler: hGetCast },
   { method: "PATCH",  pattern: "/api/cast/:id",                        handler: hPatchCast },
   { method: "DELETE", pattern: "/api/cast/:id",                        handler: hDeleteCast },
