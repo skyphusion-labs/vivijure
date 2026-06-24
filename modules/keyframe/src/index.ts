@@ -81,7 +81,7 @@ async function submit(env: Env, req: InvokeRequest<KeyframeInput>): Promise<Invo
     if (!r.ok) return { ok: false, error: "keyframe /run -> " + r.status };
     const jobId = ((await r.json()) as { id?: string }).id;
     if (!jobId) return { ok: false, error: "keyframe /run returned no job id" };
-    return { ok: true, pending: true, poll: encodePoll({ jobId, project: input.project, submittedAt: Date.now() }) };
+    return { ok: true, pending: true, poll: encodePoll({ jobId, project: input.project, submittedAt: Date.now() }), jobId };  // jobId (#318): lets the core read this RunPod job's keyframe_done snapshot
   } catch (e) {
     return { ok: false, error: "keyframe submit failed: " + (e as Error).message };
   }

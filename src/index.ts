@@ -45,6 +45,7 @@ import {
 import { stageBundleInjectedKeyframes } from "./bundle-keyframes";
 import { readBundleScenes } from "./bundle-storyboard";
 import { dialogueLinesFromBundleScenes } from "./dialogue-lines";
+import { readKeyframeDone } from "./render-progress";
 import type { DialogueLine } from "./modules/types";
 import {
   startScatterRender,
@@ -603,7 +604,10 @@ const hPollRender: Handler = async (_req, env, ctx, p) => {
   }
   const r = await advanceFilmJob(env, p.jobId);
   if (!r) throw notFound("render job");
-  const view = filmJobToPollView(r.job, r.clipJob);
+  const kfDone = r.job.phase === "keyframe" && r.job.keyframe_job_id
+    ? await readKeyframeDone(env, r.job.project, r.job.keyframe_job_id)
+    : undefined; // #318: keyframe sub-progress from the GPU job's snapshot (best-effort)
+  const view = filmJobToPollView(r.job, r.clipJob, kfDone);
   await updateRenderFromView(env, view, ctx);
   if (
     r.job.derive_mode === "cloud-finalized"
@@ -881,7 +885,12 @@ const hPollFilm: Handler = async (_req, env, ctx, p) => {
   // unification -- or via a path that did not insert -- still surfaces in history on its next
   // poll/sweep tick; then sync the live status/output exactly like hPollRender (#164).
   await insertRender(env, filmRowFromJob(r.job));
-  await updateRenderFromView(env, filmJobToPollView(r.job, r.clipJob), ctx);
+  // #318: during the keyframe phase, fold the GPU job's live keyframe_done tally into the poll view so
+  // the bar/ETA subdivide the keyframe band (instead of pinning scene_index=1). Best-effort.
+  const kfDone = r.job.phase === "keyframe" && r.job.keyframe_job_id
+    ? await readKeyframeDone(env, r.job.project, r.job.keyframe_job_id)
+    : undefined;
+  await updateRenderFromView(env, filmJobToPollView(r.job, r.clipJob, kfDone), ctx);
   return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(r.job, r.clipJob))) });
 };
 

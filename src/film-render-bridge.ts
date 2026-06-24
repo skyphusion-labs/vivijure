@@ -107,14 +107,21 @@ export function stallSignal(job: FilmJob, now: number = Date.now()): Record<stri
   return out;
 }
 
-function phaseProgress(job: FilmJob, clipJob: ClipJob | null): Record<string, unknown> {
+function phaseProgress(job: FilmJob, clipJob: ClipJob | null, keyframeDone?: number): Record<string, unknown> {
   const total = job.scenes.length;
   const summary = summarizeFilm(job, clipJob);
   const base = { scene_total: total, project: job.project, ...stallSignal(job) };
 
   switch (job.phase) {
-    case "keyframe":
+    case "keyframe": {
+      // Per-keyframe sub-progress (#318): the GPU keyframe job's snapshot tallies keyframe_done in real
+      // time (the poll handler reads it and passes it here). Without it (cloud-keyframe, or pre-job-id)
+      // hold scene_index=1, exactly as before -- the band sits at its floor, no regression.
+      if (typeof keyframeDone === "number" && total > 0) {
+        return { ...base, phase: "keyframe", scene_index: Math.min(total, keyframeDone + 1), progress: Math.min(1, keyframeDone / total) };
+      }
       return { ...base, phase: "keyframe", scene_index: 1 };
+    }
     case "clips": {
       const c = summary.clips;
       const done = c?.done ?? 0;
@@ -141,7 +148,7 @@ function phaseProgress(job: FilmJob, clipJob: ClipJob | null): Record<string, un
 }
 
 /** Fold a film job into the RunPod-shaped view the planner poll loop already understands. */
-export function filmJobToPollView(job: FilmJob, clipJob: ClipJob | null): RunpodJobView {
+export function filmJobToPollView(job: FilmJob, clipJob: ClipJob | null, keyframeDone?: number): RunpodJobView {
   let status: RunpodStatus;
   let output: Record<string, unknown> | undefined;
 
@@ -177,7 +184,7 @@ export function filmJobToPollView(job: FilmJob, clipJob: ClipJob | null): Runpod
     status = "FAILED";
   } else {
     status = "IN_PROGRESS";
-    output = phaseProgress(job, clipJob);
+    output = phaseProgress(job, clipJob, keyframeDone);
   }
 
   return {
