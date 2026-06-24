@@ -317,3 +317,65 @@ describe("dispatchChain", () => {
     expect(res.output).toEqual({ n: 101 });  // chain still threaded through
   });
 });
+
+// ----------------------------------------------------------------- readManifest transient retry
+// A module dropped on a TRANSIENT manifest blip silently shortens a chain hook (e.g. the finish
+// chain), changing the render output with no error -- the silent-showcase-render root cause. So a
+// 5xx / network throw is retried; a 4xx or invalid manifest is a real error and is dropped at once.
+
+/** A fetcher that yields `outcomes` in order. Each outcome is a status number (-> Response) or the
+ *  string "throw" (-> rejected fetch, like a network/timeout). Counts the calls. */
+function sequencedModule(outcomes: Array<number | "throw">, body: unknown = manifest()) {
+  let i = 0;
+  const calls = { n: 0 };
+  const fetcher = {
+    fetch: async () => {
+      const outcome = outcomes[Math.min(i, outcomes.length - 1)];
+      i += 1;
+      calls.n += 1;
+      if (outcome === "throw") throw new Error("network timeout");
+      return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+        status: outcome,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  };
+  return { fetcher, calls };
+}
+
+describe("readManifest transient retry", () => {
+  it("retries a transient 503 then succeeds (module not dropped)", async () => {
+    const { fetcher, calls } = sequencedModule([503, 200]);
+    const m = await readManifest("MODULE_FINISH_LIPSYNC", fetcher);
+    expect(m).toMatchObject({ name: "finish-rife", binding: "MODULE_FINISH_LIPSYNC" });
+    expect(calls.n).toBe(2); // one retry
+  });
+
+  it("retries a thrown fetch (network/timeout) then succeeds", async () => {
+    const { fetcher, calls } = sequencedModule(["throw", 200]);
+    const m = await readManifest("MODULE_X", fetcher);
+    expect(m).not.toBeNull();
+    expect(calls.n).toBe(2);
+  });
+
+  it("gives up (null) after bounded attempts on a persistent transient error", async () => {
+    const { fetcher, calls } = sequencedModule([503, 503, 503, 503]);
+    const m = await readManifest("MODULE_X", fetcher);
+    expect(m).toBeNull();
+    expect(calls.n).toBe(3); // MANIFEST_READ_ATTEMPTS, no infinite loop
+  });
+
+  it("does NOT retry a 4xx (real, stable error) -- drops at once", async () => {
+    const { fetcher, calls } = sequencedModule([404, 200]);
+    const m = await readManifest("MODULE_X", fetcher);
+    expect(m).toBeNull();
+    expect(calls.n).toBe(1); // no retry on a 4xx
+  });
+
+  it("does NOT retry an invalid manifest (real error) -- drops at once", async () => {
+    const { fetcher, calls } = sequencedModule([200], manifest({ hooks: ["teleport"] }));
+    const m = await readManifest("MODULE_X", fetcher);
+    expect(m).toBeNull();
+    expect(calls.n).toBe(1);
+  });
+});
