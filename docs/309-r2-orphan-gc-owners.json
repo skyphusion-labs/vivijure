@@ -1,0 +1,106 @@
+{
+  "castRows": [
+    {
+      "id": 2,
+      "slug": "character-a",
+      "portrait_key": "uploads/74441f7b-f6ec-4c0a-aaec-e8906ce74578.png",
+      "lora_key": "loras/lora-character-a-1782248698/A/pytorch_lora_weights.safetensors",
+      "ref_keys_json": "[{\"key\":\"cast-gen/2/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/2/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 4,
+      "slug": "wren",
+      "portrait_key": "uploads/972a0b29-5bfc-4c9f-8da3-62bb16a64978.jpg",
+      "lora_key": "loras/lora-wren-1782248711/A/pytorch_lora_weights.safetensors",
+      "ref_keys_json": "[{\"key\":\"cast-gen/4/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/4/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 5,
+      "slug": "salvage-robot",
+      "portrait_key": "uploads/287be0f8-44cf-4ab4-91de-7e6deb78f9cd.jpg",
+      "lora_key": "loras/lora-salvage-robot-1782248366/A/pytorch_lora_weights.safetensors",
+      "ref_keys_json": "[{\"key\":\"cast-gen/5/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/5/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 6,
+      "slug": "companion-robot",
+      "portrait_key": "uploads/09a643c6-0c5c-4d38-bbfc-522b1755e87d.jpg",
+      "lora_key": "loras/lora-companion-robot-1782245014/A/pytorch_lora_weights.safetensors",
+      "ref_keys_json": "[{\"key\":\"cast-gen/6/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/6/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 13,
+      "slug": "juno",
+      "portrait_key": "cast/13/portrait.jpg",
+      "lora_key": null,
+      "ref_keys_json": "[{\"key\":\"cast-gen/13/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/13/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 14,
+      "slug": "mara",
+      "portrait_key": "cast/14/portrait.jpg",
+      "lora_key": null,
+      "ref_keys_json": "[{\"key\":\"cast-gen/14/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/14/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 15,
+      "slug": "dev",
+      "portrait_key": "cast/15/portrait.jpg",
+      "lora_key": null,
+      "ref_keys_json": "[{\"key\":\"cast-gen/15/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/15/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 16,
+      "slug": "riff",
+      "portrait_key": "cast/16/portrait.jpg",
+      "lora_key": null,
+      "ref_keys_json": "[{\"key\":\"cast-gen/16/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/16/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 17,
+      "slug": "juno-2",
+      "portrait_key": "cast/17/portrait.jpg",
+      "lora_key": "loras/lora-juno-2-1782254429/A/pytorch_lora_weights.safetensors",
+      "ref_keys_json": "[{\"key\":\"cast-gen/17/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/17/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 18,
+      "slug": "mara-2",
+      "portrait_key": "cast/18/portrait.jpg",
+      "lora_key": "loras/lora-mara-2-1782254441/A/pytorch_lora_weights.safetensors",
+      "ref_keys_json": "[{\"key\":\"cast-gen/18/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/18/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 19,
+      "slug": "dev-2",
+      "portrait_key": "cast/19/portrait.jpg",
+      "lora_key": "loras/lora-dev-2-1782254452/A/pytorch_lora_weights.safetensors",
+      "ref_keys_json": "[{\"key\":\"cast-gen/19/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/19/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    },
+    {
+      "id": 20,
+      "slug": "riff-2",
+      "portrait_key": "cast/20/portrait.jpg",
+      "lora_key": "loras/lora-riff-2-1782254462/A/pytorch_lora_weights.safetensors",
+      "ref_keys_json": "[{\"key\":\"cast-gen/20/ref_01.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_02.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_03.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_04.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_05.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_06.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_07.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_08.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_09.jpg\",\"mime\":\"image/jpeg\"},{\"key\":\"cast-gen/20/ref_10.jpg\",\"mime\":\"image/jpeg\"}]",
+      "source_keys_json": null
+    }
+  ],
+  "renderLoraDirs": [
+    "fur_and_circuits"
+  ],
+  "seedPrefixes": [
+    "loras/wren_talks_test_2/"
+  ]
+}
