@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -1640,5 +1640,73 @@ describe("advanceFilmJob film.finish chain: step 2 reads step 1's OUTPUT, not th
     expect(done.film_key).toBe(titlesInputs[0].output_key);
     expect(done.film_finish?.applied).toEqual(["subtitle", "film-titles"]);
     expect(r?.job.phase).toBe("done");
+  });
+});
+
+describe("filmProgressMarker (#136 progress fingerprint)", () => {
+  const base: FilmJob = {
+    film_id: "f", project: "p", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }, { shot_id: "shot_02", prompt: "b", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {}, keyframe_binding: null,
+    phase: "clips", created_at: 0,
+  };
+
+  it("clips: counts done clip shots in the marker", () => {
+    const clipJob = { shots: [{ status: "done" }, { status: "pending" }] } as unknown as Parameters<typeof filmProgressMarker>[1];
+    expect(filmProgressMarker({ ...base, phase: "clips" }, clipJob)).toBe("clips:1");
+  });
+
+  it("clips: marker advances as more shots finish (monotonic forward progress)", () => {
+    const one = { shots: [{ status: "done" }, { status: "pending" }] } as unknown as Parameters<typeof filmProgressMarker>[1];
+    const two = { shots: [{ status: "done" }, { status: "done" }] } as unknown as Parameters<typeof filmProgressMarker>[1];
+    expect(filmProgressMarker({ ...base }, one)).not.toBe(filmProgressMarker({ ...base }, two));
+    expect(filmProgressMarker({ ...base }, two)).toBe("clips:2");
+  });
+
+  it("finish: counts done finish shots", () => {
+    const job: FilmJob = {
+      ...base, phase: "finish",
+      finish_shots: [
+        { shot_id: "shot_01", clip_key: "k1", chain: ["M"], idx: 0, status: "done", applied: [] },
+        { shot_id: "shot_02", clip_key: "k2", chain: ["M"], idx: 0, status: "pending", applied: [] },
+      ] as FinishShot[],
+    };
+    expect(filmProgressMarker(job, null)).toBe("finish:1");
+  });
+
+  it("a phase with no per-shot fan-out reports :0 (stall window runs from phase start, as before)", () => {
+    expect(filmProgressMarker({ ...base, phase: "keyframe" }, null)).toBe("keyframe:0");
+    expect(filmProgressMarker({ ...base, phase: "assemble" }, null)).toBe("assemble:0");
+  });
+});
+
+describe("advanceFilmJob re-stamps last_progress_at on a tick (#136)", () => {
+  const film = (): FilmJob => ({
+    film_id: "film-136-stamp", project: "neon", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {}, keyframe_binding: null,
+    phase: "finish", clips_only: true,
+    finish_shots: [
+      { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4", chain: ["MODULE_FINISH_RIFE"], configs: [{}], idx: 0, status: "done", applied: [] },
+    ] as FinishShot[],
+    created_at: Date.now() - 60_000,
+  });
+
+  it("sets last_progress_at + progress_marker after advancing", async () => {
+    const job = film();
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        list: async () => ({ objects: [], truncated: false }),
+      },
+    } as unknown as Env;
+    await advanceFilmJob(env, job.film_id);
+    const after = JSON.parse(stored) as FilmJob;
+    expect(typeof after.last_progress_at).toBe("number");
+    expect(typeof after.progress_marker).toBe("string");
+    expect(after.last_progress_at as number).toBeGreaterThan(job.created_at);
   });
 });

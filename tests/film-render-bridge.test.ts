@@ -288,6 +288,46 @@ describe("stallSignal (#129 render-status contract)", () => {
   });
 });
 
+describe("stallSignal measures from last_progress_at, not phase_started_at (#136)", () => {
+  const job = (over: Partial<FilmJob>): FilmJob => ({
+    film_id: "f", project: "p", bundle_key: "b", scenes: [], motion_backend: null,
+    motion_config: {}, finish_config: {}, keyframe_binding: null, phase: "clips",
+    created_at: 0, ...over,
+  });
+
+  it("a long clips phase that recently advanced a shot is NOT stalled (the #136 false-positive)", () => {
+    // phase began well past the threshold (10 i2v shots, ~3min each), but a shot finished 60s ago.
+    const now = 1_000_000;
+    const s = stallSignal(
+      job({
+        phase_started_at: now - (KEYFRAME_STALL_SECONDS + 600) * 1000, // 30+ min in this one phase
+        last_progress_at: now - 60 * 1000, // ...but a shot completed a minute ago
+      }),
+      now,
+    );
+    expect(s.stalled).toBeUndefined();
+    expect(s.last_progress_at).toBe(now - 60 * 1000); // reported from real progress, not phase start
+  });
+
+  it("flags stalled from last_progress_at once NO shot has progressed within the window", () => {
+    const now = 1_000_000;
+    const lastProgress = now - (KEYFRAME_STALL_SECONDS + 30) * 1000;
+    const s = stallSignal(
+      job({ phase_started_at: now - 10 * 1000, last_progress_at: lastProgress }),
+      now,
+    );
+    expect(s.stalled).toBe(true);
+    expect(s.stall_seconds as number).toBe(KEYFRAME_STALL_SECONDS + 30); // measured from last progress
+    expect(s.last_progress_at).toBe(lastProgress);
+  });
+
+  it("last_progress_at takes precedence over phase_started_at when both are present", () => {
+    const s = stallSignal(job({ phase_started_at: 1_000, last_progress_at: 50_000 }), 50_000 + 60_000);
+    expect(s.last_progress_at).toBe(50_000);
+    expect(s.stalled).toBeUndefined();
+  });
+});
+
 describe("filmRowFromJob (#164 -- film jobs in render history)", () => {
   const base: FilmJob = {
     film_id: "film-abc",
