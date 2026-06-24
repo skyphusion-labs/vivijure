@@ -37,6 +37,7 @@ import { exportCastBundle, importCastBundle } from "./cast-bundle";
 import { gateApiRequest } from "./access-auth";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
+import { isSafeRelKey } from "./shared";
 import {
   insertRender, updateRenderFromView, getRenderByIdForUser, listRendersForUser, listUserTags,
   setRenderLabel, setRenderLockedShots, setRenderFolder, setRenderTags, deleteRenderRow,
@@ -282,7 +283,8 @@ const AUDIO_UPLOAD_EXT: Record<string, string> = {
 };
 const hStoryboardAudioUpload: Handler = async (req, env) => {
   const mime = (req.headers.get("content-type") || "").split(";")[0].trim() || "audio/mpeg";
-  const ext = AUDIO_UPLOAD_EXT[mime] || "bin";
+  const ext = AUDIO_UPLOAD_EXT[mime];
+  if (!ext) throw badRequest(`unsupported audio content-type ${mime || "<missing>"}`);
   const bytes = await req.arrayBuffer();
   if (!bytes.byteLength) throw badRequest("empty upload body");
   if (bytes.byteLength > MAX_AUDIO_UPLOAD_BYTES) throw badRequest("upload too large (max 32MB)");
@@ -292,7 +294,8 @@ const hStoryboardAudioUpload: Handler = async (req, env) => {
 };
 const hStoryboardCharacterRef: Handler = async (req, env) => {
   const mime = (req.headers.get("content-type") || "").split(";")[0].trim() || "application/octet-stream";
-  const ext = UPLOAD_EXT[mime] || "bin";
+  const ext = UPLOAD_EXT[mime];
+  if (!ext) throw badRequest(`unsupported content-type ${mime || "<missing>"} (png/jpeg/webp/gif only)`);
   const bytes = await req.arrayBuffer();
   if (!bytes.byteLength) throw badRequest("empty upload body");
   if (bytes.byteLength > MAX_UPLOAD_BYTES) throw badRequest("upload too large (max 25MB)");
@@ -302,7 +305,8 @@ const hStoryboardCharacterRef: Handler = async (req, env) => {
 };
 const hUpload: Handler = async (req, env) => {
   const mime = (req.headers.get("content-type") || "").split(";")[0].trim() || "application/octet-stream";
-  const ext = UPLOAD_EXT[mime] || "bin";
+  const ext = UPLOAD_EXT[mime];
+  if (!ext) throw badRequest(`unsupported content-type ${mime || "<missing>"} (png/jpeg/webp/gif only)`);
   const bytes = await req.arrayBuffer();
   if (!bytes.byteLength) throw badRequest("empty upload body");
   if (bytes.byteLength > MAX_UPLOAD_BYTES) throw badRequest("upload too large (max 25MB)");
@@ -310,15 +314,30 @@ const hUpload: Handler = async (req, env) => {
   await env.R2_RENDERS.put(key, bytes, { httpMetadata: { contentType: mime } });
   return json({ key, mime, bytes: bytes.byteLength }, 201);
 };
+// F4: the known artifact namespaces. The serve route is scoped to these so it can only ever return a
+// real artifact, not an arbitrary R2 object. ADD a prefix here when a feature introduces a new one
+// (a served key outside this set is rejected).
+const ARTIFACT_PREFIXES = [
+  "audio/", "bundles/", "cast/", "cast-clean/", "cast-gen/", "character-refs/",
+  "characters/", "clips/", "loras/", "out/", "renders/", "uploads/",
+];
 const hServeArtifact: Handler = async (_req, env, _c, p) => {
   const key = p.key;
-  if (!key) throw notFound("artifact");
+  // F4: the key is the untrusted URL tail. Reject an unsafe shape (traversal/absolute/scheme/control
+  // bytes) and anything outside the known artifact namespaces -> 404 (not 400) so a probe learns
+  // nothing. This bounds the serve to actual artifacts even if the edge Access gate ever fails.
+  if (!key || !isSafeRelKey(key) || !ARTIFACT_PREFIXES.some((pre) => key.startsWith(pre))) {
+    throw notFound("artifact");
+  }
   const obj = await env.R2_RENDERS.get(key);
   if (!obj) throw notFound("artifact");
   const headers = new Headers();
   headers.set("content-type", obj.httpMetadata?.contentType || "application/octet-stream");
   headers.set("cache-control", "private, max-age=300");
   headers.set("content-length", String(obj.size));
+  // F4: never let a stored content-type be MIME-sniffed into executable script in the operator's
+  // authenticated origin (defense-in-depth alongside the upload mime allowlist).
+  headers.set("x-content-type-options", "nosniff");
   return new Response(obj.body, { headers });
 };
 

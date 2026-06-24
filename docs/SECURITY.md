@@ -30,6 +30,16 @@ Artifacts are served by R2 key with no per-row ownership check. This is safe **o
 whole worker is Access-gated and single-tenant: there is exactly one operator, so "serving by key"
 cannot cross an ownership boundary (there is none). This property depends entirely on section 1.
 
+**Hardening (F4).** The serve is nonetheless bounded so it cannot become an arbitrary-object read or a
+stored-XSS vector even if section 1 ever fails: the key must pass `isSafeRelKey` (no traversal /
+absolute / scheme / control bytes) AND start with a known artifact prefix (`ARTIFACT_PREFIXES`),
+else `404`; and every response carries `X-Content-Type-Options: nosniff`. The upload routes
+(`/api/upload`, `/api/storyboard/character-ref`, `/api/storyboard/audio-upload`) reject any
+content-type outside their allowlist (no `"bin"` fallback), so a scriptable type (`text/html`,
+`image/svg+xml`) can never be stored and later served back into the operator's authenticated origin.
+True cross-tenant isolation still needs an ownership model (the F13 IDOR follow-up); F4 makes these
+two endpoints safe-by-default for a downstream deployer in the meantime.
+
 ## 1a. In-Worker Access verification backstop (F2)
 
 Section 1's edge boundary is a single point of failure: one Access-config gap (a hostname the app
