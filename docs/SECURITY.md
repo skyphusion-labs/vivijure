@@ -14,16 +14,22 @@ the edge, by Cloudflare Access; everything behind it belongs to the one operator
 Authentication is enforced by the **Cloudflare Access** application in front of the worker, not by
 in-worker code. The Access app covers the whole production surface:
 
-- `vivijure.skyphusion.org` (production UI + JSON API), and
-- the `*.workers.dev` host (covered because `workers_dev = true` is published).
+- `vivijure.skyphusion.org` (production UI + JSON API). The `*.workers.dev` host is disabled
+  (`workers_dev = false`, #349), so the custom domain is the only served hostname.
 
-The Access policy admits a Skyphusion Labs email identity, a service token, or a production-IP
-bypass for internal callers (the GPU backend and the Slate bot, which carry no email identity).
+The Access policy admits a Skyphusion Labs email identity or an Access **service token**. The only
+non-browser caller of `/api` is the **Slate** Discord bot, which authenticates with a service token
+(it sends `CF-Access-Client-Id` + `CF-Access-Client-Secret` on every call). The **GPU backend does
+NOT call `/api` at all** -- it is a RunPod serverless handler that receives work through the RunPod
+job envelope and writes artifacts straight to R2 via boto3 S3, so it never crosses the Access
+boundary. (A legacy production-IP bypass for "internal callers" is being removed in the F2 cutover;
+the GPU backend never needed it on this path, and Slate uses a service token instead.)
 
-Because the boundary is the edge, **the worker does not re-check identity per route**. A naive
-in-worker `require email` gate would break the IP-bypass and service-token callers, which is why the
-data routes do not add one. The single-operator assumption is sound ONLY while Access covers the
-entire `/api/*` surface. If you add a new public hostname or route, confirm Access still covers it.
+The single-operator assumption is sound ONLY while Access covers the entire `/api/*` surface. The
+worker ALSO adds an in-code backstop (section 1a, F2) that verifies the Access JWT itself -- checking
+the signature + `aud`, NOT an email claim, so a service-token caller (Slate) passes while an
+unauthenticated caller is denied. If you add a new public hostname or route, confirm Access still
+covers it.
 
 ### Consequence for `/api/artifact/<key>`
 Artifacts are served by R2 key with no per-row ownership check. This is safe **only** because the
