@@ -4,7 +4,7 @@ import type { Env } from "./env";
 import { discoverModules, invokeModule, servingForHook, validateConfig } from "./modules/registry";
 import { loadInstallConfig } from "./operator-config";
 import type { NotifyInput, NotifyOutput } from "./modules/types";
-import { presignR2Get } from "./r2-presign";
+import { presignR2Get, FILM_DOWNLOAD_TTL_SECONDS } from "./r2-presign";
 import type { ScatterJob } from "./scatter-orchestrator-types";
 
 interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
@@ -17,7 +17,7 @@ export async function fireNotifyForScatter(env: Env, job: ScatterJob): Promise<v
     const envRec = env as unknown as Record<string, unknown>;
     const notifiers = servingForHook(await discoverModules(envRec), "notify");
     if (!notifiers.length) return;
-    const download_url = await presignR2Get(env, job.film_key, 86400);
+    const download_url = await presignR2Get(env, job.film_key, FILM_DOWNLOAD_TTL_SECONDS);
     const input: NotifyInput = {
       event: "render.complete",
       film_id: job.scatter_id,
