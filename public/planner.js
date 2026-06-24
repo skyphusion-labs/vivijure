@@ -4265,6 +4265,12 @@ function updateRenderProgress(data) {
 // absent. Returns null when neither signal is available, which the
 // caller treats as "show the bar at 0% with 'computing...' ETA."
 function computeProgressFraction(out) {
+  // #115: the phase-aware overall-completion fraction lives in the testable
+  // render-eta.js module (window.renderEta). The old inline scene-count logic
+  // returned 0 for the whole keyframe phase and null for finish/assemble/mux,
+  // so the UI sat at "?% eta computing..." for big stretches of a render. Keep
+  // a tiny inline fallback so a missing script never throws (coarser guess).
+  if (window.renderEta) return window.renderEta.progressFraction(out);
   if (!out || typeof out !== "object") return null;
   if (typeof out.progress === "number" && out.progress >= 0 && out.progress <= 1) {
     return out.progress;
@@ -4274,27 +4280,7 @@ function computeProgressFraction(out) {
     && typeof out.scene_total === "number"
     && out.scene_total > 0
   ) {
-    // scene_index is 1-based from the GPU. (scene_index - 1) shots
-    // completed gives a conservative estimate; once the GPU starts
-    // writing out.progress this branch becomes a fallback only.
-    const completed = Math.max(0, out.scene_index - 1);
-    return Math.min(1, completed / out.scene_total);
-  }
-  // v0.132.0: the serverless pod streams progress as log TEXT (out.log lines
-  // like "Scene 1/3 ..."), not structured scene_index/scene_total, so the two
-  // branches above never fired and the ETA was stuck at "computing...". Parse
-  // the latest "Scene N/M" out of the log and use the same completed-scene
-  // fraction (N-1)/M. Scan from the end for the most recent counter.
-  if (Array.isArray(out.log)) {
-    for (let i = out.log.length - 1; i >= 0; i--) {
-      const m = String(out.log[i]).match(/Scene\s+(\d+)\s*\/\s*(\d+)/i);
-      if (m) {
-        const idx = parseInt(m[1], 10);
-        const tot = parseInt(m[2], 10);
-        if (tot > 0) return Math.min(1, Math.max(0, idx - 1) / tot);
-        break;
-      }
-    }
+    return Math.min(1, Math.max(0, out.scene_index - 1) / out.scene_total);
   }
   return null;
 }
@@ -4331,20 +4317,15 @@ function refreshProgressWidget(out) {
   if (pctEl) pctEl.textContent = pct + "%";
   if (fillEl) fillEl.style.width = pct + "%";
 
-  // ETA: linear extrapolation from elapsed. Require at least 3% of
-  // the work done before we trust the estimate; the very early
-  // numbers are dominated by model-load time and produce wild over-
-  // estimates that would scare a user away. Below 3% the bar shows
-  // but the ETA stays "computing..." so the user has a visual sense
-  // of motion without a misleading number.
+  // ETA: linear extrapolation, computed in the testable render-eta.js module
+  // (window.renderEta.remainingMs). It withholds a number until we are
+  // confident (>= 3% done and >= 10s elapsed) so early model-load skew never
+  // produces a wild, scary estimate; null renders as "computing...".
   if (etaEl) {
-    if (frac < 0.03 || elapsedMs < 10_000) {
-      etaEl.textContent = "computing...";
-    } else {
-      const totalEstMs = elapsedMs / frac;
-      const remainingMs = Math.max(0, totalEstMs - elapsedMs);
-      etaEl.textContent = "~" + formatDuration(remainingMs);
-    }
+    const remaining = window.renderEta
+      ? window.renderEta.remainingMs(frac, elapsedMs)
+      : null;
+    etaEl.textContent = remaining === null ? "computing..." : "~" + formatDuration(remaining);
   }
 }
 
