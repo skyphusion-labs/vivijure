@@ -117,6 +117,14 @@ describe("cancelInFlightKeyframe (the #327/#328 fix: stop the GPU, never orphan)
     await cancelInFlightKeyframe(env, filmJob({ keyframe_poll: undefined }));
     expect(calls.cancel).toEqual([]);
   });
+  it("NAMES the orphaned RunPod job id in the honest-degrade WARN (so an operator can kill it by hand)", async () => {
+    const { fetcher } = fakeModule(KF_MANIFEST({ cancelable: false }));
+    const env = { MODULE_KEYFRAME: fetcher } as unknown as Env;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await cancelInFlightKeyframe(env, filmJob({ keyframe_job_id: "job-xyz-e1" }));
+    expect(warn.mock.calls.flat().join(" ")).toContain("job-xyz-e1");
+    warn.mockRestore();
+  });
 });
 
 describe("cancelFilmJob (DELETE /api/storyboard/render/:id) propagates cancel to RunPod (#328)", () => {

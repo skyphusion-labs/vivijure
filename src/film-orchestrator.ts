@@ -1651,23 +1651,27 @@ export async function keyframeSetCompleteInR2(env: Env, job: FilmJob): Promise<b
 export async function cancelInFlightKeyframe(env: Env, job: FilmJob): Promise<void> {
   if (job.phase !== "keyframe" || !job.keyframe_poll || !job.keyframe_binding) return;
   const poll = job.keyframe_poll;
+  // NAME the backend job in every orphan log so a left-running job is actionable (an operator can
+  // cancel it by hand -- exactly how this bug was caught). keyframe_job_id comes from the module's
+  // #318 jobId on the pending invoke; "(job id unknown)" only if a module omitted that optional field.
+  const jobId = job.keyframe_job_id ?? "(job id unknown)";
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
   const kf = modules.find((m) => m.binding === job.keyframe_binding) ?? null;
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
   if (!kf || !fetcher) {
-    console.warn(`film ${job.film_id}: cannot cancel in-flight keyframe job -- module ${job.keyframe_binding} not bound; RunPod job may ORPHAN (#327)`);
+    console.warn(`film ${job.film_id}: cannot cancel in-flight keyframe job -- module ${job.keyframe_binding} not bound; RunPod job ${jobId} left running (ORPHAN) (#327)`);
     return;
   }
   if (!kf.cancelable) {
-    console.warn(`film ${job.film_id}: keyframe module ${kf.name} is not cancelable -- in-flight RunPod job may run to completion (ORPHAN) (#327)`);
+    console.warn(`film ${job.film_id}: keyframe module ${kf.name} has no cancel primitive (cancelable=false) -- RunPod job ${jobId} left running (ORPHAN) (#327)`);
     return;
   }
   const r = await cancelModule(fetcher, { poll });
   if (r.ok) {
-    console.warn(`film ${job.film_id}: cancelled in-flight keyframe RunPod job via ${kf.name} (#327)`);
+    console.warn(`film ${job.film_id}: cancelled in-flight keyframe RunPod job ${jobId} via ${kf.name} (#327)`);
   } else {
-    console.warn(`film ${job.film_id}: keyframe cancel FAILED (${r.error}) -- RunPod job may ORPHAN (#327)`);
+    console.warn(`film ${job.film_id}: keyframe cancel FAILED (${r.error}) -- RunPod job ${jobId} left running (ORPHAN) (#327)`);
   }
 }
 
