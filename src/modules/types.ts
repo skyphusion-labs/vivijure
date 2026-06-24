@@ -129,6 +129,11 @@ export interface ModuleManifest {
   provides?: Provides[];
   config_schema?: ConfigSchema;
   ui?: ModuleUi;
+  /** Async modules SHOULD set this true and implement POST /cancel so the core can STOP an in-flight
+   *  job (cancel a render, recover an adopted keyframe phase) instead of orphaning GPU. OPTIONAL and
+   *  additive (no MODULE_API bump, same as the #318 jobId field). Absent/false => the core cannot
+   *  cancel this module's jobs and will HONESTLY degrade-log any orphan rather than hide it. */
+  cancelable?: boolean;
 }
 
 // --------------------------------------------------------------------------- invocation
@@ -167,6 +172,23 @@ export interface PollRequest {
 export type PollResponse<O = unknown> =
   | { ok: true; pending: true }                   // still running, poll again
   | { ok: true; output: O }                       // finished
+  | { ok: false; error: string };
+
+/** Body POSTed to a long-running module's `/cancel` to STOP an in-flight async job. The token is the
+ *  same one `/invoke` returned (and `/poll` consumes); the module decodes it to ITS backend job id and
+ *  cancels with ITS OWN backend creds, because the core never holds them. This is the contract's only
+ *  honest way to stop GPU work: without it, a cancelled render or an adopted keyframe phase orphans the
+ *  job and bleeds money after the work it was for is already satisfied (#327 / #328). */
+export interface CancelRequest {
+  poll: string;
+}
+
+/** A module's `/cancel` response. BEST-EFFORT + idempotent: cancelling an already-terminal or unknown
+ *  job is a success (`ok: true`), so the core can read `ok: true` as "this job will not keep running on
+ *  our account". A module that cannot cancel returns `ok: false` with a reason, and the core
+ *  degrade-LOGS the orphan rather than hiding it (a silent orphan is the bug). */
+export type CancelResponse =
+  | { ok: true }
   | { ok: false; error: string };
 
 // --------------------------------------------------------------------------- hook payloads
