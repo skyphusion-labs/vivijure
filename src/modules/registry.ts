@@ -200,7 +200,7 @@ export async function readManifest(
         console.warn(`module ${binding}: GET /module.json -> ${res.status}; skipping`);
         return null;
       }
-      const parsed = validateManifest(await res.json());
+      const parsed = validateManifest(await readModuleJson(res));
       if (typeof parsed === "string") {
         console.warn(`module ${binding}: invalid manifest (${parsed}); skipping`); // real error: don't retry
         return null;
@@ -282,6 +282,35 @@ function fetcherFor(env: Record<string, unknown>, module: RegisteredModule): Fet
   return isFetcher(v) ? v : null;
 }
 
+// F5: a module is untrusted (community territory). Read its response through a size cap so a
+// malicious/buggy module cannot OOM the core with a giant body -- envelopes are small JSON
+// metadata (heavy artifacts live in R2, referenced by key). Oversized/unreadable -> throw, which
+// the callers turn into an honest ok:false degrade.
+const MAX_MODULE_RESPONSE_BYTES = 1024 * 1024; // 1MB
+async function readModuleJson(res: Response): Promise<unknown> {
+  const body = res.body;
+  if (!body) return res.json(); // no stream (e.g. a test stub) -> fall back
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.length;
+    if (total > MAX_MODULE_RESPONSE_BYTES) {
+      try { await reader.cancel(); } catch { /* ignore */ }
+      throw new Error(`response exceeded ${MAX_MODULE_RESPONSE_BYTES} bytes`);
+    }
+    chunks.push(value);
+  }
+  if (total === 0) throw new Error("empty response body");
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.length; }
+  return JSON.parse(new TextDecoder().decode(buf));
+}
+
 /** POST one module's `/invoke` and return its typed `InvokeResponse`. A module failure is DATA, never
  *  an exception: a non-200, a malformed body, or an unreachable binding all become `{ ok: false }`,
  *  so the core degrades instead of crashing (the contract's whole point). */
@@ -289,21 +318,27 @@ export async function invokeModule<I = unknown, O = unknown>(
   fetcher: FetcherLike,
   request: InvokeRequest<I>,
 ): Promise<InvokeResponse<O>> {
+  let res: Response;
   try {
-    const res = await fetcher.fetch("https://module/invoke", {
+    res = await fetcher.fetch("https://module/invoke", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request),
     });
-    if (!res.ok) return { ok: false, error: `module /invoke -> ${res.status}` };
-    const data = (await res.json()) as InvokeResponse<O>;
-    if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") {
-      return data;
-    }
-    return { ok: false, error: "module returned a malformed InvokeResponse" };
   } catch (e) {
     return { ok: false, error: `module unreachable: ${(e as Error).message}` };
   }
+  if (!res.ok) return { ok: false, error: `module /invoke -> ${res.status}` };
+  let data: InvokeResponse<O>;
+  try {
+    data = (await readModuleJson(res)) as InvokeResponse<O>;
+  } catch (e) {
+    return { ok: false, error: `module /invoke body rejected: ${(e as Error).message}` };
+  }
+  if (!(data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean")) {
+    return { ok: false, error: "module returned a malformed InvokeResponse" };
+  }
+  return data;
 }
 
 /** True for the async-accepted shape of an InvokeResponse. */
@@ -316,19 +351,27 @@ export async function pollModule<O = unknown>(
   fetcher: FetcherLike,
   request: PollRequest,
 ): Promise<PollResponse<O>> {
+  let res: Response;
   try {
-    const res = await fetcher.fetch("https://module/poll", {
+    res = await fetcher.fetch("https://module/poll", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request),
     });
-    if (!res.ok) return { ok: false, error: `module /poll -> ${res.status}` };
-    const data = (await res.json()) as PollResponse<O>;
-    if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") return data;
-    return { ok: false, error: "module returned a malformed PollResponse" };
   } catch (e) {
     return { ok: false, error: `module unreachable: ${(e as Error).message}` };
   }
+  if (!res.ok) return { ok: false, error: `module /poll -> ${res.status}` };
+  let data: PollResponse<O>;
+  try {
+    data = (await readModuleJson(res)) as PollResponse<O>;
+  } catch (e) {
+    return { ok: false, error: `module /poll body rejected: ${(e as Error).message}` };
+  }
+  if (!(data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean")) {
+    return { ok: false, error: "module returned a malformed PollResponse" };
+  }
+  return data;
 }
 
 /** POST a module's `/cancel` to STOP an in-flight async job, identified by the same poll token `/invoke`
@@ -347,7 +390,7 @@ export async function cancelModule(
       body: JSON.stringify(request),
     });
     if (!res.ok) return { ok: false, error: `module /cancel -> ${res.status}` };
-    const data = (await res.json()) as CancelResponse;
+    const data = (await readModuleJson(res)) as CancelResponse;
     if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") return data;
     return { ok: false, error: "module returned a malformed CancelResponse" };
   } catch (e) {
