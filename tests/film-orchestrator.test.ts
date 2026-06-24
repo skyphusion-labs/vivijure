@@ -1710,3 +1710,62 @@ describe("advanceFilmJob re-stamps last_progress_at on a tick (#136)", () => {
     expect(after.last_progress_at as number).toBeGreaterThan(job.created_at);
   });
 });
+
+describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 incident)", () => {
+  // The exact #209 reliability gap: a finish shot stuck PENDING at a NON-LAST chain module (RIFE at
+  // idx 0 of [RIFE, TEXT_OVERLAY]) whose RunPod envelope froze at IN_PROGRESS, but whose RIFE output
+  // IS in R2. The orchestrator must adopt the intermediate from R2 (advance idx, set clip_key, clear
+  // poll) so the chain proceeds to text-overlay -- not hang to the 90min ceiling and false-fail.
+  const midChainFilm = (): FilmJob => ({
+    film_id: "film-209", project: "fac", bundle_key: "b",
+    scenes: [{ shot_id: "shot_03", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+    keyframe_binding: null, phase: "finish", clips_only: true,
+    finish_shots: [
+      { shot_id: "shot_03", clip_key: "renders/fac/clips/shot_03_i2v.mp4",
+        chain: ["MODULE_FINISH_RIFE", "MODULE_TEXT_OVERLAY"], configs: [{}, {}], idx: 0,
+        status: "pending", applied: [], poll: "tok-frozen", error: undefined },
+    ] as FinishShot[],
+    created_at: Date.now(),
+  });
+
+  function env209(job: FilmJob, headPresent: Set<string>) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        head: async (k: string) => (headPresent.has(k) ? { key: k } : null),
+        list: async () => ({ objects: [], truncated: false }),
+      },
+      // RIFE module's RunPod envelope is frozen: every poll pends forever.
+      MODULE_FINISH_RIFE: {
+        fetch: async (url: string) =>
+          String(url).includes("/poll")
+            ? new Response(JSON.stringify({ ok: true, pending: true }), { status: 200, headers: { "content-type": "application/json" } })
+            : new Response("{}", { status: 404 }),
+      },
+    } as unknown as Env;
+    return { env, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  it("adopts the RIFE intermediate from R2 and advances idx (does NOT hang on a frozen envelope)", async () => {
+    const { env, read } = env209(midChainFilm(), new Set(["renders/fac/clips/shot_03_finished.mp4"]));
+    await advanceFilmJob(env, "film-209");
+    const fs = read().finish_shots?.find((f) => f.shot_id === "shot_03");
+    expect(fs?.idx).toBe(1); // advanced off RIFE -> text-overlay
+    expect(fs?.clip_key).toBe("renders/fac/clips/shot_03_finished.mp4"); // now feeding text-overlay
+    expect(fs?.poll).toBeUndefined(); // frozen poll cleared
+    expect(fs?.applied).toContain("interpolate:2x"); // RIFE's reconstructed tag (R2-adopted)
+    expect(fs?.status).toBe("pending"); // still pending: text-overlay (idx 1) has yet to run
+  });
+
+  it("stays pending (does NOT adopt) when the RIFE intermediate is NOT in R2 -- no phantom advance", async () => {
+    const { env, read } = env209(midChainFilm(), new Set()); // nothing in R2
+    await advanceFilmJob(env, "film-209");
+    const fs = read().finish_shots?.find((f) => f.shot_id === "shot_03");
+    expect(fs?.idx).toBe(0); // not advanced
+    expect(fs?.status).toBe("pending");
+  });
+});
