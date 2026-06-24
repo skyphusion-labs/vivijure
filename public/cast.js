@@ -1034,8 +1034,22 @@
     updateMultiSceneGate();
   }
 
+  // #339 (F6 hardening): a COMPLETE HTML-entity escaper. Escapes the five
+  // characters that can break out of element text OR a double-quoted attribute
+  // value (& < > " '), so a crafted cast name can never inject markup or break
+  // out of the <option value="..."> we build by string concat. The single
+  // quote was previously omitted; harmless given the only attribute here is a
+  // numeric id in double quotes, but a complete escaper removes the latent
+  // sink for any future reuse. ' uses the numeric &#39; (HTML4-safe; &apos; is
+  // not).
   function escapeForOption(s) {
-    return String(s || "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+    return String(s || "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[ch]));
   }
 
   function multiSceneRefFor(cast) {
