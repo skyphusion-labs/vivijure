@@ -67,8 +67,12 @@ or unverifiable (JWKS unreachable with no cached key) => denied. `/health` and `
 
 **Arming it (config, not secrets -> `wrangler.toml [vars]`):** set `ACCESS_TEAM_DOMAIN` (the Zero
 Trust team hostname) and `ACCESS_AUD` (the Access application AUD tag). When BOTH are set the gate
-enforces. When unset the backstop is NOT armed: the Worker allows `/api/*` (relying solely on the
-edge gate, the pre-F2 model) and logs a loud one-time warning. **Production MUST arm it.**
+enforces. When BOTH are unset the backstop is NOT armed and the Worker **DENIES `/api/*` (503) by
+default** -- fail closed, so a downstream deployer who has not established an auth boundary is never
+silently served. The only escape is a conscious, documented opt-out: `ALLOW_UNAUTHENTICATED = "true"`
+(for local/dev/test, or a deployer fronting the Worker with their own auth proxy), which allows
+`/api/*` with a loud one-time warning. **Production MUST arm it** (set the two vars), not rely on the
+opt-out.
 
 > ### LOAD-BEARING CAVEAT: internal callers must carry a JWT before arming
 >

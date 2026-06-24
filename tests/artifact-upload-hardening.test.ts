@@ -7,6 +7,7 @@ import type { Env } from "../src/env";
 function makeEnv() {
   const r2 = new Map<string, { bytes: Uint8Array; mime: string }>();
   const env = {
+    ALLOW_UNAUTHENTICATED: "true",
     ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
     R2_RENDERS: {
       async get(key: string) {

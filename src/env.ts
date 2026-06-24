@@ -75,6 +75,9 @@ export interface Env {
   // and the app relies solely on the edge Access gate. Production MUST set both. See docs/SECURITY.md.
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+  // Conscious opt-out (dev/local/test or a deployer fronting their own auth proxy): when neither
+  // ACCESS_TEAM_DOMAIN nor ACCESS_AUD is set, /api/* is DENIED by default unless this is "true".
+  ALLOW_UNAUTHENTICATED?: string;
 
   // Rate limiting for GPU/spend endpoints (F3, src/rate-limit.ts). The Cloudflare native Rate
   // Limiting binding; added to wrangler.toml [[ratelimits]] by infra (Strummer). Optional: when

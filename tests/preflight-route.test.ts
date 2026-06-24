@@ -15,6 +15,7 @@ const ctx = { waitUntil() {}, passThroughOnException() {} } as unknown as Execut
 
 function makeEnv(castRows: unknown[] = []): Env {
   return {
+    ALLOW_UNAUTHENTICATED: "true",
     ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
     DB: {
       prepare: () => ({

@@ -10,6 +10,7 @@ import type { Env } from "../src/env";
 
 function makeEnv() {
   return {
+    ALLOW_UNAUTHENTICATED: "true",
     ASSETS: {
       fetch: async () => new Response("ASSET", { status: 200 }),
     },

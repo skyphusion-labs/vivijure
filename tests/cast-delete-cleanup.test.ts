@@ -34,6 +34,7 @@ const castFixture = (over: Partial<CastMember> = {}): CastMember => ({
 function fakeR2(opts: { failOn?: string } = {}) {
   const deleted: string[] = [];
   const env = {
+    ALLOW_UNAUTHENTICATED: "true",
     R2_RENDERS: {
       async delete(key: string) {
         if (opts.failOn && key === opts.failOn) throw new Error("transient R2 error");
@@ -93,6 +94,7 @@ describe("DELETE /api/cast/:id reclaims R2 (issue #298)", () => {
     };
     const deleted: string[] = [];
     const env = {
+    ALLOW_UNAUTHENTICATED: "true",
       ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
       DB: {
         prepare(sql: string) {

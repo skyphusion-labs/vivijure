@@ -9,6 +9,7 @@ import type { Env } from "../src/env";
 function makeEnv() {
   const assetCalls: string[] = [];
   const env = {
+    ALLOW_UNAUTHENTICATED: "true",
     ASSETS: {
       fetch: async (req: Request) => {
         assetCalls.push(new URL(req.url).pathname);
@@ -83,6 +84,7 @@ describe("fetch entrypoint (issue #9)", () => {
 function makePrefsEnv() {
   const store = new Map<string, string>();
   const env = {
+    ALLOW_UNAUTHENTICATED: "true",
     ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
     DB: {
       prepare(sql: string) {
@@ -159,6 +161,7 @@ describe("whoami + user prefs", () => {
 
   it("GET /api/storyboard/renders returns { renders: [...] }", async () => {
     const env = {
+    ALLOW_UNAUTHENTICATED: "true",
       ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
       DB: {
         prepare(sql: string) {
