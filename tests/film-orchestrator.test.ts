@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -1767,5 +1767,28 @@ describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 inc
     const fs = read().finish_shots?.find((f) => f.shot_id === "shot_03");
     expect(fs?.idx).toBe(0); // not advanced
     expect(fs?.status).toBe("pending");
+  });
+});
+
+// #211 follow-up: the film.finish outcome is canonical user-affecting state, so it must ride the
+// structured API channel (summarizeFilm), not just the persisted job -- the frontend shows honest
+// degrade state from it.
+describe("summarizeFilm surfaces film_finish (#211 follow-up)", () => {
+  const base = {
+    film_id: "film-sum", project: "p", scenes: [], phase: "done" as const,
+    film_key: "renders/film-sum/film-titled.mp4", created_at: 0,
+  };
+  it("includes film_finish when present (applied, degraded unset)", () => {
+    const job = { ...base, film_finish: { applied: ["film-titles"], errors: [], steps: ["film-titles"] } } as unknown as FilmJob;
+    const sum = summarizeFilm(job, null);
+    expect(sum.film_finish).toEqual({ applied: ["film-titles"], errors: [], steps: ["film-titles"] });
+    expect(sum.film_finish?.degraded).toBeUndefined();
+  });
+  it("carries the degraded reason so a card-less ship is visible", () => {
+    const job = { ...base, film_finish: { applied: ["film-titles"], errors: [], degraded: "film-titles: passthrough:container-unreachable" } } as unknown as FilmJob;
+    expect(summarizeFilm(job, null).film_finish?.degraded).toBe("film-titles: passthrough:container-unreachable");
+  });
+  it("omits film_finish when the chain never ran", () => {
+    expect(summarizeFilm(base as unknown as FilmJob, null).film_finish).toBeUndefined();
   });
 });
