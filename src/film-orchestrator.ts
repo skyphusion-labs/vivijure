@@ -15,7 +15,7 @@ import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
-import { presignR2Get, presignR2Put } from "./r2-presign";
+import { presignR2Get, presignR2Put, FILM_DOWNLOAD_TTL_SECONDS } from "./r2-presign";
 import { readShotDurationsFromBundle } from "./bundle-assembler";
 import { buildCaptionCues } from "./captions";
 import { resolveStagedAudioKey } from "./audio-stage";
@@ -981,7 +981,7 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
     const envRec = env as unknown as Record<string, unknown>;
     const notifiers = servingForHook(await discoverModules(envRec), "notify");
     if (!notifiers.length) return;
-    const download_url = await presignR2Get(env, job.film_key, 86400); // 24h link, matches the poll summary
+    const download_url = await presignR2Get(env, job.film_key, FILM_DOWNLOAD_TTL_SECONDS); // matches the poll summary
     const input: NotifyInput = {
       event: "render.complete", film_id: job.film_id, project: job.project,
       download_url,

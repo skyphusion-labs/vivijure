@@ -147,6 +147,12 @@ export async function presignR2WithConfig(
   return `${cfg.endpoint.replace(/\/$/, "")}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
+// F8: lifetime of a user-facing FILM DOWNLOAD link (the presigned GET emailed in the render-
+// complete notification + returned in the poll summary). 6h covers same-day email reading while
+// cutting the leaked-link window 4x vs the old 24h; the film persists in R2, so re-opening the
+// render in the studio re-presigns a fresh link on expiry.
+export const FILM_DOWNLOAD_TTL_SECONDS = 6 * 60 * 60; // 6h
+
 export function presignR2Get(env: Env, key: string, expiresSeconds = 300): Promise<string> {
   return presignR2WithConfig(configFromEnv(env), "GET", key, expiresSeconds);
 }

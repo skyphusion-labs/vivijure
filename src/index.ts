@@ -74,7 +74,7 @@ import { PLANNING_MODELS } from "./planner-catalog";
 import { serializeStoryboardYaml } from "./planner-yaml";
 import { emitMarkers, type MarkersFormat } from "./markers";
 import { assembleBundle, type AssembleBundleArgs } from "./bundle-assembler";
-import { presignR2Get } from "./r2-presign";
+import { presignR2Get, FILM_DOWNLOAD_TTL_SECONDS } from "./r2-presign";
 import { getUserPrefs, setUserPrefs } from "./user-prefs";
 import { loadInstallConfig, setInstallConfig, hasInstallConfig } from "./operator-config";
 import { analyzeAudioBeats } from "./beat-analyze";
@@ -865,7 +865,7 @@ const hPollClips: Handler = async (_req, env, _c, p) => {
  *  size limit and no extra API surface. Absent until the film is done. */
 async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<FilmSummary & { download_url?: string }> {
   if (summary.phase === "done" && summary.film_key) {
-    return { ...summary, download_url: await presignR2Get(env, summary.film_key, 86400) };
+    return { ...summary, download_url: await presignR2Get(env, summary.film_key, FILM_DOWNLOAD_TTL_SECONDS) };
   }
   return summary;
 }
