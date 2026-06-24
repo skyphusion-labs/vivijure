@@ -91,15 +91,13 @@ function makePrefsEnv() {
           bind(...args: unknown[]) { bound = args; return stmt; },
           async first() {
             if (!sql.trimStart().toUpperCase().startsWith("SELECT")) return null;
-            const email = bound[0] as string;
-            const prefs = store.get(email);
+            const prefs = store.get("1"); // global singleton
             return prefs ? { prefs_json: prefs } : null;
           },
           async run() {
             if (!sql.trimStart().toUpperCase().startsWith("INSERT")) return { meta: { changes: 0 } };
-            const email = bound[0] as string;
-            const prefsJson = bound[1] as string;
-            store.set(email, prefsJson);
+            const prefsJson = bound[0] as string; // INSERT ... VALUES (1, ?, ?)
+            store.set("1", prefsJson);
             return { meta: { changes: 1 } };
           },
         };
@@ -118,17 +116,17 @@ const reqWithAccess = (path: string, method = "GET", init: RequestInit = {}) => 
 };
 
 describe("whoami + user prefs", () => {
-  it("GET /api/whoami returns the CF Access email as user", async () => {
+  it("GET /api/whoami returns the studio identity, never the Access email (no identity leak)", async () => {
     const { env } = makeEnv();
     const res = await worker.fetch(reqWithAccess("/api/whoami"), env, ctx);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ user: "owner@example.com" });
+    expect(await res.json()).toEqual({ user: "studio" });
   });
 
-  it("GET /api/whoami without Access header falls back to anonymous", async () => {
+  it("GET /api/whoami returns the studio identity without an Access header too", async () => {
     const { env } = makeEnv();
     const res = await worker.fetch(req("/api/whoami"), env, ctx);
-    expect(await res.json()).toEqual({ user: "anonymous" });
+    expect(await res.json()).toEqual({ user: "studio" });
   });
 
   it("GET /api/prefs returns defaults then PATCH persists", async () => {
@@ -146,7 +144,7 @@ describe("whoami + user prefs", () => {
     );
     expect(patchRes.status).toBe(200);
     expect(await patchRes.json()).toEqual({ ok: true, prefs: { emailNotifications: true } });
-    expect([...store.keys()]).toEqual(["owner@example.com"]);
+    expect([...store.keys()]).toEqual(["1"]); // global singleton row
 
     const getAgain = await worker.fetch(reqWithAccess("/api/prefs"), env, ctx);
     expect(await getAgain.json()).toEqual({ ok: true, prefs: { emailNotifications: true } });

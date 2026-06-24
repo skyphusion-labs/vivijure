@@ -4,7 +4,7 @@
 
 import type { ClipJob } from "./render-orchestrator";
 import type { FilmJob } from "./film-orchestrator";
-import { summarizeFilm, phaseAgeSeconds, KEYFRAME_STALL_SECONDS } from "./film-orchestrator";
+import { summarizeFilm, KEYFRAME_STALL_SECONDS } from "./film-orchestrator";
 import type { FilmScene } from "./film-orchestrator";
 import type { RunpodJobView, RunpodStatus } from "./runpod-submit";
 import { resolveModuleRenderConfigs } from "./render-module-config";
@@ -66,6 +66,23 @@ export function filterScenesByShotIds(scenes: FilmScene[], shotIds: string[] | u
   return scenes.filter((s) => allow.has(s.shot_id));
 }
 
+/** Order (and filter) scenes to match an explicit shot-id sequence. The scatter gather assembles its
+ *  clips in expected_shot_ids order (orderFinalClips), regardless of shard completion order, while
+ *  filterScenesByShotIds keeps scenes in their own (bundle) order. The two can differ; feeding captions
+ *  the bundle order would compute each line's cumulative window against the WRONG preceding shots and
+ *  misalign the subtitles. Anchoring the caption scenes to the same shot order the film is assembled in
+ *  keeps buildCaptionCues' cumulative timeline aligned with the cut (#284/#285). Unknown ids are skipped;
+ *  scenes whose id is absent from the sequence are dropped. */
+export function orderScenesByShotIds(scenes: FilmScene[], shotIds: string[]): FilmScene[] {
+  const byId = new Map(scenes.map((s) => [s.shot_id, s]));
+  const out: FilmScene[] = [];
+  for (const id of shotIds) {
+    const s = byId.get(id);
+    if (s) out.push(s);
+  }
+  return out;
+}
+
 /** Stall signal for the UI (#129 / Joan's render-status UX). Surfaced on an IN_PROGRESS render's
  *  output_json so the history UI renders a real "needs attention" state instead of guessing from
  *  updated_at:
@@ -75,8 +92,12 @@ export function filterScenesByShotIds(scenes: FilmScene[], shotIds: string[] | u
  *  The driver (advanceFilmJob) recovers or loud-fails a stalled job; this is the in-flight signal in the
  *  window before it does. Pure + injectable `now` so it unit-tests without the wall clock. */
 export function stallSignal(job: FilmJob, now: number = Date.now()): Record<string, unknown> {
-  const lastProgressAt = job.phase_started_at ?? job.created_at;
-  const ageSeconds = phaseAgeSeconds(job, now);
+  // Measure from the last REAL progress (#136): a clip/finish/speech shot completing re-stamps
+  // job.last_progress_at (advanceFilmJob), so a healthy multi-shot phase that legitimately runs 30+
+  // min advancing shot by shot no longer false-flags "stalled". Falls back to phase_started_at (then
+  // created_at) for pre-#136 jobs, so an old in-flight job's signal is unchanged.
+  const lastProgressAt = job.last_progress_at ?? job.phase_started_at ?? job.created_at;
+  const ageSeconds = Math.max(0, Math.floor((now - lastProgressAt) / 1000));
   const stalled = ageSeconds >= KEYFRAME_STALL_SECONDS;
   const out: Record<string, unknown> = { last_progress_at: lastProgressAt };
   if (stalled) {

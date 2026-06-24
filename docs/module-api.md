@@ -1,6 +1,6 @@
 # Vivijure Module API
 
-> Status: **IMPLEMENTED** (`vivijure-module/1`). The contract the core and modules share. This
+> Status: **IMPLEMENTED** (`vivijure-module/2`; `/1` accepted transitionally). The contract the core and modules share. This
 > document is the design spec; `src/modules/types.ts` is the canonical TypeScript shape.
 
 ## Why this exists
@@ -30,20 +30,23 @@ feature.
 | **Manifest** | A module's self-description: which hooks it serves, what config it exposes, how it surfaces in the UI. |
 | **Registry** | The core's index of installed modules, built from their manifests. Drives the pipeline and feeds the frontend. |
 
-## The hooks (vivijure-module/1)
+## The hooks (vivijure-module/2)
 
 A hook is a contract, not a function. Each has a stable name, a typed input, and a typed output.
 Shapes live in `src/modules/types.ts`.
 
 | Hook | Purpose | Cardinality |
 |---|---|---|
-| `keyframe` | Storyboard -> start keyframes (SDXL on GPU). | pick one |
+| `keyframe` | Storyboard -> start keyframes. Backend-selectable: GPU SDXL or GPUless cloud (e.g. cloud-keyframe) are modules. | pick one |
 | `motion.backend` | Keyframe (+ motion prompt) -> shot clip. GPU/RunPod and cloud providers are modules. | pick one per shot |
-| `finish` | Post-process a clip: frame interpolation, upscale, face restore. | chain (0..n, ordered) |
+| `finish` | Post-process a clip: frame interpolation, lip-sync (MuseTalk), upscale (CUDA Real-ESRGAN), face restore. | chain (0..n, ordered) |
 | `score` | Add audio to a film: music, narration, beat-sync. | chain (0..n) |
+| `dialogue` | Per-shot dialogue lines -> speech audio (TTS, one voice per cast member). Runs after clips, before finish; its audio feeds the lip-sync finish module. | pick one |
 | `plan.enhance` | Expand a storyboard before render: LLM auto-direction, camera/lighting enrichment. | chain (0..n) |
 | `cast.image` | Portrait + bible -> LoRA training reference images. | pick one |
 | `notify` | Film done -> deliver a render-complete notification (email, webhook, ...). | chain (0..n) |
+| `master` | Assembled film's audio bed -> mastered audio (music upscale + LUFS loudness). Film-level, runs after the audio mix is built (assemble), before the final mux; fail-safe (a master miss muxes the un-mastered bed). The audio sibling of `finish` (clips) and the dialogue/speech lane (per-shot voice). | chain (0..n) |
+| `film.finish` | Assembled + muxed film -> film with opening title / end-credit cards. Post-mux, before done. Dispatched on the single-film render path (`/api/render/film`, fail-safe); the scatter/gather path does not run it yet. | chain (0..n) |
 
 `pick one` hooks resolve to a single module (the user's chosen backend). `chain` hooks run every
 installed module in a declared order, each consuming the previous output.
@@ -56,7 +59,7 @@ Served by the module at `GET /module.json`. The core reads it once to register t
 {
   "name": "finish-rife",                 // unique module id
   "version": "0.1.0",
-  "api": "vivijure-module/1",            // contract version this module targets
+  "api": "vivijure-module/2",            // contract version this module targets (/1 still accepted)
   "hooks": ["finish"],                   // which hooks it serves
   "provides": [                          // user-facing capabilities (one module may offer several)
     { "id": "interpolate", "label": "Smooth motion (frame interpolation)" },
@@ -76,6 +79,19 @@ The `config_schema` is the single source of truth for a module's knobs. The fron
 controls from it; the core clamps/validates against it before invoking. One declaration, one hop,
 same words down. No separate override grab-bag.
 
+A field may carry an optional `"scope"`:
+
+- **`"render"`** (the default when omitted): a per-render knob, chosen at submit time, flowing through
+  the per-render config path -- the behavior every field has always had.
+- **`"install"`**: operator-set-**once**, instance-wide config (e.g. `notify-email`'s `notify_email`
+  recipient). The operator sets it on the studio **settings** page; the core persists it in the
+  operator-config store and injects it into the module invoke at hook time. The value lives only in
+  that store, read/written via `GET/PATCH /api/modules/:name/config` -- it never rides the public
+  `/api/modules` projection (only the schema marker does, so the settings UI can render the control).
+
+`scope` is additive: an unmarked field is a `"render"` field, so adding it broke nothing and bumped no
+contract version. See CONTRACT.md 4.1.1 / 4.1.2 for the full spec.
+
 ## Invocation contract
 
 The core calls a module over a **service binding** (RPC) or HTTP. One entry point per module:
@@ -86,7 +102,7 @@ POST /invoke
   "hook":    "finish",                   // which hook is being asked
   "input":   { ... },                    // the hook's typed input (see below)
   "config":  { ... },                    // the user's values, already validated vs config_schema
-  "context": { "project": "neon", "job_id": "abc", "user_email": "..." }
+  "context": { "project": "neon", "job_id": "abc" }
 }
 ->
 { "ok": true,  "output": { ... } }       // the hook's typed output
@@ -177,7 +193,7 @@ On boot, the core reads each bound module's `module.json` and indexes them by ho
 ```
 GET /api/modules
 {
-  "api": "vivijure-module/1",
+  "api": "vivijure-module/2",
   "modules": [ { "name": "finish-rife", "hooks": ["finish"], "provides": [...], "config_schema": {...}, "ui": {...} } ],
   "hooks": { "finish": ["finish-rife"], "motion.backend": ["motion-runpod"] }
 }
@@ -185,7 +201,7 @@ GET /api/modules
 
 ## Contributor flow
 
-1. `git clone` the module template (a minimal worker + the shared `vivijure-module/1` types).
+1. `git clone` the module template (a minimal worker + the shared `vivijure-module/2` types).
 2. Implement one hook's `invoke(input, config, context) -> output`.
 3. `npm run conformance` until green.
 4. Install it: add a service binding (now) or publish to the dispatch namespace (later).

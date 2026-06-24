@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, orderFinalClips, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, type FilmScene, type FinishShot, type FilmJob } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -33,6 +33,42 @@ describe("applyFinishOutput (chain fold)", () => {
   });
 });
 
+describe("applySpeechOutput (chain fold + honest soft-degrade)", () => {
+  const speechShot = (over: Partial<SpeechShot> = {}): SpeechShot => ({
+    shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01.wav", chain: ["MODULE_SPEECH_UPSCALE"], idx: 0, status: "pending", applied: [], ...over,
+  });
+  it("real enhance: threads the new audio_key forward, records applied, marks done", () => {
+    const ss = speechShot();
+    applySpeechOutput(ss, { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_enh.wav", applied: ["speech-upscale:resemble-enhance"] });
+    expect(ss.audio_key).toBe("renders/p/dialogue/shot_01_enh.wav");
+    expect(ss.applied).toEqual(["speech-upscale:resemble-enhance"]);
+    expect(ss.idx).toBe(1);
+    expect(ss.status).toBe("done");
+    expect(ss.degraded).toBeUndefined();
+  });
+  it("HONEST soft-degrade: keeps the ORIGINAL audio_key (mouth never goes silent), records the reason, no fake applied tag", () => {
+    const ss = speechShot();
+    // even if a buggy module returns a junk key alongside `degraded`, the guard ignores it
+    applySpeechOutput(ss, { shot_id: "shot_01", audio_key: "JUNK-should-be-ignored", applied: [], degraded: "backend down" });
+    expect(ss.audio_key).toBe("renders/p/dialogue/shot_01.wav"); // the ORIGINAL dialogue audio survives
+    expect(ss.degraded).toBe("backend down");
+    expect(ss.applied).toEqual([]); // no fake applied tag
+    expect(ss.status).toBe("done");
+  });
+  it("multi-module chain: stays pending until exhausted, threading enhanced audio between steps", () => {
+    const ss = speechShot({ chain: ["MODULE_A", "MODULE_B"] });
+    applySpeechOutput(ss, { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_a.wav", applied: ["denoise:a"] });
+    expect(ss.idx).toBe(1);
+    expect(ss.status).toBe("pending"); // module B still to run
+    expect(ss.audio_key).toBe("renders/p/dialogue/shot_01_a.wav"); // B enhances A's output
+    applySpeechOutput(ss, { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_b.wav", applied: ["upscale:b"] });
+    expect(ss.idx).toBe(2);
+    expect(ss.status).toBe("done");
+    expect(ss.applied).toEqual(["denoise:a", "upscale:b"]);
+    expect(ss.audio_key).toBe("renders/p/dialogue/shot_01_b.wav");
+  });
+});
+
 describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifact in R2)", () => {
   it("adopts a FAILED shot whose finished clip is in R2 (the GC'd-job path, #141)", () => {
     expect(finishShotAdoptableFromR2(finishShot({ status: "failed", error: "GC'd" }))).toBe(true);
@@ -44,6 +80,25 @@ describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifa
 
   it("does NOT adopt a PENDING shot mid-chain (its R2 key would be an intermediate module's output)", () => {
     expect(finishShotAdoptableFromR2(finishShot({ status: "pending", poll: "tok", idx: 0, chain: ["MODULE_A", "MODULE_B"] }))).toBe(false);
+  });
+
+  it("does NOT adopt a FAILED shot mid-chain (the silent-render bug: a lip-sync fail at idx 1 of 4 must not adopt the RIFE intermediate)", () => {
+    const midChainFailed = finishShot({
+      status: "failed", idx: 1,
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+    });
+    expect(finishShotAdoptableFromR2(midChainFailed)).toBe(false);
+  });
+
+  it("reclaim does NOT touch a mid-chain FAILED shot even when an intermediate clip is present in R2", () => {
+    const failed = finishShot({
+      shot_id: "shot_02", status: "failed", idx: 1, // failed at lip-sync (idx 1), 2 more steps to go
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+    });
+    const present = new Map([["shot_02", "renders/p/clips/shot_02_finished.mp4"]]); // the RIFE intermediate
+    const adopted = reclaimFinishShotsFromR2([failed], present);
+    expect(adopted).toBe(0);
+    expect(failed.status).toBe("failed"); // NOT silently flipped to done on an intermediate
   });
 
   it("does NOT adopt a PENDING shot with no poll token (never submitted -- nothing produced it yet)", () => {
@@ -72,6 +127,231 @@ describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifa
     const adopted = reclaimFinishShotsFromR2([stuck], new Map());
     expect(adopted).toBe(0);
     expect(stuck.status).toBe("pending");
+  });
+});
+
+describe("finish-step transient retry (the silent-render trigger: a lip-sync invocation blip)", () => {
+  it("classifyFinishFailure: transport blips are transient, module-logic rejects are deterministic", () => {
+    expect(classifyFinishFailure("module /invoke -> 503")).toBe("transient");
+    expect(classifyFinishFailure("module /poll -> 504")).toBe("transient");
+    expect(classifyFinishFailure("module /invoke -> 429")).toBe("transient");
+    expect(classifyFinishFailure("module unreachable: signal timed out")).toBe("transient");
+    expect(classifyFinishFailure("module /invoke -> 400")).toBe("deterministic");
+    expect(classifyFinishFailure("module /invoke -> 404")).toBe("deterministic");
+    expect(classifyFinishFailure("finish-lipsync: input needs shot_id and clip_key")).toBe("deterministic");
+    expect(classifyFinishFailure("finish-lipsync job failed: out of memory")).toBe("deterministic");
+    expect(classifyFinishFailure(undefined)).toBe("deterministic");
+  });
+
+  it("classifyFinishRetry: transient retries under the cap, fails at the cap; deterministic fails at once", () => {
+    expect(classifyFinishRetry("module /invoke -> 503", 0)).toEqual({ action: "retry", attempts: 1 });
+    expect(classifyFinishRetry("module /invoke -> 503", 1)).toEqual({ action: "retry", attempts: 2 });
+    expect(classifyFinishRetry("module /invoke -> 503", FINISH_STEP_MAX_ATTEMPTS - 1)).toEqual({ action: "fail" });
+    expect(classifyFinishRetry("module /invoke -> 400", 0)).toEqual({ action: "fail" }); // deterministic, no spin
+  });
+
+  // Integration: a film at phase=finish whose lip-sync invocation transiently 503s, then succeeds.
+  // The step must RE-DISPATCH (stay pending, bump attempts) -- not go failed + adopt an intermediate --
+  // so the shot ends up voiced (applied includes the lip-sync tag).
+  const lipsyncFilm = (): FilmJob => ({
+    film_id: "film-finish-retry", project: "neon", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+    keyframe_binding: null, phase: "finish", clips_only: true,
+    finish_shots: [
+      { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4", chain: ["MODULE_FINISH_LIPSYNC"], configs: [{}], idx: 0, status: "pending", applied: [], poll: undefined, error: undefined },
+    ] as FinishShot[],
+    created_at: Date.now(),
+  });
+
+  function retryEnv(job: FilmJob, lipsyncOutcomes: Array<number>) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    let call = 0;
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        list: async () => ({ objects: [], truncated: false }), // no _finished clip in R2 -> no reclaim interference
+      },
+      MODULE_FINISH_LIPSYNC: {
+        fetch: async (url: string) => {
+          if (!String(url).includes("/invoke")) return new Response("{}", { status: 404 });
+          const status = lipsyncOutcomes[Math.min(call, lipsyncOutcomes.length - 1)];
+          call += 1;
+          if (status !== 200) return new Response("", { status });
+          return new Response(JSON.stringify({ ok: true, output: { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_ls.mp4", out_fps: 24, frames: 96, applied: ["lipsync:v15"] } }), { status: 200, headers: { "content-type": "application/json" } });
+        },
+      },
+    } as unknown as Env;
+    return { env, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  it("re-dispatches a transient lip-sync 503, then voices the shot on the retry", async () => {
+    const { env, read } = retryEnv(lipsyncFilm(), [503, 200]); // fail once, then succeed
+    await advanceFilmJob(env, "film-finish-retry");
+    const after1 = read().finish_shots![0];
+    expect(after1.status).toBe("pending");          // NOT failed -- re-dispatching
+    expect(after1.attempts).toBe(1);
+    expect(after1.applied).toEqual([]);             // lip-sync did not run yet
+    await advanceFilmJob(env, "film-finish-retry"); // second tick: 200
+    const after2 = read().finish_shots![0];
+    expect(after2.status).toBe("done");
+    expect(after2.applied).toEqual(["lipsync:v15"]); // shot_02-style fix: actually VOICED
+    expect(after2.clip_key).toBe("renders/neon/clips/shot_01_ls.mp4");
+  });
+
+  it("fails LOUD after the cap on a persistent transient (no infinite spin)", async () => {
+    const { env, read } = retryEnv(lipsyncFilm(), [503]); // 503 forever
+    for (let i = 0; i < FINISH_STEP_MAX_ATTEMPTS; i++) await advanceFilmJob(env, "film-finish-retry");
+    expect(read().finish_shots![0].status).toBe("failed");
+  });
+
+  it("fails LOUD at once on a deterministic 400 (no retry)", async () => {
+    const { env, read } = retryEnv(lipsyncFilm(), [400]);
+    await advanceFilmJob(env, "film-finish-retry");
+    const fs = read().finish_shots![0];
+    expect(fs.status).toBe("failed");
+    expect(fs.attempts ?? 0).toBe(0); // deterministic -> never incremented
+  });
+
+  // #245/#246: a failed finish must fail the RENDER loud -- the film job goes phase=failed with the
+  // real error, NOT phase=done shipping the raw i2v clip with applied=[] (the wan silent-degrade).
+  it("a failed finish fails the render (phase=failed), never silently done with the raw clip", async () => {
+    const { env, read } = retryEnv(lipsyncFilm(), [400]); // deterministic finish failure
+    await advanceFilmJob(env, "film-finish-retry");
+    const job = read();
+    expect(job.finish_shots![0].status).toBe("failed");
+    expect(job.phase).toBe("failed");        // was "done" before the fix (clips_only path)
+    expect(job.phase).not.toBe("done");
+    expect(job.error).toMatch(/finish failed/i);
+    expect(job.error).toMatch(/shot_01/);
+  });
+});
+
+describe("clipKeysFromFilmJob: no raw-clip substitution for a failed finish (#245/#246)", () => {
+  it("finish set up + a shot failed -> finished clips only, never the raw i2v clip", async () => {
+    const job = {
+      film_id: "film-x", project: "neon", clip_job_id: "clips-x",
+      finish_shots: [
+        { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_ls.mp4", chain: ["MODULE_LIPSYNC"], configs: [{}], idx: 0, status: "done", applied: ["lipsync:v15"] },
+        { shot_id: "shot_02", clip_key: "renders/neon/clips/shot_02_wan.mp4", chain: ["MODULE_FINISH_RIFE"], configs: [{}], idx: 0, status: "failed", applied: [], error: "RIFE crash" },
+      ] as FinishShot[],
+    } as unknown as FilmJob;
+    let touchedRawClipJob = false;
+    const env = { R2_RENDERS: { get: async () => { touchedRawClipJob = true; return null; } } } as unknown as Env;
+    const keys = await clipKeysFromFilmJob(env, job);
+    expect(touchedRawClipJob).toBe(false);                                  // never fell through to raw
+    expect(keys.get("shot_01")).toBe("renders/neon/clips/shot_01_ls.mp4");  // the finished clip
+    expect(keys.has("shot_02")).toBe(false);                               // failed shot NOT raw-substituted
+  });
+
+  it("no finish modules installed (finish_shots empty) -> assembles the raw i2v clips", async () => {
+    const job = { film_id: "film-y", project: "neon", clip_job_id: "clips-y", finish_shots: [] } as unknown as FilmJob;
+    const clipJob = { shots: [{ shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_wan.mp4", status: "done" }] };
+    const env = { R2_RENDERS: { get: async () => ({ text: async () => JSON.stringify(clipJob) }) } } as unknown as Env;
+    const keys = await clipKeysFromFilmJob(env, job);
+    expect(keys.get("shot_01")).toBe("renders/neon/clips/shot_01_wan.mp4"); // raw clip used (no finish)
+  });
+});
+
+describe("finish-step R2 advance (FIX C: a MID-chain step GC'd/frozen with its output already in R2)", () => {
+  const fs = (over: Partial<FinishShot>): FinishShot => ({
+    shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4",
+    chain: [], configs: [], idx: 0, status: "pending", applied: [], ...over,
+  } as FinishShot);
+
+  it("finishStepOutputKey: predicts each finish module's output key; null for an unmodeled module", () => {
+    // finish-rife names its output off the shot id (container convention), not by appending to the input.
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_FINISH_RIFE"] }))).toBe("renders/neon/clips/shot_01_finished.mp4");
+    // the append-convention modules insert their suffix before the extension of the INPUT clip key.
+    expect(finishStepOutputKey("neon", fs({ clip_key: "renders/neon/clips/shot_01_finished.mp4", chain: ["MODULE_FINISH_LIPSYNC"] }))).toBe("renders/neon/clips/shot_01_finished_ls.mp4");
+    expect(finishStepOutputKey("neon", fs({ clip_key: "renders/neon/clips/shot_01_finished_ls.mp4", chain: ["MODULE_FINISH_UPSCALE"] }))).toBe("renders/neon/clips/shot_01_finished_ls_up.mp4");
+    // an unmodeled module -> null: NO R2 shortcut, so it can never advance off a sibling step's artifact.
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_TEXT_OVERLAY"] }))).toBeNull();
+  });
+
+  it("finishStepAppliedTag: reconstructs each module's applied marker from its validated config", () => {
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_LIPSYNC"], configs: [{ version: "v15" }] }))).toBe("lipsync:v15");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_UPSCALE"], configs: [{ scale: 2 }] }))).toBe("upscale:2x");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_RIFE"], configs: [{ interpolation_factor: 2 }] }))).toBe("interpolate:2x");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_TEXT_OVERLAY"], configs: [{}] }))).toBe("MODULE_TEXT_OVERLAY:r2-adopted");
+  });
+
+  // The live wedge: a 4-step chain stuck at idx 0 (RIFE) whose poll froze IN_PROGRESS / 404s while the
+  // RIFE output already landed in R2 -- so lip-sync was never dispatched and the shot pended forever.
+  const wedgeFilm = (): FilmJob => ({
+    film_id: "film-fixc", project: "neon", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+    keyframe_binding: null, phase: "finish", clips_only: true,
+    finish_shots: [{
+      shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4",
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      configs: [{ interpolation_factor: 2 }, { version: "v15" }, { scale: 2 }, {}],
+      idx: 0, status: "pending", applied: [], poll: "frozen", error: undefined,
+    }] as FinishShot[],
+    created_at: Date.now(),
+  });
+
+  function wedgeEnv(job: FilmJob, opts: { rifePoll: "pending" | "404"; rifeOutputInR2: boolean }) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const present = new Set<string>();
+    if (opts.rifeOutputInR2) present.add("renders/neon/clips/shot_01_finished.mp4");
+    let lipsyncInvoked = false;
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        list: async () => ({ objects: [], truncated: false }),
+        head: async (k: string) => (present.has(k) ? { key: k } : null),
+      },
+      MODULE_FINISH_RIFE: {
+        fetch: async (url: string) => {
+          if (!String(url).includes("/poll")) return new Response("{}", { status: 404 });
+          if (opts.rifePoll === "404") return new Response("", { status: 404 }); // GC'd-after-complete
+          return new Response(JSON.stringify({ ok: true, pending: true }), { status: 200, headers: { "content-type": "application/json" } }); // frozen IN_PROGRESS
+        },
+      },
+      MODULE_FINISH_LIPSYNC: {
+        fetch: async (url: string) => {
+          if (String(url).includes("/invoke")) { lipsyncInvoked = true; return new Response(JSON.stringify({ ok: true, pending: true, poll: "ls-tok" }), { status: 200, headers: { "content-type": "application/json" } }); }
+          return new Response(JSON.stringify({ ok: true, pending: true }), { status: 200, headers: { "content-type": "application/json" } });
+        },
+      },
+    } as unknown as Env;
+    return { env, read: () => JSON.parse(stored) as FilmJob, lipsyncInvoked: () => lipsyncInvoked };
+  }
+
+  it("frozen-pending RIFE + its output in R2 -> adopts the step, advances idx, then dispatches lip-sync", async () => {
+    const { env, read, lipsyncInvoked } = wedgeEnv(wedgeFilm(), { rifePoll: "pending", rifeOutputInR2: true });
+    await advanceFilmJob(env, "film-fixc");
+    const a = read().finish_shots![0];
+    expect(a.idx).toBe(1);                                              // advanced off the RIFE step...
+    expect(a.applied).toEqual(["interpolate:2x"]);                     // ...recording its reconstructed tag
+    expect(a.clip_key).toBe("renders/neon/clips/shot_01_finished.mp4"); // next step's input is the RIFE output
+    expect(a.status).toBe("pending");                                  // 3 modules still to run
+    expect(a.poll).toBeUndefined();
+    expect(lipsyncInvoked()).toBe(false);                             // lip-sync dispatches on the NEXT tick
+    await advanceFilmJob(env, "film-fixc");
+    expect(lipsyncInvoked()).toBe(true);                              // the wedge is cleared: lip-sync now runs
+    expect(read().finish_shots![0].poll).toBe("ls-tok");
+  });
+
+  it("404 job-not-found + NO R2 output -> fails loud (not silent-pending)", async () => {
+    const { env, read } = wedgeEnv(wedgeFilm(), { rifePoll: "404", rifeOutputInR2: false });
+    await advanceFilmJob(env, "film-fixc");
+    expect(read().finish_shots![0].status).toBe("failed");
+  });
+
+  it("frozen-pending + NO R2 output yet -> stays pending (the job may still finish), never false-fails", async () => {
+    const { env, read } = wedgeEnv(wedgeFilm(), { rifePoll: "pending", rifeOutputInR2: false });
+    await advanceFilmJob(env, "film-fixc");
+    const a = read().finish_shots![0];
+    expect(a.status).toBe("pending");
+    expect(a.idx).toBe(0);
+    expect(a.applied).toEqual([]);
   });
 });
 
@@ -1028,5 +1308,405 @@ describe("advanceFilmJob dialogue phase injects audio_key into finish (talking c
     expect((finishInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01.wav");
     // clips_only -> after finish the shard is done
     expect(r?.job.phase).toBe("done");
+  });
+});
+
+describe("masteredBedKey (core presigns the PUT for this key)", () => {
+  it("inserts _mastered.wav before the extension, beside the source (original survives)", () => {
+    expect(masteredBedKey("renders/neon/audio/bed.wav")).toBe("renders/neon/audio/bed_mastered.wav");
+  });
+  it("defaults to .wav, and follows the requested format so the PUT key matches what the container writes", () => {
+    expect(masteredBedKey("renders/neon/audio/bed.mp3")).toBe("renders/neon/audio/bed_mastered.wav");
+    expect(masteredBedKey("renders/neon/audio/bed.wav", "mp3")).toBe("renders/neon/audio/bed_mastered.mp3");
+    expect(masteredBedKey("renders/neon/audio/bed.wav", "wav")).toBe("renders/neon/audio/bed_mastered.wav");
+  });
+  it("appends when there is no extension, and ignores a dot in the path", () => {
+    expect(masteredBedKey("renders/neon/audio/bed")).toBe("renders/neon/audio/bed_mastered.wav");
+    expect(masteredBedKey("a.b/audio/bed")).toBe("a.b/audio/bed_mastered.wav");
+  });
+  it("is deterministic so a transient-retry re-PUT overwrites (never orphans a key)", () => {
+    expect(masteredBedKey("renders/x/audio/bed.wav")).toBe(masteredBedKey("renders/x/audio/bed.wav"));
+  });
+});
+
+const masterState = (over: Partial<MasterState> = {}): MasterState => ({
+  chain: ["MODULE_AUDIO_MASTER"], idx: 0, applied: [], degraded: [], ...over,
+});
+
+describe("master chain fold (applyMasterOutput / degradeMasterStep)", () => {
+  it("single-step chain: folds the mastered bed, accumulates applied, advances to done", () => {
+    const m = masterState();
+    const next = applyMasterOutput(m, "audio/bed.wav", {
+      audio_key: "audio/bed_mastered.wav", applied: ["music-upscale:soxr48k", "loudnorm:-14LUFS"],
+    });
+    expect(next).toBe("audio/bed_mastered.wav");
+    expect(m.applied).toEqual(["music-upscale:soxr48k", "loudnorm:-14LUFS"]);
+    expect(m.idx).toBe(1);
+    expect(m.poll).toBeUndefined();
+    expect(m.attempts).toBe(0);
+    expect(masterChainDone(m)).toBe(true);
+  });
+
+  it("multi-step chain: each step chains the previous bed and stays not-done until exhausted", () => {
+    const m = masterState({ chain: ["MODULE_A", "MODULE_B"] });
+    const afterA = applyMasterOutput(m, "audio/bed.wav", { audio_key: "audio/bed_a.wav", applied: ["a:1"] });
+    expect(afterA).toBe("audio/bed_a.wav");
+    expect(m.idx).toBe(1);
+    expect(masterChainDone(m)).toBe(false);
+    const afterB = applyMasterOutput(m, afterA, { audio_key: "audio/bed_b.wav", applied: ["b:1"] });
+    expect(afterB).toBe("audio/bed_b.wav");
+    expect(m.idx).toBe(2);
+    expect(m.applied).toEqual(["a:1", "b:1"]);
+    expect(masterChainDone(m)).toBe(true);
+  });
+
+  it("a module soft-degrade (ok:true + output.degraded) carries the bed through and is recorded, never silent", () => {
+    const m = masterState();
+    const next = applyMasterOutput(m, "audio/bed.wav", {
+      audio_key: "audio/bed.wav", applied: ["passthrough:no-runpod-secrets"], degraded: "no-runpod-secrets",
+    });
+    expect(next).toBe("audio/bed.wav"); // unchanged bed
+    expect(m.degraded).toEqual(["MODULE_AUDIO_MASTER: no-runpod-secrets"]);
+    expect(m.applied).toEqual(["passthrough:no-runpod-secrets"]);
+  });
+
+  it("an empty audio_key from a module keeps the prior bed (never drops it)", () => {
+    const m = masterState();
+    const next = applyMasterOutput(m, "audio/bed.wav", { audio_key: "", applied: [] });
+    expect(next).toBe("audio/bed.wav");
+    expect(m.idx).toBe(1);
+  });
+
+  it("degradeMasterStep passes the bed through, records the reason against the step, advances", () => {
+    const m = masterState({ chain: ["MODULE_A", "MODULE_B"], idx: 1, poll: "tok", attempts: 2 });
+    degradeMasterStep(m, "module not bound");
+    expect(m.degraded).toEqual(["MODULE_B: module not bound"]);
+    expect(m.idx).toBe(2);
+    expect(m.poll).toBeUndefined();
+    expect(m.attempts).toBe(0);
+    expect(masterChainDone(m)).toBe(true);
+  });
+});
+
+describe("filmSeconds (master length hint)", () => {
+  it("sums scene durations", () => {
+    expect(filmSeconds({ scenes: [{ shot_id: "s1", prompt: "", seconds: 3 }, { shot_id: "s2", prompt: "", seconds: 4 }] })).toBe(7);
+  });
+  it("is undefined when there are no durations", () => {
+    expect(filmSeconds({ scenes: [] })).toBeUndefined();
+    expect(filmSeconds({ scenes: [{ shot_id: "s1", prompt: "", seconds: 0 }] })).toBeUndefined();
+  });
+});
+
+describe("master constants", () => {
+  it("bounds step retries and the stall ceiling", () => {
+    expect(MASTER_STEP_MAX_ATTEMPTS).toBeGreaterThanOrEqual(1);
+    expect(MASTER_STALL_SECONDS).toBeGreaterThan(0);
+  });
+});
+
+// End-to-end master phase: advanceFilmJob drives a `master` module over the audio bed (after assemble,
+// before mux), folds the mastered bed back into job.audio_key, then muxes. FAIL-SAFE: a master miss
+// passes the bed through and STILL muxes -- the render never fails on a polish step (#249 / #77).
+function masterEnv(
+  job: FilmJob,
+  invokeResponses: Array<{ status?: number; body?: object }>,
+  pollResponses: Array<{ status?: number; body?: object }> = [],
+) {
+  const filmDoc = filmJobDocKey(job.film_id);
+  let stored = JSON.stringify(job);
+  let invokeCall = 0, pollCall = 0;
+  const vpcCalls: string[] = [];
+  const env = {
+    DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+    R2_RENDERS: {
+      get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+      put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+      head: async () => null,
+      list: async () => ({ objects: [], truncated: false }),
+    },
+    // The master module: 404 on /module.json (so the film.finish/notify discovery in transitionToDone
+    // skips it -- it is not those hooks), and a scripted /invoke + /poll for the master chain.
+    MODULE_AUDIO_MASTER: {
+      fetch: async (url: string) => {
+        const u = String(url);
+        if (u.includes("/module.json")) return new Response("not found", { status: 404 });
+        if (u.includes("/invoke")) {
+          const r = invokeResponses[Math.min(invokeCall, invokeResponses.length - 1)]; invokeCall += 1;
+          return new Response(JSON.stringify(r.body ?? {}), { status: r.status ?? 200, headers: { "content-type": "application/json" } });
+        }
+        if (u.includes("/poll")) {
+          const r = pollResponses[Math.min(pollCall, pollResponses.length - 1)]; pollCall += 1;
+          return new Response(JSON.stringify(r.body ?? {}), { status: r.status ?? 200, headers: { "content-type": "application/json" } });
+        }
+        return new Response("{}", { status: 404 });
+      },
+    },
+    VIDEO_FINISH_VPC: { fetch: async (input: Request | string) => { vpcCalls.push(typeof input === "string" ? input : input.url); return new Response(JSON.stringify({ ok: true, key: "renders/film-master/muxed.mp4" }), { status: 200, headers: { "content-type": "application/json" } }); } },
+    R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+    R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+  } as unknown as Env;
+  return { env, vpcCalls, read: () => JSON.parse(stored) as FilmJob };
+}
+
+const masterJob = (): FilmJob => ({
+  film_id: "film-master", project: "neon", bundle_key: "b",
+  scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+  motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+  keyframe_binding: null, phase: "master",
+  silent_film_key: "renders/film-master/film.mp4",
+  audio_key: "renders/neon/audio/bed.wav",
+  master: { chain: ["MODULE_AUDIO_MASTER"], idx: 0, applied: [], degraded: [] },
+  created_at: Date.now(),
+});
+
+describe("advanceFilmJob master phase (pre-mux audio mastering)", () => {
+  it("a synchronous master folds the mastered bed, records applied, then muxes -> done", async () => {
+    const { env, vpcCalls, read } = masterEnv(masterJob(), [
+      { body: { ok: true, output: { audio_key: "renders/neon/audio/bed_mastered.wav", applied: ["music-upscale:soxr48k", "loudnorm:-14LUFS"] } } },
+    ]);
+    const r = await advanceFilmJob(env, "film-master");
+    const job = read();
+    expect(job.audio_key).toBe("renders/neon/audio/bed_mastered.wav"); // the MASTERED bed is what gets muxed
+    expect(job.master?.applied).toEqual(["music-upscale:soxr48k", "loudnorm:-14LUFS"]);
+    expect(job.master?.degraded).toEqual([]);
+    expect(vpcCalls.length).toBe(1);     // the mux ran (with the mastered bed)
+    expect(r?.job.phase).toBe("done");
+  });
+
+  it("an async master parks on its poll token (tick 1), then folds + muxes on completion (tick 2)", async () => {
+    const { env, vpcCalls, read } = masterEnv(
+      masterJob(),
+      [{ body: { ok: true, pending: true, poll: "tok-1" } }],
+      [{ body: { ok: true, output: { audio_key: "renders/neon/audio/bed_mastered.wav", applied: ["loudnorm:-14LUFS"] } } }],
+    );
+    await advanceFilmJob(env, "film-master");
+    const mid = read();
+    expect(mid.phase).toBe("master");                 // still mastering
+    expect(mid.master?.poll).toBe("tok-1");
+    expect(mid.audio_key).toBe("renders/neon/audio/bed.wav"); // bed not yet rewritten
+    expect(vpcCalls.length).toBe(0);                  // mux not reached yet
+    const r2 = await advanceFilmJob(env, "film-master");
+    const done = read();
+    expect(done.audio_key).toBe("renders/neon/audio/bed_mastered.wav");
+    expect(vpcCalls.length).toBe(1);
+    expect(r2?.job.phase).toBe("done");
+  });
+
+  it("a module soft-degrade (ok:true + passthrough) muxes the ORIGINAL bed, records the reason, never fails", async () => {
+    const { env, vpcCalls, read } = masterEnv(masterJob(), [
+      { body: { ok: true, output: { audio_key: "renders/neon/audio/bed.wav", applied: ["passthrough:no-runpod-secrets"], degraded: "no-runpod-secrets" } } },
+    ]);
+    const r = await advanceFilmJob(env, "film-master");
+    const job = read();
+    expect(job.audio_key).toBe("renders/neon/audio/bed.wav");          // UNCHANGED original bed
+    expect(job.master?.degraded).toEqual(["MODULE_AUDIO_MASTER: no-runpod-secrets"]);
+    expect(vpcCalls.length).toBe(1);                                   // STILL muxed (never dropped)
+    expect(r?.job.phase).toBe("done");                                 // NOT failed
+  });
+
+  it("a terminal master failure (HTTP 400) degrades to passthrough and STILL muxes -> done (never fails the render)", async () => {
+    const { env, vpcCalls, read } = masterEnv(masterJob(), [
+      { status: 400, body: { ok: false, error: "bad request" } },
+    ]);
+    const r = await advanceFilmJob(env, "film-master");
+    const job = read();
+    expect(job.audio_key).toBe("renders/neon/audio/bed.wav");          // original bed muxed
+    expect(job.master?.degraded?.[0]).toMatch(/invoke failed/);
+    expect(vpcCalls.length).toBe(1);
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.phase).not.toBe("failed");
+  });
+});
+
+describe("advanceFilmJob speech phase: dialogue -> speech (clean audio) -> finish lip-syncs the CLEANED audio", () => {
+  const job = {
+    film_id: "film-speech-1",
+    project: "p",
+    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+    phase: "dialogue" as const,
+    clips_only: true, // stop after finish -> done (skip assemble), so the tick ends cleanly
+    dialogue_poll: "tok",
+    dialogue_lines: [{ shot_id: "shot_01", text: "We're here.", voice_id: "orion" }],
+    finish_shots: [{ shot_id: "shot_01", clip_key: "renders/p/clips/shot_01.mp4", chain: ["MODULE_LIPSYNC"], idx: 0, status: "pending" as const, applied: [] }],
+  };
+
+  function speechEnv() {
+    const finishInputs: unknown[] = [];
+    const speechInputs: unknown[] = [];
+    const env = {
+      DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey("film-speech-1") ? { text: async () => JSON.stringify(job) } : null),
+        head: async () => null,
+        put: async () => {},
+        list: async () => ({ objects: [] }),
+      },
+      MODULE_DIALOGUE: moduleFetcher(
+        { name: "dialogue-gen", version: "0.1.0", api: "vivijure-module/1", hooks: ["dialogue"], ui: { order: 10 } },
+        { poll: () => ({ ok: true, output: { project: "p", audio: [{ shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01.wav", voice_id: "orion" }], applied: ["dialogue:aura-1"] } }) },
+      ),
+      MODULE_SPEECH_UPSCALE: moduleFetcher(
+        { name: "speech-upscale", version: "0.1.0", api: "vivijure-module/1", hooks: ["speech"], config_schema: { enable: { type: "bool", default: false } }, ui: { section: "speech", order: 10 } },
+        { invoke: (body) => { speechInputs.push((body as { input: unknown }).input); return { ok: true, output: { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_enh.wav", applied: ["speech-upscale:resemble-enhance"] } }; } },
+      ),
+      MODULE_LIPSYNC: moduleFetcher(
+        { name: "finish-lipsync", version: "0.1.0", api: "vivijure-module/1", hooks: ["finish"], ui: { section: "finish", order: 15 } },
+        { invoke: (body) => { finishInputs.push((body as { input: unknown }).input); return { ok: true, output: { shot_id: "shot_01", clip_key: "renders/p/clips/shot_01_ls.mp4", out_fps: 16, frames: 48, applied: ["lipsync:v15"] } }; } },
+      ),
+    } as unknown as Env;
+    return { env, finishInputs, speechInputs };
+  }
+
+  it("speech module enhances the dialogue audio; lip-sync then drives off the CLEANED key", async () => {
+    const { env, finishInputs, speechInputs } = speechEnv();
+    const r = await advanceFilmJob(env, "film-speech-1");
+    // the speech module received the ORIGINAL dialogue audio to enhance
+    expect(speechInputs.length).toBe(1);
+    expect((speechInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01.wav");
+    // dialogue_audio was rewritten to the ENHANCED key
+    expect(r?.job.dialogue_audio).toEqual({ shot_01: "renders/p/dialogue/shot_01_enh.wav" });
+    // lip-sync (finish) received the ENHANCED audio_key -- the whole point of inserting the speech phase
+    expect(finishInputs.length).toBe(1);
+    expect((finishInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01_enh.wav");
+    expect(r?.job.phase).toBe("done");
+  });
+});
+
+// #14: with TWO film.finish modules chained (subtitle ui.order=5, then film-titles ui.order=10), the
+// shared dispatchChain used to reuse ONE presigned GET/PUT pair for the whole chain, so step 2 re-read
+// the ORIGINAL film and overwrote step 1's output (captions lost). The fix presigns a FRESH GET (of the
+// PRIOR step's output) + PUT per serving step, so step 2 reads what step 1 wrote.
+describe("advanceFilmJob film.finish chain: step 2 reads step 1's OUTPUT, not the original (#14)", () => {
+  type FFInput = { film_key?: string; video_url?: string; output_key?: string; output_url?: string };
+  const filmFinishJob = (): FilmJob => ({
+    film_id: "film-ff", project: "neon", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {},
+    keyframe_binding: null, phase: "mux",
+    silent_film_key: "renders/neon/film.mp4",
+    // audio_key UNDEFINED: enterMuxPhase short-circuits (film_key = silent_film_key) straight to
+    // transitionToDone -> applyFilmFinish, so the film.finish chain runs without the mux VPC.
+    created_at: Date.now(),
+  });
+
+  function filmFinishEnv(job: FilmJob) {
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const subtitleInputs: FFInput[] = [];
+    const titlesInputs: FFInput[] = [];
+    // Each fake film.finish module returns the key it was told to write to (its `output_key`), exactly
+    // as a real module does after writing the carded film there.
+    const ffModule = (name: string, order: number, sink: FFInput[], tag: string) => moduleFetcher(
+      { name, version: "0.1.0", api: "vivijure-module/1", hooks: ["film.finish"], ui: { section: "film.finish", order } },
+      { invoke: (body) => { const inp = (body as { input: FFInput }).input; sink.push(inp); return { ok: true, output: { film_key: inp.output_key, applied: [tag] } }; } },
+    );
+    const env = {
+      DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        head: async () => null,
+        list: async () => ({ objects: [], truncated: false }),
+      },
+      MODULE_SUBTITLE: ffModule("subtitle", 5, subtitleInputs, "subtitle:burned"),
+      MODULE_FILM_TITLES: ffModule("film-titles", 10, titlesInputs, "titles:cards"),
+      R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+    } as unknown as Env;
+    return { env, subtitleInputs, titlesInputs, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  it("step 1 reads the original film; step 2 reads step 1's output (captions survive the title cards)", async () => {
+    const { env, subtitleInputs, titlesInputs, read } = filmFinishEnv(filmFinishJob());
+    const r = await advanceFilmJob(env, "film-ff");
+
+    expect(subtitleInputs.length).toBe(1);
+    expect(titlesInputs.length).toBe(1);
+
+    // Step 1 (subtitle) reads the ORIGINAL muxed film.
+    expect(subtitleInputs[0].video_url).toContain("/renders/neon/film.mp4?");
+    const step1Out = subtitleInputs[0].output_key!; // the key step 1 wrote (and returned as film_key)
+
+    // Step 2 (film-titles) MUST read step 1's OUTPUT, not the original (the #14 regression).
+    expect(titlesInputs[0].film_key).toBe(step1Out);
+    expect(titlesInputs[0].video_url).toContain(step1Out);
+    expect(titlesInputs[0].video_url).not.toContain("/renders/neon/film.mp4?");
+    // And step 2 writes to a FRESH key (its own presigned PUT), distinct from step 1's.
+    expect(titlesInputs[0].output_key).not.toBe(step1Out);
+
+    // The film ends on the LAST step's output, and the chain recorded both modules.
+    const done = read();
+    expect(done.film_key).toBe(titlesInputs[0].output_key);
+    expect(done.film_finish?.applied).toEqual(["subtitle", "film-titles"]);
+    expect(r?.job.phase).toBe("done");
+  });
+});
+
+describe("filmProgressMarker (#136 progress fingerprint)", () => {
+  const base: FilmJob = {
+    film_id: "f", project: "p", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }, { shot_id: "shot_02", prompt: "b", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {}, keyframe_binding: null,
+    phase: "clips", created_at: 0,
+  };
+
+  it("clips: counts done clip shots in the marker", () => {
+    const clipJob = { shots: [{ status: "done" }, { status: "pending" }] } as unknown as Parameters<typeof filmProgressMarker>[1];
+    expect(filmProgressMarker({ ...base, phase: "clips" }, clipJob)).toBe("clips:1");
+  });
+
+  it("clips: marker advances as more shots finish (monotonic forward progress)", () => {
+    const one = { shots: [{ status: "done" }, { status: "pending" }] } as unknown as Parameters<typeof filmProgressMarker>[1];
+    const two = { shots: [{ status: "done" }, { status: "done" }] } as unknown as Parameters<typeof filmProgressMarker>[1];
+    expect(filmProgressMarker({ ...base }, one)).not.toBe(filmProgressMarker({ ...base }, two));
+    expect(filmProgressMarker({ ...base }, two)).toBe("clips:2");
+  });
+
+  it("finish: counts done finish shots", () => {
+    const job: FilmJob = {
+      ...base, phase: "finish",
+      finish_shots: [
+        { shot_id: "shot_01", clip_key: "k1", chain: ["M"], idx: 0, status: "done", applied: [] },
+        { shot_id: "shot_02", clip_key: "k2", chain: ["M"], idx: 0, status: "pending", applied: [] },
+      ] as FinishShot[],
+    };
+    expect(filmProgressMarker(job, null)).toBe("finish:1");
+  });
+
+  it("a phase with no per-shot fan-out reports :0 (stall window runs from phase start, as before)", () => {
+    expect(filmProgressMarker({ ...base, phase: "keyframe" }, null)).toBe("keyframe:0");
+    expect(filmProgressMarker({ ...base, phase: "assemble" }, null)).toBe("assemble:0");
+  });
+});
+
+describe("advanceFilmJob re-stamps last_progress_at on a tick (#136)", () => {
+  const film = (): FilmJob => ({
+    film_id: "film-136-stamp", project: "neon", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }],
+    motion_backend: "own-gpu", motion_config: {}, finish_config: {}, keyframe_binding: null,
+    phase: "finish", clips_only: true,
+    finish_shots: [
+      { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4", chain: ["MODULE_FINISH_RIFE"], configs: [{}], idx: 0, status: "done", applied: [] },
+    ] as FinishShot[],
+    created_at: Date.now() - 60_000,
+  });
+
+  it("sets last_progress_at + progress_marker after advancing", async () => {
+    const job = film();
+    const filmDoc = filmJobDocKey(job.film_id);
+    let stored = JSON.stringify(job);
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
+        list: async () => ({ objects: [], truncated: false }),
+      },
+    } as unknown as Env;
+    await advanceFilmJob(env, job.film_id);
+    const after = JSON.parse(stored) as FilmJob;
+    expect(typeof after.last_progress_at).toBe("number");
+    expect(typeof after.progress_marker).toBe("string");
+    expect(after.last_progress_at as number).toBeGreaterThan(job.created_at);
   });
 });

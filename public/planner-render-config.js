@@ -1,11 +1,43 @@
-// Registry-driven render module config panel for the planner Render step.
-// Renders controls from installed modules' config_schema (keyframe, motion.backend, finish).
+// Registry-driven render module config panel for the planner Render step. The hook list is a
+// projection of the live catalog (GET /api/modules `catalog`); it renders each installed module's
+// config_schema for keyframe, motion.backend, speech, finish, master, and film.finish.
 (function (global) {
-  const HOOKS = [
-    { hook: "keyframe", title: "Keyframe", pickOne: true },
-    { hook: "motion.backend", title: "Motion", pickOne: true },
-    { hook: "finish", title: "Finish", chain: true },
-  ];
+  // The render-config panel is a PROJECTION of the live hook catalog (GET /api/modules `catalog`),
+  // not a hardcoded hook list. Every catalog hook renders here EXCEPT the ones intentionally
+  // projected on their own bespoke planner / cast surfaces (so they are never double-rendered):
+  //   plan.enhance -> the "auto-direct shots" toolbar button (scene editor)
+  //   score        -> the audio-bed stage (music / narration / beat-sync)
+  //   dialogue     -> per-shot dialogue lines (scene editor) + per-cast-member voice (cast page)
+  //   cast.image   -> the cast-prep page
+  //   notify       -> the "enable notifications" render-step toggle
+  // Net panel hooks: keyframe, motion.backend, speech, finish, master, film.finish -- all six
+  // projected from the catalog, none hardcoded. A new backend chain / pick_one hook outside the
+  // skip set surfaces here automatically (no frontend change needed).
+  const PANEL_SKIP_HOOKS = new Set([
+    "plan.enhance",
+    "score",
+    "dialogue",
+    "cast.image",
+    "notify",
+  ]);
+
+  // Display order for the panel only (pipeline order: keyframe -> motion -> dialogue -> speech ->
+  // finish, then the film-level audio master and the post-mux film.finish cards). This is a
+  // presentation preference; the SET of hooks and their cardinality come from the catalog, and any
+  // catalog hook not named here still renders (appended in catalog order) so nothing silently drops.
+  const PANEL_ORDER = ["keyframe", "motion.backend", "speech", "finish", "master", "film.finish"];
+
+  function panelHooks(catalog) {
+    const rank = (name) => {
+      const i = PANEL_ORDER.indexOf(name);
+      return i === -1 ? PANEL_ORDER.length : i;
+    };
+    return (Array.isArray(catalog) ? catalog : [])
+      .filter((h) => h && h.name && !PANEL_SKIP_HOOKS.has(h.name))
+      .map((h, i) => ({ hook: h.name, pickOne: h.cardinality === "pick_one", _i: i }))
+      .sort((a, b) => rank(a.hook) - rank(b.hook) || a._i - b._i)
+      .map(({ hook, pickOne }) => ({ hook, pickOne }));
+  }
 
   function moduleLabel(mod) {
     if (!mod) return "";
@@ -98,7 +130,13 @@
     const fields = document.createElement("div");
     fields.className = "planner-overrides-fields";
     const schema = mod.config_schema || {};
-    const keys = Object.keys(schema).filter((k) => k !== "quality_tier" && k !== "quality");
+    // quality_tier / quality are the core-owned render tier (set by the tier picker above), and
+    // scope:"install" fields are operator-set-once knobs that live on the Settings page (GET/PATCH
+    // /api/modules/:name/config), NOT per-render config. Skip both here so an install field never
+    // double-renders: it belongs only on Settings, the render panel only shows per-render knobs.
+    const keys = Object.keys(schema).filter(
+      (k) => k !== "quality_tier" && k !== "quality" && schema[k] && schema[k].scope !== "install",
+    );
     if (!keys.length) {
       const p = document.createElement("p");
       p.className = "planner-overrides-hint";
@@ -195,36 +233,51 @@
 
     await global.plannerRegistry.load();
     const resp = await fetch("/api/modules");
-    const data = resp.ok ? await resp.json() : { modules: [], hooks: {} };
+    const data = resp.ok ? await resp.json() : { modules: [], hooks: {}, catalog: [] };
     renderTierPicker(data.render);
+
     const byName = Object.fromEntries((data.modules || []).map((m) => [m.name, m]));
+    const hooks = panelHooks(data.catalog);
+
+    // Per-hook module lists come from data.hooks, which the core already sorted by ui.order then
+    // name (registry.indexByHook). We consume that order VERBATIM rather than re-sorting here, so
+    // the panel's chain order is byte-identical to the backend fold order (a client-side
+    // localeCompare could diverge by browser locale; the server sort is the single source of truth).
     const cache = {};
-    for (const h of HOOKS) {
+    for (const h of hooks) {
       const order = (data.hooks && data.hooks[h.hook]) || [];
       cache[h.hook] = order.map((n) => byName[n]).filter(Boolean);
     }
     global.plannerRegistry._cacheForRenderConfig = cache;
 
     root.innerHTML = "";
-    if (motionWrap) motionWrap.innerHTML = "";
+    if (motionWrap) {
+      motionWrap.innerHTML = "";
+      motionWrap.hidden = false;
+    }
 
-    const keyframeMods = cache.keyframe || [];
-    const motionMods = cache["motion.backend"] || [];
-    const finishMods = cache.finish || [];
-
-    if (!keyframeMods.length) {
+    if (!(cache.keyframe || []).length) {
       root.textContent = "no keyframe module installed; bind MODULE_KEYFRAME to render.";
+      if (motionWrap) motionWrap.hidden = true;
       return;
     }
 
-    for (const mod of keyframeMods) root.appendChild(renderModuleSection(mod));
-
-    const picker = renderMotionPicker(motionMods, motionMods[0] && motionMods[0].name);
-    if (picker && motionWrap) motionWrap.appendChild(picker);
-    else if (motionWrap) motionWrap.hidden = true;
-
-    for (const mod of motionMods) root.appendChild(renderModuleSection(mod));
-    for (const mod of finishMods) root.appendChild(renderModuleSection(mod));
+    // Render every panel hook's module config sections in PANEL_ORDER. motion.backend additionally
+    // gets a backend <select> (own-GPU vs cloud) in its own slot above the sections. master and
+    // film.finish now render here because the hook list is the catalog, not a fixed array.
+    let motionShown = false;
+    for (const h of hooks) {
+      const mods = cache[h.hook] || [];
+      if (h.hook === "motion.backend") {
+        const picker = renderMotionPicker(mods, mods[0] && mods[0].name);
+        if (picker && motionWrap) {
+          motionWrap.appendChild(picker);
+          motionShown = true;
+        }
+      }
+      for (const mod of mods) root.appendChild(renderModuleSection(mod));
+    }
+    if (motionWrap && !motionShown) motionWrap.hidden = true;
   }
 
   function readFieldValue(el) {

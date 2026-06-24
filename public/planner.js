@@ -205,6 +205,23 @@ function collectRenderOverrides() {
   return window.plannerRenderConfig.collectForSubmit(readVal("#planner-render-overrides"));
 }
 
+// Film title + credit-card TEXT for the film.finish chain. Shapes FilmTitleSpec{text,subtitle?} +
+// FilmCreditSpec{lines}: the title rides only with a non-empty text (a subtitle alone is dropped --
+// FilmTitleSpec requires text), and credits are the non-blank textarea lines. Returns undefined when
+// nothing is set, so an empty section never widens the submit body (the core then sets no cards).
+function collectFilmTitles() {
+  const title = readVal("#planner-film-title").trim();
+  const subtitle = readVal("#planner-film-subtitle").trim();
+  const lines = readVal("#planner-film-credits")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const out = {};
+  if (title) out.title = subtitle ? { text: title, subtitle } : { text: title };
+  if (lines.length) out.credits = { lines };
+  return Object.keys(out).length ? out : undefined;
+}
+
 const FIELD_HELP = {};
 
 let _fieldHelpPop = null;
@@ -663,6 +680,9 @@ function collectRenderStageState() {
     renderOverridesText: overridesEl ? overridesEl.value : "",
     moduleOverrides: window.plannerRenderConfig ? window.plannerRenderConfig.collect() : null,
     keyframesOnly: kfOnlyEl ? kfOnlyEl.checked : false,
+    filmTitle: readVal("#planner-film-title"),
+    filmSubtitle: readVal("#planner-film-subtitle"),
+    filmCredits: readVal("#planner-film-credits"),
     // v0.44.0: persist the render start timestamp so an elapsed +
     // ETA computation survives a page refresh. null means "no in-
     // flight render observed yet"; the updater anchors it lazily.
@@ -940,6 +960,20 @@ function restoreRenderStagePanel(saved) {
   }
   const kfOnlyEl = $("#planner-keyframes-only");
   if (kfOnlyEl) kfOnlyEl.checked = !!saved.keyframesOnly;
+  // Restore the title / credit-card text, and open the section if any was set so the
+  // restored values are visible rather than hidden behind a collapsed <details>.
+  const setFilmField = (sel, v) => {
+    if (typeof v !== "string") return;
+    const el = $(sel);
+    if (el) el.value = v;
+  };
+  setFilmField("#planner-film-title", saved.filmTitle);
+  setFilmField("#planner-film-subtitle", saved.filmSubtitle);
+  setFilmField("#planner-film-credits", saved.filmCredits);
+  if ((saved.filmTitle || saved.filmSubtitle || saved.filmCredits || "").toString().trim().length > 0) {
+    const ft = $(".planner-film-titles");
+    if (ft) ft.open = true;
+  }
   if (typeof saved.startedAt === "number" && saved.startedAt > 0) {
     renderState.startedAt = saved.startedAt;
   }
@@ -1458,6 +1492,9 @@ function applyProjectPrefs(prefs) {
   if (typeof prefs.renderOverridesText === "string") {
     setVal("#planner-render-overrides", prefs.renderOverridesText);
   }
+  setVal("#planner-film-title", prefs.filmTitle);
+  setVal("#planner-film-subtitle", prefs.filmSubtitle);
+  setVal("#planner-film-credits", prefs.filmCredits);
 }
 
 function gatherProjectPrefs() {
@@ -1480,6 +1517,9 @@ function gatherProjectPrefs() {
     seed: readVal("#planner-seed"),
     faceLockMode: readVal("#planner-face-lock-mode"),
     renderOverridesText: readVal("#planner-render-overrides"),
+    filmTitle: readVal("#planner-film-title"),
+    filmSubtitle: readVal("#planner-film-subtitle"),
+    filmCredits: readVal("#planner-film-credits"),
   };
 }
 
@@ -3742,6 +3782,12 @@ async function submitRender() {
   // audio_key from the job input, downloads, and muxes via
   // export_film(with_audio=True).
   if (planState.audioKey) reqBody.audioKey = planState.audioKey;
+  // Forward the title / credit-card TEXT. The film.finish chain (film-titles) reads it off the job
+  // (job.film_titles -> FilmFinishInput.title/credits); without this the cards never rendered from the
+  // planner. Omitted when empty, and the core ignores it on a keyframes-only preview (no assembled film
+  // to card), mirroring audioKey.
+  const filmTitles = collectFilmTitles();
+  if (filmTitles && !keyframesOnly) reqBody.film_titles = filmTitles;
   // v0.55.0: pin the render row to the active project so the history
   // list can filter by project. Skipped on transient (no-project)
   // submits, which matches the pre-0.55 behavior.
@@ -4219,6 +4265,12 @@ function updateRenderProgress(data) {
 // absent. Returns null when neither signal is available, which the
 // caller treats as "show the bar at 0% with 'computing...' ETA."
 function computeProgressFraction(out) {
+  // #115: the phase-aware overall-completion fraction lives in the testable
+  // render-eta.js module (window.renderEta). The old inline scene-count logic
+  // returned 0 for the whole keyframe phase and null for finish/assemble/mux,
+  // so the UI sat at "?% eta computing..." for big stretches of a render. Keep
+  // a tiny inline fallback so a missing script never throws (coarser guess).
+  if (window.renderEta) return window.renderEta.progressFraction(out);
   if (!out || typeof out !== "object") return null;
   if (typeof out.progress === "number" && out.progress >= 0 && out.progress <= 1) {
     return out.progress;
@@ -4228,27 +4280,7 @@ function computeProgressFraction(out) {
     && typeof out.scene_total === "number"
     && out.scene_total > 0
   ) {
-    // scene_index is 1-based from the GPU. (scene_index - 1) shots
-    // completed gives a conservative estimate; once the GPU starts
-    // writing out.progress this branch becomes a fallback only.
-    const completed = Math.max(0, out.scene_index - 1);
-    return Math.min(1, completed / out.scene_total);
-  }
-  // v0.132.0: the serverless pod streams progress as log TEXT (out.log lines
-  // like "Scene 1/3 ..."), not structured scene_index/scene_total, so the two
-  // branches above never fired and the ETA was stuck at "computing...". Parse
-  // the latest "Scene N/M" out of the log and use the same completed-scene
-  // fraction (N-1)/M. Scan from the end for the most recent counter.
-  if (Array.isArray(out.log)) {
-    for (let i = out.log.length - 1; i >= 0; i--) {
-      const m = String(out.log[i]).match(/Scene\s+(\d+)\s*\/\s*(\d+)/i);
-      if (m) {
-        const idx = parseInt(m[1], 10);
-        const tot = parseInt(m[2], 10);
-        if (tot > 0) return Math.min(1, Math.max(0, idx - 1) / tot);
-        break;
-      }
-    }
+    return Math.min(1, Math.max(0, out.scene_index - 1) / out.scene_total);
   }
   return null;
 }
@@ -4285,20 +4317,15 @@ function refreshProgressWidget(out) {
   if (pctEl) pctEl.textContent = pct + "%";
   if (fillEl) fillEl.style.width = pct + "%";
 
-  // ETA: linear extrapolation from elapsed. Require at least 3% of
-  // the work done before we trust the estimate; the very early
-  // numbers are dominated by model-load time and produce wild over-
-  // estimates that would scare a user away. Below 3% the bar shows
-  // but the ETA stays "computing..." so the user has a visual sense
-  // of motion without a misleading number.
+  // ETA: linear extrapolation, computed in the testable render-eta.js module
+  // (window.renderEta.remainingMs). It withholds a number until we are
+  // confident (>= 3% done and >= 10s elapsed) so early model-load skew never
+  // produces a wild, scary estimate; null renders as "computing...".
   if (etaEl) {
-    if (frac < 0.03 || elapsedMs < 10_000) {
-      etaEl.textContent = "computing...";
-    } else {
-      const totalEstMs = elapsedMs / frac;
-      const remainingMs = Math.max(0, totalEstMs - elapsedMs);
-      etaEl.textContent = "~" + formatDuration(remainingMs);
-    }
+    const remaining = window.renderEta
+      ? window.renderEta.remainingMs(frac, elapsedMs)
+      : null;
+    etaEl.textContent = remaining === null ? "computing..." : "~" + formatDuration(remaining);
   }
 }
 

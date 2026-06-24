@@ -2,11 +2,12 @@ import { describe, it, expect } from "vitest";
 import { clampDuration, buildSeedanceBody, extractVideoUrl, clipKey, encodePoll, decodePoll, runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS } from "../modules/seedance/src/seedance";
 
 describe("seedance pure logic", () => {
-  it("clampDuration bounds the shot length into Seedance range", () => {
+  it("clampDuration bounds the shot length into Seedance's [4,12] range (min 4: the endpoint 400s on 3, #279)", () => {
     expect(clampDuration(5)).toBe(5);
     expect(clampDuration(0)).toBe(5); // 0 -> default 5
     expect(clampDuration(99)).toBe(12);
-    expect(clampDuration(1)).toBe(3);
+    expect(clampDuration(1)).toBe(4); // below-range snaps UP to 4 (was 3, which the endpoint rejects)
+    expect(clampDuration(3)).toBe(4); // 3 was the #279-shaped break
     expect(clampDuration(7.6)).toBe(8);
   });
 

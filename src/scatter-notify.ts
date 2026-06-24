@@ -2,6 +2,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, servingForHook, validateConfig } from "./modules/registry";
+import { loadInstallConfig } from "./operator-config";
 import type { NotifyInput, NotifyOutput } from "./modules/types";
 import { presignR2Get } from "./r2-presign";
 import type { ScatterJob } from "./scatter-orchestrator-types";
@@ -22,17 +23,19 @@ export async function fireNotifyForScatter(env: Env, job: ScatterJob): Promise<v
       film_id: job.scatter_id,
       project: job.project,
       download_url,
-      user_email: job.user_email,
     };
-    const context = { project: job.project, job_id: job.scatter_id, user_email: job.user_email };
+    const context = { project: job.project, job_id: job.scatter_id };
     for (const m of notifiers) {
       const fetcher = asFetcher(envRec[m.binding]);
       if (!fetcher) continue;
       try {
+        // Inject the operator-set install-config (e.g. notify-email's notify_email recipient) as the
+        // user config, then clamp through the contract; render-scope fields stay at their defaults.
+        const installConfig = await loadInstallConfig(env, m.name, m.config_schema);
         await invokeModule<NotifyInput, NotifyOutput>(fetcher, {
           hook: "notify",
           input,
-          config: validateConfig(m.config_schema ?? {}, {}),
+          config: validateConfig(m.config_schema ?? {}, installConfig),
           context,
         });
       } catch { /* best-effort */ }

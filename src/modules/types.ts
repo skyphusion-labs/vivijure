@@ -1,4 +1,4 @@
-// The Vivijure module contract (vivijure-module/1).
+// The Vivijure module contract (vivijure-module/2).
 //
 // This is the typed boundary between the studio CORE and the opt-in MODULE workers that plug into
 // it. The core invokes hooks; it does not know who answers. A module declares which hooks it serves
@@ -8,7 +8,16 @@
 // it must stay portable (a module in another repo vendors this exact contract).
 
 /** The contract version a module targets. Bumped only on a breaking change to these shapes. */
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
+// Contract versions the host + conformance ACCEPT. The host is /2 (the identity strip dropped the
+// legacy per-operator identity field from NotifyInput + InvokeContext -- a breaking narrowing for a
+// consumer that read it, so change-control bumps the version). /1 is accepted TRANSITIONALLY so
+// first-party /1 modules keep loading while they migrate: they never read that field, so a /2 host
+// (which sends none) is functionally fine for them. A simultaneous 28-module cutover would be riskier.
+export type ModuleApi = "vivijure-module/1" | "vivijure-module/2";
+// A SET of currently-supported contract epochs (a deprecation window), not a brittle exact-match:
+// the host loads any module whose api is in the set, so /1 modules keep working while they migrate.
+export const SUPPORTED_MODULE_APIS: ReadonlySet<ModuleApi> = new Set(["vivijure-module/1", "vivijure-module/2"]);
 
 /** The pipeline extension points. `pick one` hooks resolve to a single module; `chain` hooks run
  *  every installed module in `ui.order`, each consuming the previous output. */
@@ -18,9 +27,11 @@ export type HookName =
   | "finish"         // post-process a clip: interpolation / upscale / face restore. Chainable.
   | "score"          // add audio to a film: music / narration / beat-sync. Chainable.
   | "dialogue"       // per-shot dialogue lines -> TTS audio (one voice per cast member). Pick one.
+  | "speech"         // per-shot dialogue audio -> cleaned / enhanced dialogue audio. Post-dialogue, pre-finish. Chainable.
   | "plan.enhance"   // expand a storyboard before render: LLM auto-direction. Chainable.
   | "cast.image"     // character portrait + bible -> LoRA training reference images. Cast-prep, pick one.
   | "notify"         // film done -> deliver a render-complete notification (email / webhook / ...). Chain.
+  | "master"         // assembled film's audio bed -> mastered audio (music upscale + loudness). Pre-mux. Chain.
   | "film.finish";   // assembled+muxed film -> film with title / credit cards. Post-mux, before done. Chain.
 
 export const HOOK_NAMES: readonly HookName[] = [
@@ -29,9 +40,11 @@ export const HOOK_NAMES: readonly HookName[] = [
   "finish",
   "score",
   "dialogue",
+  "speech",
   "plan.enhance",
   "cast.image",
   "notify",
+  "master",
   "film.finish",
 ];
 
@@ -42,9 +55,11 @@ export const HOOK_CARDINALITY: Record<HookName, "pick_one" | "chain"> = {
   finish: "chain",
   score: "chain",
   dialogue: "pick_one",
+  speech: "chain",
   "plan.enhance": "chain",
   "cast.image": "pick_one",
   notify: "chain",
+  master: "chain",
   "film.finish": "chain",
 };
 
@@ -56,13 +71,23 @@ export const HOOK_BLURBS: Record<HookName, string> = {
   finish: "interpolation / upscale / face restore",
   score: "music / narration / beat-sync",
   dialogue: "spoken lines -> per-character voice (TTS)",
+  speech: "clean / enhance dialogue audio",
   "plan.enhance": "LLM auto-direction",
   "cast.image": "character refs from a portrait + bible",
   notify: "render-complete notification (email / webhook)",
+  master: "film-level audio mastering: music upscale + loudness",
   "film.finish": "title / credit cards on the finished film",
 };
 
 // --------------------------------------------------------------------------- manifest
+
+/** Where a config field's value is sourced from.
+ *  - "render"  (default when omitted): per-render config, chosen at submit time (e.g. quality_tier).
+ *  - "install": operator-set-once, instance-wide config, persisted in the operator-config store and
+ *    injected at invoke time (e.g. notify-email's recipient address). The UI surfaces these on a
+ *    studio settings page, not the per-render panel. ADDITIVE: a field with no `scope` is "render",
+ *    so this marker narrows nothing -- every existing module + vendored /1 contract stays valid. */
+export type ConfigScope = "render" | "install";
 
 /** One configurable knob a module exposes. The UI renders the control from this; the core clamps
  *  the user's value against it before invoking. One declaration, one hop, same words down. */
@@ -74,10 +99,11 @@ export type ConfigField =
       max?: number;
       label?: string;
       enum_labels?: Record<string, string>;
+      scope?: ConfigScope;
     }
-  | { type: "bool"; default: boolean; label?: string }
-  | { type: "enum"; values: string[]; default: string; label?: string }
-  | { type: "string"; default: string; label?: string };
+  | { type: "bool"; default: boolean; label?: string; scope?: ConfigScope }
+  | { type: "enum"; values: string[]; default: string; label?: string; scope?: ConfigScope }
+  | { type: "string"; default: string; label?: string; scope?: ConfigScope };
 
 export type ConfigSchema = Record<string, ConfigField>;
 
@@ -98,7 +124,7 @@ export interface ModuleUi {
 export interface ModuleManifest {
   name: string; // unique module id
   version: string;
-  api: typeof MODULE_API;
+  api: ModuleApi;
   hooks: HookName[];
   provides?: Provides[];
   config_schema?: ConfigSchema;
@@ -111,7 +137,6 @@ export interface ModuleManifest {
 export interface InvokeContext {
   project: string;
   job_id: string;
-  user_email?: string;
 }
 
 /** The single entry point the core calls on a module: POST /invoke. */
@@ -202,6 +227,29 @@ export interface DialogueOutput {
   project: string;
   audio: DialogueShotAudio[];
   applied: string[];
+}
+
+// speech (v1) -----------------------------------------------------------------------------------
+
+/** What the core hands a `speech` module: ONE shot's dialogue audio to enhance / clean. The audio is
+ *  self-describing (a speech backend probes it), so this is deliberately minimal. The speech chain runs
+ *  AFTER the dialogue phase (the audio exists) and BEFORE finish (so a lip-sync finish module drives the
+ *  mouth from the cleaned audio). */
+export interface SpeechInput {
+  shot_id: string;
+  audio_key: string; // R2 key of the shot's dialogue audio (TTS), from job.dialogue_audio[shot_id]
+}
+
+/** What a `speech` module returns: the (maybe enhanced) dialogue audio plus what it did. On a real
+ *  enhancement `audio_key` is the NEW cleaned key; on an honest soft-degrade it is the input key passed
+ *  through unchanged, `applied` carries no fake tag, and `degraded` carries the reason. A speech step is
+ *  a POLISH step: it NEVER fails the render on a miss -- only malformed I/O fails loud (cf #249/#77). */
+export interface SpeechOutput {
+  shot_id: string;
+  audio_key: string;  // R2 key of the enhanced audio, or the input key passed through on a soft-degrade
+  applied: string[];  // e.g. ["speech-upscale:resemble-enhance"]; or [] on passthrough
+  degraded?: string;  // set ONLY when the audio was passed through because the work could not run
+                      // (disabled / backend down / no audio), carrying the reason; absent on success
 }
 
 // plan.enhance (v1) -----------------------------------------------------------------------------
@@ -333,12 +381,93 @@ export interface NotifyInput {
   project: string;
   download_url?: string; // presigned link to the finished film (the core presigns it)
   seconds?: number;      // film length, if known
-  user_email?: string;   // the film owner's address (for an email notifier)
 }
 
 /** What a `notify` module returns: the channels it delivered on (for the core's log / summary). */
 export interface NotifyOutput {
   delivered: string[]; // e.g. ["email:owner@example.com"]
+}
+
+// master (v1) -----------------------------------------------------------------------------------
+
+/** What the core hands a `master` module: the assembled film's AUDIO BED (the mixed score / narration
+ *  track), to polish at FILM level before the final mux. This is the audio sibling of `finish` (which
+ *  polishes a clip) and the dialogue/`speech` lane (which polishes per-shot voice): `master` operates
+ *  once, on the whole film's audio, AFTER the mix is built (score + narration) and BEFORE the audio is
+ *  muxed onto the silent film. `audio_key` is the R2 key of that bed; the core presigns a GET of it
+ *  (`audio_url`) and a PUT for the mastered output (`output_url` / `output_key`) so the module stays
+ *  CREDENTIALLESS and forwards them to its CPU container -- exactly as the subtitle / film.finish modules
+ *  get a presigned video_url + output_url. A music-video maker reaches for `master` as cleanly as a
+ *  dialogue maker reaches for the voice lane. */
+export interface MasterInput {
+  film_id: string;     // the film this bed belongs to (for the output-key convention + logs)
+  audio_key: string;   // R2 key of the assembled audio bed (the mix to master)
+  audio_url: string;   // presigned GET of the assembled bed (the container downloads it)
+  output_url: string;  // presigned PUT for the mastered bed (the container uploads it)
+  output_key: string;  // the R2 key behind output_url (returned to the core)
+  seconds?: number;    // film length hint, if known (the module probes the bed if absent)
+}
+
+/** What a `master` module returns: the mastered audio bed plus what it did. Length is invariant
+ *  (mastering changes level / sample rate, never duration). HONEST soft-degrade, exactly as a `finish`
+ *  module: when the master cannot run (misconfig / backend down) the module passes the INPUT bed
+ *  through (`audio_key` unchanged) and sets `degraded` with the reason -- never a fake `applied` tag,
+ *  never a dropped bed. A real degrade is therefore never silent (#249 / #77). */
+export interface MasterOutput {
+  audio_key: string;   // R2 key of the MASTERED bed (may equal the input if it passed through / no-op'd)
+  applied: string[];   // e.g. ["music-upscale:soxr48k", "loudnorm:-14LUFS"]; or ["passthrough:<reason>"]
+  degraded?: string;   // set ONLY when the bed was passed through because the master could not run,
+                       // carrying the reason; absent on success + on the intentional no-op (#77)
+}
+
+// film.finish (v1) ------------------------------------------------------------------------------
+
+/** One time-synced caption cue handed to a `film.finish` subtitle module, in seconds from the
+ *  assembled film's 0-based start. Structurally mirrors src/captions.ts CaptionCue; declared here so
+ *  the contract stays self-contained -- a module in another repo vendoring this file gets the caption
+ *  shape too, without importing a core-only module. */
+export interface FilmFinishCaption {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** What the core hands a `film.finish` module: the assembled+muxed film to put title / credit cards
+ *  (and/or burned-or-sidecar subtitles) on, by R2 transport. The module reads `video_url` (a presigned
+ *  GET of the input film) and writes its result to `output_url` (a presigned PUT at `output_key`),
+ *  exactly as a finish backend reads/writes a clip. `title` / `credits` carry the card text (absent =>
+ *  no cards, the module passes the film through); `captions` carries the time-synced dialogue cues for a
+ *  subtitle module (empty => it no-ops); `sidecar_url` / `sidecar_key` are a presigned PUT for an
+ *  optional .srt sidecar. This runs POST-mux, before done, as a `chain`: every installed film.finish
+ *  module folds in `ui.order`, and the core presigns a FRESH GET (of the PRIOR step's film) + PUT (to a
+ *  new key) per step, so step N+1 reads what step N wrote rather than the original (#14). */
+export interface FilmFinishInput {
+  film_key: string;    // R2 key of the input film (the prior step's output, or the original on step 1)
+  video_url: string;   // presigned GET of the input film (the module fetches it)
+  output_url: string;  // presigned PUT the module writes the carded film to
+  output_key: string;  // the R2 key behind output_url (so the core knows where the result landed)
+  title?: { text: string; subtitle?: string }; // opening title card text; absent => no title card
+  credits?: { lines: string[] };               // end-credit lines; absent => no credit card
+  captions: FilmFinishCaption[];                // time-synced dialogue cues; empty => subtitle no-op
+  sidecar_url: string; // presigned PUT for an optional .srt subtitle sidecar (ignored by non-subtitle modules)
+  sidecar_key: string; // the R2 key behind sidecar_url
+}
+
+/** What a `film.finish` module returns: the (maybe new) film key plus what it did. The chain is
+ *  FAIL-SAFE -- a module that cannot run passes the film through with `film_key` UNCHANGED (the input
+ *  film key, never omitted) and reports it via the soft-degrade convention, never dropping a
+ *  fully-rendered film (#190). `applied` carries the module name on success, or a "passthrough:<reason>"
+ *  / "noop:no-cards" tag on a soft-degrade; `degraded` (the shared chain convention, as on FinishOutput
+ *  / MasterOutput / SpeechOutput) is set ONLY when the film shipped UNCARDED, carrying the reason -- the
+ *  one signal that requested cards were NOT applied (#207). The core records the chain outcome on the
+ *  job rather than dropping it. */
+export interface FilmFinishOutput {
+  film_key: string;   // R2 key of the film; on a passthrough it is the INPUT film_key UNCHANGED (never
+                      // omitted), so the core always gets a usable key. REQUIRED to match the
+                      // conformance checker (HOOK_OUTPUT_CHECKS["film.finish"]) and every shipping
+                      // module (subtitle / film-titles both always return it).
+  applied?: string[]; // module name on success; "passthrough:<reason>" / "noop:no-cards" on a soft-degrade
+  degraded?: string;  // set ONLY when the film was passed through UNCARDED, carrying the reason (#207)
 }
 
 // --------------------------------------------------------------------------- registry view
@@ -376,7 +505,7 @@ export interface RenderConfigProjection {
  *  module view (no internal `binding`); the hook index maps each hook to the module NAMES serving
  *  it, so the frontend has everything it needs to project the pipeline without seeing topology. */
 export interface ModulesResponse {
-  api: typeof MODULE_API;
+  api: ModuleApi;
   modules: PublicModule[];
   hooks: Partial<Record<HookName, string[]>>; // hook -> module names serving it
   catalog: HookCatalogEntry[];                 // every hook (name + blurb + cardinality)

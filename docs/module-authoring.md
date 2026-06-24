@@ -22,17 +22,19 @@ The core discovers your module from a `MODULE_<NAME>` service binding, reads you
 you by hook, and renders your stage in the studio UI from your `config_schema`. It invokes you when a
 render reaches your hook. **The core never knows who answers** -- it just asks the hook.
 
-## The hooks (vivijure-module/1)
+## The hooks (vivijure-module/2)
 
 | Hook | Purpose | Cardinality |
 |---|---|---|
 | `keyframe` | storyboard -> start keyframes (SDXL on GPU) | **pick one** |
 | `motion.backend` | keyframe (+ motion prompt) -> shot clip (GPU or cloud) | **pick one** per shot |
-| `finish` | post-process a clip: interpolation / upscale / face restore | **chain** |
+| `finish` | post-process a clip: interpolation / lip-sync / upscale / face restore | **chain** |
 | `score` | add audio to a film: music / narration / beat-sync | **chain** |
+| `dialogue` | per-shot dialogue lines -> speech audio (TTS); feeds the lip-sync finish module | **pick one** |
 | `plan.enhance` | expand a storyboard before render (LLM auto-direction) | **chain** |
 | `cast.image` | portrait + bible -> LoRA training reference images | **pick one** |
 | `notify` | render-complete notification (email / webhook) | **chain** |
+| `film.finish` | assembled + muxed film -> title / credit cards (post-mux; single-film path only) | **chain** |
 
 `pick_one` resolves to a single module (the user picks; default is the first). `chain` folds every
 installed module in `ui.order`, each consuming the previous one's output.
@@ -63,7 +65,7 @@ need from [`src/modules/types.ts`](../src/modules/types.ts): `MODULE_API`, the m
 const MANIFEST: ModuleManifest = {
   name: "plan-enhance",
   version: "0.1.0",
-  api: MODULE_API,                       // "vivijure-module/1"
+  api: MODULE_API,                       // "vivijure-module/2"
   hooks: ["plan.enhance"],
   provides: [{ id: "auto-direction", label: "LLM auto-direction" }],
   config_schema: {                       // the UI renders a control per field
@@ -163,7 +165,7 @@ If that is green, your module will plug into the core cleanly.
 
 ## Checklist
 
-- [ ] `GET /module.json` returns a manifest with `api: "vivijure-module/1"`, a `name`, a `version`,
+- [ ] `GET /module.json` returns a manifest with `api: "vivijure-module/2"` (or `/1`, still accepted), a `name`, a `version`,
       and only known `hooks`.
 - [ ] `config_schema` fields each have a valid `type` and a `default` consistent with it.
 - [ ] `POST /invoke` returns HTTP 200 with a well-formed `InvokeResponse` for every input, including
@@ -188,7 +190,7 @@ The shape is identical: serve `GET /module.json` and `POST /invoke`. A minimal e
 import json
 from workers import Response, WorkerEntrypoint
 
-MANIFEST = {"name": "my-module", "version": "0.1.0", "api": "vivijure-module/1", "hooks": ["plan.enhance"]}
+MANIFEST = {"name": "my-module", "version": "0.1.0", "api": "vivijure-module/2", "hooks": ["plan.enhance"]}
 
 def _json(body, status=200):
     return Response(json.dumps(body), status=status, headers={"content-type": "application/json"})

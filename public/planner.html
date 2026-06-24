@@ -366,7 +366,10 @@
         <input id="planner-scatter-shards" type="number" min="2" value="2" inputmode="numeric" />
       </div>
       </div>
-      <!-- Module render config: projected from GET /api/modules config_schema (keyframe / motion / finish). -->
+      <!-- Module render config: projected from GET /api/modules. The hook set comes from the live
+           `catalog` (keyframe, motion.backend, speech, finish, master, film.finish render here;
+           plan.enhance / score / dialogue / cast.image / notify project on their own surfaces),
+           and each module renders its own config_schema. Nothing per-hook is hardcoded. -->
       <div id="planner-motion-backend-wrap" class="planner-overrides-common"></div>
       <details class="planner-overrides-details" open>
         <summary class="planner-overrides-summary">module settings (optional)</summary>
@@ -375,6 +378,31 @@
           Quality tier above is injected into keyframe and motion modules automatically.
         </p>
         <div id="planner-module-config" class="planner-module-config"></div>
+      </details>
+      <!-- Film title + credit cards: the film-level TEXT a film.finish title-card module
+           (film-titles) cannot derive. Its presentation knobs (font / color / durations) project
+           into the module panel above from config_schema; this carries FilmTitleSpec{text,subtitle}
+           + FilmCreditSpec{lines}. Empty -> no card (the film.finish chain no-ops), matching today.
+           Applied on a full render; keyframes-only previews skip the film.finish chain. -->
+      <details class="planner-overrides-details planner-film-titles">
+        <summary class="planner-overrides-summary">title + credit cards (optional)</summary>
+        <div class="planner-overrides-fields">
+          <p class="planner-overrides-hint">
+            Text for the opening title and end-credit cards, used when a title-card film.finish module is installed. Leave blank for no card.
+          </p>
+          <label class="planner-field">
+            <span>film title</span>
+            <input id="planner-film-title" type="text" placeholder="(no title card)" />
+          </label>
+          <label class="planner-field">
+            <span>subtitle (optional)</span>
+            <input id="planner-film-subtitle" type="text" placeholder="second line, needs a title" />
+          </label>
+          <label class="planner-field">
+            <span>credits (one per line)</span>
+            <textarea id="planner-film-credits" rows="3" placeholder="Directed by ...&#10;Music by ..." spellcheck="false"></textarea>
+          </label>
+        </div>
       </details>
       <details class="planner-overrides-details planner-overrides-expert">
         <summary class="planner-overrides-summary">expert: raw JSON</summary>
@@ -537,6 +565,7 @@
   <script src="planner-registry.js"></script>
   <script src="planner-render-config.js"></script>
   <script src="lora-preflight.js"></script>
+  <script src="render-eta.js"></script>
   <script src="planner.js"></script>
 </body>
 </html>

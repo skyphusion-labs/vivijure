@@ -9,12 +9,15 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
-import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput } from "./modules/types";
+import { loadInstallConfig } from "./operator-config";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { presignR2Get, presignR2Put } from "./r2-presign";
+import { readShotDurationsFromBundle } from "./bundle-assembler";
+import { buildCaptionCues } from "./captions";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { coerceShotId } from "./storyboard-validate";
 import { getCastById, markLoraReady } from "./cast-db";
@@ -37,6 +40,30 @@ export interface FinishShot {
   poll?: string;
   applied: string[];
   error?: string;
+  // Transient-retry counter for the CURRENT chain step (reset when the step advances). A transient
+  // invocation blip (the module worker momentarily unreachable / 5xx -- the musetalk cold-start race
+  // that silenced shot_02) re-dispatches the step up to FINISH_STEP_MAX_ATTEMPTS instead of going
+  // failed; a deterministic reject or the cap exhausted fails loud. Mirrors scatter assemble_attempts.
+  attempts?: number;
+}
+
+/** One shot's dialogue audio moving through the `speech` chain (post-dialogue, pre-finish). `chain` is
+ *  the speech module bindings in ui.order; `idx` walks them, each consuming the previous module's
+ *  enhanced audio. `configs` is the validated config per step (parallel to `chain`). Mirrors FinishShot,
+ *  but threads AUDIO (audio_key) instead of the video clip. A speech step is a POLISH step: a hard
+ *  failure DEGRADES the shot (keeps its current audio) rather than failing the render. */
+export interface SpeechShot {
+  shot_id: string;
+  audio_key: string;   // current dialogue-audio key (updated as each speech module completes)
+  chain: string[];     // speech module env-binding names, in ui.order
+  configs?: Record<string, unknown>[];
+  idx: number;
+  status: "pending" | "done" | "failed";
+  poll?: string;
+  applied: string[];
+  degraded?: string;   // last soft-degrade reason on this shot (honest, never a fake applied tag)
+  error?: string;
+  attempts?: number;   // transient-retry counter for the current step (reset on advance)
 }
 
 export interface FilmKeyframeRef {
@@ -52,11 +79,15 @@ export interface FilmJob {
   motion_backend: string | null;
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>; // per finish module (keyed by module name), validated at enterFinishPhase
+  speech_config?: Record<string, Record<string, unknown>>; // per speech module (keyed by module name), validated at enterSpeechOrFinish
+  film_finish_config?: Record<string, Record<string, unknown>>; // per film.finish module (by name), validated in applyFilmFinish
+  master_config?: Record<string, Record<string, unknown>>; // per master module (by name), validated at enterMasterOrMux
   keyframe_binding: string | null;
-  phase: "keyframe" | "clips" | "dialogue" | "finish" | "assemble" | "mux" | "done" | "failed";
+  phase: "keyframe" | "clips" | "dialogue" | "speech" | "finish" | "assemble" | "master" | "mux" | "done" | "failed";
   keyframe_poll?: string;
   clip_job_id?: string;
   finish_shots?: FinishShot[];
+  speech_shots?: SpeechShot[]; // per-shot speech (dialogue-audio enhance) chain, run between dialogue and finish
   // Talking characters: per-shot dialogue lines (resolved at submission: authored text + cast voice),
   // synthesized to per-shot audio by the `dialogue` module in a phase between clips and finish. The
   // resulting audio_key per shot is injected into that shot's FinishInput for lip-sync. Absent/empty
@@ -70,7 +101,24 @@ export interface FilmJob {
   cast_loras?: Record<string, number>;
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   silent_film_key?: string; // silent concat output before optional audio mux
-  audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble
+  audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble (the `master` chain polishes
+                      // THIS key in place: each master step rewrites it to the mastered bed before mux)
+  // Film-level audio mastering (the `master` chain): polish the assembled film's audio BED -- music
+  // upscale (soxr) + LUFS loudness -- AFTER the mix is built (assemble) and BEFORE the final mux. Set
+  // only when there IS an audio_key AND a master module is installed; absent => the bed is muxed as-is.
+  // FAIL-SAFE, like film.finish: a step that fails / degrades passes the CURRENT bed through (records a
+  // reason in `degraded`), never failing the render -- a polish miss must never drop a fully-rendered
+  // film (the #249 / #77 discipline). `chain` is the master module bindings in ui.order; `idx` walks
+  // them; `poll` holds the in-flight step's token; `attempts` is its bounded transient-retry counter.
+  master?: {
+    chain: string[];     // master module env-binding names, in ui.order
+    idx: number;         // current chain step
+    poll?: string;       // in-flight step poll token
+    attempts?: number;   // transient-retry counter for the CURRENT step (reset when the step advances)
+    applied: string[];   // accumulated applied tags across the chain (e.g. ["music-upscale:soxr48k"])
+    degraded: string[];  // per-step soft-degrade reasons ("<binding>: <reason>"); a passthrough is never silent
+    configs?: Record<string, unknown>[]; // per-step clamped planner config, aligned to `chain` order (enterMasterOrMux)
+  };
   // Opening title + end-credit text for the film.finish chain (title / credit cards). Absent -> no
   // cards; the film.finish module passes the film through unchanged. (#190)
   film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
@@ -112,9 +160,16 @@ export interface FilmJob {
   // keyframe_recovered: the motion.backend (own-gpu) poll can return pending forever on a GC'd RunPod
   // job while the finished clip already sits in R2; recovery collects them by shot name and advances.
   clips_recovered?: boolean;
+  // Wall-clock of the last REAL per-shot progress (#136): re-stamped by advanceFilmJob when the
+  // current phase's done-count advances (a clip/finish/speech shot completed) OR on a phase
+  // transition. The UI stall signal measures against THIS, not phase_started_at, so a healthy
+  // multi-shot clips/finish phase (10 i2v shots at ~3min each = 30+min in ONE phase) no longer
+  // false-trips "stalled". The driver's recovery still measures from phase_started_at (unchanged).
+  last_progress_at?: number;
+  // The progress fingerprint last seen ("<phase>:<doneCount>"); any change is genuine forward progress.
+  progress_marker?: string;
   error?: string;
   created_at: number;
-  user_email?: string; // film owner; passed to the `notify` hook on done (e.g. for an email notifier)
 }
 
 interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
@@ -143,11 +198,17 @@ export async function clipKeysFromFilmJob(
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (job.finish_shots?.length) {
+    // Finish WAS set up for this job: the assembled clips are the FINISHED ones only. Never substitute
+    // a raw i2v clip for a finish shot that did not reach "done" -- that silent-degrade (#245/#246)
+    // shipped unfinished clips marked done with applied=[] (wan: RIFE crashed at idx 0 -> the shot
+    // "failed" -> the job fell through to the raw _wan clip). A failed finish fails the render in
+    // advanceFinishPhase; this is the defense-in-depth so assemble can never ship a raw clip.
     for (const fs of job.finish_shots) {
       if (fs.status === "done" && fs.clip_key) out.set(fs.shot_id, fs.clip_key);
     }
-    if (out.size) return out;
+    return out;
   }
+  // No finish modules installed (finish_shots empty) -> assemble the raw i2v clips (the clips_only path).
   if (!job.clip_job_id) return out;
   const cjObj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
   if (!cjObj) return out;
@@ -245,8 +306,7 @@ function completeKeyframesOnly(job: FilmJob, kfOut: KeyframeOutput): void {
  *  adapter to a character-stable key (survives project deletion), and mark the cast member ready.
  *  Reused slots (backend reports the already-banked key) and unmapped slots are no-ops; a versioned
  *  stable key keyed on job.created_at makes a retry idempotent. Best-effort but LOUD on failure
- *  (unlike the silent state-tar restore it replaces). Keyed on cast id (PK) only -- NOT the
- *  half-stripped user_email. */
+ *  (unlike the silent state-tar restore it replaces). Keyed on cast id (PK) only. */
 async function recordTrainedLorasToCast(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
   const trained = kfOut.trained_loras;
   const castIds = job.cast_loras;
@@ -317,7 +377,59 @@ export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
   fs.applied.push(...(out.applied || []));
   fs.idx += 1;
   fs.poll = undefined;
+  fs.attempts = 0; // a step succeeded -> the next step gets a fresh transient-retry budget
   if (fs.idx >= fs.chain.length) fs.status = "done"; // else stays pending; next advance submits chain[idx]
+}
+
+/** Pure: fold one speech module's output into the shot. On a REAL enhancement (no `degraded`), thread the
+ *  new audio_key forward so the next step (and finish) sees the cleaned audio; on an honest soft-degrade,
+ *  LEAVE audio_key UNCHANGED (the original audio survives) and record the reason -- no fake applied tag,
+ *  the chain never fails on a polish miss. Advance idx; done when the chain is exhausted. */
+export function applySpeechOutput(ss: SpeechShot, out: SpeechOutput): void {
+  if (!out.degraded) ss.audio_key = out.audio_key; // real enhance threads forward; a degrade keeps the original
+  ss.applied.push(...(out.applied || []));
+  if (out.degraded) ss.degraded = out.degraded;
+  ss.idx += 1;
+  ss.poll = undefined;
+  ss.attempts = 0;
+  if (ss.idx >= ss.chain.length) ss.status = "done";
+}
+
+// Bounded transient-retry for a finish-step invocation/poll failure. shot_02 shipped silent because
+// its lip-sync invocation hit a transient blip (the module worker momentarily unreachable / 5xx --
+// a musetalk cold-start race) and went straight to `failed`, where the mid-chain intermediate was
+// then adopted. Now a TRANSIENT failure re-dispatches the step (status stays `pending`) up to the
+// cap; a DETERMINISTIC reject (a 4xx, a real module error, "job failed", "no clip_key") or the cap
+// exhausted goes `failed` -- loud, no spin. Same classify-then-retry discipline as the D1 / assemble
+// transport retries.
+export const FINISH_STEP_MAX_ATTEMPTS = 3;
+
+/** Classify an invokeModule / pollModule failure string. Transport shapes are transient:
+ *  "module /invoke -> 503", "module /poll -> 504", "module unreachable: <timeout/network>". A module-
+ *  logic ok:false (input reject, "job failed", "no clip_key") or a 4xx is deterministic -> fail. */
+export function classifyFinishFailure(error: string | undefined): "transient" | "deterministic" {
+  const e = error ?? "";
+  const m = e.match(/->\s*(\d{3})\b/); // the "module /invoke -> NNN" / "/poll -> NNN" transport status
+  if (m) {
+    const s = Number(m[1]);
+    return s === 408 || s === 429 || (s >= 500 && s <= 599) ? "transient" : "deterministic";
+  }
+  if (/unreachable|timed? ?out|timeout|network|econnreset|connection (reset|lost)|fetch failed/i.test(e)) {
+    return "transient";
+  }
+  return "deterministic"; // a module-logic ok:false -> a real reject, fail loud
+}
+
+/** Decide whether to re-dispatch a failed finish step or fail it. Pure so the retry contract is
+ *  unit-testable without a module fetcher. */
+export function classifyFinishRetry(
+  error: string | undefined,
+  priorAttempts: number,
+  maxAttempts: number = FINISH_STEP_MAX_ATTEMPTS,
+): { action: "retry"; attempts: number } | { action: "fail" } {
+  if (classifyFinishFailure(error) !== "transient") return { action: "fail" };
+  const attempts = (priorAttempts ?? 0) + 1;
+  return attempts < maxAttempts ? { action: "retry", attempts } : { action: "fail" };
 }
 
 /** Pure: resolve the validated config for each finish module, in chain order. Each module gets its
@@ -343,8 +455,15 @@ export function resolveFinishConfigs(
  *  A `pending` shot mid-chain (idx < last) is NOT adopted: its R2 key would be an intermediate module's
  *  output, not the chain's final artifact, so the remaining modules must still run. */
 export function finishShotAdoptableFromR2(fs: FinishShot): boolean {
+  // Adopt an R2 clip ONLY when it is the chain's FINAL artifact (idx === last). A mid-chain shot's
+  // R2 key is an INTERMEDIATE module's output, so adopting it skips the remaining finish modules
+  // (e.g. lip-sync) and ships a half-finished, silent clip. This guard protected the `pending` branch
+  // but the `failed` branch lacked it, so a mid-chain module failure adopted the intermediate as
+  // "done" -- the silent showcase render (lip-sync failed at idx 1 of 4 -> the RIFE intermediate was
+  // adopted). The failed branch is the #141 GC'd-job path: a fast-failed shot whose FINAL clip is in R2.
+  if (fs.idx !== fs.chain.length - 1) return false;
   if (fs.status === "failed") return true;
-  return fs.status === "pending" && !!fs.poll && fs.idx === fs.chain.length - 1;
+  return fs.status === "pending" && !!fs.poll;
 }
 
 /** Pure: adopt every adoptable finish shot whose finished clip is present in R2 (the artifact overrides
@@ -362,6 +481,41 @@ export function reclaimFinishShotsFromR2(finishShots: FinishShot[], present: Map
     }
   }
   return adopted;
+}
+
+/** Pure: the R2 key the CURRENT finish step (fs.chain[fs.idx]) is expected to write, given its input
+ *  clip (fs.clip_key). Mirrors each finish module's OWN output-key convention so the orchestrator can
+ *  check R2 PRESENCE for a step whose RunPod job was GC'd / froze MID-chain (the #141/#166 R2-authoritative
+ *  pattern, extended from the final step to any step). The modules: finish-rife writes
+ *  `<project>/clips/<shot>_finished.mp4` (named off the shot id by its container); the append-convention
+ *  modules derive `<input-base>_<suffix>.<ext>` from the input clip key (musetalk lip-sync -> `_ls`,
+ *  upscale -> `_up`; see vivijure-musetalk / vivijure-upscale handler.py). Returns null for a module whose
+ *  convention we do not model (e.g. text-overlay), so an unmodeled step gets NO R2 shortcut and can never
+ *  be advanced off a sibling step's artifact -- the mid-chain phantom-adopt the silent-render bug warned of. */
+export function finishStepOutputKey(project: string, fs: FinishShot): string | null {
+  const binding = fs.chain[fs.idx] ?? "";
+  if (/RIFE/i.test(binding)) return `renders/${project}/clips/${fs.shot_id}_finished.mp4`;
+  const suffix = /LIPSYNC|MUSETALK/i.test(binding) ? "_ls" : /UPSCALE/i.test(binding) ? "_up" : null;
+  if (!suffix) return null;
+  const key = fs.clip_key;
+  const slash = key.lastIndexOf("/");
+  const dotInBase = key.slice(slash + 1).lastIndexOf(".");
+  if (dotInBase < 0) return `${key}${suffix}`;
+  const at = slash + 1 + dotInBase;
+  return `${key.slice(0, at)}${suffix}${key.slice(at)}`; // insert the suffix before the extension
+}
+
+/** Pure: the `applied` tag the CURRENT finish step would report, reconstructed from its validated config
+ *  so an R2-adopted step (whose job is gone, so its real response is lost) still carries the marker the
+ *  verifier and UI read (e.g. `lipsync:v15`, `upscale:2x`, `interpolate:2x`). Mirrors each module's own
+ *  `applied` string. Unmodeled modules get a `<binding>:r2-adopted` marker so the adoption is never silent. */
+export function finishStepAppliedTag(fs: FinishShot): string {
+  const binding = fs.chain[fs.idx] ?? "";
+  const cfg = (fs.configs?.[fs.idx] ?? {}) as Record<string, unknown>;
+  if (/LIPSYNC|MUSETALK/i.test(binding)) return `lipsync:${String(cfg.version ?? "v15")}`;
+  if (/UPSCALE/i.test(binding)) return `upscale:${Number(cfg.scale ?? 2)}x`;
+  if (/RIFE/i.test(binding)) return cfg.interpolate === false ? "noop:interpolate-off" : `interpolate:${Number(cfg.interpolation_factor ?? 2)}x`;
+  return `${binding}:r2-adopted`;
 }
 
 /** Internal: clips done -> set up the finish chain (one FinishShot per done clip). No finish modules
@@ -401,11 +555,11 @@ function applyDialogueOutput(job: FilmJob, out: DialogueOutput): void {
  *  a fully-rendered film (lip-sync no-ops without an audio_key). */
 async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
   const lines = job.dialogue_lines;
-  if (!lines || !lines.length) { job.phase = "finish"; return; }
+  if (!lines || !lines.length) { await enterSpeechOrFinish(env, job); return; }
   const envRec = env as unknown as Record<string, unknown>;
   const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
   const fetcher = dialogueModule ? asFetcher(envRec[dialogueModule.binding]) : null;
-  if (!fetcher) { job.phase = "finish"; return; }  // no dialogue module bound: silent film
+  if (!fetcher) { await enterSpeechOrFinish(env, job); return; }  // no dialogue module bound: silent film
   const req = {
     hook: "dialogue" as const,
     input: { project: job.project, lines } as DialogueInput,
@@ -413,32 +567,141 @@ async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
     context: { project: job.project, job_id: job.film_id },
   };
   const r = await invokeModule<DialogueInput, DialogueOutput>(fetcher, req);
-  if (!r.ok) { console.warn(`film ${job.film_id}: dialogue submit failed (${r.error}); silent finish`); job.phase = "finish"; return; }
+  if (!r.ok) { console.warn(`film ${job.film_id}: dialogue submit failed (${r.error}); silent finish`); await enterSpeechOrFinish(env, job); return; }
   if ((r as { pending?: boolean }).pending) { job.dialogue_poll = (r as { poll: string }).poll; job.phase = "dialogue"; return; }
   if ("output" in r) { applyDialogueOutput(job, r.output as DialogueOutput); }
-  job.phase = "finish";
+  await enterSpeechOrFinish(env, job);
 }
 
 /** Poll the in-flight dialogue batch. On done, record the per-shot audio map and advance to finish; a
  *  failure soft-degrades to a silent finish (the rendered clips are fine, just unvoiced). */
 async function advanceDialoguePhase(env: Env, job: FilmJob): Promise<void> {
-  if (!job.dialogue_poll) { job.phase = "finish"; return; }
+  if (!job.dialogue_poll) { await enterSpeechOrFinish(env, job); return; }
   const envRec = env as unknown as Record<string, unknown>;
   const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
   const fetcher = dialogueModule ? asFetcher(envRec[dialogueModule.binding]) : null;
-  if (!fetcher) { job.dialogue_poll = undefined; job.phase = "finish"; return; }
+  if (!fetcher) { job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
   const p = await pollModule<DialogueOutput>(fetcher, { poll: job.dialogue_poll });
-  if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; job.phase = "finish"; return; }
+  if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
   if ((p as { pending?: boolean }).pending) return;  // still synthesizing
   applyDialogueOutput(job, (p as { output: DialogueOutput }).output);
   job.dialogue_poll = undefined;
-  job.phase = "finish";
+  await enterSpeechOrFinish(env, job);
+}
+
+/** After dialogue is resolved: if any `speech` module is installed AND there is dialogue audio to clean,
+ *  build the per-shot speech chain and enter the speech phase; otherwise go straight to finish. No speech
+ *  module, or no shot with dialogue audio -> straight to finish (an unvoiced film needs no speech pass). */
+async function enterSpeechOrFinish(env: Env, job: FilmJob): Promise<void> {
+  const audio = job.dialogue_audio ?? {};
+  const shotIds = Object.keys(audio);
+  if (!shotIds.length) { job.phase = "finish"; return; }  // unvoiced film: nothing to enhance
+  const serving = servingForHook(await discoverModules(env as unknown as Record<string, unknown>), "speech"); // ui.order
+  const chain = serving.map((m) => m.binding);
+  if (!chain.length) { job.phase = "finish"; return; }  // no speech modules installed: passthrough to finish
+  const configs = resolveFinishConfigs(serving, job.speech_config ?? {});
+  job.speech_shots = shotIds.map((shot_id) => ({
+    shot_id, audio_key: audio[shot_id], chain, configs, idx: 0, status: "pending" as const, applied: [],
+  }));
+  job.phase = "speech";
+}
+
+/** Advance the speech chain: per shot, submit its current speech module or poll the in-flight one,
+ *  chaining the enhanced audio forward on completion. A transient invocation/poll blip re-dispatches the
+ *  step up to the cap (classifyFinishRetry, shared with finish); a DETERMINISTIC failure does NOT fail the
+ *  render -- speech is a POLISH step, so a hard step failure DEGRADES the shot (keep its current audio,
+ *  record the reason, mark the chain done) rather than failing a fully-rendered film (#249/#77). When
+ *  every shot is terminal, fold the cleaned (or, on a degrade, original) audio back into job.dialogue_audio
+ *  -- so a lip-sync finish module drives the mouth from it -- and advance to finish. */
+async function advanceSpeechPhase(env: Env, job: FilmJob): Promise<void> {
+  const envRec = env as unknown as Record<string, unknown>;
+  const degrade = (ss: SpeechShot, reason: string): void => {
+    // A hard failure on a POLISH step: keep the current audio (original survives), record the reason
+    // honestly (no fake applied tag), advance idx so the chain completes. The render never fails here.
+    ss.degraded = reason;
+    ss.idx += 1; ss.poll = undefined; ss.attempts = 0;
+    if (ss.idx >= ss.chain.length) ss.status = "done";
+  };
+  const blipOrDegrade = (ss: SpeechShot, error: string | undefined, keepPoll: boolean): void => {
+    const d = classifyFinishRetry(error, ss.attempts ?? 0); // reuse the shared transient classifier
+    if (d.action === "retry") {
+      ss.attempts = d.attempts;
+      ss.error = `speech ${ss.chain[ss.idx]} transient (attempt ${d.attempts}/${FINISH_STEP_MAX_ATTEMPTS}), retrying: ${error ?? ""}`;
+      if (!keepPoll) ss.poll = undefined;
+    } else {
+      degrade(ss, `${ss.chain[ss.idx]}: ${error ?? "speech step failed"}`);
+    }
+  };
+  for (const ss of job.speech_shots || []) {
+    if (ss.status !== "pending") continue;
+    const fetcher = asFetcher(envRec[ss.chain[ss.idx]]);
+    if (!fetcher) { degrade(ss, `speech module ${ss.chain[ss.idx]} not bound`); continue; }
+    const req = {
+      hook: "speech" as const,
+      input: { shot_id: ss.shot_id, audio_key: ss.audio_key } as SpeechInput,
+      config: ss.configs?.[ss.idx] ?? {},
+      context: { project: job.project, job_id: job.film_id },
+    };
+    if (!ss.poll) {
+      const r = await invokeModule<SpeechInput, SpeechOutput>(fetcher, req);
+      if (!r.ok) { blipOrDegrade(ss, r.error, false); }
+      else if ((r as { pending?: boolean }).pending) { ss.poll = (r as { poll: string }).poll; }
+      else if ("output" in r) { applySpeechOutput(ss, r.output as SpeechOutput); }
+      else { degrade(ss, "speech module returned neither output nor a poll token"); }
+    } else {
+      const p = await pollModule<SpeechOutput>(fetcher, { poll: ss.poll });
+      if (p.ok && !(p as { pending?: boolean }).pending) {
+        applySpeechOutput(ss, (p as { output: SpeechOutput }).output);
+      } else if (!p.ok && classifyFinishFailure(p.error) === "transient") {
+        blipOrDegrade(ss, p.error, true);
+      } else if (!p.ok) {
+        blipOrDegrade(ss, p.error, false);
+      }
+      // else: still pending -> leave it for the next tick
+    }
+  }
+  const speechShots = job.speech_shots || [];
+  if (speechShots.every((ss) => ss.status !== "pending")) {
+    // Fold the cleaned (or, on a degrade, original) audio back into dialogue_audio so a lip-sync finish
+    // module drives the mouth from it. This is the single point folding speech results into film state.
+    for (const ss of speechShots) (job.dialogue_audio ??= {})[ss.shot_id] = ss.audio_key;
+    job.phase = "finish";
+  }
+}
+
+/** R2-authoritative recovery for a finish step whose RunPod job is GONE (poll 404s, GC'd-after-complete)
+ *  or FROZEN (envelope stuck IN_PROGRESS so /poll pends forever, #166) MID-chain: if THIS step's expected
+ *  output (finishStepOutputKey) is already in R2, fold it in and advance idx so the next module dispatches
+ *  -- instead of pending to the hard-deadline. Distinct from finishShotAdoptableFromR2, which adopts only
+ *  the chain's FINAL artifact: this advances ONE step on its OWN predicted output, so the remaining modules
+ *  still run and it can never ship a half-finished clip (the mid-chain phantom-adopt the silent-render bug
+ *  warned against). Returns true iff it advanced the step. */
+async function adoptFinishStepFromR2(env: Env, job: FilmJob, fs: FinishShot): Promise<boolean> {
+  const expected = finishStepOutputKey(job.project, fs);
+  if (!expected) return false;
+  if ((await env.R2_RENDERS.head(expected)) === null) return false;
+  applyFinishOutput(fs, { shot_id: fs.shot_id, clip_key: expected, out_fps: 0, frames: 0, applied: [finishStepAppliedTag(fs)] });
+  return true;
 }
 
 /** Advance the finish chain: per shot, submit its current finish module or poll the in-flight one,
  *  chaining to the next module on completion. Phase -> assemble when every shot is terminal. */
 async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
   const envRec = env as unknown as Record<string, unknown>;
+  // A transient invocation/poll blip re-dispatches the step (status stays `pending`) up to the cap
+  // instead of failing it; a deterministic reject or the cap exhausted fails loud. `keepPoll` keeps a
+  // poll token to re-poll (a lost poll) vs clearing it to re-submit (a failed invoke).
+  const failOrRetry = (fs: FinishShot, error: string | undefined, keepPoll: boolean): void => {
+    const d = classifyFinishRetry(error, fs.attempts ?? 0);
+    if (d.action === "retry") {
+      fs.attempts = d.attempts;
+      fs.error = `finish ${fs.chain[fs.idx]} transient (attempt ${d.attempts}/${FINISH_STEP_MAX_ATTEMPTS}), retrying: ${error ?? ""}`;
+      if (!keepPoll) fs.poll = undefined; // re-submit next tick; status stays "pending"
+    } else {
+      fs.status = "failed";
+      fs.error = error;
+    }
+  };
   for (const fs of job.finish_shots || []) {
     if (fs.status !== "pending") continue;
     const fetcher = asFetcher(envRec[fs.chain[fs.idx]]);
@@ -451,14 +714,26 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
     };
     if (!fs.poll) {
       const r = await invokeModule<FinishInput, FinishOutput>(fetcher, req);
-      if (!r.ok) { fs.status = "failed"; fs.error = r.error; }
+      if (!r.ok) { failOrRetry(fs, r.error, false); }
       else if ((r as { pending?: boolean }).pending) { fs.poll = (r as { poll: string }).poll; }
       else if ("output" in r) { applyFinishOutput(fs, r.output as FinishOutput); }
       else { fs.status = "failed"; fs.error = "finish module returned neither output nor a poll token"; }
     } else {
       const p = await pollModule<FinishOutput>(fetcher, { poll: fs.poll });
-      if (!p.ok) { fs.status = "failed"; fs.error = p.error; }
-      else if (!(p as { pending?: boolean }).pending) { applyFinishOutput(fs, (p as { output: FinishOutput }).output); }
+      if (p.ok && !(p as { pending?: boolean }).pending) {
+        applyFinishOutput(fs, (p as { output: FinishOutput }).output);
+      } else if (!p.ok && classifyFinishFailure(p.error) === "transient") {
+        failOrRetry(fs, p.error, true); // a transport blip: re-poll the same job under the cap
+      } else if (!(await adoptFinishStepFromR2(env, job, fs))) {
+        // The step's RunPod job is GONE (a deterministic poll failure -- 404 job-not-found, the
+        // GC'd-after-complete path) or FROZEN (envelope stuck IN_PROGRESS so /poll pends forever, #166),
+        // and this step's output is NOT in R2. A deterministic failure with no artifact fails loud; a
+        // still-pending poll with no artifact stays pending (the job may yet finish, or its output land).
+        // The whole point: a mid-chain finish step can no longer pend forever when its output is in R2 --
+        // the wedge that stalled the showcase (RIFE done, idx never advanced, lip-sync never dispatched).
+        if (!p.ok) failOrRetry(fs, p.error, true);
+      }
+      // else: adoptFinishStepFromR2 folded this step's R2 output in and advanced idx (R2 authoritative).
     }
   }
   // R2 PRESENCE IS AUTHORITATIVE (issue #141), symmetric to the clips reclaim: the finish output may
@@ -474,6 +749,18 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
     reclaimFinishShotsFromR2(finishShots, present);
   }
   if (finishShots.every((fs) => fs.status !== "pending")) {
+    // Fail LOUD on a genuinely-failed finish step. After the bounded transient-retry (failOrRetry)
+    // and the R2 reclaim above, a shot still "failed" has no path left and no finished artifact -- so
+    // the render must NOT advance to done/assemble shipping the raw i2v clip with applied=[]. That
+    // silent-degrade (#245/#246) shipped green-but-unfinished films (wan: RIFE crashed at idx 0, the
+    // shot "failed", the job went done with the raw clip, error:None). Surface the real error instead.
+    const failed = finishShots.filter((fs) => fs.status === "failed");
+    if (failed.length) {
+      job.phase = "failed";
+      job.error = `finish failed for ${failed.length} shot(s): ` +
+        failed.map((fs) => `${fs.shot_id} at ${fs.chain[fs.idx] ?? "?"} (${fs.error ?? "no error"})`).join("; ");
+      return;
+    }
     job.phase = job.clips_only ? "done" : "assemble";
   }
 }
@@ -597,15 +884,18 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
     const download_url = await presignR2Get(env, job.film_key, 86400); // 24h link, matches the poll summary
     const input: NotifyInput = {
       event: "render.complete", film_id: job.film_id, project: job.project,
-      download_url, user_email: job.user_email,
+      download_url,
     };
-    const context = { project: job.project, job_id: job.film_id, user_email: job.user_email };
+    const context = { project: job.project, job_id: job.film_id };
     for (const m of notifiers) {
       const fetcher = asFetcher(envRec[m.binding]);
       if (!fetcher) continue;
       try {
+        // Inject the operator-set install-config (e.g. notify-email's notify_email recipient) as the
+        // user config, then clamp through the contract; render-scope fields stay at their defaults.
+        const installConfig = await loadInstallConfig(env, m.name, m.config_schema);
         await invokeModule<NotifyInput, NotifyOutput>(fetcher, {
-          hook: "notify", input, config: validateConfig(m.config_schema ?? {}, {}), context,
+          hook: "notify", input, config: validateConfig(m.config_schema ?? {}, installConfig), context,
         });
       } catch { /* best-effort per notifier -- a delivery failure never fails the render */ }
     }
@@ -636,66 +926,140 @@ async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
   await fireNotify(env, job);
 }
 
-/** The film.finish module output the core reads back: the (maybe new) film key, the per-step detail
- *  (`applied`: the module name on success, or a "passthrough:..."/"noop:..." reason on a soft-degrade),
- *  and `degraded` -- set when the film was passed through UNCARDED (e.g. the video-finish container was
- *  unreachable). The chain is fail-safe, so `degraded` is the only signal that requested cards were not
- *  applied; applyFilmFinish records it on the job rather than dropping it. */
-interface FilmFinishChainOutput {
-  film_key?: string;
-  applied?: string[];
+// The film.finish hook I/O is the named FilmFinishInput / FilmFinishOutput pair in ./modules/types
+// (every hook has one). The core reads FilmFinishOutput back: the (maybe new) film key, the per-step
+// detail (`applied`: the module name on success, or a "passthrough:..."/"noop:..." reason on a
+// soft-degrade), and `degraded` -- set when the film was passed through UNCARDED (e.g. the video-finish
+// container was unreachable). The chain is fail-safe, so `degraded` is the only signal that requested
+// cards were not applied; applyFilmFinish records it on the job rather than dropping it.
+
+/** Inputs for runFilmFinish -- job-shape-agnostic so BOTH the single-film path (advanceFilmJob) and the
+ *  scatter gather can run the film.finish chain on an assembled+muxed film (#284/#285). */
+export interface RunFilmFinishInput {
+  film_key: string;
+  scenes: FilmScene[];
+  dialogue_lines?: DialogueLine[];
+  film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
+  film_finish_config?: Record<string, Record<string, unknown>>;
+  bundle_key: string;
+  project: string;
+  job_id: string;
+}
+export interface RunFilmFinishResult {
+  ran: boolean;      // false when no film.finish module is installed (caller leaves its state untouched)
+  film_key: string;  // carded film key, or the input key on no-op / passthrough
+  applied: string[];
+  errors: string[];
+  steps?: string[];
+  degraded?: string;
 }
 
-async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
-  if (!job.film_key) return;
+/** Run the film.finish chain (subtitle / title / credit cards) on an assembled+muxed film. Reused by the
+ *  single-film path AND the scatter gather. Captions are FILM-LEVEL (buildCaptionCues computes each
+ *  line's start from the cumulative duration of preceding shots), so the caller passes the FULL scenes +
+ *  dialogue_lines in assembled (shot) order. FAIL-SAFE: a module soft-degrade / failure passes the film
+ *  through (recorded in degraded), never drops it. */
+export async function runFilmFinish(env: Env, input: RunFilmFinishInput): Promise<RunFilmFinishResult> {
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
-  if (servingForHook(modules, "film.finish").length === 0) return; // nothing installed -> no-op
-  const outKey = job.film_key.replace(/\.mp4$/i, "") + "-titled-" + crypto.randomUUID().slice(0, 8) + ".mp4";
-  const [videoUrl, outputUrl] = await Promise.all([
-    presignR2Get(env, job.film_key, 1800),
+  if (servingForHook(modules, "film.finish").length === 0) {
+    return { ran: false, film_key: input.film_key, applied: [], errors: [] }; // nothing installed -> no-op
+  }
+  const outKey = input.film_key.replace(/\.mp4$/i, "") + "-titled-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+  // A soft .srt sidecar for the subtitle module's sidecar / both modes (its own presigned PUT). Cheap
+  // to presign whether or not a subtitle module is installed; ignored by film-titles.
+  const sidecarKey = outKey.replace(/\.mp4$/i, "") + ".srt";
+  const [videoUrl, outputUrl, sidecarUrl] = await Promise.all([
+    presignR2Get(env, input.film_key, 1800),
     presignR2Put(env, outKey, 1800),
+    presignR2Put(env, sidecarKey, 1800),
   ]);
-  const seed = {
-    film_key: job.film_key,
+  // Time-synced dialogue captions for the subtitle film.finish module: the cumulative per-shot
+  // windows (real beat-trimmed durations from the bundle, authored seconds as fallback) carrying each
+  // speaking shot's line. Empty when the film has no dialogue -> the subtitle module no-ops. Narration
+  // is NOT captioned (a single film-level track with no per-line timing); see src/captions.ts.
+  const durations = await readShotDurationsFromBundle(env, input.bundle_key);
+  const captions = buildCaptionCues(input.scenes, input.dialogue_lines ?? [], durations);
+  const seed: FilmFinishInput = {
+    film_key: input.film_key,
     video_url: videoUrl,
     output_url: outputUrl,
     output_key: outKey,
-    title: job.film_titles?.title,
-    credits: job.film_titles?.credits,
+    title: input.film_titles?.title,
+    credits: input.film_titles?.credits,
+    captions,
+    sidecar_url: sidecarUrl,
+    sidecar_key: sidecarKey,
   };
-  // One film.finish module today (film-titles). A 2nd would need fresh presigned URLs per step;
-  // nextInput keeps the same URLs and is only reached with >1 serving module -- revisit then.
-  const result = await dispatchChain<typeof seed, FilmFinishChainOutput>(
+  // Multiple film.finish modules chain (e.g. subtitle ui.order=5 then film-titles ui.order=10), each
+  // consuming the PRIOR step's output. The seed presigns the FIRST step (read original film, write
+  // outKey); every subsequent step must read what the previous step WROTE, not the original, or it
+  // overwrites the prior step's work (#14: titles re-read the original and dropped the captions). So
+  // nextInput presigns a FRESH GET (of the prior step's film_key) + PUT (to a new key) per step.
+  const result = await dispatchChain<FilmFinishInput, FilmFinishOutput>(
     envRec,
     modules,
     "film.finish",
     seed,
-    { project: job.project, job_id: job.film_id, user_email: job.user_email },
-    { nextInput: (prev) => ({ ...seed, film_key: prev?.film_key ?? job.film_key! }), configFor: () => ({}) },
+    { project: input.project, job_id: input.job_id },
+    {
+      nextInput: async (prev) => {
+        const prevKey = prev?.film_key ?? input.film_key;
+        const stepOutKey = input.film_key.replace(/\.mp4$/i, "") + "-ff-" + crypto.randomUUID().slice(0, 8) + ".mp4";
+        const stepSidecarKey = stepOutKey.replace(/\.mp4$/i, "") + ".srt";
+        const [stepVideoUrl, stepOutputUrl, stepSidecarUrl] = await Promise.all([
+          presignR2Get(env, prevKey, 1800),
+          presignR2Put(env, stepOutKey, 1800),
+          presignR2Put(env, stepSidecarKey, 1800),
+        ]);
+        return {
+          ...seed,
+          film_key: prevKey,
+          video_url: stepVideoUrl,
+          output_url: stepOutputUrl,
+          output_key: stepOutKey,
+          sidecar_url: stepSidecarUrl,
+          sidecar_key: stepSidecarKey,
+        };
+      },
+      // Per-module planner config (subtitle styling/mode/enabled, film-titles font/color/bg), clamped
+      // by dispatchChain against each module's schema. Without this the film.finish chain dispatched with
+      // {} and every styling/toggle knob was dead from the planner (the dead-config pattern, now closed).
+      configFor: (name) => input.film_finish_config?.[name],
+    },
   );
   // Record the chain outcome so a degraded or failed film.finish is observable state, not a silent green.
   // The module soft-degrades (passthrough) on a container failure and still returns ok:true, so the only
   // signal that cards were NOT applied is `output.degraded`; surface it (and any chain errors) here. (#207)
   const out = result.output;
-  // dispatchChain records a module's soft-degrade (ok:true but it passed the film through) centrally in
-  // result.degraded ("<module>: <reason>"); collapse it onto the job so a degraded run is observable
-  // state, not a silent green. A degrade means cards were requested but NOT applied.
   const degraded = result.degraded.length > 0 ? result.degraded.join("; ") : undefined;
-  job.film_finish = {
-    applied: result.applied,
-    errors: result.errors,
-    steps: out?.applied,
-    degraded,
-  };
-  if (result.errors.length > 0) {
-    console.warn(`film.finish errors for ${job.film_id}: ${result.errors.join("; ")}`);
+  const finalKey = typeof out?.film_key === "string" && out.film_key.length > 0 ? out.film_key : input.film_key;
+  return { ran: true, film_key: finalKey, applied: result.applied, errors: result.errors, steps: out?.applied, degraded };
+}
+
+/** Single-film film.finish: thin wrapper over runFilmFinish that folds the outcome back onto the job
+ *  (behavior-identical to the pre-refactor inline version -- no-op leaves the job untouched). */
+async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
+  if (!job.film_key) return;
+  const r = await runFilmFinish(env, {
+    film_key: job.film_key,
+    scenes: job.scenes,
+    dialogue_lines: job.dialogue_lines,
+    film_titles: job.film_titles,
+    film_finish_config: job.film_finish_config,
+    bundle_key: job.bundle_key,
+    project: job.project,
+    job_id: job.film_id,
+  });
+  if (!r.ran) return; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
+  if (r.errors.length > 0) {
+    console.warn(`film.finish errors for ${job.film_id}: ${r.errors.join("; ")}`);
   }
-  if (degraded) {
-    console.warn(`film.finish degraded for ${job.film_id}: ${degraded} -- film shipped WITHOUT cards`);
+  if (r.degraded) {
+    console.warn(`film.finish degraded for ${job.film_id}: ${r.degraded} -- film shipped WITHOUT cards`);
   }
-  const next = out?.film_key;
-  if (typeof next === "string" && next.length > 0) job.film_key = next;
+  job.film_finish = { applied: r.applied, errors: r.errors, steps: r.steps, degraded: r.degraded };
+  job.film_key = r.film_key;
 }
 
 async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
@@ -771,15 +1135,174 @@ async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
   await transitionToDone(env, job);
 }
 
+// --------------------------------------------------------------------------- master (pre-mux audio)
+
+/** The film-level `master` chain state carried on a FilmJob (the master module bindings in ui.order, the
+ *  step cursor, the in-flight poll token, and the accumulated applied / degraded record). */
+export type MasterState = NonNullable<FilmJob["master"]>;
+
+// Bounded transient-retry for a master step, the same discipline as a finish step: a transport blip (the
+// module worker momentarily unreachable / a 5xx) re-dispatches the step under the cap. On EXHAUSTION the
+// step soft-degrades (passthrough) -- it does NOT fail the render, because master is a polish step (#249/#77).
+export const MASTER_STEP_MAX_ATTEMPTS = 3;
+
+// How long the master phase may sit before a frozen step (a RunPod envelope stuck IN_PROGRESS so /poll
+// pends forever) is soft-degraded to a passthrough and the chain advances. Generous: a CPU master of a
+// few-minute bed is well done by now. NOT a hard FAIL (unlike PHASE_HARD_DEADLINE_SECONDS) -- a stuck
+// polish must degrade to the un-mastered bed and still ship the film, never drop it.
+export const MASTER_STALL_SECONDS = 15 * 60;
+
+/** Pure: total film length (seconds) from the scenes -- the optional `seconds` hint a master module gets
+ *  (it probes the bed if absent). Returns undefined for a job with no scene durations. */
+export function filmSeconds(job: Pick<FilmJob, "scenes">): number | undefined {
+  const total = (job.scenes || []).reduce((a, s) => a + (Number(s.seconds) || 0), 0);
+  return total > 0 ? total : undefined;
+}
+
+/** Pure: the mastered bed's R2 key -- beside the source with a `_mastered` suffix, so the original
+ *  survives and each chain step writes a fresh, deterministic key (`renders/p/audio/bed.wav` ->
+ *  `renders/p/audio/bed_mastered.wav`). The core presigns a PUT for this key and passes it to the master
+ *  module; the extension is `.wav`, the master config default (the master phase does not thread per-user
+ *  the planner's master config (so a user-selected mp3 lands on a `.mp3` key the container PUT matches).
+ *  A deterministic key makes a transient-retry re-PUT idempotent (it overwrites, never orphans). */
+export function masteredBedKey(audioKey: string, format: "wav" | "mp3" = "wav"): string {
+  const slash = audioKey.lastIndexOf("/");
+  const dot = audioKey.lastIndexOf(".");
+  const base = dot > slash ? audioKey.slice(0, dot) : audioKey;
+  return `${base}_mastered.${format}`;
+}
+
+/** Pure: fold one master step's SUCCESS output into the chain state, returning the bed key to carry to
+ *  the next step (and the mux). Advances idx, resets the step's poll + attempts. `applied` tags
+ *  accumulate; a module soft-degrade (ok:true + output.degraded -- it passed the bed through because it
+ *  could not do the work) is recorded against the step binding, so a passthrough is never silent (#77).
+ *  Returns the input bed unchanged when the module returned no usable audio_key. */
+export function applyMasterOutput(m: MasterState, prevKey: string, out: MasterOutput): string {
+  const binding = m.chain[m.idx] ?? "";
+  const carried = typeof out.audio_key === "string" && out.audio_key.length > 0 ? out.audio_key : prevKey;
+  for (const a of out.applied || []) m.applied.push(a);
+  if (typeof out.degraded === "string" && out.degraded.length > 0) m.degraded.push(`${binding}: ${out.degraded}`);
+  m.idx += 1;
+  m.poll = undefined;
+  m.attempts = 0;
+  return carried;
+}
+
+/** Pure: record a step that could NOT run at all (unbound module, a terminal failure, or a stall) as a
+ *  soft-degrade and advance the cursor. The bed carries through unchanged -- the render never fails on a
+ *  master miss (#249 / #77). */
+export function degradeMasterStep(m: MasterState, reason: string): void {
+  const binding = m.chain[m.idx] ?? "";
+  m.degraded.push(`${binding}: ${reason}`);
+  m.idx += 1;
+  m.poll = undefined;
+  m.attempts = 0;
+}
+
+/** Pure: true once every master step has run (or degraded). */
+export function masterChainDone(m: MasterState): boolean {
+  return m.idx >= m.chain.length;
+}
+
+/** After the silent film is assembled and an audio bed exists: set up the `master` chain (if any master
+ *  module is installed) to polish the bed before mux. No master module -> straight to mux with the bed
+ *  as-is. Mirrors enterDialogueOrFinish -- it kicks the phase and lets advanceMasterPhase drive it. */
+async function enterMasterOrMux(env: Env, job: FilmJob): Promise<void> {
+  const envRec = env as unknown as Record<string, unknown>;
+  const serving = servingForHook(await discoverModules(envRec), "master"); // ui.order; the full master chain
+  const chain = serving.map((mod) => mod.binding);
+  if (!chain.length) { job.phase = "mux"; await enterMuxPhase(env, job); return; } // no master installed: mux as-is
+  // Per-step planner config, clamped against each module's schema (by name), aligned to chain order --
+  // mirrors enterSpeechOrFinish / the finish chain so the audio-master knobs (target_lufs/upscale/format)
+  // actually reach the module instead of dispatching with {}.
+  const configs = resolveFinishConfigs(serving, job.master_config ?? {});
+  job.master = { chain, idx: 0, applied: [], degraded: [], configs };
+  job.phase = "master";
+  await advanceMasterPhase(env, job);
+}
+
+/** Drive the master chain over the film's audio bed: submit the current step or poll the in-flight one,
+ *  folding each mastered bed back into job.audio_key. FAIL-SAFE -- an unbound / failed / stalled step
+ *  soft-degrades (passes the CURRENT bed through, records the reason) and the chain advances; the render
+ *  NEVER fails on a master miss (#249 / #77). When the chain is exhausted, record the outcome and mux.
+ *  One network round-trip (submit OR poll) per step per tick: a synchronous step folds and continues in
+ *  the same tick; an async step parks on its poll token and returns (the next advanceFilmJob re-enters). */
+async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
+  const m = job.master;
+  if (!m || !job.audio_key) { job.phase = "mux"; await enterMuxPhase(env, job); return; } // defensive: nothing to master
+  const envRec = env as unknown as Record<string, unknown>;
+  const seconds = filmSeconds(job);
+
+  // A step in flight can freeze (a RunPod envelope stuck IN_PROGRESS pends forever). If the phase has sat
+  // past the stall ceiling with a step still pending, soft-degrade THIS step (passthrough) and move on --
+  // a stuck polish ships the un-mastered bed, it never hangs the render or drops the film.
+  if (m.poll && phaseAgeSeconds(job) >= MASTER_STALL_SECONDS) {
+    console.warn(`film ${job.film_id}: master step ${m.chain[m.idx]} stalled; passing the bed through`);
+    degradeMasterStep(m, "stalled");
+  }
+
+  while (!masterChainDone(m)) {
+    const fetcher = asFetcher(envRec[m.chain[m.idx]]);
+    if (!fetcher) { degradeMasterStep(m, "module not bound"); continue; }
+    if (!m.poll) {
+      // CREDENTIALLESS module: the core owns the R2 S3 creds and presigns the bed GET + the mastered PUT
+      // (the module/container hold no R2 creds), exactly as the film.finish chain does. Each step masters
+      // the PRIOR step's output (job.audio_key carries forward), so presign per step from the current bed.
+      const audioKey = job.audio_key;
+      // The step's clamped planner config (target_lufs / upscale / format). The output key extension must
+      // match the format the module/container will write, so derive it from the same config.
+      const cfg = m.configs?.[m.idx] ?? {};
+      const format = cfg.format === "mp3" ? "mp3" : "wav";
+      const outputKey = masteredBedKey(audioKey, format);
+      const [audioUrl, outputUrl] = await Promise.all([
+        presignR2Get(env, audioKey, 1800), // 30min: covers a multi-minute CPU master
+        presignR2Put(env, outputKey, 1800),
+      ]);
+      const req = {
+        hook: "master" as const,
+        input: {
+          film_id: job.film_id, audio_key: audioKey,
+          audio_url: audioUrl, output_url: outputUrl, output_key: outputKey, seconds,
+        } as MasterInput,
+        config: cfg,
+        context: { project: job.project, job_id: job.film_id },
+      };
+      const r = await invokeModule<MasterInput, MasterOutput>(fetcher, req);
+      if (!r.ok) {
+        const d = classifyFinishRetry(r.error, m.attempts ?? 0, MASTER_STEP_MAX_ATTEMPTS);
+        if (d.action === "retry") { m.attempts = d.attempts; return; } // transient: re-submit next tick
+        degradeMasterStep(m, `invoke failed: ${r.error}`); continue;     // terminal: passthrough + advance
+      }
+      if ((r as { pending?: boolean }).pending) { m.poll = (r as { poll: string }).poll; m.attempts = 0; return; }
+      if ("output" in r) { job.audio_key = applyMasterOutput(m, job.audio_key, r.output as MasterOutput); continue; }
+      degradeMasterStep(m, "module returned neither output nor a poll token"); continue;
+    }
+    const p = await pollModule<MasterOutput>(fetcher, { poll: m.poll });
+    if (p.ok && !(p as { pending?: boolean }).pending) {
+      job.audio_key = applyMasterOutput(m, job.audio_key, (p as { output: MasterOutput }).output); continue;
+    }
+    if (p.ok) return; // still mastering -- poll again next tick
+    const d = classifyFinishRetry(p.error, m.attempts ?? 0, MASTER_STEP_MAX_ATTEMPTS);
+    if (d.action === "retry") { m.attempts = d.attempts; return; } // transient poll blip: re-poll next tick
+    degradeMasterStep(m, `poll failed: ${p.error}`); // terminal: passthrough + advance
+  }
+
+  // Chain exhausted: the (maybe mastered) bed is in job.audio_key. A degrade is observable, not a silent green.
+  if (m.degraded.length) console.warn(`film ${job.film_id}: master degraded -- ${m.degraded.join("; ")}`);
+  job.phase = "mux";
+  await enterMuxPhase(env, job);
+}
+
 async function finishAssembledFilm(env: Env, job: FilmJob, silentKey: string): Promise<void> {
   job.silent_film_key = silentKey;
-  if (job.audio_key) {
-    job.phase = "mux";
-    await enterMuxPhase(env, job);
-  } else {
+  if (!job.audio_key) {
     job.film_key = silentKey;
     await transitionToDone(env, job);
+    return;
   }
+  // There IS an audio bed: master it (music upscale + loudness) if a master module is installed, then mux.
+  // enterMasterOrMux soft-degrades to a straight mux when no master module is present (or the polish fails).
+  await enterMasterOrMux(env, job);
 }
 
 async function enterAssemblePhase(
@@ -883,10 +1406,12 @@ export async function startFilmFromKeyframes(
     motion_config?: Record<string, unknown>;
     motion_configs?: Record<string, Record<string, unknown>>;
     finish_config?: Record<string, Record<string, unknown>>;
+    speech_config?: Record<string, Record<string, unknown>>;
+    film_finish_config?: Record<string, Record<string, unknown>>;
+    master_config?: Record<string, Record<string, unknown>>;
     derive_mode: "finalized" | "cloud-finalized";
     parent_render_id?: number;
     audio_key?: string;
-    user_email?: string;
   },
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
@@ -900,6 +1425,9 @@ export async function startFilmFromKeyframes(
     motion_backend: args.motion_backend ?? null,
     motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
+    speech_config: args.speech_config ?? {},
+    film_finish_config: args.film_finish_config ?? {},
+    master_config: args.master_config ?? {},
     keyframe_binding: null,
     phase: "failed",
     created_at: Date.now(),
@@ -907,7 +1435,6 @@ export async function startFilmFromKeyframes(
     derive_mode: args.derive_mode,
     parent_render_id: args.parent_render_id,
     audio_key: stagedAudio,
-    user_email: args.user_email,
   };
   if (!matched.length) {
     job.error = `no keyframes matched requested shots (missing: ${missing.join(", ")})`;
@@ -945,13 +1472,15 @@ export async function startFilmJob(
   env: Env,
   args: {
     project: string; bundle_key: string; scenes: FilmScene[];
-    motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
+    motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>;
     finish_config?: Record<string, Record<string, unknown>>;
+    speech_config?: Record<string, Record<string, unknown>>;
+    film_finish_config?: Record<string, Record<string, unknown>>;
+    master_config?: Record<string, Record<string, unknown>>;
     keyframes_only?: boolean;
     clips_only?: boolean;
     pretrained_loras?: Record<string, string>;
     audio_key?: string;
-    user_email?: string;
     dialogue_lines?: DialogueLine[];
     cast_loras?: Record<string, number>;
     film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
@@ -961,26 +1490,34 @@ export async function startFilmJob(
   const stagedAudio = args.clips_only ? undefined : await resolveStagedAudioKey(env, args.audio_key);
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
-  const kf = servingForHook(modules, "keyframe")[0] ?? null;
+  // Honor the planner's keyframe backend pick (e.g. cloud-keyframe) over the ui.order default, mirroring
+  // motion.backend selection. An explicit-but-unknown choice resolves to null -> the render fails loud
+  // with a clear "keyframe module <choice> not installed" rather than silently swapping backends.
+  const kfServing = servingForHook(modules, "keyframe");
+  const kf = (args.keyframe_backend ? kfServing.find((m) => m.name === args.keyframe_backend) : kfServing[0]) ?? null;
   const job: FilmJob = {
     film_id: "film-" + crypto.randomUUID(),
     project: args.project, bundle_key: args.bundle_key, scenes,
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
     finish_config: args.finish_config ?? {},
+    speech_config: args.speech_config ?? {},
+    film_finish_config: args.film_finish_config ?? {},
+    master_config: args.master_config ?? {},
     keyframes_only: !!args.keyframes_only,
     clips_only: !!args.clips_only,
     audio_key: stagedAudio,
     film_titles: args.film_titles,
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
     phase_started_at: Date.now(),
-    user_email: args.user_email,
     dialogue_lines: args.dialogue_lines && args.dialogue_lines.length ? args.dialogue_lines : undefined,
     cast_loras: args.cast_loras && Object.keys(args.cast_loras).length ? args.cast_loras : undefined,
   };
   const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
   if (!kf || !fetcher) {
     job.phase = "failed";
-    job.error = kf ? `keyframe module ${kf.name} (${kf.binding}) is not bound` : "no keyframe module installed";
+    job.error = kf
+      ? `keyframe module ${kf.name} (${kf.binding}) is not bound`
+      : (args.keyframe_backend ? `keyframe module ${args.keyframe_backend} not installed` : "no keyframe module installed");
   } else {
     const config = validateConfig(kf.config_schema, args.keyframe_config);
     const keyframeInput: KeyframeInput = {
@@ -1034,13 +1571,26 @@ export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob |
 export const KEYFRAME_STALL_SECONDS = 20 * 60; // 20min: a project-wide SDXL keyframe pass is well done by now
 export const PHASE_HARD_DEADLINE_SECONDS = 90 * 60; // 90min: absolute ceiling for any one pollable phase
 
-const POLLABLE_PHASES: ReadonlySet<FilmJob["phase"]> = new Set(["keyframe", "clips", "finish"]);
+const POLLABLE_PHASES: ReadonlySet<FilmJob["phase"]> = new Set(["keyframe", "clips", "speech", "finish"]);
 
 /** Seconds the job has sat in its current phase. Falls back to created_at on pre-#129 jobs (no
  *  phase_started_at stamp); `now` is injectable so tests do not depend on the wall clock. */
 export function phaseAgeSeconds(job: FilmJob, now: number = Date.now()): number {
   const since = job.phase_started_at ?? job.created_at;
   return Math.max(0, Math.floor((now - since) / 1000));
+}
+
+/** Progress fingerprint for the stall signal (#136): the current phase plus how many of its per-shot
+ *  units are done. Monotonic within a phase (shots only go pending->done) and it changes on every phase
+ *  transition, so ANY change is genuine forward progress -- which is what re-stamps last_progress_at.
+ *  Phases with no per-shot fan-out (keyframe/dialogue/assemble/master/mux) report :0, so their stall
+ *  window runs from when the phase began, exactly as before. */
+export function filmProgressMarker(job: FilmJob, clipJob: ClipJob | null): string {
+  let done = 0;
+  if (job.phase === "clips") done = (clipJob?.shots || []).filter((s) => s.status === "done").length;
+  else if (job.phase === "finish") done = (job.finish_shots || []).filter((fs) => fs.status === "done").length;
+  else if (job.phase === "speech") done = (job.speech_shots || []).filter((ss) => ss.status === "done").length;
+  return `${job.phase}:${done}`;
 }
 
 /** List the keyframe PNGs the GPU wrote for a project and join them to the job's scenes. The keyframe
@@ -1244,6 +1794,14 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
     await putFilm(env, job);
   }
 
+  // Phase 2.6: enhance per-shot dialogue audio (the speech chain, async across requests), then -> finish.
+  // A POLISH phase: a hard step failure degrades the shot (keeps the original audio) and the render
+  // proceeds to finish -- a speech glitch must never fail a fully-rendered film (see advanceSpeechPhase).
+  if (job.phase === "speech") {
+    await advanceSpeechPhase(env, job);
+    await putFilm(env, job);
+  }
+
   // Phase 3: drive the finish chain per clip (async, across requests), then -> assemble.
   if (job.phase === "finish" && job.finish_shots) {
     await advanceFinishPhase(env, job);
@@ -1266,18 +1824,39 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
     await putFilm(env, job);
   }
 
-  // Phase 5: mux the audio bed onto the silent film via video-finish (VPC remuxAudioOnly).
+  // Phase 4.5: master the assembled film's audio bed (music upscale + loudness) before mux. Pollable
+  // like dialogue; FAIL-SAFE -- a master miss passes the bed through and proceeds to mux (#249 / #77).
+  if (job.phase === "master") {
+    await advanceMasterPhase(env, job);
+    await putFilm(env, job);
+  }
+
+  // Phase 5: mux the (mastered) audio bed onto the silent film via video-finish (VPC remuxAudioOnly).
   if (job.phase === "mux") {
     await enterMuxPhase(env, job);
     await putFilm(env, job);
   }
 
+  // Re-stamp the stall clock on REAL progress (#136). The clips/finish/speech phases advance per shot
+  // over many minutes inside ONE phase, so a UI stall signal measured from phase_started_at alone cries
+  // wolf on a healthy long phase. filmProgressMarker changes on any finished shot (or a phase
+  // transition), so a change is genuine progress -> refresh last_progress_at. The DRIVER's recovery
+  // (phaseAgeSeconds + the 90min ceiling) deliberately still measures from phase_started_at; this only
+  // fixes the in-flight UI signal, never the recovery semantics.
+  const marker = filmProgressMarker(job, clipJob);
+  const progressed = marker !== job.progress_marker;
+  if (progressed) {
+    job.progress_marker = marker;
+    job.last_progress_at = Date.now();
+  }
   // On any phase transition this tick, stamp when the new phase began (the stall recovery measures
   // against it) and persist. The phase legs above already persisted on the paths they took; this also
   // covers a recovery that failed the job at the ceiling (no leg ran after it), so that verdict lands
   // in R2. putFilm is an idempotent re-PUT, so the belt-and-suspenders double write is harmless.
   if (job.phase !== entryPhase) {
     job.phase_started_at = Date.now();
+    await putFilm(env, job);
+  } else if (progressed) {
     await putFilm(env, job);
   }
 

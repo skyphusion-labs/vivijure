@@ -1,4 +1,4 @@
-// Module conformance harness (vivijure-module/1).
+// Module conformance harness (vivijure-module/2; /1 accepted transitionally).
 //
 // The "does this module honor the contract?" checker. Anyone writing a module (in this repo or
 // another) runs these checks against their worker to know it will plug into the core cleanly:
@@ -11,7 +11,7 @@
 // .test.ts) drives them against a deployed module URL. This is the conformance half of the module
 // SDK: the contract is the law, and this is how a contributor proves they obey it.
 
-import { MODULE_API, type HookName } from "./types";
+import { MODULE_API, SUPPORTED_MODULE_APIS, type HookName } from "./types";
 import { validateManifest } from "./registry";
 
 export interface ConformanceCheck {
@@ -24,6 +24,7 @@ const ok = (name: string, detail = "ok"): ConformanceCheck => ({ name, pass: tru
 const bad = (name: string, detail: string): ConformanceCheck => ({ name, pass: false, detail });
 
 const FIELD_TYPES = ["int", "float", "bool", "enum", "string"];
+const FIELD_SCOPES = ["render", "install"];
 
 /** One config_schema field has a valid type and a default consistent with that type. */
 function checkConfigField(key: string, f: unknown): ConformanceCheck {
@@ -32,6 +33,10 @@ function checkConfigField(key: string, f: unknown): ConformanceCheck {
   const ff = f as Record<string, unknown>;
   const t = ff.type;
   if (typeof t !== "string" || !FIELD_TYPES.includes(t)) return bad(label, "bad field type " + String(t));
+  // scope is optional (omitted => "render", a per-render knob); when present it must be a known scope.
+  if (ff.scope !== undefined && (typeof ff.scope !== "string" || !FIELD_SCOPES.includes(ff.scope))) {
+    return bad(label, "bad field scope " + String(ff.scope));
+  }
   if (t === "enum") {
     if (!Array.isArray(ff.values) || ff.values.length === 0) return bad(label, "enum needs a non-empty values[]");
     if (typeof ff.default !== "string" || !(ff.values as unknown[]).includes(ff.default)) {
@@ -56,7 +61,9 @@ export function checkManifest(raw: unknown): ConformanceCheck[] {
     return checks;
   }
   checks.push(ok("manifest", m.name + " v" + m.version));
-  checks.push(m.api === MODULE_API ? ok("api-version", m.api) : bad("api-version", m.api + " != " + MODULE_API));
+  checks.push((SUPPORTED_MODULE_APIS as ReadonlySet<string>).has(String(m.api))
+    ? ok("api-version", String(m.api))
+    : bad("api-version", String(m.api) + " not in " + [...SUPPORTED_MODULE_APIS].join("/")));
   checks.push(ok("hooks", m.hooks.join(", ")));
   if (m.config_schema) {
     for (const [k, f] of Object.entries(m.config_schema)) checks.push(checkConfigField(k, f));
@@ -142,6 +149,12 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
     if (!isStrArr(o.applied)) return "dialogue output needs an applied string[]";
     return null;
   },
+  speech: (o) => {
+    if (!isStr(o.shot_id)) return "speech output needs a string shot_id";
+    if (!isStr(o.audio_key)) return "speech output needs a string audio_key";
+    if (!isStrArr(o.applied)) return "speech output needs an applied string[]";
+    return null;
+  },
   "plan.enhance": (o) => {
     if (!isRec(o.storyboard)) return "plan.enhance output needs a storyboard object";
     if (!Array.isArray((o.storyboard as Record<string, unknown>).scenes)) {
@@ -159,6 +172,11 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
   },
   notify: (o) => {
     if (!isStrArr(o.delivered)) return "notify output needs a delivered string[]";
+    return null;
+  },
+  master: (o) => {
+    if (!isStr(o.audio_key)) return "master output needs a string audio_key";
+    if (!isStrArr(o.applied)) return "master output needs an applied string[]";
     return null;
   },
   "film.finish": (o) => {

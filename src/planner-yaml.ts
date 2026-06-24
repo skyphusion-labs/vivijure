@@ -53,6 +53,15 @@ function emitScene(scene: StoryboardScene): string[] {
   if (scene.start_image !== undefined) {
     lines.push(`${inner}start_image: ${quote(scene.start_image)}`);
   }
+  // Per-shot dialogue (issue #307). validateStoryboard preserves scene.dialogue { slot, text };
+  // dropping it here is what made dialogue-bearing bundles serialize a SILENT storyboard.yaml.
+  // Nested mapping so the line round-trips faithfully (slot is a single-letter SlotId, no quoting
+  // needed; text is quoted like every other free string). Absent dialogue emits nothing.
+  if (scene.dialogue !== undefined) {
+    lines.push(`${inner}dialogue:`);
+    lines.push(`${inner}  slot: ${scene.dialogue.slot}`);
+    lines.push(`${inner}  text: ${quote(scene.dialogue.text)}`);
+  }
   return lines;
 }
 

@@ -11,6 +11,7 @@
 
 import {
   MODULE_API,
+  SUPPORTED_MODULE_APIS,
   HOOK_NAMES,
   HOOK_BLURBS,
   HOOK_CARDINALITY,
@@ -52,7 +53,8 @@ export function moduleBindingNames(env: Record<string, unknown>): string[] {
 export function validateManifest(raw: unknown): ModuleManifest | string {
   if (!raw || typeof raw !== "object") return "manifest is not an object";
   const m = raw as Record<string, unknown>;
-  if (m.api !== MODULE_API) return `unsupported api ${String(m.api)} (core speaks ${MODULE_API})`;
+  if (!(SUPPORTED_MODULE_APIS as ReadonlySet<string>).has(String(m.api)))
+    return `unsupported api ${String(m.api)} (core speaks ${MODULE_API}, accepts ${[...SUPPORTED_MODULE_APIS].join(", ")})`;
   if (typeof m.name !== "string" || !m.name) return "manifest missing name";
   if (typeof m.version !== "string" || !m.version) return "manifest missing version";
   if (!Array.isArray(m.hooks) || m.hooks.length === 0) return "manifest declares no hooks";
@@ -397,7 +399,11 @@ export async function dispatchChain<I = unknown, O = unknown>(
   seed: I,
   context: InvokeContext,
   opts: {
-    nextInput: (prevOutput: O, seed: I) => I;
+    // Map a module's output to the next module's input. May be async: a chain whose steps thread
+    // through R2 (film.finish reading the PRIOR step's output) presigns a fresh GET/PUT pair per step
+    // here, so step N+1 reads what step N wrote instead of re-reading the seed (#14). A sync mapper
+    // (plan.enhance) just returns I; `await` on a non-promise is a no-op.
+    nextInput: (prevOutput: O, seed: I) => I | Promise<I>;
     configFor?: (moduleName: string) => Record<string, unknown> | undefined;
   },
 ): Promise<ChainResult<O>> {
@@ -416,7 +422,7 @@ export async function dispatchChain<I = unknown, O = unknown>(
     const r = await awaitInvoke<I, O>(fetcher, { hook, input: current, config, context });
     if (r.ok) {
       last = r.output;
-      current = opts.nextInput(r.output, seed);
+      current = await opts.nextInput(r.output, seed);
       applied.push(module.name);
       // A module can return ok:true yet report a SOFT-DEGRADE via the `output.degraded` convention (a
       // reason string) -- it passed its input through because it could not do its work. Without this, a

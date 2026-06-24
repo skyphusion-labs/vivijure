@@ -9,6 +9,7 @@ import {
   addSource,
   removeSource,
 } from "./cast-db";
+import type { CastMember } from "./cast-db";
 import { extFromMime } from "./utils";
 
 export const CAST_IMAGE_MIME_RE = /^image\/(png|jpe?g|webp)$/i;
@@ -238,4 +239,21 @@ export async function handleCastSourceRemove(
   if (!result.removedKey) return json({ error: "source key not in this cast member's set" }, 404);
   try { await env.R2_RENDERS.delete(result.removedKey); } catch { /* ignore */ }
   return json({ cast: result.row });
+}
+
+// Issue #298: deleting a cast member must reclaim ALL of its R2 artifacts, not just the D1 row.
+// Mirrors the per-key best-effort delete the portrait/ref/source handlers already use. Collects the
+// portrait, every ref (the LoRA training set), every source (raw uploads), and the trained lora_key,
+// then issues one delete per key. Each delete is best-effort: an already-absent key is not a failure
+// (R2 delete is idempotent), and one transient miss must not abort the rest of the cleanup.
+export async function deleteCastArtifacts(env: Env, cast: CastMember): Promise<void> {
+  const keys = [
+    cast.portrait_key,
+    ...cast.ref_keys.map((r) => r.key),
+    ...cast.source_keys.map((s) => s.key),
+    cast.lora_key,
+  ].filter((k): k is string => typeof k === "string" && k.length > 0);
+  for (const key of keys) {
+    try { await env.R2_RENDERS.delete(key); } catch { /* ignore: best-effort GC */ }
+  }
 }

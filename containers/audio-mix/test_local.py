@@ -114,6 +114,8 @@ def main():
     else:
         failures.append(f"music only ducked {drop:.2f} dB (<6 dB); duck not effective")
 
+    # The single-bed "master the bed" check moved with the DSP: see containers/audio-master/test_local.py.
+
     if failures:
         print("\nFAILED:")
         for f in failures:

@@ -62,15 +62,60 @@ jobs:
       # Module workers deploy BEFORE the core. The core binds each module as a [[services]] dependency,
       # and a binding to a not-yet-deployed service makes the core `wrangler deploy` fail. Deploying
       # modules first keeps every MODULE_* binding pointing at a live service.
+      #
+      # DEPLOY-BY-DEFAULT: iterate EVERY modules/*/wrangler.toml, never a hardcoded include-list. A
+      # hardcoded list silently drifts -- a new module (or a new scope:install config field on an
+      # existing one, e.g. notify-email #300) is added to modules/ but forgotten here, so the live
+      # worker stays stale and the registry/UI never sees the change. Worse, the core can bind a
+      # [[services]] target the list omits, turning the next core deploy into a dangling-binding
+      # failure. Deploying every module dir closes both gaps. If a module ever must be skipped, add
+      # its dir name to EXCLUDE below (explicit, reviewable) -- do NOT reintroduce an include-list.
+      # POSIX sh ONLY: this job runs in `container: node:22-alpine`, whose /bin/sh is BusyBox ash, and
+      # GitHub's default `run:` shell there is `sh` (not bash). No bash-isms -- no `shopt`, no `arr=()`
+      # arrays, no `${#arr[@]}` -- or the step dies with exit 127 (v0.6.1 failed exactly this way:
+      # `shopt: not found`). A plain glob `for` loop is portable; an unmatched glob stays literal, so
+      # we test `[ -f "$toml" ]` to handle the empty case.
       - name: Deploy module workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          for module in own-gpu finish-rife finish-upscale finish-lipsync keyframe seedance kling minimax-hailuo google-veo vidu-q3 alibaba-wan text-overlay film-titles dialogue-gen; do
+          set -eu
+          # Explicit, reviewable skip-list (space-separated module DIR names). Empty = deploy all.
+          # DO NOT replace this with a hardcoded include-list: that is what drifted (v0.6.0 omitted
+          # 9 modules incl. notify-email, which served config_schema:null). Deploy-by-default; the
+          # ONLY way to skip a module is to name it here, with a reason, so the exclusion is reviewed.
+          #
+          # Excluded (not-ready; never been live, so excluding them is not a regression):
+          #   openai-sora     -- WIP; first deploy fails on the workers.dev subdomain API even with
+          #                      workers_dev=false (v0.6.2). Onboard the script, then drop from here.
+          #   alibaba-wan25   -- WIP; not wired into the core yet (not in [[services]]).
+          #   plan-enhance-py -- superseded by the TS plan-enhance module; Python variant not shipped.
+          EXCLUDE="openai-sora alibaba-wan25 plan-enhance-py"
+          deployed=0
+          found=0
+          for toml in modules/*/wrangler.toml; do
+            # Unmatched glob stays literal in POSIX sh; skip the non-file sentinel.
+            [ -f "$toml" ] || continue
+            found=$((found + 1))
+            module=$(basename "$(dirname "$toml")")
+            skip=0
+            for ex in $EXCLUDE; do
+              [ "$module" = "$ex" ] && skip=1
+            done
+            if [ "$skip" -eq 1 ]; then
+              echo "Skipping vivijure-module-${module} (in EXCLUDE)"
+              continue
+            fi
             echo "Deploying vivijure-module-${module}..."
-            npx wrangler deploy -c modules/${module}/wrangler.toml
+            npx wrangler deploy -c "$toml"
+            deployed=$((deployed + 1))
           done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no modules/*/wrangler.toml found -- refusing to deploy core with zero modules"
+            exit 1
+          fi
+          echo "Deployed ${deployed} module worker(s) of ${found} module dir(s)."
 
       # Apply D1 schema migrations BEFORE the core deploys, so new code never runs against an old
       # schema. Idempotent: wrangler only runs untracked migrations. Additive migrations only; a

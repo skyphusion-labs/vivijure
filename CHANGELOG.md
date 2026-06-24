@@ -3,6 +3,47 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.2.6
+
+**Launch prep: fail-loud finish, the talking showcase, and the render-pipeline diagram.**
+
+- **Fail loud on a failed finish chain (#245 / #249):** a finish step that genuinely fails (after the bounded retry + R2 reclaim) now fails the render with the real per-shot error instead of silently advancing to done and shipping the raw i2v clip with `applied=[]`. `clipKeysFromFilmJob` returns finished clips only when a finish chain was set up, never substituting a raw clip for a non-done shot. The honest-failures safety net: a finish failure can no longer ship a green-but-unfinished film.
+- **Welcome page + README:** the "Vivijure Speaks" talking-character showcase on the public welcome page (#240), and a render-pipeline mermaid diagram in the README (storyboard to keyframe to dialogue + motion.backend to the finish chain to assemble to mux).
+- Pairs with **backend-v0.2.27** (the RIFE pad-to-64 fix, verified live VOICED+FULL on a non-64 resolution): the finish chain now runs on every cloud i2v output dimension, so all seven motion backends do the full lip-sync + upscale path.
+- **693 tests**, typecheck-clean.
+
+## v0.2.5
+
+**Preflight fix: the pre-render safety check actually runs now.** Found in a full planner regression pass.
+
+- **preflight route wired + envelope unwrapped (#242 / #243):** `src/preflight.ts` (the real validator: shape + cast-readiness) was written but never imported, so `/api/storyboard/preflight` only ran the shape gate against the wrong object: it read `.title`/`.scenes` off the `{storyboard, castBindings}` envelope (undefined) and returned HTTP 400 on every valid storyboard. The client threw on the non-2xx and showed only "HTTP 400" with no reasons, and its bundle gate never activated. The handler now unwraps `.storyboard`, runs the full chain (validateStoryboard -> checkStoryboardShape -> checkCastBindingsReady -> summarize), and returns the PreflightResult at HTTP 200 with `ok:false` + structured issues for a storyboard-with-problems (validation findings are data, not an HTTP failure). The client now renders the issues and the bundle gate works. D1 is only queried when cast bindings are present.
+- **690 tests** (8 new preflight-route tests incl. the exact old-bug payload as a regression guard), typecheck-clean.
+
+## v0.2.4
+
+**Cloud i2v duration enum fix.** Unblocks the cloud motion backends for short shots.
+
+- **kling + wan duration snap (#241):** the Kling ({5,10}) and Wan 2.6 ({5,10,15}) cloud i2v modules accept only a discrete duration enum, not a continuous range; the old continuous clamp passed a 4s shot straight through and the provider 400'd at submit (so a cloud talking render failed before any clip rendered). Duration now snaps UP to the smallest allowed value at or above the per-shot seconds (4s -> 5; a 7s shot -> 10, never clipped shorter than the shot). The other six cloud modules likely share the bug; tracked as follow-up.
+- **683 tests**, typecheck-clean.
+
+## v0.2.3
+
+**Finish-chain self-heal: a GC'd or frozen mid-chain finish step now recovers from R2.** Builds on v0.2.2's silent-render fixes.
+
+- **R2-presence advance for any finish step (#239):** when a finish step's RunPod poll job is GC'd-after-complete (a 404) or freezes IN_PROGRESS (poll pends forever), and that step's OWN expected output is already in R2, the orchestrator folds it in and advances to the next module -- instead of polling a ghost job to the hard deadline. This fixes the wedge where RIFE completed and its output landed in R2 but the finish chain never advanced, so lip-sync was never dispatched and the shot pended forever. Per-step advance on the step's own artifact (not final-artifact adoption), so the remaining modules still run -- it cannot ship a half-finished clip.
+- **682 tests**, typecheck-clean.
+
+## v0.2.2
+
+**The talking-character showcase fix: a scatter film keeps its voice end to end.** Builds on v0.2.1's self-heal so the orchestration now reliably delivers per-shot dialogue + lip-sync through gather and assemble.
+
+- **Scatter keeps clip audio (#234):** when a render has dialogue, the gather concat now preserves each lip-synced clip's baked-in audio (and silent-pads an audio-less clip to a uniform track), instead of stripping all audio and producing a silent film.
+- **No mid-chain finish adoption (#234):** a finish shot whose module fails mid-chain is no longer adopted from its intermediate R2 clip as "done" -- only the chain's final artifact is adoptable, so a failed lip-sync can no longer masquerade as a finished (silent) clip.
+- **Bounded finish-step retry (#234):** a transient finish-module blip (5xx / timeout / lost poll token) re-dispatches the step up to 3 attempts; a deterministic reject (4xx / no face) still fails loud -- so a momentary MuseTalk cold-start no longer silences a shot.
+- **Watchdog spares D1-blocked shards (#230):** a shard that is merely retrying a transient D1 error is no longer declared dead by the watchdog.
+- **voiced-verify (#236):** a `scripts/` checker that gates a render on per-shot lip-sync + non-silent audio (volumedetect), not just stream presence.
+- **677 tests**, typecheck-clean.
+
 ## v0.2.1
 
 **Production hardening: tag-gated deploys + render self-heal.** First release cut under the new tag gate.

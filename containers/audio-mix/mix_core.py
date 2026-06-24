@@ -109,6 +109,11 @@ def _build_filtergraph(tracks):
     out_label = _combine(final, "mix", parts)
     return ";".join(parts), out_label, did_duck
 
+# The standalone "master the bed" pass (VHQ soxr resample + high-shelf air lift + two-pass loudnorm)
+# was LIFTED OUT of this mixer into its own first-class module under the `master` hook
+# (modules/audio-master + containers/audio-master). This container stays the multi-track MIX + duck;
+# film-level mastering of the assembled bed is the master module's job now.
+
 
 def _measure_loudnorm(path, target_lufs):
     """First loudnorm pass: measure the file's loudness stats. Returns the dict of

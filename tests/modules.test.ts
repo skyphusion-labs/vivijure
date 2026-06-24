@@ -45,6 +45,10 @@ describe("validateManifest", () => {
   it("rejects a wrong api version", () => {
     expect(validateManifest(manifest({ api: "vivijure-module/99" }))).toContain("unsupported api");
   });
+  it("accepts BOTH supported versions (host-accepts-both: /2 current, /1 transitional)", () => {
+    expect(validateManifest(manifest({ api: "vivijure-module/1" }))).toMatchObject({ name: "finish-rife" });
+    expect(validateManifest(manifest({ api: "vivijure-module/2" }))).toMatchObject({ name: "finish-rife" });
+  });
   it("rejects unknown hooks", () => {
     expect(validateManifest(manifest({ hooks: ["finish", "teleport"] }))).toContain("unknown hooks");
   });
@@ -155,11 +159,13 @@ describe("modulesResponse", () => {
   it("serves the static hook catalog (name + blurb + cardinality), independent of installs", () => {
     const r = modulesResponse([], render);
     expect(r.catalog.map((h) => h.name)).toEqual([
-      "keyframe", "motion.backend", "finish", "score", "dialogue", "plan.enhance", "cast.image", "notify", "film.finish",
+      "keyframe", "motion.backend", "finish", "score", "dialogue", "speech", "plan.enhance", "cast.image", "notify", "master", "film.finish",
     ]);
     expect(r.catalog.find((h) => h.name === "dialogue")?.cardinality).toBe("pick_one");
+    expect(r.catalog.find((h) => h.name === "speech")?.cardinality).toBe("chain");
     expect(r.catalog.find((h) => h.name === "cast.image")?.cardinality).toBe("pick_one");
     expect(r.catalog.find((h) => h.name === "notify")?.cardinality).toBe("chain");
+    expect(r.catalog.find((h) => h.name === "master")?.cardinality).toBe("chain");
     expect(r.catalog.find((h) => h.name === "keyframe")?.cardinality).toBe("pick_one");
     expect(r.catalog.find((h) => h.name === "motion.backend")?.cardinality).toBe("pick_one");
     expect(r.catalog.find((h) => h.name === "finish")?.cardinality).toBe("chain");

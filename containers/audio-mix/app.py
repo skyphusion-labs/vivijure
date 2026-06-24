@@ -157,6 +157,9 @@ async def mix(req):
 app = web.Application(client_max_size=1024 * 1024)  # JSON bodies are small (URLs only)
 app.router.add_get("/health", health)
 app.router.add_post("/mix", mix)
+# The single-bed "master the bed" pass (formerly POST /music-upscale here) was lifted out into its own
+# first-class module under the `master` hook (modules/audio-master + containers/audio-master). This
+# container stays the multi-track MIX + duck only.
 
 if __name__ == "__main__":
     log.info("audio-mix listening on 0.0.0.0:%d", PORT)

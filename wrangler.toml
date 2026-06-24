@@ -17,6 +17,10 @@ workers_dev = true
 # The studio frontend (public/) served via Workers Assets.
 assets = { directory = "./public", binding = "ASSETS" }
 
+# Tail consumer -- ships core render logs + exceptions to vivijure-tail -> Loki -> Grafana.
+# DEPLOY-ORDERED: vivijure-tail must be live BEFORE this binding deploys (dangling-binding hazard).
+tail_consumers = [ { service = "vivijure-tail" } ]
+
 [observability]
 enabled = true
 
@@ -130,8 +134,9 @@ binding = "MODULE_TEXT_OVERLAY"
 service = "vivijure-module-text-overlay"
 
 # Film titles: a film.finish-chain module (opening title + end credit cards) that runs on the
-# assembled+muxed film via the video-finish /film-titles route. Inert until the orchestrator invokes
-# the film.finish chain (separate change); discovered by the registry now.
+# assembled+muxed film via the video-finish /film-titles route. The orchestrator invokes the
+# film.finish chain (applyFilmFinish, post-mux before done) since v0.3.0, so this runs on every
+# single-film render; discovered by the registry.
 [[services]]
 binding = "MODULE_FILM_TITLES"
 service = "vivijure-module-film-titles"
@@ -161,6 +166,14 @@ service = "vivijure-module-narration-gen"
 binding = "MODULE_BEAT_SYNC"
 service = "vivijure-module-beat-sync"
 
+# Audio master: film-level mastering of the assembled audio bed (music upscale + LUFS loudness) on the
+# audio-master CPU VPC container (containers/audio-master over AUDIO_MASTER_VPC -- CPU ffmpeg, NEVER
+# RunPod/GPU). The `master` chain runs after assemble, before the final mux; a master miss soft-degrades
+# to the un-mastered bed (never fails the render).
+[[services]]
+binding = "MODULE_AUDIO_MASTER"
+service = "vivijure-module-audio-master"
+
 # Dialogue: per-shot spoken lines -> Deepgram Aura-1 (Workers AI) in the cast member's voice. The
 # `dialogue` phase runs after clips, before finish; its audio_key feeds the lip-sync finish module.
 [[services]]
@@ -172,6 +185,13 @@ service = "vivijure-module-dialogue-gen"
 [[services]]
 binding = "MODULE_LIPSYNC"
 service = "vivijure-module-finish-lipsync"
+
+# Speech upscale (the `speech` hook): aviation-grade speech cleanup / enhancement on the dialogue
+# audio_key before lip-sync consumes it. Its own per-module worker; the registry discovers it as a
+# MODULE_* binding.
+[[services]]
+binding = "MODULE_SPEECH_UPSCALE"
+service = "vivijure-module-speech-upscale"
 
 # Cloud i2v motion.backend modules (RunPod-hosted), joining own-gpu / seedance / kling. Each is its
 # own per-module worker with a scoped RUNPOD_API_KEY; the registry discovers them as MODULE_* bindings.
@@ -191,6 +211,28 @@ service = "vivijure-module-vidu-q3"
 [[services]]
 binding = "MODULE_ALIBABA_WAN"
 service = "vivijure-module-alibaba-wan"
+
+# alibaba-wan-lora: Wan 2.2 i2v 720p on the RunPod PUBLIC managed endpoint wan-2-2-t2v-720-lora, with
+# CUSTOM operator LoRAs (the controllable, GPU-rental-free i2v lane; pairs with the cloud-keyframe
+# module). A motion.backend module, discovered by the registry exactly like any MODULE_* binding.
+#
+# UNCOMMENTED for v0.3.0: vivijure-module-alibaba-wan-lora is deployed (modules deploy before the core
+# in ci.yml), so this binding no longer dangles.
+[[services]]
+binding = "MODULE_ALIBABA_WAN_LORA"
+service = "vivijure-module-alibaba-wan-lora"
+
+# Cloud keyframe (GPUless cost-door): FLUX-2 direct on the AI binding + nano-banana-pro via AI Gateway.
+# ADDED in v0.3.0.
+[[services]]
+binding = "MODULE_CLOUD_KEYFRAME"
+service = "vivijure-module-cloud-keyframe"
+
+# Subtitle (film.finish): burns a time-synced SRT via the video-finish container (POST /subtitle).
+# ADDED in v0.3.0; depends on the video-finish container rebuild (runbook 1.0).
+[[services]]
+binding = "MODULE_SUBTITLE"
+service = "vivijure-module-subtitle"
 
 # plan-enhance-py: the Python on-ramp PROOF module (plan.enhance, deterministic rule-based direction).
 # A CF Python Worker behind the same hook contract as the TS plan-enhance, discovered by the registry

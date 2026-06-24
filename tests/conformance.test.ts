@@ -40,6 +40,22 @@ describe("conformance: manifest", () => {
     expect(allPass(checks)).toBe(false);
   });
 
+  it("accepts a config field marked scope:install (operator-set-once)", () => {
+    const checks = checkManifest({
+      ...goodManifest,
+      config_schema: { recipient: { type: "string", default: "", scope: "install" } },
+    });
+    expect(allPass(checks), JSON.stringify(failures(checks))).toBe(true);
+  });
+
+  it("fails a config field with an unknown scope", () => {
+    const checks = checkManifest({
+      ...goodManifest,
+      config_schema: { recipient: { type: "string", default: "", scope: "bogus" } },
+    });
+    expect(allPass(checks)).toBe(false);
+  });
+
   it("fails a provides entry missing a label", () => {
     const checks = checkManifest({ ...goodManifest, provides: [{ id: "x" }] });
     expect(allPass(checks)).toBe(false);
@@ -74,6 +90,18 @@ describe("conformance: hook output payload", () => {
     const out = { shot_id: "s1", clip_key: "k.mp4", out_fps: 24, frames: 48 };
     expect(checkHookOutput("finish", out).pass).toBe(false);
   });
+  it("accepts a well-formed speech output", () => {
+    const out = { shot_id: "s1", audio_key: "renders/neon/dialogue/s1_enh.wav", applied: ["speech-upscale:resemble-enhance"] };
+    expect(checkHookOutput("speech", out).pass).toBe(true);
+  });
+  it("accepts a soft-degraded speech output (passthrough audio_key, empty applied, degraded reason)", () => {
+    const out = { shot_id: "s1", audio_key: "renders/neon/dialogue/s1.wav", applied: [], degraded: "backend down" };
+    expect(checkHookOutput("speech", out).pass).toBe(true);
+  });
+  it("rejects a speech output missing audio_key (envelope-ok but contract-broken)", () => {
+    const out = { shot_id: "s1", applied: [] };
+    expect(checkHookOutput("speech", out).pass).toBe(false);
+  });
   it("accepts a well-formed plan.enhance output", () => {
     const out = { storyboard: { scenes: [{ prompt: "x" }] }, notes: ["did a thing"] };
     expect(checkHookOutput("plan.enhance", out).pass).toBe(true);
@@ -95,6 +123,20 @@ describe("conformance: hook output payload", () => {
   });
   it("accepts a well-formed notify output (including an empty delivered)", () => {
     expect(checkHookOutput("notify", { delivered: [] }).pass).toBe(true);
+  });
+  it("accepts a well-formed master output", () => {
+    const out = { audio_key: "audio/bed.wav", applied: ["music-upscale:soxr48k", "loudnorm:-14LUFS"] };
+    expect(checkHookOutput("master", out).pass).toBe(true);
+  });
+  it("accepts a master soft-degrade (passthrough bed + degraded reason)", () => {
+    const out = { audio_key: "audio/bed.wav", applied: ["passthrough:no-runpod-secrets"], degraded: "no-runpod-secrets" };
+    expect(checkHookOutput("master", out).pass).toBe(true);
+  });
+  it("rejects a master output missing audio_key (envelope-ok but contract-broken)", () => {
+    expect(checkHookOutput("master", { applied: [] }).pass).toBe(false);
+  });
+  it("rejects a master output missing applied", () => {
+    expect(checkHookOutput("master", { audio_key: "audio/bed.wav" }).pass).toBe(false);
   });
   it("rejects a non-object output", () => {
     expect(checkHookOutput("finish", null).pass).toBe(false);

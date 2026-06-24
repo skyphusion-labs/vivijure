@@ -11,6 +11,7 @@
     { id: "planner", label: "Planner", href: "planner" },
     { id: "cast", label: "Cast", href: "cast" },
     { id: "pipeline", label: "Modules", href: "modules" },
+    { id: "settings", label: "Settings", href: "settings" },
   ];
 
   const nav = Array.isArray(window.VIVIJURE_STUDIO_NAV)
@@ -25,6 +26,7 @@
     if (leaf === "modules" || leaf === "modules.html" || leaf === "index.html") return "pipeline";
     if (leaf === "planner" || leaf === "planner.html") return "planner";
     if (leaf === "cast" || leaf === "cast.html") return "cast";
+    if (leaf === "settings" || leaf === "settings.html") return "settings";
     if (path === "/") return "pipeline";
     return "";
   }

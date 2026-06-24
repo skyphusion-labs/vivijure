@@ -1,8 +1,8 @@
 // Registry-driven render module config: the wire shape the planner sends as render_overrides
 // and the core resolves into per-hook module configs before starting a film job.
 
-import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
-import { servingForHook, validateConfig } from "./modules/registry";
+import { resolveRenderPipeline, pickOneForHook, type RenderPipelineSelection } from "./modules/render-pipeline";
+import { servingForHook } from "./modules/registry";
 import type { RegisteredModule, RenderConfigProjection } from "./modules/types";
 
 /** The render quality tier the core injects into the keyframe (as quality_tier) and motion (as
@@ -38,14 +38,19 @@ export function renderConfigProjection(): RenderConfigProjection {
 /** Planner / API wire format for module render overrides (stored on render rows). */
 export interface ModuleRenderOverridesWire {
   motion_backend?: string;
+  keyframe_backend?: string;
   config?: Record<string, Record<string, unknown>>;
 }
 
 export interface ResolvedModuleRenderConfigs {
   motion_backend?: string;
+  keyframe_backend?: string;
   keyframe_config: Record<string, unknown>;
   motion_config: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>;
+  speech_config: Record<string, Record<string, unknown>>;
+  film_finish_config: Record<string, Record<string, unknown>>;
+  master_config: Record<string, Record<string, unknown>>;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -56,10 +61,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  *  { keyframe, i2v, lora } namespaced overrides from older rows / expert JSON. */
 export function parseModuleRenderOverrides(raw: unknown): ModuleRenderOverridesWire {
   if (!isRecord(raw)) return {};
-  if (isRecord(raw.config) || typeof raw.motion_backend === "string") {
+  if (isRecord(raw.config) || typeof raw.motion_backend === "string" || typeof raw.keyframe_backend === "string") {
     const out: ModuleRenderOverridesWire = {};
     if (typeof raw.motion_backend === "string" && raw.motion_backend.trim()) {
       out.motion_backend = raw.motion_backend.trim();
+    }
+    if (typeof raw.keyframe_backend === "string" && raw.keyframe_backend.trim()) {
+      out.keyframe_backend = raw.keyframe_backend.trim();
     }
     if (isRecord(raw.config)) {
       const config: Record<string, Record<string, unknown>> = {};
@@ -103,11 +111,14 @@ function injectQualityTier(
   config: Record<string, Record<string, unknown>>,
   tier: RenderTier,
   modules: RegisteredModule[],
+  keyframeChoice?: string,
 ): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {};
   for (const [name, cfg] of Object.entries(config)) out[name] = { ...cfg };
 
-  const kf = servingForHook(modules, "keyframe")[0];
+  // Stamp the tier onto the CHOSEN keyframe module (the planner's pick over the ui.order default), so a
+  // user-selected backend gets the tier, not whichever module leads by order.
+  const kf = pickOneForHook(modules, "keyframe", keyframeChoice) ?? servingForHook(modules, "keyframe")[0];
   if (kf) {
     out[kf.name] = { ...(out[kf.name] ?? {}), quality_tier: tier };
   }
@@ -126,25 +137,47 @@ export function resolveModuleRenderConfigs(
   modules: RegisteredModule[],
 ): ResolvedModuleRenderConfigs {
   const parsed = parseModuleRenderOverrides(overrides);
-  const config = injectQualityTier(parsed.config ?? {}, tier, modules);
+  const config = injectQualityTier(parsed.config ?? {}, tier, modules, parsed.keyframe_backend);
   const selection: RenderPipelineSelection = {
     motion_backend_choice: parsed.motion_backend,
+    keyframe_backend_choice: parsed.keyframe_backend,
     config,
   };
   const pipeline = resolveRenderPipeline(modules, selection);
 
-  const kfMod = servingForHook(modules, "keyframe")[0];
-  const keyframe_config = kfMod
-    ? validateConfig(kfMod.config_schema, config[kfMod.name])
-    : { quality_tier: tier };
+  // The chosen keyframe module (planner pick honored over the ui.order default), so a user can select
+  // cloud-keyframe over the GPU keyframe module. Its name is threaded to the keyframe phase as
+  // keyframe_backend; its clamped config as keyframe_config.
+  // pipeline.keyframe is already resolved (config clamped against its schema by resolveRenderPipeline),
+  // so use its config directly -- same shape as motion_config. Fallback to the bare tier when no module.
+  const keyframe_config = pipeline.keyframe ? pipeline.keyframe.config : { quality_tier: tier };
 
   const finish_config: Record<string, Record<string, unknown>> = {};
   for (const m of pipeline.finish) finish_config[m.name] = m.config;
 
+  // speech is a chain hook exactly like finish: clamp each serving speech module's config (planner ->
+  // render_overrides -> here) by module name, so the speech phase's enable/denoise toggles actually
+  // reach the module instead of always defaulting (the dead-config gap closed pre-v0.3.0).
+  const speech_config: Record<string, Record<string, unknown>> = {};
+  for (const m of pipeline.speech) speech_config[m.name] = m.config;
+
+  // film.finish (subtitle / film-titles) + master (audio-master) are chain hooks too: clamp each
+  // serving module's planner config by name so the post-mux card / caption styling and the audio
+  // master knobs actually reach the module instead of dispatching with {} (the same dead-config
+  // pattern Conrad caught for speech -- every config_schema-bearing hook is now wired).
+  const film_finish_config: Record<string, Record<string, unknown>> = {};
+  for (const m of pipeline.filmFinish) film_finish_config[m.name] = m.config;
+  const master_config: Record<string, Record<string, unknown>> = {};
+  for (const m of pipeline.master) master_config[m.name] = m.config;
+
   return {
     motion_backend: pipeline.motion_backend?.name,
+    keyframe_backend: pipeline.keyframe?.name,
     keyframe_config,
     motion_config: pipeline.motion_backend?.config ?? {},
     finish_config,
+    speech_config,
+    film_finish_config,
+    master_config,
   };
 }

@@ -164,6 +164,9 @@ async def finish(req):
             "bytes": len(out_bytes),
             "durationSeconds": round(secs, 3),
             "shots": len(srcs),
+            # [assemble] instrumentation (#287): clips received vs downloaded vs output duration,
+            # so a partial assemble is diagnosable from logs (worker-sent-fewer vs fetch-dropped).
+            "clipsReceived": len(clips),
             "hasAudio": has_audio,
             "width": width,
             "height": height,
@@ -339,6 +342,15 @@ def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade
         _concat_crossfade(norms, silent, effective_crossfade, crf=crf, preset=preset)
     else:
         _concat_hard(norms, silent)  # -c copy; preserves per-clip audio when ensure_audio kept it
+
+    # Fail loud: the concat must NEVER silently drop a clip (a scatter render once shipped 1 of 3
+    # shots). If the assembled film is materially shorter than the sum of its (tail-trimmed) inputs,
+    # a clip was dropped at concat -- raise so the caller fails rather than ship a partial film.
+    _sil = _probe_duration(silent) or 0.0
+    _sum_in = sum((_probe_duration(n) or 0.0) for n in norms)
+    if _sum_in > 0 and _sil < _sum_in * 0.85:
+        raise RuntimeError(
+            f"concat dropped clips: assembled {_sil:.2f}s < sum of {len(norms)} inputs {_sum_in:.2f}s")
 
     out = os.path.join(work, "final.mp4")
     has_bed = bool(audio_path) and os.path.isfile(audio_path)
@@ -740,11 +752,237 @@ async def film_titles(req):
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
-app = web.Application(client_max_size=1024 * 1024)  # JSON bodies are small (URLs only)
+# ---------------------------------------------------------------------------
+# /subtitle: burn a time-synced SRT onto the assembled film (and/or write a
+# soft .srt sidecar) via the ffmpeg subtitles (libass) filter.
+#
+# The caller (the subtitle module worker) already FORMATTED the SRT from the
+# core's timed cues; this route never re-times. It writes the SRT to disk,
+# burns it with `-vf subtitles=<srt>:force_style=...`, re-encodes video
+# (libx264) since a filtered video cannot be stream-copied, stream-copies the
+# audio so dialogue/score survive, and PUTs the result. In sidecar / both
+# modes it also PUTs the raw .srt to a presigned sidecarUrl. Bytes never touch
+# the Worker. Presigned URLs keep R2 creds on the Worker.
+#
+# Pure helpers (_escape_subtitles_path, _ass_alignment, _ass_colour,
+# _subtitle_filter) are factored out for unit-testability.
+
+MAX_SRT_BYTES = 512 * 1024   # an SRT for a short film is a few KB; 512 KB is a generous ceiling
+
+# position -> libass Alignment (numpad layout): bottom-center 2, top-center 8, middle-center 5.
+_SUB_ALIGNMENT = {"bottom": 2, "top": 8, "middle": 5}
+# A few named colors -> ASS &HAABBGGRR (alpha 00 = opaque). Names keep the config human-friendly;
+# an ASS &H... value passes straight through for full control.
+_SUB_COLOUR = {
+    "white": "&H00FFFFFF",
+    "black": "&H00000000",
+    "yellow": "&H0000FFFF",
+    "red": "&H000000FF",
+    "green": "&H0000FF00",
+    "cyan": "&H00FFFF00",
+}
+
+
+def _escape_subtitles_path(path):
+    """Escape a path for use inside an ffmpeg subtitles= filter value. The filtergraph splits
+    options on ':' and treats '\\' and "'" specially, so escape those three (backslash first to
+    avoid double-escaping)."""
+    return (path
+            .replace("\\", "\\\\")
+            .replace(":", "\\:")
+            .replace("'", "\\'"))
+
+
+def _ass_alignment(position):
+    return _SUB_ALIGNMENT.get(str(position or "bottom"), 2)
+
+
+def _ass_colour(color):
+    """Resolve a config color to an ASS &HAABBGGRR string. A named color maps via the table; an
+    explicit &H... value passes through; anything else falls back to opaque white."""
+    if isinstance(color, str):
+        if color.startswith("&H"):
+            return color
+        mapped = _SUB_COLOUR.get(color.lower())
+        if mapped:
+            return mapped
+    return "&H00FFFFFF"
+
+
+def _subtitle_filter(srt_path, style):
+    """Build the ffmpeg -vf subtitles filter string for an SRT burn. Pure; no I/O.
+    style: {font, fontSize, color, position, box, marginV}. `box` == "box" draws an opaque box
+    behind the text (BorderStyle 3); otherwise the text is outlined (BorderStyle 1, Outline 2)."""
+    style = style if isinstance(style, dict) else {}
+    font = str(style.get("font") or "DejaVu Sans")
+    try:
+        size = int(style.get("fontSize") or 28)
+    except (TypeError, ValueError):
+        size = 28
+    try:
+        margin_v = int(style.get("marginV") if style.get("marginV") is not None else 36)
+    except (TypeError, ValueError):
+        margin_v = 36
+    alignment = _ass_alignment(style.get("position"))
+    primary = _ass_colour(style.get("color"))
+    if style.get("box") == "box":
+        border_style, outline, shadow = 3, 0, 0
+    else:
+        border_style, outline, shadow = 1, 2, 0
+    force_style = (
+        f"FontName={font},FontSize={size},PrimaryColour={primary},"
+        f"Alignment={alignment},MarginV={margin_v},"
+        f"BorderStyle={border_style},Outline={outline},Shadow={shadow}"
+    )
+    return f"subtitles={_escape_subtitles_path(srt_path)}:force_style='{force_style}'"
+
+
+def _burn_subtitles(src, dst, vf_filter, crf=18, preset="medium"):
+    """Burn captions onto src via the subtitles filter, writing to dst. Re-encodes video with
+    libx264 (a filtered video cannot be stream-copied); audio is stream-copied unchanged so the
+    dialogue/score survive; `-movflags +faststart` keeps the output web-playable."""
+    cmd = [
+        "ffmpeg", "-y", "-i", src,
+        "-vf", vf_filter,
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        dst,
+    ]
+    _run(cmd)
+
+
+async def subtitle(req):
+    """POST /subtitle -- burn a time-synced SRT onto the film and/or write a soft .srt sidecar.
+
+    JSON body (presigned URLs; bytes never touch the Worker):
+      srt         string  the already-formatted SubRip document (required)
+      mode        string  "burn" (default), "sidecar", or "both"
+      videoUrl    string  presigned GET URL for the assembled film (required for burn)
+      outputUrl   string  presigned PUT URL for the burned result (required for burn)
+      outputKey   string  R2 key label for the burned result (returned on burn)
+      sidecarUrl  string  presigned PUT URL for the .srt (required for sidecar/both)
+      sidecarKey  string  R2 key label for the sidecar (returned on sidecar write)
+      style       object  {font, fontSize, color, position, box, marginV}
+      width/height/fps    output geometry hints (unused by the burn; kept for parity)
+      crf         int     libx264 CRF   (default 18)
+      preset      string  libx264 preset (default "medium")
+
+    Returns: {ok, key, burned, sidecar, sidecarKey, durationSeconds}
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+
+    srt_text = body.get("srt")
+    mode = str(body.get("mode", "burn"))
+    video_url = body.get("videoUrl")
+    output_url = body.get("outputUrl")
+    output_key = body.get("outputKey", "")
+    sidecar_url = body.get("sidecarUrl")
+    sidecar_key = body.get("sidecarKey", "")
+    style = body.get("style") if isinstance(body.get("style"), dict) else {}
+
+    if not isinstance(srt_text, str) or not srt_text.strip():
+        return web.json_response({"ok": False, "error": "srt required"}, status=400)
+    if len(srt_text.encode("utf-8")) > MAX_SRT_BYTES:
+        return web.json_response({"ok": False, "error": "srt too large"}, status=413)
+    if mode not in ("burn", "sidecar", "both"):
+        return web.json_response({"ok": False, "error": "mode must be burn|sidecar|both"}, status=400)
+
+    want_burn = mode in ("burn", "both")
+    want_sidecar = mode in ("sidecar", "both")
+
+    if want_burn:
+        if not video_url:
+            return web.json_response({"ok": False, "error": "videoUrl required for burn"}, status=400)
+        if not output_url:
+            return web.json_response({"ok": False, "error": "outputUrl required for burn"}, status=400)
+        ok, why = validate_fetch_url(output_url)
+        if not ok:
+            return web.json_response({"ok": False, "error": f"outputUrl blocked: {why}"}, status=400)
+    if want_sidecar:
+        if not sidecar_url:
+            return web.json_response({"ok": False, "error": "sidecarUrl required for sidecar mode"}, status=400)
+        ok, why = validate_fetch_url(sidecar_url)
+        if not ok:
+            return web.json_response({"ok": False, "error": f"sidecarUrl blocked: {why}"}, status=400)
+
+    try:
+        crf = int(body.get("crf", 18))
+    except (TypeError, ValueError):
+        return web.json_response({"ok": False, "error": "bad numeric input"}, status=400)
+    preset = str(body.get("preset", "medium"))
+
+    work = tempfile.mkdtemp(prefix="vfsubs-")
+    try:
+        srt_path = os.path.join(work, "subs.srt")
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(srt_text)
+
+        # Sidecar first: a soft .srt is cheap and independent of the (heavier) burn.
+        sidecar_done = False
+        if want_sidecar:
+            async with ClientSession(timeout=ClientTimeout(total=UPLOAD_TIMEOUT_S)) as s:
+                async with s.put(sidecar_url, data=srt_text.encode("utf-8"),
+                                 headers={"content-type": "application/x-subrip"}) as r:
+                    if r.status not in (200, 201, 204):
+                        return web.json_response({"ok": False, "error": f"sidecar put {r.status}"}, status=502)
+            sidecar_done = True
+
+        burned = False
+        out_secs = 0.0
+        if want_burn:
+            async with ClientSession(timeout=ClientTimeout(total=DOWNLOAD_TIMEOUT_S)) as s:
+                film_path = os.path.join(work, "film.mp4")
+                ok, info = await _download(s, video_url, film_path, MAX_CLIP_BYTES)
+                if not ok:
+                    sc = 413 if info == "too large" else (400 if info.startswith("blocked:") else 502)
+                    return web.json_response({"ok": False, "error": f"film {info}"}, status=sc)
+
+            vf = _subtitle_filter(srt_path, style)
+            out_path = os.path.join(work, "subbed.mp4")
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(None, _burn_subtitles, film_path, out_path, vf, crf, preset)
+            except subprocess.CalledProcessError as e:
+                log.exception("ffmpeg subtitles burn failed key=%s", output_key)
+                return web.json_response({"ok": False, "error": f"ffmpeg failed: {e}"}, status=500)
+            except Exception as e:  # noqa: BLE001
+                log.exception("/subtitle burn failed")
+                return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+            with open(out_path, "rb") as f:
+                out_bytes = f.read()
+            async with ClientSession(timeout=ClientTimeout(total=UPLOAD_TIMEOUT_S)) as s:
+                async with s.put(output_url, data=out_bytes,
+                                 headers={"content-type": "video/mp4"}) as r:
+                    if r.status not in (200, 201, 204):
+                        return web.json_response({"ok": False, "error": f"output put {r.status}"}, status=502)
+            burned = True
+            out_secs = _probe_duration(out_path)
+
+        log.info("/subtitle ok key=%s burned=%s sidecar=%s dur=%.3f",
+                 output_key, burned, sidecar_done, out_secs)
+        return web.json_response({
+            "ok": True,
+            "key": output_key if burned else "",
+            "burned": burned,
+            "sidecar": sidecar_done,
+            "sidecarKey": sidecar_key if sidecar_done else "",
+            "durationSeconds": round(out_secs, 3),
+        })
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+app = web.Application(client_max_size=1024 * 1024)  # JSON bodies are small (URLs + a short SRT)
 app.router.add_get("/health", health)
 app.router.add_post("/finish", finish)
 app.router.add_post("/overlay", overlay)
 app.router.add_post("/film-titles", film_titles)
+app.router.add_post("/subtitle", subtitle)
 
 if __name__ == "__main__":
     log.info("video-finish listening on 0.0.0.0:%d", PORT)

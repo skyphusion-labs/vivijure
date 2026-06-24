@@ -1,0 +1,715 @@
+#!/usr/bin/env python3
+"""vivijure-deploy: a guided installer that stands up the whole Vivijure stack on YOUR OWN
+Cloudflare + RunPod accounts (BYO keys + GPU). One input surface, idempotent re-runs, a teardown.
+
+What it does (see issue #244 for the design + options survey):
+  - one input surface + correct secret handling (hidden prompts, never echoed, logged, or on argv),
+  - the full provisioning spine: Cloudflare (D1, R2 x2, AI Gateway, Access app, Secrets Store + an
+    R2 S3 token mint), then RunPod (template, network volume, endpoints), then seed -> migrate ->
+    deploy. The cross-wiring order is enforced -- most importantly the Secrets Store is seeded BEFORE
+    the workers deploy (a module's secrets_store_secrets binding fails at deploy if its secret does
+    not yet exist; see #237), and RunPod endpoint ids are captured before RUNPOD_ENDPOINT_ID is seeded,
+  - idempotent reconcile (a local state file of resource IDS, never secrets: create-if-absent),
+  - `up` / `plan` / `down` -- teardown removes the RunPod + CF resources it created, by recorded id.
+
+HONESTY NOTE: the provider calls are REAL. `up` provisions against YOUR live Cloudflare + RunPod
+accounts -- it mints an R2 API token, creates an Access app, RunPod endpoints, etc. The calls are
+written against the CF/RunPod API docs + the RunPod OpenAPI, but have NOT been integration-tested end
+to end on a live account; treat the first run accordingly. A few values you MUST set before a live run
+(DEPLOY_DOMAIN, OPERATOR_EMAIL, DATACENTER_ID, BACKEND_IMAGE_TAG, GPU_TYPE_IDS) are flagged at the top
+and the run dies loud if any is missing.
+
+WHAT THIS TOOL COLLECTS (and what it never will):
+  COLLECTS: exactly three infra credentials, for YOUR accounts -- a Cloudflare account id, a
+  Cloudflare API token, and a RunPod API key. Nothing else.
+  NEVER: it does NOT collect, prompt for, store, or transmit any payment information, credit-card
+  number, bank detail, or cryptocurrency wallet/seed/address (BTC/XMR/anything). A deploy tool has
+  no business touching payment or wallet data; this one bills nothing and routes nothing. Vivijure is
+  AGPL and you are encouraged to read this file end to end -- the secret surface is deliberately
+  minimal and obvious.
+
+Design ethos: Cloudflare-first, minimal deps (Python 3 stdlib + wrangler via npx; boto3 only for
+the optional R2/volume seed step, lazily imported). No subscription, not-our-infra: your keys, your
+GPU, your data.
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# --------------------------------------------------------------------------------------------------
+# Constants: the concrete resource set this stack needs (mirrors the repo's wrangler.toml + #244).
+# --------------------------------------------------------------------------------------------------
+
+STATE_FILE = ".vivijure-deploy.json"  # resource ids only, NEVER secrets. Safe to commit? No -- gitignore it.
+
+# R2 buckets the studio binds (render outputs + the doc/RAG store).
+R2_BUCKETS = ("vivijure", "skyphusion-llm")
+D1_DATABASE = "vivijure-studio"
+STORE_NAME = "vivijure"  # the account-level Secrets Store name (#237/#238)
+# The placeholder the module wrangler.tomls ship with (#237). After creating the store the installer
+# replaces it with the real store id so the secrets_store_secrets bindings resolve at deploy.
+STORE_ID_PLACEHOLDER = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+# Single-tenant studio gating (config, NOT secrets -- set these for your deploy):
+DEPLOY_DOMAIN = ""    # the studio hostname behind CF Access (match the core worker's route/custom domain)
+OPERATOR_EMAIL = ""   # the one email allowed through the Access self-only policy
+
+# The secrets the studio + module workers read. Seeded into the account-level Cloudflare Secrets Store
+# (see #237/#238), NOT via `wrangler secret put`. Keyed by the binding name the code reads.
+#   from the user's input:   RUNPOD_API_KEY
+#   minted/derived here:      RUNPOD_ENDPOINT_ID (from RunPod step), GATEWAY_ID (from the AI Gateway),
+#                             R2_S3_ACCESS_KEY_ID / R2_S3_SECRET_ACCESS_KEY (scoped R2 token), etc.
+STORE_SECRETS = (
+    "RUNPOD_API_KEY",
+    "RUNPOD_ENDPOINT_ID",
+    "GATEWAY_ID",
+    "R2_S3_ACCESS_KEY_ID",
+    "R2_S3_SECRET_ACCESS_KEY",
+    "R2_S3_ENDPOINT",
+)
+
+# RunPod serverless endpoints to stand up (each is an id the studio needs). The cloud-i2v passthroughs
+# run through the backend endpoint; upscale + musetalk are dedicated. A first deploy can opt into a
+# subset -- upscale/lipsync degrade gracefully.
+RUNPOD_ENDPOINTS = ("vivijure-backend", "vivijure-upscale", "vivijure-musetalk")
+GHCR_IMAGE = "ghcr.io/skyphusion-labs/vivijure-backend"  # public image -> NO registry auth (see note).
+
+
+# --------------------------------------------------------------------------------------------------
+# Inputs + secret handling (the part that must be exactly right).
+# --------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Secrets:
+    """The three infra credentials, held in memory only for the lifetime of one run. Never written to
+    the state file, never logged, never passed on a command line (argv lands in shell history)."""
+
+    cf_account_id: str
+    cf_api_token: str
+    runpod_api_key: str
+
+    def presence(self) -> str:
+        """A SAFE summary for the user: emits SET / missing only -- never a value. Uses the ${var:+SET}
+        discipline (a presence test that cannot expand to the secret)."""
+        def p(v: str) -> str:
+            return "SET" if v else "missing"
+        return (
+            f"cloudflare_account_id={'SET' if self.cf_account_id else 'missing'} "
+            f"cloudflare_api_token={p(self.cf_api_token)} "
+            f"runpod_api_key={p(self.runpod_api_key)}"
+        )
+
+
+def collect_secrets(noninteractive_env: bool = False) -> Secrets:
+    """Collect the three credentials via HIDDEN prompts (getpass: no terminal echo). Values are read
+    straight into memory; nothing is printed back, logged, or stored. The account id is not secret
+    (an identifier) but we still never echo the token/key.
+
+    For CI/headless use, allow reading from the environment (CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN
+    / RUNPOD_API_KEY) so a value never has to be typed where it could be captured -- still never argv.
+    """
+    if noninteractive_env:
+        s = Secrets(
+            cf_account_id=os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip(),
+            cf_api_token=os.environ.get("CLOUDFLARE_API_TOKEN", "").strip(),
+            runpod_api_key=os.environ.get("RUNPOD_API_KEY", "").strip(),
+        )
+    else:
+        print("Enter your OWN account credentials. Input is hidden and is never echoed, logged, or stored.")
+        print("(This tool collects ONLY these three. It never asks for payment, card, or wallet data.)\n")
+        cf_account_id = input("  Cloudflare account id: ").strip()
+        cf_api_token = getpass.getpass("  Cloudflare API token (hidden): ").strip()
+        runpod_api_key = getpass.getpass("  RunPod API key (hidden): ").strip()
+        s = Secrets(cf_account_id, cf_api_token, runpod_api_key)
+
+    missing = [n for n, v in (
+        ("cloudflare_account_id", s.cf_account_id),
+        ("cloudflare_api_token", s.cf_api_token),
+        ("runpod_api_key", s.runpod_api_key),
+    ) if not v]
+    if missing:
+        die(f"missing required credential(s): {', '.join(missing)}")
+    return s
+
+
+# --------------------------------------------------------------------------------------------------
+# Small helpers: logging that NEVER prints a secret, a stdlib HTTP call, subprocess for wrangler.
+# --------------------------------------------------------------------------------------------------
+
+
+def log(msg: str) -> None:
+    print(f"[vivijure-deploy] {msg}")
+
+
+def die(msg: str, code: int = 1) -> "None":
+    print(f"[vivijure-deploy] ERROR: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def http_json(method: str, url: str, token: str, body: dict | None = None) -> dict:
+    """A minimal stdlib HTTPS call returning parsed JSON. The bearer token rides in the header (never
+    in the URL or argv). Used for the Cloudflare + RunPod REST APIs. Raises on non-2xx."""
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("authorization", f"Bearer {token}")
+    req.add_header("content-type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode() or "{}"
+            return json.loads(raw)
+    except urllib.error.HTTPError as e:
+        # Surface the status, NOT the request body (which may carry a secret).
+        die(f"{method} {url.split('?')[0]} -> HTTP {e.code}")
+    except urllib.error.URLError as e:
+        die(f"{method} {url.split('?')[0]} -> network error: {e.reason}")
+    return {}
+
+
+CF_API = "https://api.cloudflare.com/client/v4"
+AI_GATEWAY_ID = "vivijure"  # the AI Gateway slug -> becomes the GATEWAY_ID secret
+
+
+def cf_api(method: str, path: str, token: str, body: dict | None = None):
+    """Cloudflare API v4 call. Unwraps the {result, success, errors} envelope and dies on success:false,
+    surfacing the error MESSAGE only (never the request body, which may carry a secret). `path` is
+    relative to CF_API and may carry an /accounts/{acct}/ prefix."""
+    out = http_json(method, CF_API + path, token, body)
+    if isinstance(out, dict) and out.get("success") is False:
+        msgs = "; ".join(str(e.get("message", e)) for e in (out.get("errors") or [])) or "success:false"
+        die(f"Cloudflare {method} {path.split('?')[0]} -> {msgs}")
+    return out.get("result") if isinstance(out, dict) and "result" in out else out
+
+
+def create_if_absent(*, kind: str, account: str, token: str, list_path: str, create_path: str,
+                     create_body: dict, name: str, name_key: str, id_key: str,
+                     list_unwrap: str | None = None) -> str:
+    """Idempotent reconcile by NAME -> returns the resource id. Lists existing, matches name_key, else
+    POSTs create_body. list_unwrap handles nested list results (e.g. R2 buckets under 'buckets')."""
+    listed = cf_api("GET", list_path.format(acct=account), token)
+    items = (listed.get(list_unwrap) if (list_unwrap and isinstance(listed, dict)) else listed) or []
+    for it in (items if isinstance(items, list) else []):
+        if isinstance(it, dict) and it.get(name_key) == name:
+            rid = str(it.get(id_key, name))
+            log(f"  {kind} '{name}' exists ({rid})")
+            return rid
+    created = cf_api("POST", create_path.format(acct=account), token, create_body)
+    rid = str(created.get(id_key, name)) if isinstance(created, dict) else name
+    log(f"  {kind} '{name}' created ({rid})")
+    return rid
+
+
+def cf_env_for(s: "Secrets") -> dict:
+    """The Cloudflare creds Wrangler reads from the ENVIRONMENT (never argv): token + account id."""
+    return {"CLOUDFLARE_API_TOKEN": s.cf_api_token, "CLOUDFLARE_ACCOUNT_ID": s.cf_account_id}
+
+
+def wrangler(args: list[str], *, cwd: Path, cf_env: dict | None = None, secret_stdin: str | None = None) -> None:
+    """Run `npx wrangler ...`. A secret value (if any) is piped via STDIN, NEVER placed on argv (argv is
+    visible in `ps` and shell history). CLOUDFLARE_API_TOKEN/ACCOUNT_ID ride in the child ENV, not the
+    command line."""
+    cmd = ["npx", "wrangler", *args]
+    log("wrangler " + " ".join(args[:3]))  # never log a value -- args here are subcommands/flags only
+    child_env = dict(os.environ)
+    if cf_env:
+        child_env.update(cf_env)
+    proc = subprocess.run(
+        cmd, cwd=str(cwd),
+        input=(secret_stdin.encode() if secret_stdin is not None else None),
+        env=child_env,
+    )
+    if proc.returncode != 0:
+        die(f"wrangler {' '.join(args[:2])} failed (exit {proc.returncode})")
+
+
+def module_dirs(repo: Path) -> list[str]:
+    """Enumerate the module workers to deploy (modules/<name>/wrangler.toml), deployed BEFORE the core."""
+    mods = sorted(p.name for p in (repo / "modules").iterdir() if (p / "wrangler.toml").exists()) if (repo / "modules").is_dir() else []
+    return mods
+
+
+# --------------------------------------------------------------------------------------------------
+# State: idempotent reconcile. Records resource ids (NEVER secrets) so a re-run reconciles and a
+# teardown can delete by id.
+# --------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class State:
+    path: Path
+    data: dict = field(default_factory=dict)
+
+    @classmethod
+    def load(cls, repo: Path) -> "State":
+        p = repo / STATE_FILE
+        data = json.loads(p.read_text()) if p.exists() else {}
+        return cls(p, data)
+
+    # Keys that would carry a SECRET VALUE -- never allowed in the state file (it holds ids/names only).
+    _SECRET_KEY_HINTS = ("secret", "password", "api_token", "token_value", "_value")
+
+    def save(self) -> None:
+        # State holds resource ids/names only; the put() guard below enforces no secret-valued key lands here.
+        self.path.write_text(json.dumps(self.data, indent=2, sort_keys=True) + "\n")
+
+    def get(self, key: str):
+        return self.data.get(key)
+
+    def put(self, key: str, value) -> None:
+        # Real guard (not just a comment): refuse to persist a key whose name implies a secret VALUE.
+        # Ids/names only -- note r2_token_id is the access-key ID, not the secret it derives.
+        if any(h in key.lower() for h in self._SECRET_KEY_HINTS):
+            die(f"refusing to write '{key}' to the state file -- it looks like a secret value (state holds ids only)")
+        self.data[key] = value
+        self.save()
+
+
+# --------------------------------------------------------------------------------------------------
+# The provisioning spine. ORDER MATTERS -- the comments encode the #244 cross-wiring constraints.
+# Each step is reconcile-shaped: look up by name/id in state, create-if-absent, record the id.
+# --------------------------------------------------------------------------------------------------
+
+
+def preflight(repo: Path, s: Secrets) -> None:
+    """Fail fast before touching anything: deps present, tokens actually valid, repo looks right."""
+    if shutil.which("npx") is None:
+        die("npx (Node) not found -- wrangler is required to deploy the workers")
+    if not (repo / "wrangler.toml").exists():
+        die(f"run from the vivijure repo root (no wrangler.toml at {repo})")
+    # Validate the CF token with a real, harmless authenticated call (token verify).
+    http_json("GET", "https://api.cloudflare.com/client/v4/user/tokens/verify", s.cf_api_token)
+    # Validate the RunPod key (list endpoints; empty is fine).
+    http_json("GET", "https://rest.runpod.io/v1/endpoints", s.runpod_api_key)
+    log("preflight ok: deps present, both credentials valid")
+
+
+def provision_access_app(account: str, token: str, st: State) -> None:
+    """Gate the single-tenant studio behind CF Access: a self-hosted app on DEPLOY_DOMAIN with a
+    self-only allow policy (OPERATOR_EMAIL). Shapes confirmed against the CF Access API docs --
+    app = {name, domain, type:'self_hosted', policies:[...]}; policy = {name, decision:'allow',
+    include:[{email:{email}}]}. Reconciled by domain so a re-run does not duplicate. No-op (with a
+    loud warn) if the two config values are unset -- better an explicit ungated warning than a wrong
+    gate."""
+    if not DEPLOY_DOMAIN or not OPERATOR_EMAIL:
+        log("  WARN: DEPLOY_DOMAIN / OPERATOR_EMAIL unset -- skipping Access app (studio would be UNGATED); set them to gate it")
+        return
+    app_id = create_if_absent(kind="Access app", account=account, token=token,
+        list_path="/accounts/{acct}/access/apps", create_path="/accounts/{acct}/access/apps",
+        create_body={
+            "name": "Vivijure Studio",
+            "domain": DEPLOY_DOMAIN,
+            "type": "self_hosted",
+            "policies": [{
+                "name": "operator only",
+                "decision": "allow",
+                "include": [{"email": {"email": OPERATOR_EMAIL}}],
+            }],
+        },
+        name=DEPLOY_DOMAIN, name_key="domain", id_key="id")
+    st.put("access_app_id", app_id)
+
+
+def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
+    """Create an account-scoped API token with the R2 read/write permission group and DERIVE the S3
+    credentials. Confirmed against developers.cloudflare.com/r2/api/tokens/:
+      Access Key ID     = the token's `id`
+      Secret Access Key = SHA-256 hex digest of the token's `value`
+    The token value is returned ONCE by CF; the derived secret is held in memory for the seed step and
+    is NEVER written to state. NOT cleanly idempotent (CF returns the value once), so a state flag skips
+    a re-mint on re-run -- the secret was already seeded into the store on the first run."""
+    endpoint = f"https://{account}.r2.cloudflarestorage.com"
+    if st.get("r2_token_id"):
+        log("  R2 S3 token already minted (id in state) -- skipping re-mint (secret already seeded)")
+        return {"R2_S3_ACCESS_KEY_ID": st.get("r2_token_id"), "R2_S3_SECRET_ACCESS_KEY": "", "R2_S3_ENDPOINT": endpoint}
+    groups = cf_api("GET", f"/accounts/{account}/tokens/permission_groups", token) or []
+    pg = next((g for g in groups if isinstance(g, dict) and g.get("name") == "Workers R2 Storage Write"), None)
+    if not pg:
+        log("  WARN: 'Workers R2 Storage Write' permission group not found -- R2 S3 token NOT minted")
+        return {"R2_S3_ACCESS_KEY_ID": "", "R2_S3_SECRET_ACCESS_KEY": "", "R2_S3_ENDPOINT": endpoint}
+    created = cf_api("POST", f"/accounts/{account}/tokens", token, {
+        "name": "vivijure-r2-s3",
+        "policies": [{
+            "effect": "allow",
+            "permission_groups": [{"id": pg["id"]}],
+            # Account-scoped; narrow the resource to one bucket for a tighter blast radius if preferred.
+            "resources": {f"com.cloudflare.api.account.{account}": "*"},
+        }],
+    }) or {}
+    token_id, token_value = created.get("id", ""), created.get("value", "")
+    secret = hashlib.sha256(token_value.encode()).hexdigest() if token_value else ""
+    if token_id:
+        st.put("r2_token_id", token_id)  # the access-key id (NOT the secret) -- safe in state
+    log("  minted R2 S3 token (access-key id recorded; secret held in memory only)")
+    return {"R2_S3_ACCESS_KEY_ID": token_id, "R2_S3_SECRET_ACCESS_KEY": secret, "R2_S3_ENDPOINT": endpoint}
+
+
+def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
+    """Step 1. The CF data-plane resources the workers bind (D1, R2 x2, AI Gateway), reconciled by name.
+    Returns the IN-MEMORY derived values the secret seed needs (GATEWAY_ID slug + R2 S3 creds);
+    identifiers are also recorded in state. Also mints the scoped R2 S3 token and creates the Access app."""
+    acct, tok = s.cf_account_id, s.cf_api_token
+    log("provisioning Cloudflare infra (D1, R2 x2, AI Gateway, Access) ...")
+
+    d1_id = create_if_absent(kind="D1 database", account=acct, token=tok,
+        list_path="/accounts/{acct}/d1/database", create_path="/accounts/{acct}/d1/database",
+        create_body={"name": D1_DATABASE}, name=D1_DATABASE, name_key="name", id_key="uuid")
+    st.put("d1_id", d1_id)
+
+    for b in R2_BUCKETS:
+        create_if_absent(kind="R2 bucket", account=acct, token=tok,
+            list_path="/accounts/{acct}/r2/buckets", create_path="/accounts/{acct}/r2/buckets",
+            create_body={"name": b}, name=b, name_key="name", id_key="name", list_unwrap="buckets")
+    st.put("r2_buckets", list(R2_BUCKETS))
+
+    gateway = create_if_absent(kind="AI Gateway", account=acct, token=tok,
+        list_path="/accounts/{acct}/ai-gateway/gateways", create_path="/accounts/{acct}/ai-gateway/gateways",
+        create_body={"id": AI_GATEWAY_ID, "cache_ttl": 0, "collect_logs": True,
+                     "rate_limiting_interval": 0, "rate_limiting_limit": 0, "rate_limiting_technique": "fixed"},
+        name=AI_GATEWAY_ID, name_key="id", id_key="id")
+    st.put("gateway_id", gateway)  # an identifier (the slug), not a secret -- safe in state
+
+    # Scoped R2 S3 token: mint + derive (Access Key ID = token id; Secret = SHA-256(token value)).
+    # CF returns the secret ONCE; it is held in memory for the seed step, never written to state.
+    r2 = mint_r2_s3_token(acct, tok, st)
+    # Access app + self-only policy gating the single-tenant studio (shapes confirmed against the CF
+    # Access API docs). No-op with a warn if DEPLOY_DOMAIN / OPERATOR_EMAIL are unset.
+    provision_access_app(acct, tok, st)
+    return {"GATEWAY_ID": gateway, **r2}
+
+
+RUNPOD_API = "https://rest.runpod.io/v1"  # the current REST API (Bearer key; OpenAPI at /v1/openapi.json)
+DATACENTER_ID = ""  # REQUIRED for a network volume -- set an available DC id (GET /datacenters or console)
+BACKEND_IMAGE_TAG = ""  # REQUIRED -- pin an explicit released tag (e.g. "0.2.27"); never "latest" (reproducibility)
+GPU_TYPE_IDS: list = []  # REQUIRED -- endpoint GPU type id(s) (GET /gputypes), e.g. ["NVIDIA H100 80GB HBM3"]
+
+
+def rp_api(method: str, path: str, key: str, body: dict | None = None):
+    """RunPod REST v1 call (plain JSON, no envelope; Bearer key in the header)."""
+    return http_json(method, RUNPOD_API + path, key, body)
+
+
+def rp_reconcile(*, kind: str, key: str, list_path: str, create_path: str, create_body: dict,
+                 name: str, name_key: str = "name", id_key: str = "id") -> str:
+    """Idempotent reconcile by NAME against the RunPod REST API -> returns the resource id."""
+    listed = rp_api("GET", list_path, key)
+    items = listed if isinstance(listed, list) else (
+        (listed.get("data") or listed.get("endpoints") or listed.get("templates") or [])
+        if isinstance(listed, dict) else [])
+    for it in items:
+        if isinstance(it, dict) and it.get(name_key) == name:
+            log(f"  RunPod {kind} '{name}' exists ({it.get(id_key)})")
+            return str(it.get(id_key, ""))
+    created = rp_api("POST", create_path, key, create_body)
+    rid = str(created.get(id_key, "")) if isinstance(created, dict) else ""
+    log(f"  RunPod {kind} '{name}' created ({rid})")
+    return rid
+
+
+def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dict:
+    """Step 2. RunPod must come BEFORE secret-seeding because RUNPOD_ENDPOINT_ID is a seeded secret.
+    Order within: registry-auth (only if the image is private) -> template (pin GHCR image, R2 env) ->
+    network volume -> endpoint. Returns {endpoint_name: endpoint_id}. Reconciled by name. Consumes the
+    R2 S3 creds (cf_derived, from the CF R2-token mint) for the backend env.
+
+    GOTCHA encoded: for a PUBLIC GHCR image, leave containerRegistryAuthId UNSET. A stale/blank-but-
+    present auth makes RunPod attempt auth and abort even a public pull."""
+    key = s.runpod_api_key
+    log("provisioning RunPod (registry-auth?, templates, volumes, endpoints) ...")
+
+    # Required config -- die loud rather than POST an empty/unpinned value (relying on a remote 400).
+    if not BACKEND_IMAGE_TAG or BACKEND_IMAGE_TAG == "latest":
+        die('set BACKEND_IMAGE_TAG to an explicit released tag (e.g. "0.2.27") -- never empty or "latest"')
+    if not DATACENTER_ID:
+        die("set DATACENTER_ID to an available RunPod data-center id (GET /datacenters) -- volumes require it")
+    if not GPU_TYPE_IDS:
+        die("set GPU_TYPE_IDS to the endpoint GPU type id(s) (GET /gputypes)")
+
+    # Public GHCR image -> NO registry auth (leave containerRegistryAuthId unset; the blank-auth gotcha).
+    registry_auth_id = None  # for a PRIVATE image, rp_reconcile a containerregistryauth here first.
+
+    # The env the pod reads to reach R2 (S3), from the CF R2-token mint (cf_derived). If the mint warned
+    # (e.g. the permission group was missing), the creds are empty -> abort rather than ship an endpoint
+    # that cannot read R2.
+    if not cf_derived.get("R2_S3_ACCESS_KEY_ID"):
+        die("R2 S3 creds were not minted (see the CF R2-token warning above) -- aborting before creating RunPod endpoints that cannot read R2")
+    # RunPod template env is a key->value OBJECT (confirmed against the v1 OpenAPI), not an array.
+    backend_env = {
+        "R2_S3_ACCESS_KEY_ID": cf_derived.get("R2_S3_ACCESS_KEY_ID", ""),
+        "R2_S3_SECRET_ACCESS_KEY": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", ""),
+        "R2_ENDPOINT": cf_derived.get("R2_S3_ENDPOINT", ""),
+        "R2_BUCKET": R2_BUCKETS[0],
+    }
+
+    endpoints: dict = {}
+    for ep in RUNPOD_ENDPOINTS:
+        tmpl_id = rp_reconcile(kind="template", key=key, list_path="/templates", create_path="/templates",
+            create_body={
+                "name": f"{ep}-tmpl",
+                "imageName": f"{GHCR_IMAGE}:{BACKEND_IMAGE_TAG}",
+                "containerDiskInGb": 500,
+                "env": backend_env,
+                **({"containerRegistryAuthId": registry_auth_id} if registry_auth_id else {}),
+            }, name=f"{ep}-tmpl")
+        # Network volume for the model weights (warm cache between jobs). dataCenterId is REQUIRED +
+        # region-specific (confirmed against the v1 OpenAPI); checked + die-loud at the top of this fn.
+        vol_id = rp_reconcile(kind="network volume", key=key, list_path="/networkvolumes",
+            create_path="/networkvolumes",
+            create_body={"name": f"{ep}-vol", "size": 100, "dataCenterId": DATACENTER_ID},  # size in GB
+            name=f"{ep}-vol")
+        ep_id = rp_reconcile(kind="endpoint", key=key, list_path="/endpoints", create_path="/endpoints",
+            create_body={
+                "name": ep, "templateId": tmpl_id, "networkVolumeId": vol_id,
+                "gpuTypeIds": GPU_TYPE_IDS,
+                "workersMin": 0, "workersMax": 1,
+                # scaler/idle/timeout tuning (scalerType / scalerValue / idleTimeout / executionTimeoutMs)
+                # is optional; confirm the exact fields against the live /v1/openapi.json before tuning.
+            }, name=ep)
+        endpoints[ep] = ep_id
+        st.put(f"runpod_endpoint_{ep}", ep_id)
+        st.put(f"runpod_template_{ep}", tmpl_id)
+        st.put(f"runpod_volume_{ep}", vol_id)
+
+    # Model seeding: the backend image self-preloads weights from R2 on first cold start (the
+    # R2-mirror-on-cold-start model), so it is not blocking; optionally pre-seed each volume via the
+    # RunPod S3 API (boto3, no pod) to avoid a slow first job.
+    log("  NOTE: model-seeding via the RunPod volume S3 API (boto3) is an optional follow-up; the image "
+        "self-preloads from R2 on first job otherwise.")
+    return endpoints
+
+
+def replace_store_id_placeholder(repo: Path, store_id: str) -> None:
+    """Wire the real Secrets Store id into the module wrangler.tomls (replace the #237 placeholder) so
+    the secrets_store_secrets bindings resolve at deploy. Idempotent: a no-op once already replaced."""
+    n = 0
+    for toml in sorted((repo / "modules").glob("*/wrangler.toml")):
+        text = toml.read_text()
+        if STORE_ID_PLACEHOLDER in text:
+            toml.write_text(text.replace(STORE_ID_PLACEHOLDER, store_id))
+            n += 1
+    log(f"  wired store_id into {n} module wrangler.toml(s)")
+
+
+def restore_store_id_placeholder(repo: Path, store_id: str) -> None:
+    """Undo replace_store_id_placeholder after a successful deploy, so the working tree is left CLEAN
+    (the user's checkout is not dirtied with their store id). Only runs on success; a failed deploy
+    leaves the tomls mutated, and a re-run reconciles them."""
+    if not store_id:
+        return
+    n = 0
+    for toml in sorted((repo / "modules").glob("*/wrangler.toml")):
+        text = toml.read_text()
+        if store_id in text and STORE_ID_PLACEHOLDER not in text:
+            toml.write_text(text.replace(store_id, STORE_ID_PLACEHOLDER))
+            n += 1
+    if n:
+        log(f"  restored the store_id placeholder in {n} module wrangler.toml(s) (working tree left clean)")
+
+
+def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_endpoints: dict) -> None:
+    """Step 3. CRITICAL ORDER: seed the Secrets Store BEFORE deploying the workers. A module worker's
+    secrets_store_secrets binding references a store secret by name; `wrangler deploy` FAILS if that
+    secret does not yet exist (#237). Values flow from: the user's RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID
+    (step 2), GATEWAY_ID + the scoped R2 S3 creds (step 1).
+
+    Secret VALUES are sent in the HTTPS request body of the Secrets Store API (never on argv, never
+    logged) -- the non-interactive analogue of wrangler's hidden prompt. Re-run reseeds rotated values."""
+    acct, tok = s.cf_account_id, s.cf_api_token
+    log("seeding the Cloudflare Secrets Store (BEFORE deploy) ...")
+
+    store_id = create_if_absent(kind="Secrets Store", account=acct, token=tok,
+        list_path="/accounts/{acct}/secrets_store/stores", create_path="/accounts/{acct}/secrets_store/stores",
+        create_body={"name": STORE_NAME}, name=STORE_NAME, name_key="name", id_key="id")
+    st.put("store_id", store_id)
+    replace_store_id_placeholder(repo, store_id)  # so the deploy's bindings resolve
+
+    values = {
+        "RUNPOD_API_KEY": s.runpod_api_key,
+        "RUNPOD_ENDPOINT_ID": runpod_endpoints.get("vivijure-backend", ""),
+        "GATEWAY_ID": cf_derived.get("GATEWAY_ID", ""),
+        "R2_S3_ACCESS_KEY_ID": cf_derived.get("R2_S3_ACCESS_KEY_ID", ""),
+        "R2_S3_SECRET_ACCESS_KEY": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", ""),
+        "R2_S3_ENDPOINT": cf_derived.get("R2_S3_ENDPOINT", ""),
+    }
+    base = f"/accounts/{acct}/secrets_store/stores/{store_id}/secrets"
+    existing = {x.get("name") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict)}
+    # COUPLING NOTE: on a re-run, mint_r2_s3_token returns an EMPTY R2 secret (CF returns the token
+    # value only once). The skip-empty guard below is what protects the already-seeded R2 secret from
+    # being overwritten with a blank on a reconcile -- do NOT "fix" it to seed empty values.
+    for name in STORE_SECRETS:
+        v = values.get(name, "")
+        if not v:
+            log(f"  skip {name}: no value this run (already seeded, or not yet resolved) -- left as-is")
+            continue
+        if name in existing:
+            cf_api("PATCH", f"{base}/{name}", tok, {"value": v, "scopes": ["workers"]})
+        else:
+            cf_api("POST", base, tok, {"name": name, "value": v, "scopes": ["workers"]})
+        log(f"  seeded {name}")  # name only, never the value
+
+
+def run_migrations(repo: Path, s: Secrets) -> None:
+    """Step 4. D1 schema migrations (Wrangler only -- Terraform cannot do this). Additive, idempotent."""
+    log("applying D1 migrations ...")
+    wrangler(["d1", "migrations", "apply", D1_DATABASE, "--remote"], cwd=repo, cf_env=cf_env_for(s))
+
+
+def deploy_workers(repo: Path, s: Secrets) -> None:
+    """Step 5. Modules BEFORE the core (the core binds each module as a [[services]] dependency).
+    Wrangler bundles + uploads. Only reachable AFTER seed_secrets (the store bindings must resolve)."""
+    mods = module_dirs(repo)
+    log(f"deploying {len(mods)} module workers, then the core ...")
+    env = cf_env_for(s)
+    for m in mods:
+        wrangler(["deploy", "-c", f"modules/{m}/wrangler.toml"], cwd=repo, cf_env=env)
+    wrangler(["deploy"], cwd=repo, cf_env=env)  # the core, AFTER every module (service bindings)
+
+
+def bring_up_containers(repo: Path) -> None:
+    """Step 6 (Phase 2 / optional). The 3 CPU helper containers run on the user's OWN box (Docker),
+    reached over CF VPC bindings. Without them the studio still renders clips; it just cannot do the
+    final concat / title cards. Phase 2."""
+    log("(phase 2) CPU containers + VPC services -- skipped in phase 1")
+
+
+def finalize(repo: Path, st: State) -> None:
+    log("done. studio URL + recorded resource ids are in " + str(repo / STATE_FILE))
+
+
+# --------------------------------------------------------------------------------------------------
+# Orchestration: up / down / plan.
+# --------------------------------------------------------------------------------------------------
+
+
+def cmd_up(repo: Path, dry_run: bool, noninteractive: bool) -> None:
+    # The plan is order-only -- it needs NO credentials, so never prompt for secrets in a dry-run.
+    if dry_run:
+        log("PLAN (dry-run) -- order (no credentials needed, no changes made):")
+        for i, name in enumerate([
+            "preflight (deps + token validity)",
+            "provision Cloudflare infra (D1, R2 x2, AI Gateway, Access, scoped R2 token)",
+            "provision RunPod (registry-auth?, template, volume, endpoints) -> capture endpoint ids",
+            "seed Cloudflare Secrets Store  <-- BEFORE deploy (#237)",
+            "run D1 migrations",
+            "deploy module workers, then the core",
+            "(phase 2) bring up CPU containers + VPC services",
+        ], 1):
+            log(f"  {i}. {name}")
+        return
+    s = collect_secrets(noninteractive_env=noninteractive)
+    log("credential presence: " + s.presence())  # SET/missing only
+    st = State.load(repo)
+    preflight(repo, s)
+    cf_derived = provision_cloudflare_infra(repo, s, st)
+    runpod_endpoints = provision_runpod(repo, s, st, cf_derived)
+    seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
+    run_migrations(repo, s)
+    deploy_workers(repo, s)
+    restore_store_id_placeholder(repo, st.get("store_id"))  # leave the working tree clean post-deploy
+    bring_up_containers(repo)
+    finalize(repo, st)
+
+
+def cmd_down(repo: Path, delete_data: bool) -> None:
+    """Teardown in reverse dependency order, by recorded id. R2 buckets + D1 hold user data and are
+    LEFT in place unless --delete-data is given."""
+    st = State.load(repo)
+    s = collect_secrets()  # teardown needs the keys too -- same hidden-prompt handling, never argv
+    log("teardown (reverse dependency order, by recorded id) ...")
+
+    # RunPod first (endpoint -> volume -> template). An endpoint with live workers may need scaling to 0
+    # before delete; surface the API error rather than force.
+    key = s.runpod_api_key
+    for ep in RUNPOD_ENDPOINTS:
+        eid = st.get(f"runpod_endpoint_{ep}")
+        if eid:
+            rp_api("DELETE", f"/endpoints/{eid}", key)
+            log(f"  deleted RunPod endpoint {ep} ({eid})")
+        vid = st.get(f"runpod_volume_{ep}")
+        if vid:
+            rp_api("DELETE", f"/networkvolumes/{vid}", key)
+            log(f"  deleted RunPod volume {ep}")
+        tid = st.get(f"runpod_template_{ep}")
+        if tid:
+            rp_api("DELETE", f"/templates/{tid}", key)
+            log(f"  deleted RunPod template {ep}")
+
+    # CF teardown by recorded id, in dependency-safe order. The minted R2 API TOKEN is the security
+    # footgun -- it must NOT survive a `down`. A delete error surfaces loud (cf_api dies), never silent.
+    acct, tok = s.cf_account_id, s.cf_api_token
+    removed: list = []
+
+    # Workers (modules + core) via `wrangler delete`. wrangler may prompt for confirmation depending on
+    # version; that surfaces (it is not silently skipped).
+    for m in module_dirs(repo):
+        wrangler(["delete", "-c", f"modules/{m}/wrangler.toml"], cwd=repo, cf_env=cf_env_for(s))
+    wrangler(["delete"], cwd=repo, cf_env=cf_env_for(s))
+    removed.append("workers (modules + core)")
+
+    sid = st.get("store_id")
+    if sid:
+        base = f"/accounts/{acct}/secrets_store/stores/{sid}/secrets"
+        for name in {x.get("name") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict)}:
+            cf_api("DELETE", f"{base}/{name}", tok)
+        cf_api("DELETE", f"/accounts/{acct}/secrets_store/stores/{sid}", tok)
+        removed.append("Secrets Store (store + secrets)")
+    aid = st.get("access_app_id")
+    if aid:
+        cf_api("DELETE", f"/accounts/{acct}/access/apps/{aid}", tok); removed.append("Access app")
+    gw = st.get("gateway_id")
+    if gw:
+        cf_api("DELETE", f"/accounts/{acct}/ai-gateway/gateways/{gw}", tok); removed.append("AI Gateway")
+    rt = st.get("r2_token_id")
+    if rt:
+        cf_api("DELETE", f"/accounts/{acct}/tokens/{rt}", tok); removed.append("R2 API token")
+
+    log("CF removed by id: " + (", ".join(removed) if removed else "(nothing was recorded in state)"))
+
+    if not delete_data:
+        log("NOTE: R2 buckets + D1 (your DATA) left intact. Re-run with --delete-data to remove them.")
+    else:
+        for b in (st.get("r2_buckets") or []):
+            cf_api("DELETE", f"/accounts/{acct}/r2/buckets/{b}", tok)
+            log(f"  deleted R2 bucket {b}")
+        d1 = st.get("d1_id")
+        if d1:
+            cf_api("DELETE", f"/accounts/{acct}/d1/database/{d1}", tok)
+            log("  deleted D1 database")
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(
+        prog="vivijure-deploy",
+        description="Stand up the Vivijure stack on YOUR Cloudflare + RunPod accounts (BYO keys). "
+                    "Collects ONLY a CF account id + CF API token + RunPod API key. Never payment or wallet data.",
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    up = sub.add_parser("up", help="provision + seed + deploy (idempotent; safe to re-run)")
+    up.add_argument("--dry-run", action="store_true", help="print the ordered plan and exit (no changes)")
+    up.add_argument("--noninteractive", action="store_true", help="read creds from env (CI/headless), never argv")
+    sub.add_parser("plan", help="alias for `up --dry-run`")
+    down = sub.add_parser("down", help="teardown by recorded id")
+    down.add_argument("--delete-data", action="store_true", help="ALSO delete R2 buckets + D1 (your data)")
+
+    args = ap.parse_args(argv)
+    repo = Path.cwd()
+    if args.cmd == "up":
+        cmd_up(repo, dry_run=args.dry_run, noninteractive=args.noninteractive)
+    elif args.cmd == "plan":
+        cmd_up(repo, dry_run=True, noninteractive=False)
+    elif args.cmd == "down":
+        cmd_down(repo, delete_data=args.delete_data)
+
+
+if __name__ == "__main__":
+    main()

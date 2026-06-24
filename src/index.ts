@@ -13,11 +13,10 @@ import { resolveCastLoras, untrainedCastMessage } from "./cast-loras";
 import { normalizeHybridBackends } from "./storyboard-validate";
 import { startCastRefsJob, advanceCastRefsJob, summarizeCastRefs } from "./cast-image-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
-import { getUserEmail, getAccessUserEmail } from "./shared";
 import type { Env } from "./env";
 
 import {
-  listProjectsForUser, getProjectById, createProject, updateProjectMeta, setLastStoryboard, deleteProject,
+  listProjects, getProjectById, createProject, updateProjectMeta, setLastStoryboard, deleteProject,
 } from "./storyboard-projects-db";
 import {
   listCast, getCastById, createCast, updateCast, deleteCast,
@@ -32,6 +31,7 @@ import {
   handleCastRefRemove,
   handleCastSourceAdd,
   handleCastSourceRemove,
+  deleteCastArtifacts,
 } from "./cast-media";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
@@ -44,6 +44,7 @@ import {
 } from "./renders-db";
 import { stageBundleInjectedKeyframes } from "./bundle-keyframes";
 import { readBundleScenes } from "./bundle-storyboard";
+import type { DialogueLine } from "./modules/types";
 import {
   startScatterRender,
   advanceScatterJob,
@@ -58,6 +59,7 @@ import {
   type AudioAnalyzeRequest,
 } from "./runpod-submit";
 import { validateStoryboard, type StoryboardValidated } from "./storyboard-validate";
+import { checkStoryboardShape, checkCastBindingsReady, summarize, type PreflightIssue } from "./preflight";
 import {
   planStoryboard, refineStoryboard, chatComplete,
   type PlanStoryboardArgs, type RefineStoryboardArgs, type ChatCompleteArgs,
@@ -68,6 +70,7 @@ import { emitMarkers, type MarkersFormat } from "./markers";
 import { assembleBundle, type AssembleBundleArgs } from "./bundle-assembler";
 import { presignR2Get } from "./r2-presign";
 import { getUserPrefs, setUserPrefs } from "./user-prefs";
+import { loadInstallConfig, setInstallConfig, hasInstallConfig } from "./operator-config";
 import { analyzeAudioBeats } from "./beat-analyze";
 import { startScoreBedGenerate, pollScoreBedGenerate } from "./score-bed";
 import { muxAudioOntoRender } from "./render-mux";
@@ -119,35 +122,35 @@ function match(routes: Route[], method: string, pathname: string) {
 // --- projects ------------------------------------------------------------
 // Responses are wrapped by resource name ({projects}/{project}) -- the frontend reads data.projects
 // / data.project. (Migration regression: these used to return bare rows, which crashed create.)
-const hListProjects: Handler = async (req, env) => json({ projects: await listProjectsForUser(env, getUserEmail(req)) });
+const hListProjects: Handler = async (req, env) => json({ projects: await listProjects(env) });
 const hCreateProject: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; prefs?: Record<string, unknown> }>(req);
   if (!b.name) throw badRequest("name required");
-  return json({ project: await createProject(env, getUserEmail(req), { name: b.name, prefs: b.prefs }) }, 201);
+  return json({ project: await createProject(env, { name: b.name, prefs: b.prefs }) }, 201);
 };
 const hGetProject: Handler = async (req, env, _c, p) => {
-  const row = await getProjectById(env, idParam(p.id), getUserEmail(req));
+  const row = await getProjectById(env, idParam(p.id));
   if (!row) throw notFound("project");
   return json({ project: row });
 };
 const hPatchProject: Handler = async (req, env, _c, p) => {
-  const id = idParam(p.id), email = getUserEmail(req);
+  const id = idParam(p.id);
   const b = await readBody<{ name?: string; prefs?: Record<string, unknown>; storyboard?: unknown }>(req);
   const row = b.storyboard !== undefined
-    ? await setLastStoryboard(env, id, email, b.storyboard)
-    : await updateProjectMeta(env, id, email, { name: b.name, prefs: b.prefs });
+    ? await setLastStoryboard(env, id, b.storyboard)
+    : await updateProjectMeta(env, id, { name: b.name, prefs: b.prefs });
   if (!row) throw notFound("project");
   return json({ project: row });
 };
 const hDeleteProject: Handler = async (req, env, _c, p) => {
-  const row = await deleteProject(env, idParam(p.id), getUserEmail(req));
+  const row = await deleteProject(env, idParam(p.id));
   if (!row) throw notFound("project");
   return json({ ok: true, deleted: row.id });
 };
 const hSaveProjectStoryboard: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ storyboard?: unknown }>(req);
   if (b.storyboard === undefined) throw badRequest("storyboard required");
-  const row = await setLastStoryboard(env, idParam(p.id), getUserEmail(req), b.storyboard);
+  const row = await setLastStoryboard(env, idParam(p.id), b.storyboard);
   if (!row) throw notFound("project");
   return json({ project: row });
 };
@@ -188,6 +191,9 @@ const hPatchCast: Handler = async (req, env, _c, p) => {
 const hDeleteCast: Handler = async (req, env, _c, p) => {
   const row = await deleteCast(env, idParam(p.id));
   if (!row) throw notFound("cast member");
+  // Issue #298: deleteCast returns the row (with its keys) precisely so the caller reclaims R2.
+  // Best-effort, so a missing/transient-failing artifact never blocks the delete response.
+  await deleteCastArtifacts(env, row);
   return json({ ok: true, deleted: row.id });
 };
 // portrait / ref / source: binary upload, staged {key,mime}, or {from_chat_artifact} copy.
@@ -360,24 +366,22 @@ const hAddRenderNarration: Handler = async (req, env, _c, p) => {
 async function animatePreviewHandler(
   env: Env,
   renderId: number,
-  email: string,
-  args: Omit<import("./finalize-from-keyframes").AnimateFromPreviewArgs, "parent" | "userEmail">,
+  args: Omit<import("./finalize-from-keyframes").AnimateFromPreviewArgs, "parent">,
 ): Promise<Response> {
   const parent = await getRenderByIdForUser(env, renderId);
   if (!parent) throw notFound("render");
-  const r = await animateFromPreview(env, { parent, userEmail: email, ...args });
+  const r = await animateFromPreview(env, { parent, ...args });
   if (!r.ok) return json({ ok: false, error: r.error }, r.status ?? 400);
   return json({ ok: true, ...r.view }, 201);
 }
 
 const hFinalizePreview: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
   let audioKey: string | undefined;
   try {
     const b = await readBody<{ audioKey?: string; castLoras?: Record<string, string> }>(req);
     audioKey = b.audioKey;
   } catch { /* empty body ok */ }
-  return animatePreviewHandler(env, idParam(p.id), email, {
+  return animatePreviewHandler(env, idParam(p.id), {
     deriveMode: "finalized",
     motionBackend: "own-gpu",
     audioKey,
@@ -385,9 +389,8 @@ const hFinalizePreview: Handler = async (req, env, _c, p) => {
 };
 
 const hAnimateCloud: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
   const b = await readBody<{ model?: string; perShot?: Record<string, string>; audioKey?: string }>(req);
-  return animatePreviewHandler(env, idParam(p.id), email, {
+  return animatePreviewHandler(env, idParam(p.id), {
     deriveMode: "cloud-finalized",
     motionBackend: b.model,
     perShotModels: b.perShot,
@@ -396,7 +399,6 @@ const hAnimateCloud: Handler = async (req, env, _c, p) => {
 };
 
 const hAnimateHybrid: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
   const b = await readBody<{
     backends?: unknown;
     defaultBackend?: "gpu" | "cloud";
@@ -409,7 +411,7 @@ const hAnimateHybrid: Handler = async (req, env, _c, p) => {
   );
   const normalized = normalizeHybridBackends(b.backends, allowed);
   if (normalized.errors.length) throw badRequest(normalized.errors.join("; "));
-  return animatePreviewHandler(env, idParam(p.id), email, {
+  return animatePreviewHandler(env, idParam(p.id), {
     deriveMode: "cloud-finalized",
     hybridBackends: normalized.backends,
     defaultBackend: b.defaultBackend === "cloud" ? "cloud" : "gpu",
@@ -420,13 +422,13 @@ const hAnimateHybrid: Handler = async (req, env, _c, p) => {
 
 // --- render submission / lifecycle ---------------------------------------
 const hSubmitRender: Handler = async (req, env) => {
-  const email = getUserEmail(req);
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
     renderOverrides?: Record<string, unknown>; keyframesOnly?: boolean; audioKey?: string;
     processShotIds?: string[]; projectId?: unknown;
     scenes?: unknown; motion_backend?: string;
     castLoras?: Record<string, unknown>;
+    film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
   const tier = coerceQualityTier(b.qualityTier) ?? "final";
@@ -460,14 +462,21 @@ const hSubmitRender: Handler = async (req, env) => {
     bundle_key: b.bundleKey,
     scenes,
     motion_backend: motionBackend,
+    keyframe_backend: mapped.keyframe_backend,
     keyframe_config: mapped.keyframe_config,
     motion_config: mapped.motion_config,
     finish_config: mapped.finish_config,
+    speech_config: mapped.speech_config,
+    film_finish_config: mapped.film_finish_config,
+    master_config: mapped.master_config,
     keyframes_only: !!b.keyframesOnly,
     audio_key: b.keyframesOnly ? undefined : b.audioKey,
+    // Opening title + end-credit card TEXT (FilmTitleSpec / FilmCreditSpec); the film.finish chain
+    // reads it off the job. Mirrors hStartFilm. Skipped on a keyframes-only preview (no assembled
+    // film to card), exactly like audio_key above.
+    film_titles: b.keyframesOnly ? undefined : b.film_titles,
     pretrained_loras: Object.keys(pretrained).length ? pretrained : undefined,
     cast_loras: Object.keys(castIds).length ? castIds : undefined,
-    user_email: email,
   });
   const view = filmJobToPollView(job, null);
   const row: NewRenderRow = {
@@ -484,7 +493,6 @@ const hSubmitRender: Handler = async (req, env) => {
   return json(view, 201);
 };
 const hRenderFromKeyframes: Handler = async (req, env) => {
-  const email = getUserEmail(req);
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
     renderOverrides?: Record<string, unknown>; audioKey?: string; projectId?: unknown;
@@ -525,9 +533,11 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
     motion_backend: motionBackend,
     motion_config: mapped.motion_config,
     finish_config: mapped.finish_config,
+    speech_config: mapped.speech_config,
+    film_finish_config: mapped.film_finish_config,
+    master_config: mapped.master_config,
     derive_mode: "finalized",
     audio_key: b.audioKey,
-    user_email: email,
   });
   if (job.phase === "failed") {
     return json({ error: job.error || "render from keyframes failed" }, 422);
@@ -546,7 +556,6 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
   return json(view, 201);
 };
 const hRegenShot: Handler = async (req, env, _c, p) => {
-  const email = getUserEmail(req);
   const renderId = idParam(p.id);
   const b = await readBody<{ shotId?: string }>(req);
   const shotId = typeof b.shotId === "string" ? b.shotId.trim() : "";
@@ -572,9 +581,9 @@ const hRegenShot: Handler = async (req, env, _c, p) => {
     project: row.project,
     bundle_key: row.bundle_key,
     scenes: [{ shot_id: scene.shot_id, prompt: scene.prompt, seconds: scene.seconds }],
+    keyframe_backend: mapped.keyframe_backend,
     keyframe_config: mapped.keyframe_config,
     keyframes_only: true,
-    user_email: email,
   });
   if (job.phase === "failed") {
     return json({ ok: false, error: job.error || "regen submit failed" }, 422);
@@ -628,12 +637,12 @@ const hCancelRender: Handler = async (_req, env, _c, p) => {
   return json(view);
 };
 const hScatterRender: Handler = async (req, env) => {
-  const email = getUserEmail(req);
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
     shotIds?: string[]; shardCount?: number; castLoras?: Record<string, unknown>;
     renderOverrides?: Record<string, unknown>; audioKey?: string; projectId?: unknown;
     motion_backend?: string;
+    film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
   if (!Array.isArray(b.shotIds) || b.shotIds.length < 2) throw badRequest("shotIds[] required (>= 2)");
@@ -651,8 +660,8 @@ const hScatterRender: Handler = async (req, env) => {
       render_overrides: b.renderOverrides,
       motion_backend: b.motion_backend,
       audio_key: b.audioKey,
-      user_email: email,
-      project_id: normalizeProjectIdInput(b.projectId),
+      film_titles: b.film_titles,
+        project_id: normalizeProjectIdInput(b.projectId),
     });
     const view = scatterJobToPollView(job);
     return json({ ok: true, jobId: view.jobId, status: view.status }, 201);
@@ -669,10 +678,44 @@ const hAdoptRender: Handler = async (req, env) =>
   handleAdoptRender(req, env);
 
 // --- validation ----------------------------------------------------------
-const hPreflight: Handler = async (req) => {
-  const result = validateStoryboard(await readBody<unknown>(req));
-  const okFlag = (result as { ok?: boolean }).ok;
-  return json(result, okFlag === false ? 400 : 200);
+// Pre-render preflight. The client (planner.js `runPreflight`) POSTs the
+// envelope { storyboard, castBindings?, bundleKey?, audioKey? } and expects a
+// PreflightResult { ok, counts, issues[] } (see ./preflight): it renders the
+// issues, shows the counts, and gates the bundle button on counts.error.
+//
+// Two things this handler must get right (both were wrong before #242):
+//   1. Unwrap `.storyboard` from the envelope. The previous code validated the
+//      whole body, so `validateStoryboard` read `.title`/`.scenes` off the
+//      wrapper (undefined) and 400'd on every valid storyboard.
+//   2. A storyboard with problems is DATA, not an HTTP failure -- return 200
+//      with `ok:false` + the issues so the client renders them. The previous
+//      code returned 400, which made the client `throw` and show only
+//      "HTTP 400" with no reasons (and never reach its own gate). Reserve
+//      non-2xx for a genuinely malformed request (handled by readBody's 400).
+const hPreflight: Handler = async (req, env) => {
+  const body = await readBody<unknown>(req);
+  const envelope = (body && typeof body === "object") ? (body as Record<string, unknown>) : {};
+
+  // Hard shape gate first: title + scenes structure. Surface its errors as
+  // preflight issues so the panel shows the actual reasons.
+  const validated = validateStoryboard(envelope.storyboard);
+  if (!validated.ok) {
+    const issues: PreflightIssue[] = validated.errors.map((message) => ({
+      level: "error" as const, scope: "storyboard", message,
+    }));
+    return json(summarize(issues), 200);
+  }
+
+  // Shape is valid -> run the semantic + cast-readiness checks.
+  const issues: PreflightIssue[] = [...checkStoryboardShape(validated.value)];
+  const bindings = (envelope.castBindings && typeof envelope.castBindings === "object")
+    ? (envelope.castBindings as Record<string, number>)
+    : null;
+  // Only touch D1 when there are bindings to check.
+  if (bindings && Object.keys(bindings).length > 0) {
+    issues.push(...checkCastBindingsReady(bindings, await listCast(env)));
+  }
+  return json(summarize(issues), 200);
 };
 
 // --- authoring: planning / yaml / markers / bundle / audio ----------------
@@ -789,7 +832,7 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   return summary;
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } } }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[] }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
@@ -797,11 +840,16 @@ const hStartFilm: Handler = async (req, env) => {
   const project = a.project ?? deriveProjectFromBundleKey(a.bundle_key);
   const job = await startFilmJob(env, {
     project, bundle_key: a.bundle_key, scenes: a.scenes,
-    motion_backend: a.motion_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
+    motion_backend: a.motion_backend, keyframe_backend: a.keyframe_backend, keyframe_config: a.keyframe_config, motion_config: a.motion_config,
     // audio_key: a staged bed (score-bed music/narration) to mux after assemble. startFilmJob runs it
     // through resolveStagedAudioKey; without forwarding it here the mux phase is skipped and the film is
     // silent even when the caller supplied a bed (the scored/narrated render path).
-    finish_config: a.finish_config, audio_key: a.audio_key, film_titles: a.film_titles, user_email: getUserEmail(req),
+    finish_config: a.finish_config, speech_config: a.speech_config, film_finish_config: a.film_finish_config, master_config: a.master_config, audio_key: a.audio_key, film_titles: a.film_titles,
+    // dialogue_lines (issue #296): the per-shot lines Slate authored. startFilmJob already accepts
+    // them -- the dialogue/TTS+lip-sync stage (enterDialogueOrFinish) and the subtitle module
+    // (buildCaptionCues) both read job.dialogue_lines. Not forwarding them here left every film
+    // submitted via /api/render/film silent and uncaptioned even with the subtitle toggle on.
+    dialogue_lines: a.dialogue_lines,
   });
   // Write a renders-table row so this film shows in the history panel (#164), the same way
   // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
@@ -838,7 +886,7 @@ const hEnhance: Handler = async (req, env) => {
     modules,
     "plan.enhance",
     seed,
-    { project: a.project || "enhance", job_id: crypto.randomUUID(), user_email: getUserEmail(req) },
+    { project: a.project || "enhance", job_id: crypto.randomUUID() },
     {
       nextInput: (prev) => ({ storyboard: prev.storyboard, brief: a.brief }),
       configFor: () => a.config,
@@ -883,16 +931,41 @@ const hAudioAnalyze: Handler = async (req, env) => {
 };
 
 // --- misc planner endpoints ----------------------------------------------
-const hWhoami: Handler = async (req) => json({ user: getAccessUserEmail(req) });
+const hWhoami: Handler = async () => json({ user: "studio" });
 const hGetPrefs: Handler = async (req, env) => {
-  const prefs = await getUserPrefs(env, getAccessUserEmail(req));
+  const prefs = await getUserPrefs(env);
   return json({ ok: true, prefs });
 };
 const hPatchPrefs: Handler = async (req, env) => {
   const body = await readBody<Record<string, unknown>>(req);
   if (!body || typeof body !== "object" || Array.isArray(body)) throw badRequest("body must be a prefs object");
-  const prefs = await setUserPrefs(env, getAccessUserEmail(req), body);
+  const prefs = await setUserPrefs(env, body);
   return json({ ok: true, prefs });
+};
+
+// --- operator install-config (per-module, instance-scoped; backs config_schema scope:"install") ----
+// GET/PATCH the operator-set-once config for one module (e.g. notify-email's notify_email). The
+// VALUE lives only here, never on the unauthenticated /api/modules projection; only the schema marker
+// crosses there. Render-scope / unknown keys are rejected by the store's install-subschema clamp.
+async function resolveModuleByName(env: Env, name: string) {
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  return modules.find((m) => m.name === name) ?? null;
+}
+const hGetModuleConfig: Handler = async (_req, env, _ctx, p) => {
+  const mod = await resolveModuleByName(env, p.name);
+  if (!mod) throw notFound("module");
+  if (!hasInstallConfig(mod.config_schema)) throw notFound("module has no install-scope config");
+  const config = await loadInstallConfig(env, mod.name, mod.config_schema);
+  return json({ ok: true, module: mod.name, config });
+};
+const hPatchModuleConfig: Handler = async (req, env, _ctx, p) => {
+  const mod = await resolveModuleByName(env, p.name);
+  if (!mod) throw notFound("module");
+  if (!hasInstallConfig(mod.config_schema)) throw notFound("module has no install-scope config");
+  const body = await readBody<Record<string, unknown>>(req);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw badRequest("body must be a config object");
+  const config = await setInstallConfig(env, mod.name, mod.config_schema, body);
+  return json({ ok: true, module: mod.name, config });
 };
 
 // --- route table ---------------------------------------------------------
@@ -962,6 +1035,8 @@ const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/whoami",                          handler: hWhoami },
   { method: "GET",    pattern: "/api/prefs",                           handler: hGetPrefs },
   { method: "PATCH",  pattern: "/api/prefs",                           handler: hPatchPrefs },
+  { method: "GET",    pattern: "/api/modules/:name/config",            handler: hGetModuleConfig },
+  { method: "PATCH",  pattern: "/api/modules/:name/config",            handler: hPatchModuleConfig },
 ];
 
 // Pretty studio page paths (vivijure.skyphusion.org/planner, /cast, /modules). Served
@@ -978,6 +1053,8 @@ const STUDIO_PAGE_ASSETS: Record<string, string> = {
   "/cast/": "/cast.html",
   "/modules": "/modules.html",
   "/modules/": "/modules.html",
+  "/settings": "/settings.html",
+  "/settings/": "/settings.html",
 };
 
 function serveStudioAsset(env: Env, request: Request, url: URL, assetPath: string): Promise<Response> {

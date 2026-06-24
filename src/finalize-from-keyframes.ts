@@ -22,7 +22,6 @@ import type { ClipJob, ClipShotInput } from "./render-orchestrator";
 
 export interface AnimateFromPreviewArgs {
   parent: RenderRow;
-  userEmail: string;
   deriveMode: "finalized" | "cloud-finalized";
   motionBackend?: string;
   perShotModels?: Record<string, string>;
@@ -185,10 +184,12 @@ export async function animateFromPreview(
     per_shot_motion: perShotMotion,
     motion_config: mapped.motion_config,
     finish_config: mapped.finish_config,
+    speech_config: mapped.speech_config,
+    film_finish_config: mapped.film_finish_config,
+    master_config: mapped.master_config,
     derive_mode: args.deriveMode,
     parent_render_id: args.parent.id,
     audio_key: args.audioKey,
-    user_email: args.userEmail,
   });
 
   const view = filmJobToPollView(job, null);
