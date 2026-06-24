@@ -11,8 +11,11 @@ compatibility_flags = ["nodejs_compat"]
 # Disable preview urls
 preview_urls = false
 
-# Enable workers_dev route
-workers_dev = true
+# workers.dev route DISABLED (security F1): the *.workers.dev hostname is NOT covered by CF Access
+# (Access reliably gates only custom/zone-proxied domains), so leaving it on exposed the entire /api
+# UNAUTHENTICATED. Legit access is vivijure.skyphusion.org behind Access. Conrad confirmed the route
+# is not needed. Re-enabling requires an in-Worker auth gate that does not depend on the edge Access app.
+workers_dev = false
 
 # The studio frontend (public/) served via Workers Assets.
 assets = { directory = "./public", binding = "ASSETS" }
@@ -31,6 +34,14 @@ crons = ["*/1 * * * *"]
 #   echo "<gateway-slug>" | npx wrangler secret put GATEWAY_ID
 [ai]
 binding = "AI"
+
+# Spend rate-limit (Workers Rate Limiting, GA) -- F3. Enforced in-Worker on the GPU-spend trigger
+# path (#343); bound here by infra so the limiter exists before the code arms it. ~30 req / 60s.
+# The TS interface (SPEND_RATE_LIMITER?: RateLimitBinding) + enforcement land in #343 (Rollins);
+[[ratelimits]]
+name = "SPEND_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 30, period = 60 }
 
 # Storage. R2_RENDERS = the `vivijure` bucket (bundles, keyframes, clips, MP4s, project state).
 # R2 = the chat-side `skyphusion-llm` bucket the render flow copies a staged audio bed across from.
