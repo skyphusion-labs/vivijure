@@ -161,6 +161,14 @@ store `secret_name` differs. Modules that share an endpoint share one secret (si
 Seed the store ONCE, from a trusted box that already holds the values. The hidden prompt keeps the
 value out of shell history -- never pass `--value` on the command line:
 
+> **PASTE THE BARE VALUE ONLY.** The store keeps whatever you type into the prompt VERBATIM -- it does
+> not parse, trim, or unquote it. Paste the token alone (e.g. `rpa_...`), with NO `VAR=` prefix, NO
+> surrounding quotes, and NO leading/trailing whitespace or newline. A paste of `RUNPOD_API_KEY=rpa_...`
+> stores the literal string `RUNPOD_API_KEY=rpa_...`, so every module then sends
+> `Bearer RUNPOD_API_KEY=rpa_...` and RunPod returns **401 at submit**. This is exactly what broke v0.6.6
+> (#237): a prefixed paste, not a code bug. `secretValue()` resolves and uses the stored string
+> correctly -- a 401 at submit means the stored VALUE is malformed.
+
 ```bash
 # 1. Use your account Secrets Store. Cloudflare provisions one default store per account
 #    (`wrangler secrets-store store list --remote` shows it); create one only if absent:
@@ -177,6 +185,22 @@ npx wrangler secrets-store secret create $S --name GATEWAY_ID                   
 npx wrangler secrets-store secret create $S --name BACKEND_RUNPOD_ENDPOINT_ID       --scopes workers --remote
 npx wrangler secrets-store secret create $S --name VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID --scopes workers --remote
 npx wrangler secrets-store secret create $S --name MUSETALK_RUNPOD_ENDPOINT_ID      --scopes workers --remote
+```
+
+**Defensive seed (recommended): strip the value so a bad paste cannot poison the store.** Stage the
+value in a `0600` file, then pipe a sanitized copy via stdin instead of using the interactive prompt.
+`cut -d= -f2-` drops any `VAR=` prefix (a bare token passes through unchanged) and `tr -d` removes all
+whitespace/newlines/CR, so a `RUNPOD_API_KEY=rpa_...` line and a bare `rpa_...` token seed identically:
+
+```bash
+S=<your-store-id>
+# ~/.runpod-api.txt is mode 0600, holding the value (bare token OR a VAR=value line -- both work).
+printf '%s' "$(cut -d= -f2- < ~/.runpod-api.txt | tr -d '[:space:]')" \
+  | npx wrangler secrets-store secret create $S --name RUNPOD_API_KEY --scopes workers --remote
+# To re-seed an EXISTING secret, swap `create` for `update $S --secret-id <id>` (list ids:
+# `npx wrangler secrets-store secret list $S --remote`). `shred -u ~/.runpod-api.txt` once seeded.
+# Verify with a live module /invoke: a NON-401 from RunPod /run (a job id, or a 404-on-bundle)
+# confirms auth; a 401 means the stored value is still bad (re-mint the key).
 ```
 Once the store is seeded and `store_id` is filled in, deploy as in 3d -- each module reads its secret
 through the binding. A `wrangler deploy` against a secret that does not yet exist in the store fails
