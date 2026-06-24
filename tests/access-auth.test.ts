@@ -158,10 +158,13 @@ describe("verifyAccessRequest -- fail-closed CF Access JWT verification (F2)", (
 describe("gateApiRequest -- fail-closed-with-escape-hatch policy", () => {
   beforeEach(() => __resetJwksCacheForTest());
 
-  it("ALLOWS (backstop not armed) when unconfigured, but warns -- edge gate only", async () => {
-    // Unconfigured -> the in-Worker backstop is off; we allow so a flag-day rollout and a no-Access
-    // local/test deploy keep working. Production MUST set the two vars to enforce (see SECURITY.md).
+  it("DENIES (503) when unconfigured and not opted out (fail closed by default)", async () => {
     const d = await gateApiRequest(reqWith(null), {} as any);
+    expect(d).toMatchObject({ ok: false, status: 503, reason: expect.stringMatching(/auth not configured/) });
+  });
+
+  it("ALLOWS when unconfigured but ALLOW_UNAUTHENTICATED=true (conscious opt-out)", async () => {
+    const d = await gateApiRequest(reqWith(null), { ALLOW_UNAUTHENTICATED: "true" } as any);
     expect(d.ok).toBe(true);
   });
 

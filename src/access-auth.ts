@@ -209,11 +209,12 @@ export async function verifyAccessRequest(
 
 // Gate decision for an incoming request to a protected path (the caller uses this for /api/*).
 //   - configured (ACCESS_TEAM_DOMAIN + ACCESS_AUD set) -> VERIFY the JWT, fail CLOSED on any problem.
-//   - unconfigured -> the backstop is not armed: allow, but warn LOUDLY (once per isolate). The app
-//     then relies solely on the edge Access gate (the pre-F2 model). Defaulting to allow keeps a
-//     no-Access local/test deploy and the production rollout working on a flag-day; production MUST
-//     set both vars to arm the fail-closed backstop. See docs/SECURITY.md.
-let warnedUnconfigured = false;
+//   - unconfigured + ALLOW_UNAUTHENTICATED==="true" -> allow (the conscious, documented opt-out for
+//     local/dev/test or a deployer fronting the Worker with their own auth proxy); warn once.
+//   - unconfigured otherwise -> DENY (503), fail CLOSED by default. A downstream deployer who has not
+//     established an auth boundary is never silently served. Armed deploys take the configured path
+//     above, so this default does not affect them. See docs/SECURITY.md.
+let warnedOptOut = false;
 export async function gateApiRequest(
   request: Request,
   env: Env,
@@ -221,13 +222,20 @@ export async function gateApiRequest(
 ): Promise<AccessDecision> {
   const cfg = accessConfig(env);
   if (cfg) return verifyAccessRequest(request, cfg, opts);
-  if (!warnedUnconfigured) {
-    warnedUnconfigured = true;
-    console.warn(
-      "access: ACCESS_TEAM_DOMAIN/ACCESS_AUD unset -> in-Worker Access verification DISABLED (edge gate only). Set both to arm the fail-closed backstop.",
-    );
+  if ((env.ALLOW_UNAUTHENTICATED || "").trim() === "true") {
+    if (!warnedOptOut) {
+      warnedOptOut = true;
+      console.warn(
+        "access: ALLOW_UNAUTHENTICATED=true -> in-Worker Access verification DISABLED (edge gate only). NOT for a public/multi-tenant deploy; arm ACCESS_TEAM_DOMAIN + ACCESS_AUD instead.",
+      );
+    }
+    return { ok: true, sub: null, email: null };
   }
-  return { ok: true, sub: null, email: null };
+  return {
+    ok: false,
+    status: 503,
+    reason: "auth not configured: set ACCESS_TEAM_DOMAIN + ACCESS_AUD to arm the backstop, or ALLOW_UNAUTHENTICATED=true to consciously opt out (dev/own-proxy only)",
+  };
 }
 
 // Test-only: reset the per-isolate JWKS cache so cases do not bleed into each other.

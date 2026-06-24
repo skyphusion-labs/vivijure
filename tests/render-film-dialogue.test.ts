@@ -40,7 +40,7 @@ import { startFilmJob } from "../src/film-orchestrator";
 import type { Env } from "../src/env";
 
 const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
-const env = { ASSETS: { fetch: async () => new Response("ASSET") } } as unknown as Env;
+const env = { ALLOW_UNAUTHENTICATED: "true", ASSETS: { fetch: async () => new Response("ASSET") } } as unknown as Env;
 
 function postFilm(body: unknown): Request {
   return new Request("https://studio.example/api/render/film", {

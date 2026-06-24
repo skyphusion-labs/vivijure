@@ -14,16 +14,22 @@ the edge, by Cloudflare Access; everything behind it belongs to the one operator
 Authentication is enforced by the **Cloudflare Access** application in front of the worker, not by
 in-worker code. The Access app covers the whole production surface:
 
-- `vivijure.skyphusion.org` (production UI + JSON API), and
-- the `*.workers.dev` host (covered because `workers_dev = true` is published).
+- `vivijure.skyphusion.org` (production UI + JSON API). The `*.workers.dev` host is disabled
+  (`workers_dev = false`, #349), so the custom domain is the only served hostname.
 
-The Access policy admits a Skyphusion Labs email identity, a service token, or a production-IP
-bypass for internal callers (the GPU backend and the Slate bot, which carry no email identity).
+The Access policy admits a Skyphusion Labs email identity or an Access **service token**. The only
+non-browser caller of `/api` is the **Slate** Discord bot, which authenticates with a service token
+(it sends `CF-Access-Client-Id` + `CF-Access-Client-Secret` on every call). The **GPU backend does
+NOT call `/api` at all** -- it is a RunPod serverless handler that receives work through the RunPod
+job envelope and writes artifacts straight to R2 via boto3 S3, so it never crosses the Access
+boundary. (A legacy production-IP bypass for "internal callers" is being removed in the F2 cutover;
+the GPU backend never needed it on this path, and Slate uses a service token instead.)
 
-Because the boundary is the edge, **the worker does not re-check identity per route**. A naive
-in-worker `require email` gate would break the IP-bypass and service-token callers, which is why the
-data routes do not add one. The single-operator assumption is sound ONLY while Access covers the
-entire `/api/*` surface. If you add a new public hostname or route, confirm Access still covers it.
+The single-operator assumption is sound ONLY while Access covers the entire `/api/*` surface. The
+worker ALSO adds an in-code backstop (section 1a, F2) that verifies the Access JWT itself -- checking
+the signature + `aud`, NOT an email claim, so a service-token caller (Slate) passes while an
+unauthenticated caller is denied. If you add a new public hostname or route, confirm Access still
+covers it.
 
 ### Consequence for `/api/artifact/<key>`
 Artifacts are served by R2 key with no per-row ownership check. This is safe **only** because the
@@ -67,8 +73,12 @@ or unverifiable (JWKS unreachable with no cached key) => denied. `/health` and `
 
 **Arming it (config, not secrets -> `wrangler.toml [vars]`):** set `ACCESS_TEAM_DOMAIN` (the Zero
 Trust team hostname) and `ACCESS_AUD` (the Access application AUD tag). When BOTH are set the gate
-enforces. When unset the backstop is NOT armed: the Worker allows `/api/*` (relying solely on the
-edge gate, the pre-F2 model) and logs a loud one-time warning. **Production MUST arm it.**
+enforces. When BOTH are unset the backstop is NOT armed and the Worker **DENIES `/api/*` (503) by
+default** -- fail closed, so a downstream deployer who has not established an auth boundary is never
+silently served. The only escape is a conscious, documented opt-out: `ALLOW_UNAUTHENTICATED = "true"`
+(for local/dev/test, or a deployer fronting the Worker with their own auth proxy), which allows
+`/api/*` with a loud one-time warning. **Production MUST arm it** (set the two vars), not rely on the
+opt-out.
 
 > ### LOAD-BEARING CAVEAT: internal callers must carry a JWT before arming
 >
