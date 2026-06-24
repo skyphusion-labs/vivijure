@@ -22,14 +22,36 @@ import {
 import { buildPreviewBody, parseKeyframes, parseTrainedLoras, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./keyframe";
 
 interface Env {
-  RUNPOD_API_KEY: string;
+  RUNPOD_API_KEY: SecretsStoreSecret;
   // The vivijure-backend RunPod endpoint id. A SECRET (not hardcoded) so the public repo never
   // exposes the specific endpoint -- same rule as push-secrets.sh (#38).
-  RUNPOD_ENDPOINT_ID: string;
+  RUNPOD_ENDPOINT_ID: SecretsStoreSecret;
 }
 
-const endpoint = (env: Env) => "https://api.runpod.ai/v2/" + env.RUNPOD_ENDPOINT_ID;
-const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
+const endpoint = (endpointId: string) => "https://api.runpod.ai/v2/" + endpointId;
+const auth = (apiKey: string) => ({ authorization: "Bearer " + apiKey });
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
+
+/** Resolve both RunPod secrets once per request. */
+async function runpodCreds(env: Env): Promise<{ apiKey: string; endpointId: string }> {
+  const [apiKey, endpointId] = await Promise.all([
+    secretValue(env.RUNPOD_API_KEY),
+    secretValue(env.RUNPOD_ENDPOINT_ID),
+  ]);
+  return { apiKey, endpointId };
+}
 
 // Exported so the core's tier-drift guard (tests/quality-tier-drift.test.ts, issue #124) can assert
 // this module's quality_tier enum stays in lockstep with the core QUALITY_TIERS set.
@@ -69,19 +91,20 @@ async function submit(env: Env, req: InvokeRequest<KeyframeInput>): Promise<Invo
   if (!input || !input.project || !input.bundle_key) {
     return { ok: false, error: "keyframe: input needs project and bundle_key" };
   }
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!apiKey || !endpointId) {
     return { ok: false, error: "keyframe: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
   }
   try {
-    const r = await fetch(endpoint(env) + "/run", {
+    const r = await fetch(endpoint(endpointId) + "/run", {
       method: "POST",
-      headers: { ...auth(env), "content-type": "application/json" },
+      headers: { ...auth(apiKey), "content-type": "application/json" },
       body: JSON.stringify(buildPreviewBody(input, req.config)),
     });
     if (!r.ok) return { ok: false, error: "keyframe /run -> " + r.status };
     const jobId = ((await r.json()) as { id?: string }).id;
     if (!jobId) return { ok: false, error: "keyframe /run returned no job id" };
-    return { ok: true, pending: true, poll: encodePoll({ jobId, project: input.project, submittedAt: Date.now() }) };
+    return { ok: true, pending: true, poll: encodePoll({ jobId, project: input.project, submittedAt: Date.now() }), jobId };  // jobId (#318): lets the core read this RunPod job's keyframe_done snapshot
   } catch (e) {
     return { ok: false, error: "keyframe submit failed: " + (e as Error).message };
   }
@@ -90,14 +113,15 @@ async function submit(env: Env, req: InvokeRequest<KeyframeInput>): Promise<Invo
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<KeyframeOutput>> {
   const st = decodePoll(body.poll);
   if (!st) return { ok: false, error: "keyframe: bad poll token" };
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!apiKey || !endpointId) {
     return { ok: false, error: "keyframe: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
   }
 
   let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    const resp = await fetch(endpoint(env) + "/status/" + st.jobId, { headers: auth(env) });
+    const resp = await fetch(endpoint(endpointId) + "/status/" + st.jobId, { headers: auth(apiKey) });
     httpStatus = resp.status;
     s = (await resp.json()) as typeof s;
   } catch {

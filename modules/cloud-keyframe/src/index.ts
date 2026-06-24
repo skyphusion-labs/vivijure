@@ -244,7 +244,7 @@ async function submit(env: Env, req: InvokeRequest<KeyframeInput>): Promise<Invo
   } catch (e) {
     return { ok: false, error: "cloud-keyframe: could not persist run state: " + (e as Error).message };
   }
-  return { ok: true, pending: true, poll: encodePoll({ project: input.project, job_id }) };
+  return { ok: true, pending: true, poll: encodePoll({ project: input.project, job_id }), jobId: job_id };  // #318 (additive); cloud-keyframe writes no progress snapshot -> core gets no sub-progress, degrades gracefully
 }
 
 /** /poll: load the run state, render the next shot (gen -> normalize -> store), advance, and return

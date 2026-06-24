@@ -45,3 +45,20 @@ export interface RenderProgressSnapshot {
   last_event: Record<string, unknown> | null;
   error: { stage?: string; message?: string } | null;
 }
+
+import type { Env } from "./env";
+
+/** Read the GPU job's progress snapshot and return its keyframe_done tally (#318). Best-effort: a
+ *  missing/garbled snapshot (e.g. a cloud-keyframe job that writes none, or a just-submitted job) yields
+ *  undefined, so the poll view simply has no keyframe sub-progress -- never an error. */
+export async function readKeyframeDone(env: Env, project: string, jobId: string): Promise<number | undefined> {
+  try {
+    const obj = await env.R2_RENDERS.get(progressSnapshotKey(project, jobId));
+    if (!obj) return undefined;
+    const snap = JSON.parse(await obj.text()) as RenderProgressSnapshot;
+    const n = snap?.counts?.keyframe_done;
+    return typeof n === "number" && n >= 0 ? n : undefined;
+  } catch {
+    return undefined;
+  }
+}

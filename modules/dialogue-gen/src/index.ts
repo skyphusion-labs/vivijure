@@ -62,7 +62,7 @@ interface WorkflowBinding {
 
 interface Env {
   AI: AiRun;
-  GATEWAY_ID: string;
+  GATEWAY_ID: SecretsStoreSecret;
   R2_RENDERS: R2Bucket;
   DIALOGUE_WORKFLOW: WorkflowBinding;
 }
@@ -89,6 +89,19 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
+
 async function writeState(env: Env, jobId: string, state: RunState): Promise<void> {
   await env.R2_RENDERS.put(stateKey(jobId), JSON.stringify(state), {
     httpMetadata: { contentType: "application/json" },
@@ -109,8 +122,9 @@ async function readState(env: Env, jobId: string): Promise<RunState | null> {
  *  THROWS on failure so the step retries; Aura-1 returns the audio as a binary stream (not a URL like
  *  the music model), so we read the body to bytes directly. */
 async function synthLine(env: Env, project: string, line: NormalizedLine): Promise<DialogueShotAudio> {
-  if (!env.GATEWAY_ID) throw new Error("GATEWAY_ID not configured");
-  const result = await env.AI.run(MODEL, buildTtsParams(line.text, line.voice), { gateway: { id: env.GATEWAY_ID } });
+  const gatewayId = await secretValue(env.GATEWAY_ID);
+  if (!gatewayId) throw new Error("GATEWAY_ID not configured");
+  const result = await env.AI.run(MODEL, buildTtsParams(line.text, line.voice), { gateway: { id: gatewayId } });
   // Aura-1 returns a ReadableStream of audio; Response accepts it (or a raw ArrayBuffer/bytes) as a body.
   const bytes = await new Response(result as BodyInit).arrayBuffer();
   if (bytes.byteLength === 0) throw new Error(`empty audio for ${line.shot_id}`);
@@ -150,7 +164,8 @@ export class DialogueGenWorkflow extends WorkflowEntrypoint<Env, WorkflowParams>
 async function submit(env: Env, req: InvokeRequest<DialogueInput>): Promise<InvokeResponse<DialogueOutput>> {
   const norm = normalizeInput(req.input);
   if (!norm.ok) return { ok: false, error: "dialogue: " + norm.error };
-  if (!env.GATEWAY_ID) return { ok: false, error: "dialogue: GATEWAY_ID not configured" };
+  const gatewayId = await secretValue(env.GATEWAY_ID);
+  if (!gatewayId) return { ok: false, error: "dialogue: GATEWAY_ID not configured" };
 
   // No lines with anything to say: a film with no dialogue. Return an empty result immediately rather
   // than spinning up a workflow that does nothing.

@@ -43,7 +43,7 @@ export interface InvokeRequest<I = unknown> {
 // pending + a poll token, and the caller drives /poll until it is done.
 export type InvokeResponse<O = unknown> =
   | { ok: true; output: O }
-  | { ok: true; pending: true; poll: string }
+  | { ok: true; pending: true; poll: string; jobId?: string } // jobId: optional/additive (#318) -- backend RunPod job id for the progress snapshot read; no MODULE_API bump
   | { ok: false; error: string };
 
 export interface PollRequest {

@@ -75,6 +75,11 @@ jobs:
       # arrays, no `${#arr[@]}` -- or the step dies with exit 127 (v0.6.1 failed exactly this way:
       # `shopt: not found`). A plain glob `for` loop is portable; an unmatched glob stays literal, so
       # we test `[ -f "$toml" ]` to handle the empty case.
+      # No secret step here BY DESIGN: module secrets (RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID / GATEWAY_ID)
+      # are bound declaratively from the account-level Cloudflare Secrets Store via [[secrets_store_secrets]]
+      # in each module's wrangler.toml, so `wrangler deploy` re-establishes them every run. A fresh-create
+      # can no longer start secretless and silently degrade (the v0.2.2 finish-upscale passthrough), and no
+      # secret value ever passes through CI/GitHub. Seeding is a one-time out-of-band op (see docs/DEPLOYMENT.md).
       - name: Deploy module workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

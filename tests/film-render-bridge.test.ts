@@ -328,6 +328,31 @@ describe("stallSignal measures from last_progress_at, not phase_started_at (#136
   });
 });
 
+describe("filmJobToPollView keyframe sub-progress (#318)", () => {
+  const kfJob = (over: Partial<FilmJob> = {}): FilmJob => ({
+    film_id: "f", project: "p", bundle_key: "b",
+    scenes: [{ shot_id: "shot_01", prompt: "a", seconds: 4 }, { shot_id: "shot_02", prompt: "b", seconds: 4 }, { shot_id: "shot_03", prompt: "c", seconds: 4 }],
+    motion_backend: null, motion_config: {}, finish_config: {}, keyframe_binding: null,
+    phase: "keyframe", phase_started_at: Date.now(), created_at: Date.now(), ...over,
+  });
+
+  it("subdivides the keyframe band from the snapshot's keyframe_done count", () => {
+    const view = filmJobToPollView(kfJob(), null, 2); // 2 of 3 keyframes done
+    const out = view.output as Record<string, unknown>;
+    expect(out.phase).toBe("keyframe");
+    expect(out.scene_index).toBe(3);       // min(total, done+1)
+    expect(out.progress).toBeCloseTo(2 / 3);
+  });
+
+  it("holds scene_index=1 with no snapshot (cloud-keyframe / pre-job-id) -- no regression", () => {
+    const view = filmJobToPollView(kfJob(), null); // keyframeDone undefined
+    const out = view.output as Record<string, unknown>;
+    expect(out.phase).toBe("keyframe");
+    expect(out.scene_index).toBe(1);
+    expect(out.progress).toBeUndefined();
+  });
+});
+
 describe("filmRowFromJob (#164 -- film jobs in render history)", () => {
   const base: FilmJob = {
     film_id: "film-abc",

@@ -151,7 +151,10 @@ export interface InvokeRequest<I = unknown> {
  *  crash, when a module returns `ok: false`. */
 export type InvokeResponse<O = unknown> =
   | { ok: true; output: O }                       // synchronous: the work is done
-  | { ok: true; pending: true; poll: string }     // async: accepted; POST /poll with this token
+  | { ok: true; pending: true; poll: string; jobId?: string } // async: accepted; POST /poll with this token.
+  //   jobId (#318, OPTIONAL/additive -- no MODULE_API bump): the backend RunPod job id, so the core can
+  //   read that job's progress snapshot (counts.keyframe_done) for sub-phase progress. Omit -> graceful
+  //   degrade (no sub-progress).
   | { ok: false; error: string };
 
 /** Body POSTed to a long-running module's `/poll` to check an async job. */

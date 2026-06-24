@@ -55,10 +55,14 @@ export interface FinishInput {
   shot_id: string;
   clip_key: string;
   audio_key?: string;   // the shot's dialogue audio (TTS); absent => no dialogue => no-op passthrough
-  src_fps: number;
-  frames: number;
-  width: number;
-  height: number;
+  // Optional hints (#232): the GPU side ffprobes the clip when absent; these are used only for
+  // output-metadata fallback (e.g. out_fps: input.src_fps). advanceFinishPhase sends only
+  // { shot_id, clip_key, audio_key }, and the core FinishInput + text-overlay already declare
+  // them optional -- so the producer's real shape now matches (no more `as FinishInput` cover).
+  src_fps?: number;
+  frames?: number;
+  width?: number;
+  height?: number;
 }
 
 export interface FinishOutput {

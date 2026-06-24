@@ -85,6 +85,9 @@ export interface FilmJob {
   keyframe_binding: string | null;
   phase: "keyframe" | "clips" | "dialogue" | "speech" | "finish" | "assemble" | "master" | "mux" | "done" | "failed";
   keyframe_poll?: string;
+  // The keyframe module's backend RunPod job id (#318), surfaced on its async-accept envelope. Lets
+  // the poll handler read that job's progress snapshot (counts.keyframe_done) for keyframe sub-progress.
+  keyframe_job_id?: string;
   clip_job_id?: string;
   finish_shots?: FinishShot[];
   speech_shots?: SpeechShot[]; // per-shot speech (dialogue-audio enhance) chain, run between dialogue and finish
@@ -252,6 +255,10 @@ export interface FilmSummary {
   clips?: JobSummary;
   finish?: FinishSummary;
   film_key?: string; // present once the film is assembled (phase "done")
+  // Outcome of the film.finish chain (title / credit cards). Surfaced so the API/frontend can show
+  // honest degrade state -- a film that reached "done" but shipped WITHOUT cards (e.g. the video-finish
+  // container was unreachable) has film_finish.degraded set. Absent until film.finish runs. (#211 follow-up)
+  film_finish?: FilmJob["film_finish"];
 }
 export function summarizeFinish(shots: FinishShot[]): FinishSummary {
   return {
@@ -267,6 +274,7 @@ export function summarizeFilm(job: FilmJob, clipJob: ClipJob | null): FilmSummar
     clips: clipJob ? summarizeJob(clipJob) : undefined,
     finish: job.finish_shots ? summarizeFinish(job.finish_shots) : undefined,
     film_key: job.film_key,
+    film_finish: job.film_finish,
   };
 }
 
@@ -1535,7 +1543,7 @@ export async function startFilmJob(
       context: { project: args.project, job_id: job.film_id },
     });
     if (!r.ok) { job.phase = "failed"; job.error = r.error; }
-    else if ((r as { pending?: boolean }).pending) { job.keyframe_poll = (r as { poll: string }).poll; }
+    else if ((r as { pending?: boolean }).pending) { job.keyframe_poll = (r as { poll: string }).poll; job.keyframe_job_id = (r as { jobId?: string }).jobId; }
     else if ("output" in r) { await afterKeyframeOutput(env, job, r.output as KeyframeOutput); }
     else { job.phase = "failed"; job.error = "keyframe module returned neither output nor a poll token"; }
   }

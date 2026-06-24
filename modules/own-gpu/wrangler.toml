@@ -16,7 +16,17 @@ workers_dev = false
 [observability]
 enabled = true
 
-# Secrets, set AFTER deploy (never committed). RUNPOD_ENDPOINT_ID is the user's own i2v endpoint
-# (ours is t9wcvlxh8rc5la); RUNPOD_API_KEY a DEDICATED, scoped vivijure RunPod key:
-#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/own-gpu/wrangler.toml
-#   ! npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/own-gpu/wrangler.toml
+# RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID (the user's own i2v endpoint) are bound from the account-level
+# Cloudflare Secrets Store -- declarative config that every `wrangler deploy` re-establishes, so a
+# fresh-create can't start secretless and silently degrade (the v0.2.2 finish-upscale passthrough bug).
+# Seeded ONCE by the operator from the crew secret store; values never touch CI/GitHub. Set store_id at
+# cutover. See docs/DEPLOYMENT.md "Module secrets via the Secrets Store".
+[[secrets_store_secrets]]
+binding = "RUNPOD_API_KEY"
+store_id = "0b04371c738a48a497c3344604114268"
+secret_name = "RUNPOD_API_KEY"
+
+[[secrets_store_secrets]]
+binding = "RUNPOD_ENDPOINT_ID"
+store_id = "0b04371c738a48a497c3344604114268"
+secret_name = "BACKEND_RUNPOD_ENDPOINT_ID"

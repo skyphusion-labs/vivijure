@@ -69,6 +69,10 @@ export interface ParsedBundleScene {
   shot_id: string;
   prompt: string;
   seconds: number;
+  // Per-shot dialogue carried back OUT of the bundle storyboard.yaml (#313) -- the round-trip of the
+  // emitScene dialogue block (#307). Absent on a silent shot. Lets the film path derive dialogue_lines
+  // for a bundle-only render (no D1 project, no explicit dialogue_lines arg).
+  dialogue?: { slot: string; text: string };
 }
 
 /** Extract { shot_id, prompt, seconds } from an emitted storyboard.yaml. */
@@ -79,14 +83,18 @@ export function parseStoryboardScenes(yaml: string, defaultSeconds = 4): ParsedB
   let curId: string | null = null;
   let curPrompt: string | null = null;
   let curTarget: number | null = null;
+  let curDlgSlot: string | null = null;
+  let curDlgText: string | null = null;
   const flush = (): void => {
     if (idx === 0 || !curPrompt) return;
     const shot = curId || `shot_${String(idx).padStart(2, "0")}`;
-    out.push({
+    const scene: ParsedBundleScene = {
       shot_id: shot,
       prompt: curPrompt,
       seconds: curTarget !== null && curTarget > 0 ? curTarget : defaultSeconds,
-    });
+    };
+    if (curDlgSlot && curDlgText) scene.dialogue = { slot: curDlgSlot, text: curDlgText };
+    out.push(scene);
   };
   for (const line of yaml.split(/\r?\n/)) {
     if (!inScenes) {
@@ -99,6 +107,8 @@ export function parseStoryboardScenes(yaml: string, defaultSeconds = 4): ParsedB
       idx++;
       curId = null;
       curTarget = null;
+      curDlgSlot = null;
+      curDlgText = null;
       curPrompt = promptM[1].replace(/\\(.)/g, "$1");
       continue;
     }
@@ -110,6 +120,18 @@ export function parseStoryboardScenes(yaml: string, defaultSeconds = 4): ParsedB
     const tsM = line.match(/^ {4}target_seconds:\s*([0-9]+(?:\.[0-9]+)?)\s*$/);
     if (tsM) {
       curTarget = parseFloat(tsM[1]);
+      continue;
+    }
+    // Per-shot dialogue block (#313 round-trip of emitScene): `    dialogue:` then `      slot: X` +
+    // `      text: "..."` at 6-space indent. slot is an unquoted SlotId; text is double-quoted/escaped.
+    const dlgSlotM = line.match(/^ {6}slot:\s*([A-Za-z0-9_]+)\s*$/);
+    if (dlgSlotM) {
+      curDlgSlot = dlgSlotM[1];
+      continue;
+    }
+    const dlgTextM = line.match(/^ {6}text:\s*"((?:[^"\\]|\\.)*)"\s*$/);
+    if (dlgTextM) {
+      curDlgText = dlgTextM[1].replace(/\\(.)/g, "$1");
     }
   }
   flush();

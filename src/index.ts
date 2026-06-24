@@ -44,6 +44,8 @@ import {
 } from "./renders-db";
 import { stageBundleInjectedKeyframes } from "./bundle-keyframes";
 import { readBundleScenes } from "./bundle-storyboard";
+import { dialogueLinesFromBundleScenes } from "./dialogue-lines";
+import { readKeyframeDone } from "./render-progress";
 import type { DialogueLine } from "./modules/types";
 import {
   startScatterRender,
@@ -602,7 +604,10 @@ const hPollRender: Handler = async (_req, env, ctx, p) => {
   }
   const r = await advanceFilmJob(env, p.jobId);
   if (!r) throw notFound("render job");
-  const view = filmJobToPollView(r.job, r.clipJob);
+  const kfDone = r.job.phase === "keyframe" && r.job.keyframe_job_id
+    ? await readKeyframeDone(env, r.job.project, r.job.keyframe_job_id)
+    : undefined; // #318: keyframe sub-progress from the GPU job's snapshot (best-effort)
+  const view = filmJobToPollView(r.job, r.clipJob, kfDone);
   await updateRenderFromView(env, view, ctx);
   if (
     r.job.derive_mode === "cloud-finalized"
@@ -832,9 +837,25 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   return summary;
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[] }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[]; cast_loras?: Record<string, number> }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
+
+  // Bundle-only voicing (#313): when the caller passed NO explicit dialogue_lines, derive them from the
+  // bundle storyboard's per-shot dialogue (round-tripped by #307), resolving each speaking slot's voice
+  // from the cast (cast_loras) when given and defaulting otherwise. So a hand-authored dialogue bundle
+  // with no D1 project and no dialogue_lines arg still renders VOICED. Explicit lines always win; a
+  // bundle with no dialogue stays silent (derived lines are []).
+  let dialogue_lines = a.dialogue_lines;
+  if (!dialogue_lines || !dialogue_lines.length) {
+    const bundleScenes = await readBundleScenes(env, a.bundle_key);
+    if (bundleScenes.some((s) => s.dialogue)) {
+      const voices = (a.cast_loras && Object.keys(a.cast_loras).length)
+        ? (await resolveCastLoras(env, a.cast_loras)).voices
+        : {};
+      dialogue_lines = dialogueLinesFromBundleScenes(bundleScenes, voices);
+    }
+  }
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
   // only has a bundle (e.g. the Slate bot) lands in the same project namespace the monolith uses.
   const project = a.project ?? deriveProjectFromBundleKey(a.bundle_key);
@@ -845,11 +866,11 @@ const hStartFilm: Handler = async (req, env) => {
     // through resolveStagedAudioKey; without forwarding it here the mux phase is skipped and the film is
     // silent even when the caller supplied a bed (the scored/narrated render path).
     finish_config: a.finish_config, speech_config: a.speech_config, film_finish_config: a.film_finish_config, master_config: a.master_config, audio_key: a.audio_key, film_titles: a.film_titles,
-    // dialogue_lines (issue #296): the per-shot lines Slate authored. startFilmJob already accepts
-    // them -- the dialogue/TTS+lip-sync stage (enterDialogueOrFinish) and the subtitle module
-    // (buildCaptionCues) both read job.dialogue_lines. Not forwarding them here left every film
-    // submitted via /api/render/film silent and uncaptioned even with the subtitle toggle on.
-    dialogue_lines: a.dialogue_lines,
+    // dialogue_lines (#296 explicit arg, #313 bundle-derived): the per-shot lines for the dialogue/
+    // TTS+lip-sync stage (enterDialogueOrFinish) and the subtitle module (buildCaptionCues), both of
+    // which read job.dialogue_lines. cast_loras carries the speaking cast (slot -> cast id) so the
+    // LoRA write-back + voice resolution have it.
+    dialogue_lines, cast_loras: a.cast_loras,
   });
   // Write a renders-table row so this film shows in the history panel (#164), the same way
   // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
@@ -864,7 +885,12 @@ const hPollFilm: Handler = async (_req, env, ctx, p) => {
   // unification -- or via a path that did not insert -- still surfaces in history on its next
   // poll/sweep tick; then sync the live status/output exactly like hPollRender (#164).
   await insertRender(env, filmRowFromJob(r.job));
-  await updateRenderFromView(env, filmJobToPollView(r.job, r.clipJob), ctx);
+  // #318: during the keyframe phase, fold the GPU job's live keyframe_done tally into the poll view so
+  // the bar/ETA subdivide the keyframe band (instead of pinning scene_index=1). Best-effort.
+  const kfDone = r.job.phase === "keyframe" && r.job.keyframe_job_id
+    ? await readKeyframeDone(env, r.job.project, r.job.keyframe_job_id)
+    : undefined;
+  await updateRenderFromView(env, filmJobToPollView(r.job, r.clipJob, kfDone), ctx);
   return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(r.job, r.clipJob))) });
 };
 

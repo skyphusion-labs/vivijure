@@ -13,8 +13,8 @@ workers_dev = false
 [observability]
 enabled = true
 
-# Workers AI + AI Gateway (same pattern as music-gen / cast-image proxied models).
-#   ! npx wrangler secret put GATEWAY_ID -c modules/dialogue-gen/wrangler.toml
+# Workers AI + AI Gateway (same pattern as music-gen / cast-image proxied models). GATEWAY_ID is
+# bound from the Cloudflare Secrets Store (see the [[secrets_store_secrets]] block at end of file).
 [ai]
 binding = "AI"
 
@@ -30,3 +30,12 @@ bucket_name = "vivijure"
 name = "dialogue-gen"
 binding = "DIALOGUE_WORKFLOW"
 class_name = "DialogueGenWorkflow"
+
+# GATEWAY_ID (the AI Gateway slug) is bound from the account-level Cloudflare Secrets Store --
+# declarative config that every `wrangler deploy` re-establishes; seeded ONCE by the operator from the
+# crew secret store, never in CI/GitHub. Set store_id at cutover.
+# See docs/DEPLOYMENT.md "Module secrets via the Secrets Store".
+[[secrets_store_secrets]]
+binding = "GATEWAY_ID"
+store_id = "0b04371c738a48a497c3344604114268"
+secret_name = "GATEWAY_ID"
