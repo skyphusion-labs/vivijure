@@ -31,6 +31,7 @@ import {
   handleCastRefRemove,
   handleCastSourceAdd,
   handleCastSourceRemove,
+  deleteCastArtifacts,
 } from "./cast-media";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
@@ -189,6 +190,9 @@ const hPatchCast: Handler = async (req, env, _c, p) => {
 const hDeleteCast: Handler = async (req, env, _c, p) => {
   const row = await deleteCast(env, idParam(p.id));
   if (!row) throw notFound("cast member");
+  // Issue #298: deleteCast returns the row (with its keys) precisely so the caller reclaims R2.
+  // Best-effort, so a missing/transient-failing artifact never blocks the delete response.
+  await deleteCastArtifacts(env, row);
   return json({ ok: true, deleted: row.id });
 };
 // portrait / ref / source: binary upload, staged {key,mime}, or {from_chat_artifact} copy.
