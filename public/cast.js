@@ -117,6 +117,23 @@
     throw lastErr;
   }
 
+  // #146: remember the most-recently-viewed character so a reload reopens it
+  // (and its detail pane) instead of landing on an empty "pick a character".
+  const LAST_VIEWED_LS = "cast-last-viewed";
+  function readLastViewedId() {
+    try {
+      const raw = localStorage.getItem(LAST_VIEWED_LS);
+      if (raw == null || raw === "") return null;
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) ? n : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  function writeLastViewedId(id) {
+    try { localStorage.setItem(LAST_VIEWED_LS, String(id)); } catch (_) {}
+  }
+
   async function loadCastList() {
     setListStatus("loading...");
     try {
@@ -128,6 +145,16 @@
           ? "no characters yet. click + new character to start."
           : ""
       );
+      // #146: open a character on load so the list highlight and the detail
+      // pane are in sync from the start (most-recently-viewed if it still
+      // exists, else the first). Only when nothing is selected yet, so a
+      // reload after the user has already picked one is left alone.
+      if (state.selectedId == null && state.cast.length > 0) {
+        const pick = window.castSelect
+          ? window.castSelect.pickInitialCastId(state.cast, readLastViewedId())
+          : state.cast[0].id;
+        if (pick != null) selectCast(pick);
+      }
     } catch (e) {
       setListStatus("could not load cast: " + e.message, true);
     }
@@ -293,6 +320,7 @@
       renderCastList();
       return;
     }
+    writeLastViewedId(id); // #146: persist most-recently-viewed for reloads
     setEditorVisible(true);
     populateEditor(c);
     renderCastList();
