@@ -263,6 +263,8 @@ Every route the worker serves. The detail subsection for each follows in 2.2+. (
 | 64 | PATCH | `/api/prefs` | 2.29 |
 | 65 | GET | `/api/modules/:name/config` | 4.1.2 |
 | 66 | PATCH | `/api/modules/:name/config` | 4.1.2 |
+| 67 | GET/POST | `/api/cast/export/:id` | 2.9a |
+| 68 | POST | `/api/cast/import` | 2.9a |
 
 ### 2.2 GET /health
 
@@ -401,6 +403,27 @@ Errors: `404` if the cast member (POST) or job (GET) is unknown.
 `lora_status` enum (on the cast row): `"idle" | "training" | "ready" | "failed"`. The training submit
 banks the freshly-trained adapter back onto the cast member (`lora_status` -> `ready`) so a
 character's LoRA is trained ONCE and reused across every project.
+
+### 2.9a Cast bundle import/export (issue #324)
+
+Share a whole character (portrait + refs + sources + LoRA + bible + voice) as one portable
+`.vvcast` tar between users and instances. Full ICD: **`docs/CAST-BUNDLE.md`**.
+
+| Route | Body | Response | Errors |
+|-------|------|----------|--------|
+| GET (or POST) `/api/cast/export/:id` | none | `200` tar bytes; `Content-Type: application/x-tar`, `Content-Disposition: attachment; filename="<slug>.vvcast"` | `404 { error: "cast not found" }` |
+| POST `/api/cast/import` | raw `.vvcast` tar bytes | `201 { cast, imported_from_schema }` | `400 { error }` malformed bundle; `413 { error }` over the 80MB import cap |
+
+The bundle is **identity-free** (carries the character only, no user/tenant/instance id or source
+R2 key; assets are re-keyed into the importing instance under `cast/<newid>/...` + a fresh
+`loras/cast-<newid>-<uuid>.safetensors`). The LoRA is carried **inline** so the bundle is fully
+self-contained. The `manifest.json` is **schema-versioned** (`format`, `schema_version`); an unknown
+format or a newer schema than this instance supports is rejected. Export STREAMS each asset from R2
+and **honestly degrades** -- a referenced artifact missing from R2 is dropped from the bundle +
+manifest with a warn, never faked and never a 500. Import **fails loud** on any malformed input
+BEFORE writing anything (no half-import). GET is the canonical export verb (side-effect-free
+download link for the UI); POST is also accepted. See `docs/CAST-BUNDLE.md` for the manifest schema,
+the failure table, and limits.
 
 ### 2.10 Uploads (binary -> staged key)
 
