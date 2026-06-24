@@ -120,6 +120,21 @@ supplied path fields, `sanitizeKeySegment` for derived slugs, and `isPresignSafe
 defense-in-depth on any key about to be signed. This blocks path traversal, absolute keys, URL
 schemes, and control/non-ASCII bytes from steering an object reference.
 
+## 7. Module response hardening (F5)
+
+A module is untrusted (community territory: the operator service-binds third-party Worker code).
+The core reads every `/invoke`, `/poll`, `/cancel`, and `/module.json` response through a
+size-capped reader (`MAX_MODULE_RESPONSE_BYTES`, 1MB; `src/modules/registry.ts`). Envelopes are
+small JSON metadata -- heavy artifacts live in R2, referenced by KEY, never inline -- so the cap is
+generous. A response exceeding it (or an unreadable body) becomes an honest `ok:false` DEGRADE,
+never an unbounded buffer that could OOM/DoS the core Worker.
+
+> **Follow-up (tracked):** runtime validation of a module's terminal OUTPUT against its hook
+> contract (`checkHookOutput`) is NOT yet enforced at runtime -- it runs only in the conformance
+> TEST. The core still trusts the output SHAPE a module returns. See the F5-output-validation issue
+> for the layering decision (the generic invoke/poll transport is payload-agnostic, so enforcement
+> belongs at the per-hook terminal-consumption seams, with a test-fixture sweep).
+
 ## Checklist when changing the surface
 
 - [ ] New hostname or route -> confirm the Cloudflare Access app still covers it (`/api/*` must stay
@@ -129,6 +144,8 @@ schemes, and control/non-ASCII bytes from steering an object reference.
 - [ ] New module field -> internal/secret values stay off the `GET /api/modules` projection.
 - [ ] New R2/key consumer -> mint a per-function, least-privilege token (Object R/W, single bucket);
       do not reuse a broader token.
+- [ ] New module response field consumed by the core -> it is UNTRUSTED; validate its shape
+      before acting on it (a module is community code).
 - [ ] Arming the F2 backstop (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) -> first confirm EVERY internal
       caller carries an Access JWT (service token, not IP bypass), or it will be denied.
 
