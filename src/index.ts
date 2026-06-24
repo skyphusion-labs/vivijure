@@ -43,6 +43,7 @@ import {
 } from "./renders-db";
 import { stageBundleInjectedKeyframes } from "./bundle-keyframes";
 import { readBundleScenes } from "./bundle-storyboard";
+import type { DialogueLine } from "./modules/types";
 import {
   startScatterRender,
   advanceScatterJob,
@@ -827,7 +828,7 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   return summary;
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } } }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[] }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
@@ -840,6 +841,11 @@ const hStartFilm: Handler = async (req, env) => {
     // through resolveStagedAudioKey; without forwarding it here the mux phase is skipped and the film is
     // silent even when the caller supplied a bed (the scored/narrated render path).
     finish_config: a.finish_config, speech_config: a.speech_config, film_finish_config: a.film_finish_config, master_config: a.master_config, audio_key: a.audio_key, film_titles: a.film_titles,
+    // dialogue_lines (issue #296): the per-shot lines Slate authored. startFilmJob already accepts
+    // them -- the dialogue/TTS+lip-sync stage (enterDialogueOrFinish) and the subtitle module
+    // (buildCaptionCues) both read job.dialogue_lines. Not forwarding them here left every film
+    // submitted via /api/render/film silent and uncaptioned even with the subtitle toggle on.
+    dialogue_lines: a.dialogue_lines,
   });
   // Write a renders-table row so this film shows in the history panel (#164), the same way
   // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
