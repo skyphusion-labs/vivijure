@@ -177,7 +177,8 @@ npm run deploy     # wrangler deploy
 ```
 
 See [CLAUDE.md](CLAUDE.md) for conventions and [docs/module-authoring.md](docs/module-authoring.md)
-for how to write your own module worker.
+for how to write your own module worker. See [docs/SECURITY.md](docs/SECURITY.md) for the
+security model (Cloudflare Access boundary, job-id capabilities, credential blast radius).
 
 ## Architecture
 
