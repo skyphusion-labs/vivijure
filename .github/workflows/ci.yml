@@ -131,6 +131,32 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler d1 migrations apply vivijure-studio --remote
 
+      # Render the core wrangler.toml from the committed wrangler.toml.example, injecting the
+      # account-specific values from encrypted Actions secrets. The real wrangler.toml is gitignored
+      # (so the account AUD / resource IDs are not in the public repo); it is rendered fresh here.
+      # node:22-alpine has no envsubst, so add gettext (POSIX sh). The explicit SHELL-FORMAT var list
+      # means ONLY these placeholders substitute -- any other ${...} in the file is left untouched.
+      - name: Render core wrangler.toml
+        env:
+          ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
+          ACCESS_AUD: ${{ secrets.ACCESS_AUD }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          VPC_VIDEO_FINISH_ID: ${{ secrets.VPC_VIDEO_FINISH_ID }}
+          VPC_IMAGE_PREP_ID: ${{ secrets.VPC_IMAGE_PREP_ID }}
+          VPC_AUDIO_BEAT_SYNC_ID: ${{ secrets.VPC_AUDIO_BEAT_SYNC_ID }}
+          VPC_AUDIO_MIX_ID: ${{ secrets.VPC_AUDIO_MIX_ID }}
+          SPEND_RATE_LIMITER_NS_ID: ${{ secrets.SPEND_RATE_LIMITER_NS_ID }}
+        run: |
+          set -eu
+          apk add --no-cache gettext >/dev/null
+          VARS='$ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID'
+          envsubst "$VARS" < wrangler.toml.example > wrangler.toml
+          # fail-closed: no placeholder may survive (a missing secret would leave a literal ${...}).
+          if grep -q '${' wrangler.toml; then echo "::error::unsubstituted placeholder in wrangler.toml"; grep -n '${' wrangler.toml; exit 1; fi
+          # F2 guard: the armed Access vars must be present + NON-EMPTY (a blank would unarm -> DENY 503).
+          grep -Eq 'ACCESS_AUD = ".+"' wrangler.toml && grep -Eq 'ACCESS_TEAM_DOMAIN = ".+"' wrangler.toml || { echo "::error::F2 Access vars empty/missing after render"; exit 1; }
+          echo "Rendered wrangler.toml from wrangler.toml.example ($(wc -l < wrangler.toml) lines, F2 vars present)."
+
       - name: Deploy core worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

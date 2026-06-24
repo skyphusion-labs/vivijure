@@ -10,3 +10,8 @@ __pycache__/
 
 # vivijure-deploy local state (resource ids; never secrets)
 .vivijure-deploy.json
+
+# The REAL core wrangler.toml is RENDERED at deploy from wrangler.toml.example (account-specific
+# values injected from CI secrets via envsubst). Committing it would put the account AUD / resource
+# IDs in the public repo. Edit wrangler.toml.example; render locally to work. See docs/deploy-config-injection.md.
+/wrangler.toml

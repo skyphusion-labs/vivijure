@@ -28,8 +28,8 @@ tail_consumers = [ { service = "vivijure-tail" } ]
 # When BOTH are set, /api/* requires a valid Access JWT (fail-closed); see src/access-auth.ts.
 # Not secrets -- public Zero-Trust identifiers (team hostname + the vivijure app AUD).
 [vars]
-ACCESS_TEAM_DOMAIN = "skyphusion.cloudflareaccess.com"
-ACCESS_AUD = "be06bf478d2cb5689cf22bab24c30dcce28efc9d0e0b1dbfa3e5fd45f5b0a984"
+ACCESS_TEAM_DOMAIN = "${ACCESS_TEAM_DOMAIN}"
+ACCESS_AUD = "${ACCESS_AUD}"
 
 [observability]
 enabled = true
@@ -47,7 +47,7 @@ binding = "AI"
 # The TS interface (SPEND_RATE_LIMITER?: RateLimitBinding) + enforcement land in #343 (Rollins);
 [[ratelimits]]
 name = "SPEND_RATE_LIMITER"
-namespace_id = "1001"
+namespace_id = "${SPEND_RATE_LIMITER_NS_ID}"
 simple = { limit = 30, period = 60 }
 
 # Storage. R2_RENDERS = the `vivijure` bucket (bundles, keyframes, clips, MP4s, project state).
@@ -68,7 +68,7 @@ bucket_name = "skyphusion-llm"
 [[d1_databases]]
 binding = "DB"
 database_name = "vivijure-studio"
-database_id = "bb806935-47a7-4524-93dd-251024794a55"
+database_id = "${D1_DATABASE_ID}"
 
 # --- Off-GPU CPU work runs always-on on the fleet (issue #83), reached privately over Workers VPC
 # --- (see [[vpc_services]] below). The CF Container + its Durable Object class were removed once the
@@ -88,23 +88,23 @@ deleted_classes = ["VideoFinishContainer", "ImagePrepContainer", "AudioBeatSyncC
 # the fleet, reached over private VPC bindings (issue #83 -- off CF Containers, no cold start).
 [[vpc_services]]
 binding = "VIDEO_FINISH_VPC"
-service_id = "019ecbe6-9fc1-70a0-9946-14bbec0f51bc"
+service_id = "${VPC_VIDEO_FINISH_ID}"
 remote = true
 
 [[vpc_services]]
 binding = "IMAGE_PREP_VPC"
-service_id = "019ecc06-3084-79f1-a417-c621b1376f56"
+service_id = "${VPC_IMAGE_PREP_ID}"
 remote = true
 
 [[vpc_services]]
 binding = "AUDIO_BEAT_SYNC_VPC"
-service_id = "019ecc06-3790-7403-9d8f-20f1287a513a"
+service_id = "${VPC_AUDIO_BEAT_SYNC_ID}"
 remote = true
 # max_instances = 5
 
 [[vpc_services]]
 binding = "AUDIO_MIX_VPC"
-service_id = "019efa71-2548-7562-b718-0115f50f539c"
+service_id = "${VPC_AUDIO_MIX_ID}"
 remote = true
 
 # --- Secrets (npx wrangler secret put <NAME>): RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID,
