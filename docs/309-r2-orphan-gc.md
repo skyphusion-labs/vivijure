@@ -255,3 +255,14 @@ ORPHANS (152 objects, 2.0 GiB):
 
 DRY RUN -- nothing deleted. Re-run with --apply to GC the orphan set above.
 ```
+
+## Applied (2026-06-24)
+Cleared to apply the full 152-object set by the lead (Conrad-confirmed; live
+casts = ids 2/4/5/6/17/18/19/20, every orphan 0-ref by id + renders).
+
+```
+node scripts/r2-orphan-gc.ts --owners docs/309-r2-orphan-gc-owners.json --apply
+```
+Result: **deleted 152/152, 0 failures**; re-list verification: **0 orphans
+remain ("orphan set is empty")**. Freed ~2.0 GiB from the `vivijure` R2 bucket.
+All 223 live-cast assets + 86 out-of-scope non-cast artifacts untouched.
