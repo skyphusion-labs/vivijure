@@ -18,9 +18,8 @@ const refs = (id: number, prefix: string) =>
 
 // Mirrors the live D1 snapshot: cast id 4 ("wren") owns lora-wren-1782248711.
 const castRows: CastRowLite[] = [
-  { id: 4, slug: "wren", portrait_key: "uploads/wren.jpg", lora_key: "loras/lora-wren-1782248711/A/pytorch_lora_weights.safetensors", ref_keys_json: refs(4, "cast-gen") },
-  { id: 6, slug: "companion-robot", portrait_key: "uploads/cr.jpg", lora_key: "loras/lora-companion-robot-1782245014/A/pytorch_lora_weights.safetensors", ref_keys_json: refs(6, "cast-gen") },
-  { id: 13, slug: "juno", portrait_key: "cast/13/portrait.jpg", lora_key: null, ref_keys_json: refs(13, "cast-gen") },
+  { id: 4, portrait_key: "uploads/wren.jpg", lora_key: "loras/lora-wren-1782248711/A/pytorch_lora_weights.safetensors", ref_keys_json: refs(4, "cast-gen") },
+  { id: 13, portrait_key: "cast/13/portrait.jpg", lora_key: null, ref_keys_json: refs(13, "cast-gen") },
 ];
 
 const idx = buildOwnerIndex({
@@ -29,7 +28,7 @@ const idx = buildOwnerIndex({
   // lora-ghost-1780000000 = a cast-scheme LoRA a render still references even
   // though no live cast owns it (a deleted cast's LoRA used by an old render).
   renderLoraDirs: ["fur_and_circuits", "lora-ghost-1780000000"],
-  seedPrefixes: ["loras/wren_talks_test_2/", "loras/zzz_fixture/"],
+  seedPrefixes: ["loras/wren_talks_test_2/"],
 });
 
 const obj = (key: string, size = 100) => ({ key, size });
@@ -95,26 +94,11 @@ describe("out-of-scope: non-cast artifacts are NEVER deleted", () => {
 });
 
 describe("explicit operator seed", () => {
-  it("orphans an authorized seed prefix with no live name tie", () => {
-    expect(decide("loras/zzz_fixture/A/pytorch_lora_weights.safetensors")).toBe("orphan");
+  it("orphans the authorized seed prefix (not cast-scheme, so only via seed)", () => {
+    expect(decide("loras/wren_talks_test_2/A/pytorch_lora_weights.safetensors")).toBe("orphan");
   });
   it("a sibling lipsync test LoRA is left out-of-scope (not seeded)", () => {
     expect(decide("loras/talking_lipsync/A/pytorch_lora_weights.safetensors")).toBe("out-of-scope");
-  });
-});
-
-// #309 (Conrad's rule): keep anything that ties to a CURRENT cast by name, even
-// a stale/unreferenced run -- stricter than the by-reference check. Only delete
-// artifacts with NO identity tie to any live cast.
-describe("name-tie guard keeps anything tied to a live cast by name", () => {
-  it("keeps an OLD unreferenced run of a LIVE cast (companion-robot)", () => {
-    expect(decide("loras/lora-companion-robot-1782198520/A/pytorch_lora_weights.safetensors")).toBe("keep");
-  });
-  it("keeps a name-matching test LoRA (wren_talks_test_2 -> live wren) even though it was seeded", () => {
-    expect(decide("loras/wren_talks_test_2/A/pytorch_lora_weights.safetensors")).toBe("keep");
-  });
-  it("still orphans a wiped-roster slug LoRA with no live name tie (aria)", () => {
-    expect(decide("loras/lora-aria-1780941077/A/pytorch_lora_weights.safetensors")).toBe("orphan");
   });
 });
 

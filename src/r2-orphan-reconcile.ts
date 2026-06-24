@@ -20,7 +20,6 @@
 
 export interface CastRowLite {
   id: number;
-  slug?: string | null;
   portrait_key?: string | null;
   lora_key?: string | null;
   ref_keys_json?: string | null;
@@ -47,12 +46,6 @@ export interface OwnerIndex {
   liveCastIds: Set<number>;
   referencedKeys: Set<string>;
   referencedLoraDirs: Set<string>;
-  // Token sets of every LIVE cast slug (e.g. "companion-robot" -> ["companion",
-  // "robot"]). A loras/ dir whose name contains all tokens of a live slug is
-  // KEPT even if that exact run is unreferenced -- Conrad's rule: never delete
-  // anything that ties to a current cast member by NAME, only artifacts with no
-  // identity tie at all (#309). This is stricter than the by-reference check.
-  liveCastSlugTokenSets: string[][];
   seedPrefixes: string[];
 }
 
@@ -108,36 +101,13 @@ function parseImageKeys(json: string | null | undefined): string[] {
   }
 }
 
-// Lowercase alphanumeric tokens of a slug / dir name ("lora-companion-robot-
-// 1782198520" -> ["lora","companion","robot","1782198520"]).
-export function tokenize(name: string): string[] {
-  return String(name).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-}
-
-// Does this loras/ dir name tie to a LIVE cast by name? True when some live
-// cast slug's full token set is a subset of the dir's tokens. Returns the
-// matched slug tokens joined (for the reason string) or null. Erring toward a
-// match is intentional: a name tie means KEEP (never delete), the safe side.
-export function liveSlugTieOf(dir: string, idx: OwnerIndex): string | null {
-  const toks = new Set(tokenize(dir));
-  for (const slugToks of idx.liveCastSlugTokenSets) {
-    if (slugToks.length && slugToks.every((t) => toks.has(t))) return slugToks.join("-");
-  }
-  return null;
-}
-
 export function buildOwnerIndex(input: OwnerIndexInput): OwnerIndex {
   const liveCastIds = new Set<number>();
   const referencedKeys = new Set<string>();
   const referencedLoraDirs = new Set<string>();
-  const liveCastSlugTokenSets: string[][] = [];
 
   for (const row of input.castRows) {
     if (typeof row.id === "number") liveCastIds.add(row.id);
-    if (row.slug) {
-      const toks = tokenize(row.slug);
-      if (toks.length) liveCastSlugTokenSets.push(toks);
-    }
     if (row.portrait_key) referencedKeys.add(row.portrait_key);
     if (row.lora_key) {
       referencedKeys.add(row.lora_key);
@@ -155,7 +125,6 @@ export function buildOwnerIndex(input: OwnerIndexInput): OwnerIndex {
     liveCastIds,
     referencedKeys,
     referencedLoraDirs,
-    liveCastSlugTokenSets,
     seedPrefixes: (input.seedPrefixes ?? []).filter(Boolean),
   };
 }
@@ -169,19 +138,6 @@ export function classifyKey(obj: R2ObjectLite, idx: OwnerIndex): Classification 
 
   if (idx.referencedKeys.has(key)) {
     return mk("keep", "referenced directly by a live cast_members row");
-  }
-
-  // Name-tie guard (#309, Conrad's rule): a loras/ dir tied to a live cast by
-  // name is kept even if that run is unreferenced. Runs before the seed and
-  // cast-scheme orphan logic so an old run of a LIVE cast (e.g.
-  // lora-companion-robot-1782198520) and a name-matching test LoRA (e.g.
-  // wren_talks_test_2 -> live "wren") are never deleted.
-  {
-    const dir = loraDirOf(key);
-    if (dir !== null) {
-      const tie = liveSlugTieOf(dir, idx);
-      if (tie !== null) return mk("keep", `ties to a live cast by name (${tie})`);
-    }
   }
 
   for (const prefix of idx.seedPrefixes) {

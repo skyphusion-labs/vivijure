@@ -5,23 +5,20 @@ artifacts (every cast deletion before #298 leaked its portrait/refs/sources/
 LoRA). See `scripts/r2-orphan-gc.ts` (IO) + `src/r2-orphan-reconcile.ts` (pure,
 tested core).
 
-## Safety model (verify by ID, never by slug) + the name-tie guard
+## Safety model (verify by ID / by reference, never by slug)
 A key is an orphan ONLY when no live owner is found, decided against the live
 `cast_members` id set and the keys / LoRA dirs any live cast row OR any render
 references. The #298 near-miss is the reason: a broad "wren" grep flagged
 `loras/lora-wren-1782248711/` for deletion, but that LoRA is LIVE (cast id 4) --
-only a verify-by-id check spared it.
+only a verify-by-id check spared it. Anything not provably cast-owned (films,
+load tests, smokes) is left out-of-scope, never deleted.
 
-NAME-TIE GUARD (Conrad's rule, #309): on top of by-id/by-reference, KEEP
-anything that ties to a CURRENT cast by NAME even if that exact run is
-unreferenced -- only delete artifacts with NO identity tie to any live cast. A
-`loras/` dir whose tokens contain a live cast slug's full token set is kept.
-This is what excludes:
-  - `loras/lora-companion-robot-1782198520/` (an OLD run of LIVE cast 6
-    Companion Robot; the live run is `-1782245014`)
-  - `loras/wren_talks_test_2/` (name-matches LIVE cast 4 Wren)
-The wiped prior-roster slugs (aria / marcus / rei-kurogane / rhode / vesper /
-kaito-yurei) have NO live cast tie and are deleted.
+Multi-run nuance: ownership is decided PER DIR, not per slug. An OLD training run
+of a live cast is an orphan if that exact dir is unreferenced -- e.g.
+`loras/lora-companion-robot-1782198520/` is swept (live cast 6 uses
+`-1782245014`), and `loras/wren_talks_test_2/` is swept (unreferenced; not the
+artifact any live cast uses). Decision per Conrad: "if we didn't keep it, it's
+not meant to be" -- only the referenced run survives.
 
 ## How to run
 ```
@@ -32,18 +29,16 @@ node scripts/r2-orphan-gc.ts --owners docs/309-r2-orphan-gc-owners.json --apply
 ```
 R2 access via an rclone remote (`R2_REMOTE`/`R2_BUCKET`, default `r2:vivijure`).
 The owner snapshot (`--owners`) is `{ castRows, renderLoraDirs, seedPrefixes }`,
-built from a D1 query of `cast_members` (incl. slug) plus a `renders` LoRA-ref
-scan. The snapshot used here is committed as `309-r2-orphan-gc-owners.json`
-(point-in-time 2026-06-24; do NOT reuse for a later GC -- re-query D1).
+built from a D1 query of `cast_members` plus a `renders` LoRA-reference scan. The
+snapshot used here is committed as `309-r2-orphan-gc-owners.json` (point-in-time
+2026-06-24; do NOT reuse for a later GC -- re-query D1).
 
-## Dry-run record (2026-06-24, live R2 + live D1 snapshot; TRIMMED set)
-Live casts: ids 2,4,5,6,13..20 (slugs character-a, wren, salvage-robot,
-companion-robot, juno/mara/dev/riff (+ -2 variants)). Every candidate confirmed
-0 references in `cast_members` (by id) AND the `renders` JSON columns, and no
-name tie to any live cast.
+## Dry-run record (2026-06-24, live R2 + live D1 snapshot)
+Live casts: ids 2,4,5,6,13..20. Every candidate confirmed 0 references in
+`cast_members` (by id) AND the `renders` JSON columns.
 
 ```
-scanned 459 objects: 150 orphan, 223 kept, 86 out-of-scope
+scanned 459 objects: 152 orphan, 221 kept, 86 out-of-scope
 
 out-of-scope LoRA dirs left intact (not cast-scheme): 45
   . loras/EMBER/
@@ -92,7 +87,7 @@ out-of-scope LoRA dirs left intact (not cast-scheme): 45
   . loras/v0212-00/
   . loras/v0213-verify-00/
 
-ORPHANS (150 objects, 1.9 GiB):
+ORPHANS (152 objects, 2.0 GiB):
   [cast id 10 has no live cast_members row] -- 11 obj, 5.6 MiB
     DELETE cast/10/portrait.jpg  (533.6 KiB)
     DELETE cast/10/refs/0571be3b-215a-4398-b588-9358e4e4a939.jpg  (422.0 KiB)
@@ -239,10 +234,11 @@ ORPHANS (150 objects, 1.9 GiB):
     DELETE loras/cast-8/1780622927.safetensors.diffusers.bak  (88.8 MiB)
   [cast-9 LoRA, cast id 9 has no live row] -- 1 obj, 88.7 MiB
     DELETE loras/cast-9/1780807145.safetensors  (88.7 MiB)
-  [cast-scheme LoRA dir with no live cast or render reference] -- 14 obj, 622.4 MiB
+  [cast-scheme LoRA dir with no live cast or render reference] -- 15 obj, 666.9 MiB
     DELETE loras/lora-aria-1780941077/A/pytorch_lora_weights.safetensors  (44.5 MiB)
     DELETE loras/lora-aria-1780949897/A/pytorch_lora_weights.safetensors  (44.5 MiB)
     DELETE loras/lora-aria-1780977405/A/pytorch_lora_weights.safetensors  (44.5 MiB)
+    DELETE loras/lora-companion-robot-1782198520/A/pytorch_lora_weights.safetensors  (44.5 MiB)
     DELETE loras/lora-kaito-yurei-1780949945/A/pytorch_lora_weights.safetensors  (44.5 MiB)
     DELETE loras/lora-marcus-1780941067/A/pytorch_lora_weights.safetensors  (44.5 MiB)
     DELETE loras/lora-marcus-1780949888/A/pytorch_lora_weights.safetensors  (44.5 MiB)
@@ -254,6 +250,8 @@ ORPHANS (150 objects, 1.9 GiB):
     DELETE loras/lora-vesper-1780941301/A/pytorch_lora_weights.safetensors  (44.5 MiB)
     DELETE loras/lora-vesper-1780943393/A/pytorch_lora_weights.safetensors  (44.5 MiB)
     DELETE loras/lora-vesper-1780948007/A/pytorch_lora_weights.safetensors  (44.5 MiB)
+  [explicit operator seed (loras/wren_talks_test_2/), no live reference] -- 1 obj, 44.5 MiB
+    DELETE loras/wren_talks_test_2/A/pytorch_lora_weights.safetensors  (44.5 MiB)
 
 DRY RUN -- nothing deleted. Re-run with --apply to GC the orphan set above.
 ```
