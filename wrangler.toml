@@ -24,6 +24,13 @@ assets = { directory = "./public", binding = "ASSETS" }
 # DEPLOY-ORDERED: vivijure-tail must be live BEFORE this binding deploys (dangling-binding hazard).
 tail_consumers = [ { service = "vivijure-tail" } ]
 
+# F2: in-Worker CF Access JWT verification (defense-in-depth BEHIND the edge Access app).
+# When BOTH are set, /api/* requires a valid Access JWT (fail-closed); see src/access-auth.ts.
+# Not secrets -- public Zero-Trust identifiers (team hostname + the vivijure app AUD).
+[vars]
+ACCESS_TEAM_DOMAIN = "skyphusion.cloudflareaccess.com"
+ACCESS_AUD = "be06bf478d2cb5689cf22bab24c30dcce28efc9d0e0b1dbfa3e5fd45f5b0a984"
+
 [observability]
 enabled = true
 
