@@ -84,6 +84,11 @@ service_id = "019ecc06-3790-7403-9d8f-20f1287a513a"
 remote = true
 # max_instances = 5
 
+[[vpc_services]]
+binding = "AUDIO_MIX_VPC"
+service_id = "019efa71-2548-7562-b718-0115f50f539c"
+remote = true
+
 # --- Secrets (npx wrangler secret put <NAME>): RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID,
 # --- R2_S3_ACCESS_KEY_ID, R2_S3_SECRET_ACCESS_KEY, GATEWAY_ID.
 # --- Presign vars (uncomment + fill on provision):

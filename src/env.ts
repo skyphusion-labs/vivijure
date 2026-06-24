@@ -60,6 +60,10 @@ export interface Env {
   VIDEO_FINISH_VPC: Fetcher; // Workers VPC -> always-on fleet video-finish (issue #83)
   IMAGE_PREP_VPC: Fetcher; // Workers VPC -> always-on fleet image-prep (issue #83)
   AUDIO_BEAT_SYNC_VPC: Fetcher; // Workers VPC -> always-on fleet audio-beat-sync (issue #83)
+  // OPTIONAL (#231): Workers VPC -> always-on fleet audio-mix container (/mix: multi-track duck +
+  // loudnorm). Optional so the Worker deploys before the VPC service is provisioned; the mux phase
+  // degrades to the single-track remux when it is absent. Provisioned + bound by infra (Strummer).
+  AUDIO_MIX_VPC?: Fetcher;
 
   // Transactional mail (render-complete notification). Optional; guard with `if (env.EMAIL)`.
   EMAIL?: EmailServiceBinding;
