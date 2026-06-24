@@ -137,6 +137,7 @@ export interface FilmJob {
     degraded?: string;   // set when the film was passed through UNCARDED; the reason (cards NOT applied)
   };
   mux_output_key?: string; // deterministic mux destination for idempotent retries
+  mix_audio_key?: string; // #231: multi-track mixed audio (dialogue + ducked music + loudnorm) destination
   mux_attempts?: number;
   // keyframes-only preview: stop after the keyframe module, no i2v / assemble.
   keyframes_only?: boolean;
@@ -828,6 +829,97 @@ export async function callVideoFinish(
   return resp;
 }
 
+/** What the audio-mix container's /mix returns (containers/audio-mix/app.py). */
+interface AudioMixResult {
+  ok: boolean;
+  key?: string;
+  durationSeconds?: number;
+  lufs?: number;
+  ducked?: boolean;
+  error?: string;
+}
+
+/** POST to the always-on fleet audio-mix container (/mix), mirroring callVideoFinish: a private
+ *  Workers VPC binding, retry the transient gateway statuses. Returns null when the binding is not
+ *  provisioned (#231 is additive -- the caller then degrades to the single-track remux). */
+export async function callAudioMix(
+  env: Env,
+  payload: {
+    tracks: { url: string; role: "dialogue" | "music" | "sfx"; gainDb?: number }[];
+    outputUrl: string;
+    outputKey: string;
+    format?: string;
+    loudnessTargetLufs?: number;
+  },
+  opts: { retries?: number; backoffMs?: number } = {},
+): Promise<Response | null> {
+  if (!env.AUDIO_MIX_VPC) return null; // not provisioned -> caller degrades to single-track mux
+  const retries = opts.retries ?? 3;
+  const backoffMs = opts.backoffMs ?? 1500;
+  const init = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) };
+  let resp: Response | null = null;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      resp = await env.AUDIO_MIX_VPC.fetch("http://audio-mix/mix", init);
+    } catch {
+      resp = null;
+    }
+    if (resp && resp.status !== 503 && resp.status !== 504) return resp;
+    if (attempt < retries - 1) await new Promise((r) => setTimeout(r, backoffMs));
+  }
+  return resp;
+}
+
+/** Pure: should the mux phase run the multi-track mix (#231)? Only when the film has BOTH dialogue
+ *  (baked into the assembled video by lip-sync) AND a music bed, and the audio-mix VPC is bound.
+ *  Otherwise the single-track remux is correct (and unchanged). */
+export function shouldMultiTrackMix(job: FilmJob, env: Env): boolean {
+  const hasDialogue = !!job.dialogue_audio && Object.keys(job.dialogue_audio).length > 0;
+  return hasDialogue && !!job.audio_key && !!job.silent_film_key && !!env.AUDIO_MIX_VPC;
+}
+
+/** #231: mix the film's dialogue (in the assembled video) under-ducked with the music bed + loudnorm via
+ *  /mix, returning the mixed audio R2 key to remux -- or null to DEGRADE to the single-track bed mux. The
+ *  mix is a POLISH step: any failure soft-degrades (keep the bed), never fails a fully-rendered film
+ *  (#249/#77). /mix runs ffmpeg -i per track, so the assembled video's URL works as the dialogue track
+ *  (its audio stream is extracted); the bed is the music track. */
+async function mixFilmAudio(env: Env, job: FilmJob, videoKey: string, bedKey: string): Promise<string | null> {
+  const mixKey = job.mix_audio_key
+    ?? videoKey.replace(/\.mp4$/i, "") + "-mix-" + crypto.randomUUID().slice(0, 8) + ".mp3";
+  job.mix_audio_key = mixKey;
+  const [dialogueUrl, musicUrl, outputUrl] = await Promise.all([
+    presignR2Get(env, videoKey, 1800),
+    presignR2Get(env, bedKey, 1800),
+    presignR2Put(env, mixKey, 1800),
+  ]);
+  const resp = await callAudioMix(env, {
+    tracks: [
+      { url: dialogueUrl, role: "dialogue", gainDb: 0 },
+      { url: musicUrl, role: "music", gainDb: 0 },
+    ],
+    outputUrl,
+    outputKey: mixKey,
+    format: "mp3",
+    loudnessTargetLufs: -14,
+  });
+  if (!resp || !resp.ok) {
+    console.warn(`film ${job.film_id}: audio-mix unreachable/${resp ? resp.status : "null"}; degrading to single-track mux (#231)`);
+    return null;
+  }
+  let body: AudioMixResult;
+  try {
+    body = (await resp.json()) as AudioMixResult;
+  } catch {
+    console.warn(`film ${job.film_id}: audio-mix returned non-JSON; degrading to single-track mux`);
+    return null;
+  }
+  if (!body.ok || !body.key) {
+    console.warn(`film ${job.film_id}: audio-mix not ok (${body.error ?? "no key"}); degrading to single-track mux`);
+    return null;
+  }
+  return mixKey; // mixed dialogue + ducked music + loudnorm; remux this in place of the bare bed
+}
+
 const filmOutKey = (filmId: string) => `renders/${filmId}/film.mp4`;
 
 // Cap on across-polls assemble re-attempts before a transient failure goes terminal (issue #82).
@@ -1088,9 +1180,19 @@ async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
     ?? silentKey.replace(/\.mp4$/i, "") + "-audio-" + crypto.randomUUID().slice(0, 8) + ".mp4";
   job.mux_output_key = outKey;
 
+  // #231: a dialogue + music film gets a PROPER multi-track mix first -- duck the music under the
+  // dialogue + loudness-normalize via the audio-mix container -- then remux that single mixed track.
+  // Soft-degrades to the bare bed (single-track remux, prior behavior) when the audio-mix VPC is not
+  // bound or the mix fails; an audio-polish miss never fails a fully-rendered film (#249/#77).
+  let audioToMux = audioKey;
+  if (shouldMultiTrackMix(job, env)) {
+    const mixed = await mixFilmAudio(env, job, silentKey, audioKey);
+    if (mixed) audioToMux = mixed;
+  }
+
   const [videoUrl, audioUrl, outputUrl] = await Promise.all([
     presignR2Get(env, silentKey, 1800),
-    presignR2Get(env, audioKey, 1800),
+    presignR2Get(env, audioToMux, 1800),
     presignR2Put(env, outKey, 1800),
   ]);
 
