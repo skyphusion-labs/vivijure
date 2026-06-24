@@ -11,6 +11,8 @@
 // discovered by the registry (src/modules/registry.ts). Not statically listed; a deployment installs
 // only the modules it wants.
 
+import type { RateLimitBinding } from "./rate-limit";
+
 // RPC surface of the skyphusion-email Worker's EmailService entrypoint (the notify-email module
 // uses it to send render-complete mail). Kept minimal + local so this repo does not depend on that package.
 export interface EmailServiceBinding {
@@ -73,6 +75,12 @@ export interface Env {
   // and the app relies solely on the edge Access gate. Production MUST set both. See docs/SECURITY.md.
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+
+  // Rate limiting for GPU/spend endpoints (F3, src/rate-limit.ts). The Cloudflare native Rate
+  // Limiting binding; added to wrangler.toml [[ratelimits]] by infra (Strummer). Optional: when
+  // unbound the spend routes fail OPEN (allowed + warned), since rate-limit is availability-
+  // protective, not an auth gate. See docs/SECURITY.md.
+  SPEND_RATE_LIMITER?: RateLimitBinding;
 
   // Transactional mail (render-complete notification). Optional; guard with `if (env.EMAIL)`.
   EMAIL?: EmailServiceBinding;
