@@ -101,7 +101,7 @@ async function submit(env: Env, req: InvokeRequest<FinishInput>): Promise<Invoke
     return {
       ok: true,
       pending: true,
-      poll: encodePoll({ jobId, shotId: input.shot_id, clipKey: input.clip_key, srcFps: input.src_fps, frames: input.frames, submittedAt: Date.now() }),
+      poll: encodePoll({ jobId, shotId: input.shot_id, clipKey: input.clip_key, srcFps: input.src_fps ?? 24, frames: input.frames ?? 0, submittedAt: Date.now() }),
     };
   } catch (e) {
     return passthrough(input, "exception", { detail: (e as Error).message });
