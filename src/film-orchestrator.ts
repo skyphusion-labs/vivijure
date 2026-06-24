@@ -1557,6 +1557,12 @@ export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob |
   if (!obj) return null;
   const job = JSON.parse(await obj.text()) as FilmJob;
   if (job.phase === "done" || job.phase === "failed") return job;
+  // #328: STOP the in-flight RunPod job, not just the studio state -- a cancel that leaves the GPU
+  // training is a lie to the user and a money leak. Run this BEFORE mutating phase, so the helper can
+  // still see the in-flight keyframe poll token. (Motion/finish/speech phases adopt /cancel in
+  // follow-ups once their modules advertise `cancelable`; until then cancelInFlightKeyframe is a no-op
+  // off the keyframe phase and the orphan, if any, is the existing behavior -- not made worse here.)
+  await cancelInFlightKeyframe(env, job);
   job.cancelled = true;
   job.phase = "failed";
   job.error = "cancelled";

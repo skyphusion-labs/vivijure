@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { cancelModule } from "../src/modules/registry";
-import { cancelInFlightKeyframe, type FilmJob } from "../src/film-orchestrator";
+import { cancelInFlightKeyframe, cancelFilmJob, filmJobDocKey, type FilmJob } from "../src/film-orchestrator";
 import type { Env } from "../src/env";
 import kfWorker, { MANIFEST } from "../modules/keyframe/src/index";
 import { encodePoll } from "../modules/keyframe/src/keyframe";
@@ -115,6 +115,40 @@ describe("cancelInFlightKeyframe (the #327/#328 fix: stop the GPU, never orphan)
     const env = { MODULE_KEYFRAME: fetcher } as unknown as Env;
     await cancelInFlightKeyframe(env, filmJob({ phase: "clips" }));
     await cancelInFlightKeyframe(env, filmJob({ keyframe_poll: undefined }));
+    expect(calls.cancel).toEqual([]);
+  });
+});
+
+describe("cancelFilmJob (DELETE /api/storyboard/render/:id) propagates cancel to RunPod (#328)", () => {
+  it("issues a module cancel for the in-flight keyframe job and marks the film cancelled", async () => {
+    const { fetcher, calls } = fakeModule(KF_MANIFEST());
+    const job = filmJob({ keyframe_poll: "tok-del" });
+    const store = new Map<string, string>([[filmJobDocKey(job.film_id), JSON.stringify(job)]]);
+    const env = {
+      MODULE_KEYFRAME: fetcher,
+      R2_RENDERS: {
+        get: async (k: string) => { const v = store.get(k); return v === undefined ? null : { text: async () => v }; },
+        put: async (k: string, v: string) => { store.set(k, v); },
+      },
+    } as unknown as Env;
+
+    const out = await cancelFilmJob(env, job.film_id);
+    expect(calls.cancel).toEqual(["tok-del"]); // the GPU was actually told to stop, not just the studio state
+    expect(out?.cancelled).toBe(true);
+    expect(out?.phase).toBe("failed");
+    // and it was persisted cancelled
+    expect(JSON.parse(store.get(filmJobDocKey(job.film_id))!).cancelled).toBe(true);
+  });
+
+  it("an already-terminal film is a no-op (no cancel call)", async () => {
+    const { fetcher, calls } = fakeModule(KF_MANIFEST());
+    const job = filmJob({ phase: "done" });
+    const store = new Map<string, string>([[filmJobDocKey(job.film_id), JSON.stringify(job)]]);
+    const env = {
+      MODULE_KEYFRAME: fetcher,
+      R2_RENDERS: { get: async (k: string) => { const v = store.get(k); return v === undefined ? null : { text: async () => v }; }, put: async () => {} },
+    } as unknown as Env;
+    await cancelFilmJob(env, job.film_id);
     expect(calls.cancel).toEqual([]);
   });
 });
