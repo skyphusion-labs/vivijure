@@ -130,6 +130,23 @@ supplied path fields, `sanitizeKeySegment` for derived slugs, and `isPresignSafe
 defense-in-depth on any key about to be signed. This blocks path traversal, absolute keys, URL
 schemes, and control/non-ASCII bytes from steering an object reference.
 
+## 6. Spend rate limiting (F3)
+
+The render / train / generate routes each submit a RunPod GPU job or paid AI work, so an abused
+session can burn the operator's balance (denial-of-wallet). Every such POST route
+(`/api/storyboard/render`, `/api/render/clips`, `/api/render/film`, `.../render/scatter`,
+`.../render-from-keyframes`, `.../renders/:id/animate-cloud|animate-hybrid`,
+`/api/cast/:id/train-lora`, `/api/cast/:id/generate-refs`, `/api/storyboard/score-bed|music-generate`)
+passes a rate limiter before dispatch (`src/rate-limit.ts`, the spend surface is the single
+auditable `SPEND_PATTERNS` list). Backend: the Cloudflare native Rate Limiting binding
+(`SPEND_RATE_LIMITER`), keyed by `CF-Connecting-IP`; over-limit returns `429` + `Retry-After`.
+
+Posture: **FAIL OPEN.** Rate limiting is availability-protective, not an auth gate -- if the
+limiter is unbound or `.limit()` throws, the request is ALLOWED (with a one-time warning) so a
+limiter blip never blocks a legitimate render. This is the deliberate OPPOSITE of the F2 auth
+backstop (section 1a), which fails closed. The binding is per-colo; a Durable Object token bucket
+is the documented upgrade if cross-colo (global) accuracy is ever needed.
+
 ## 7. Module response hardening (F5)
 
 A module is untrusted (community territory: the operator service-binds third-party Worker code).
@@ -158,6 +175,8 @@ never an unbounded buffer that could OOM/DoS the core Worker.
       before acting on it (a module is community code).
 - [ ] Arming the F2 backstop (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) -> first confirm EVERY internal
       caller carries an Access JWT (service token, not IP bypass), or it will be denied.
+- [ ] New GPU/paid endpoint -> add its path to `SPEND_PATTERNS` (src/rate-limit.ts) so it is
+      rate-limited; an unlisted spend route is a denial-of-wallet hole.
 
 ## References
 
