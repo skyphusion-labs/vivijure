@@ -112,6 +112,16 @@ POST /invoke
 A module is **stateless to the core**: it gets typed input + config, returns typed output. Where it
 does the work (its own GPU, a cloud provider, a CPU container) is the module's business.
 
+### Async + cancel
+
+A long-running hook answers `/invoke` with `{ ok: true, pending: true, poll }` and the core POSTs
+`{ poll }` to `POST /poll` until it is done. A module doing real backend work (a GPU render) SHOULD
+also set `cancelable: true` and serve `POST /cancel { poll }` -> `{ ok: true }` (cancelled, or already
+terminal: idempotent) / `{ ok: false, error }`. The module decodes the token to its own backend job id
+and cancels with its own creds. Without `/cancel`, a cancelled render or a stall-recovery adopt
+ORPHANS the GPU job (it keeps billing after the work is satisfied); the core honest-degrade-logs that
+orphan rather than hide it (#327 / #328). Full envelope spec in CONTRACT.md section 4.
+
 ## Worked example: the `finish` hook
 
 This is the whole contract for one hook, end to end. It is also the first real module.

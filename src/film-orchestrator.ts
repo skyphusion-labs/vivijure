@@ -8,7 +8,7 @@
 // No Worker ever holds a multi-minute GPU/cloud render.
 
 import type { Env } from "./env";
-import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
+import { discoverModules, invokeModule, pollModule, cancelModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
 import { loadInstallConfig } from "./operator-config";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput } from "./modules/types";
 import {
@@ -1636,6 +1636,35 @@ export async function keyframeSetCompleteInR2(env: Env, job: FilmJob): Promise<b
   return job.scenes.every((s) => have.has(s.shot_id));
 }
 
+/** Cancel the film's in-flight keyframe RunPod job THROUGH its module, honestly. No-op when no keyframe
+ *  job is in flight (wrong phase, no poll token, or no bound backend). When the bound module is missing
+ *  or not `cancelable`, or the cancel call fails, we LOG the orphan rather than swallow it: an orphaned
+ *  GPU job is a money leak that betrays scale-to-zero (#327 / #328), so it stays visible even when we
+ *  cannot stop it. Read keyframe_poll BEFORE the caller clears it. Exported for the orchestrator
+ *  unit test (it asserts the adopt + DELETE-cancel paths actually issue a cancel). */
+export async function cancelInFlightKeyframe(env: Env, job: FilmJob): Promise<void> {
+  if (job.phase !== "keyframe" || !job.keyframe_poll || !job.keyframe_binding) return;
+  const poll = job.keyframe_poll;
+  const envRec = env as unknown as Record<string, unknown>;
+  const modules = await discoverModules(envRec);
+  const kf = modules.find((m) => m.binding === job.keyframe_binding) ?? null;
+  const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
+  if (!kf || !fetcher) {
+    console.warn(`film ${job.film_id}: cannot cancel in-flight keyframe job -- module ${job.keyframe_binding} not bound; RunPod job may ORPHAN (#327)`);
+    return;
+  }
+  if (!kf.cancelable) {
+    console.warn(`film ${job.film_id}: keyframe module ${kf.name} is not cancelable -- in-flight RunPod job may run to completion (ORPHAN) (#327)`);
+    return;
+  }
+  const r = await cancelModule(fetcher, { poll });
+  if (r.ok) {
+    console.warn(`film ${job.film_id}: cancelled in-flight keyframe RunPod job via ${kf.name} (#327)`);
+  } else {
+    console.warn(`film ${job.film_id}: keyframe cancel FAILED (${r.error}) -- RunPod job may ORPHAN (#327)`);
+  }
+}
+
 /** Recover a keyframe phase whose module poll has gone stale (RunPod GC'd the finished job) by adopting
  *  the keyframes already in R2 and advancing exactly as a fresh keyframe completion would (afterKeyframe
  *  Output -> clips, or done for a keyframes-only preview). Idempotent: marks keyframe_recovered so it
@@ -1645,8 +1674,12 @@ async function recoverStalledKeyframePhase(env: Env, job: FilmJob): Promise<bool
   const adopted = await listProjectKeyframes(env, job.project, job.scenes);
   if (!adopted.length) return false; // nothing in R2 to adopt -- not actually complete; let the ceiling handle it
   console.warn(`film ${job.film_id}: keyframe poll stale, adopting ${adopted.length} orphaned keyframes from R2 (#129)`);
+  // #327: STOP the still-running RunPod job BEFORE discarding its poll token. Adopting the cached
+  // keyframes satisfies the work, but the GPU job keeps training/rendering unless we cancel it; clearing
+  // keyframe_poll without cancelling is exactly what orphaned it. Best-effort, honest-degrade-logged.
+  await cancelInFlightKeyframe(env, job);
   job.keyframe_recovered = true;
-  job.keyframe_poll = undefined; // the phantom RunPod job is done with
+  job.keyframe_poll = undefined; // the RunPod job is cancelled (or logged as an orphan) above
   await afterKeyframeOutput(env, job, { project: job.project, keyframes: adopted });
   return true;
 }

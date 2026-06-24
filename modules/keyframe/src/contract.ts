@@ -24,6 +24,9 @@ export interface ModuleManifest {
   provides?: Provides[];
   config_schema?: ConfigSchema;
   ui?: ModuleUi;
+  /** This module implements POST /cancel (it is async + GPU-backed), so the core can stop an in-flight
+   *  RunPod job instead of orphaning it. OPTIONAL/additive, mirrors src/modules/types.ts. */
+  cancelable?: boolean;
 }
 
 export interface InvokeContext {
@@ -52,6 +55,16 @@ export interface PollRequest {
 export type PollResponse<O = unknown> =
   | { ok: true; pending: true }
   | { ok: true; output: O }
+  | { ok: false; error: string };
+
+// POST /cancel: stop the in-flight RunPod job named by this poll token. The module decodes the token to
+// its RunPod job id and cancels with its own key+endpoint. Best-effort + idempotent (an already-terminal
+// or unknown job is a success), so the core can treat ok:true as "not running on our account" (#327/#328).
+export interface CancelRequest {
+  poll: string;
+}
+export type CancelResponse =
+  | { ok: true }
   | { ok: false; error: string };
 
 // keyframe payloads (vivijure-module/1). A PROJECT-level pass: one job renders every shot's start

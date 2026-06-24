@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkManifest, checkInvokeResponse, checkHookOutput, allPass, failures } from "../src/modules/conformance";
+import { checkManifest, checkInvokeResponse, checkCancelResponse, checkHookOutput, allPass, failures } from "../src/modules/conformance";
 
 const goodManifest = {
   name: "demo",
@@ -78,6 +78,22 @@ describe("conformance: invoke response", () => {
   it("rejects a body with no boolean ok", () => {
     expect(checkInvokeResponse({ output: {} }).pass).toBe(false);
     expect(checkInvokeResponse(null).pass).toBe(false);
+  });
+});
+
+describe("conformance: cancel response", () => {
+  it("accepts ok:true (cancelled / idempotent success)", () => {
+    expect(checkCancelResponse({ ok: true }).pass).toBe(true);
+  });
+  it("accepts ok:false with an error string (could not cancel -> core degrade-logs)", () => {
+    expect(checkCancelResponse({ ok: false, error: "job not found" }).pass).toBe(true);
+  });
+  it("rejects ok:false with no error string", () => {
+    expect(checkCancelResponse({ ok: false }).pass).toBe(false);
+  });
+  it("rejects a body with no boolean ok", () => {
+    expect(checkCancelResponse({}).pass).toBe(false);
+    expect(checkCancelResponse(null).pass).toBe(false);
   });
 });
 

@@ -122,6 +122,8 @@ module is a separate Worker that:
 1. Serves `GET /module.json` -- its **manifest** (which hooks it serves, its config knobs, UI hints).
 2. Serves `POST /invoke` -- the single entry point the core calls to run a hook.
 3. Optionally serves `POST /poll` -- for async (long-running) work.
+4. Optionally serves `POST /cancel` (and sets `cancelable: true`) -- to STOP an in-flight async job
+   so a cancelled render or a stall-recovery adopt never orphans the GPU (#327 / #328).
 
 The core discovers modules from its env bindings, fetches each manifest, and builds a **registry**.
 
@@ -1215,6 +1217,28 @@ For async work the core POSTs `{ poll: string }` to the module's `/poll` until i
 `{ ok:true, output }` (done) or `{ ok:false, error }` (failed); `{ ok:true, pending:true }` means keep
 polling.
 
+### Cancelling an async job (`POST /cancel`)
+
+An async module that runs real backend work (a GPU render) MUST be able to STOP that work on demand,
+or a cancelled render and a stall-recovery adopt both ORPHAN the job: it keeps running, untracked,
+after the work it was for is already satisfied, and bills in full. That is a money leak and an
+architectural betrayal of scale-to-zero (#327 / #328).
+
+A module advertises this capability with `cancelable: true` in its manifest and serves `POST /cancel`:
+
+```
+// request:  { poll: string }   // the SAME token /invoke returned
+// response: { ok: true }                  // cancelled, OR already terminal/unknown (idempotent)
+//           { ok: false, error: string }  // could not cancel -> the core degrade-LOGS the orphan
+```
+
+The module decodes the poll token to ITS OWN backend job id and cancels with ITS OWN backend creds,
+because the core never holds them (this is what keeps a module portable across backend accounts).
+Cancel is BEST-EFFORT and IDEMPOTENT: cancelling an already-finished or unknown job is `ok: true`, so
+the core can read `ok: true` as "this job will not keep running on our account". A module WITHOUT
+`cancelable` (or whose `/cancel` returns `ok: false`) is not silently trusted -- the core emits an
+honest degrade log that the GPU job may run to completion, so an orphan is never hidden.
+
 ```mermaid
 sequenceDiagram
   participant Core
@@ -1229,6 +1253,9 @@ sequenceDiagram
       Module-->>Core: {ok:true, pending:true}
     end
     Module-->>Core: {ok:true, output}
+  else cancelled (cancelable modules only)
+    Core->>Module: POST /cancel {poll}
+    Module-->>Core: {ok:true}
   else failure (data, not a crash)
     Module-->>Core: {ok:false, error}
   end

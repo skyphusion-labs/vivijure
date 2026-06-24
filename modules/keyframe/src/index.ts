@@ -16,6 +16,8 @@ import {
   type InvokeResponse,
   type PollRequest,
   type PollResponse,
+  type CancelRequest,
+  type CancelResponse,
   type KeyframeInput,
   type KeyframeOutput,
 } from "./contract";
@@ -57,7 +59,7 @@ async function runpodCreds(env: Env): Promise<{ apiKey: string; endpointId: stri
 // this module's quality_tier enum stays in lockstep with the core QUALITY_TIERS set.
 export const MANIFEST: ModuleManifest = {
   name: "keyframe",
-  version: "0.1.0",
+  version: "0.2.0",
   api: MODULE_API,
   hooks: ["keyframe"],
   provides: [{ id: "gpu-keyframe", label: "GPU Keyframe (SDXL on RunPod)" }],
@@ -80,6 +82,9 @@ export const MANIFEST: ModuleManifest = {
     seed: { type: "int", default: -1, min: -1, label: "seed (-1 = random)" },
   },
   ui: { section: "keyframe", order: 10 },
+  // This module is async + GPU-backed, so it implements POST /cancel: the core can stop an in-flight
+  // RunPod job (a cancelled render, or an adopted keyframe phase) instead of orphaning it (#327/#328).
+  cancelable: true,
 };
 
 function json(body: unknown, status = 200): Response {
@@ -152,6 +157,26 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<KeyframeO
   };
 }
 
+// Stop the in-flight RunPod job named by this poll token. RunPod's cancel is POST /v2/<id>/cancel/<job>.
+// Idempotent by contract: a 200 (cancelled) and a 404 (job already GC'd / terminal) both mean the job is
+// NOT running on our account, so both report ok:true. Any other status is surfaced as ok:false so the
+// core degrade-logs the orphan rather than assuming it stopped. Failures are DATA, never thrown.
+async function cancel(env: Env, body: CancelRequest): Promise<CancelResponse> {
+  const st = decodePoll(body.poll);
+  if (!st) return { ok: false, error: "keyframe: bad poll token" };
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!apiKey || !endpointId) {
+    return { ok: false, error: "keyframe: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
+  }
+  try {
+    const resp = await fetch(endpoint(endpointId) + "/cancel/" + st.jobId, { method: "POST", headers: auth(apiKey) });
+    if (resp.ok || resp.status === 404) return { ok: true };
+    return { ok: false, error: "keyframe /cancel -> " + resp.status };
+  } catch (e) {
+    return { ok: false, error: "keyframe cancel failed: " + (e as Error).message };
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -177,6 +202,16 @@ export default {
       }
       if (!body || typeof body.poll !== "string") return json({ ok: false, error: "poll token required" } as PollResponse);
       return json(await poll(env, body));
+    }
+    if (request.method === "POST" && url.pathname === "/cancel") {
+      let body: CancelRequest;
+      try {
+        body = (await request.json()) as CancelRequest;
+      } catch {
+        return json({ ok: false, error: "invalid JSON body" } as CancelResponse);
+      }
+      if (!body || typeof body.poll !== "string") return json({ ok: false, error: "poll token required" } as CancelResponse);
+      return json(await cancel(env, body));
     }
     return json({ ok: false, error: "not found" }, 404);
   },

@@ -23,6 +23,8 @@ import {
   type InvokeResponse,
   type PollRequest,
   type PollResponse,
+  type CancelRequest,
+  type CancelResponse,
   type ModuleManifest,
   type ModulesResponse,
   type PublicModule,
@@ -324,6 +326,30 @@ export async function pollModule<O = unknown>(
     const data = (await res.json()) as PollResponse<O>;
     if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") return data;
     return { ok: false, error: "module returned a malformed PollResponse" };
+  } catch (e) {
+    return { ok: false, error: `module unreachable: ${(e as Error).message}` };
+  }
+}
+
+/** POST a module's `/cancel` to STOP an in-flight async job, identified by the same poll token `/invoke`
+ *  returned. A failure is DATA, like invoke/poll: a non-200, a malformed body, or an unreachable binding
+ *  all become `{ ok: false }`, so the caller degrade-logs the orphan instead of crashing. Only call this
+ *  on a module whose manifest advertises `cancelable` -- a module without /cancel would 404 here, which
+ *  this surfaces honestly as `ok: false` (the caller then logs the orphan, never hides it). */
+export async function cancelModule(
+  fetcher: FetcherLike,
+  request: CancelRequest,
+): Promise<CancelResponse> {
+  try {
+    const res = await fetcher.fetch("https://module/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!res.ok) return { ok: false, error: `module /cancel -> ${res.status}` };
+    const data = (await res.json()) as CancelResponse;
+    if (data && typeof data === "object" && typeof (data as { ok?: unknown }).ok === "boolean") return data;
+    return { ok: false, error: "module returned a malformed CancelResponse" };
   } catch (e) {
     return { ok: false, error: `module unreachable: ${(e as Error).message}` };
   }

@@ -88,6 +88,18 @@ export function checkInvokeResponse(raw: unknown): ConformanceCheck {
   return bad("invoke-response", "missing boolean `ok`");
 }
 
+/** Validate that a body is a well-formed CancelResponse: { ok:true } or { ok:false, error:string }. A
+ *  module whose manifest advertises `cancelable` must answer POST /cancel with this shape (a bad/unknown
+ *  token is DATA -> ok:false with a reason, never a crash), so the core can trust ok:true as "the job is
+ *  not running on our account" and degrade-log on ok:false (#327 / #328). */
+export function checkCancelResponse(raw: unknown): ConformanceCheck {
+  if (!raw || typeof raw !== "object") return bad("cancel-response", "not an object");
+  const r = raw as Record<string, unknown>;
+  if (r.ok === true) return ok("cancel-response", "ok:true");
+  if (r.ok === false) return typeof r.error === "string" ? ok("cancel-response", "ok:false + error") : bad("cancel-response", "ok:false but error is not a string");
+  return bad("cancel-response", "missing boolean `ok`");
+}
+
 // --------------------------------------------------------------------------- hook output payloads
 
 const isRec = (v: unknown): v is Record<string, unknown> =>
