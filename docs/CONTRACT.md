@@ -1237,7 +1237,8 @@ because the core never holds them (this is what keeps a module portable across b
 Cancel is BEST-EFFORT and IDEMPOTENT: cancelling an already-finished or unknown job is `ok: true`, so
 the core can read `ok: true` as "this job will not keep running on our account". A module WITHOUT
 `cancelable` (or whose `/cancel` returns `ok: false`) is not silently trusted -- the core emits an
-honest degrade log that the GPU job may run to completion, so an orphan is never hidden.
+honest degrade log that NAMES the still-running backend job id (`RunPod job <id> left running`), so an
+operator can cancel it by hand and an orphan is never hidden.
 
 ```mermaid
 sequenceDiagram
