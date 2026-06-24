@@ -10,6 +10,7 @@
 import { coerceShotId } from "./storyboard-validate";
 import type { DialogueLine } from "./modules/types";
 import { coerceVoiceId, DEFAULT_VOICE_ID } from "./voices";
+import type { ParsedBundleScene } from "./planner-yaml";
 
 interface StoredScene {
   id?: unknown;
@@ -49,5 +50,26 @@ export function buildDialogueLines(
     const voice = coerceVoiceId(voices[slot]) ?? DEFAULT_VOICE_ID;
     lines.push({ shot_id: shotId, text: text.trim(), voice_id: voice });
   });
+  return lines;
+}
+
+
+/** Bundle-only voicing (#313): build the per-shot dialogue batch from the dialogue carried in a
+ *  bundle's storyboard.yaml (parsed by parseStoryboardScenes), resolving each speaking slot's voice
+ *  from `voices` (slot -> voice_id; empty on a bundle-only render with no cast) and defaulting
+ *  otherwise. A scene with no/blank dialogue is skipped (silent shot). The /api/render/film path uses
+ *  this when the caller passed no explicit dialogue_lines, so a self-describing dialogue bundle renders
+ *  voiced end to end with no D1 project or arg. */
+export function dialogueLinesFromBundleScenes(
+  scenes: ParsedBundleScene[],
+  voices: Record<string, string>,
+): DialogueLine[] {
+  const lines: DialogueLine[] = [];
+  for (const s of scenes) {
+    const dlg = s.dialogue;
+    if (!dlg || typeof dlg.text !== "string" || !dlg.text.trim()) continue;
+    const voice = coerceVoiceId(voices[dlg.slot]) ?? DEFAULT_VOICE_ID;
+    lines.push({ shot_id: s.shot_id, text: dlg.text.trim(), voice_id: voice });
+  }
   return lines;
 }
