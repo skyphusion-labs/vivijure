@@ -25,10 +25,10 @@ bucket_name = "vivijure"
 # See docs/DEPLOYMENT.md "Module secrets via the Secrets Store".
 [[secrets_store_secrets]]
 binding = "RUNPOD_API_KEY"
-store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+store_id = "0b04371c738a48a497c3344604114268"
 secret_name = "RUNPOD_API_KEY"
 
 [[secrets_store_secrets]]
 binding = "RUNPOD_ENDPOINT_ID"
-store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
-secret_name = "RUNPOD_ENDPOINT_ID"
+store_id = "0b04371c738a48a497c3344604114268"
+secret_name = "BACKEND_RUNPOD_ENDPOINT_ID"
