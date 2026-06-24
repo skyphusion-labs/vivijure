@@ -65,6 +65,15 @@ export interface Env {
   // degrades to the single-track remux when it is absent. Provisioned + bound by infra (Strummer).
   AUDIO_MIX_VPC?: Fetcher;
 
+  // CF Access JWT verification (F2, src/access-auth.ts): fail-CLOSED in-Worker backstop so the data
+  // plane never depends solely on the edge Access app. Deploy-specific, NOT secrets -> wrangler.toml
+  // [vars]. ACCESS_TEAM_DOMAIN = the Zero Trust team hostname (e.g. "skyphusion.cloudflareaccess.com");
+  // ACCESS_AUD = the Access application AUD tag. When BOTH are set, /api/* requires a valid Access JWT
+  // (fail closed). When unset, the backstop is not armed: /api/* is allowed with a loud one-time warning
+  // and the app relies solely on the edge Access gate. Production MUST set both. See docs/SECURITY.md.
+  ACCESS_TEAM_DOMAIN?: string;
+  ACCESS_AUD?: string;
+
   // Transactional mail (render-complete notification). Optional; guard with `if (env.EMAIL)`.
   EMAIL?: EmailServiceBinding;
 

@@ -34,6 +34,7 @@ import {
   deleteCastArtifacts,
 } from "./cast-media";
 import { exportCastBundle, importCastBundle } from "./cast-bundle";
+import { gateApiRequest } from "./access-auth";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
 import {
@@ -1106,6 +1107,13 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return json({ ok: true, service: "vivijure-studio", phase: 1 });
+    // F2: fail-CLOSED Access verification for the whole data plane. /health (above) + static
+    // pages/assets (below) stay open; every /api/* request must carry a valid Access JWT (or the
+    // deployer must consciously opt out via ALLOW_UNAUTHENTICATED). See src/access-auth.ts.
+    if (url.pathname.startsWith("/api/")) {
+      const gate = await gateApiRequest(request, env);
+      if (!gate.ok) return json({ error: gate.reason }, gate.status);
+    }
     if (url.pathname === "/api/modules" && request.method === "GET") {
       // Cache discovery for 60s per isolate so a refresh storm does not re-fetch every module's
       // manifest each request (issue #17 follow-up). Only this route opts in; dispatch stays fresh.
