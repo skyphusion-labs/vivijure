@@ -19,6 +19,22 @@ keyframes, and lip-sync all run **through RunPod**, so one RunPod key covers the
 
 ---
 
+## ⚠️ Security requirement (read first): SINGLE-OPERATOR, auth-gated
+
+Vivijure is a **single-operator** studio. It does **NO per-user authorization** -- every `:id`
+route trusts the caller, ids are sequential/enumerable, and `GET /api/cast/export/:id` returns a
+full character bundle (portrait + LoRA + bible) by id. You **MUST** put the Studio Worker behind
+an authenticating proxy (**Cloudflare Access** or equivalent) on **every** hostname it serves --
+including the `*.workers.dev` host (disable it with `workers_dev = false`, or cover it with the
+same Access app). Do **NOT** deploy multi-tenant or on an unauthenticated route, or any visitor
+can read and delete every project, cast member, and film by walking the ids.
+
+Arm the in-code backstop too: set `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` (your Zero Trust team
+hostname + the Access application AUD) so the Worker itself verifies the Access JWT and FAILS
+CLOSED, instead of trusting the edge alone. See [SECURITY.md](SECURITY.md).
+
+---
+
 ## 1. Accounts you need
 
 | Provider | What it is | Sign up |

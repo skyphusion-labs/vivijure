@@ -139,6 +139,20 @@ the GPU work hits whatever endpoint you point it at; the artifacts land in your 
 
 ## Quick start
 
+> ### ⚠️ Security requirement: this is a SINGLE-OPERATOR studio
+>
+> Vivijure performs **NO per-user authorization**. Every `:id` route (`/api/cast/:id`,
+> `/api/storyboard/projects/:id`, `/api/render/film/:id`, `GET /api/cast/export/:id`, ...) trusts the
+> caller; ids are sequential integers (trivially enumerable), and the cast-export route returns a
+> whole character bundle (portrait + LoRA + bible) by id. This is safe ONLY when exactly one operator
+> can reach the Worker.
+>
+> You MUST place the Worker behind an authenticating proxy (**Cloudflare Access** or equivalent) on
+> **every** hostname it serves -- including the `*.workers.dev` host. Do **NOT** deploy it multi-tenant
+> or on any unauthenticated route. The Worker also ships an in-code Access JWT backstop (set
+> `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`) that fails closed once armed; see
+> [docs/SECURITY.md](docs/SECURITY.md).
+
 ### Guided installer
 
 One command stands the whole stack up on **your own** Cloudflare + RunPod accounts (bring your own keys
