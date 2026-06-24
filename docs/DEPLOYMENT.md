@@ -47,10 +47,15 @@ Scope it to **your account only** (Account Resources -> Include -> your account)
 | `Account > Workers R2 Storage > Edit` | Create + write the two buckets: render outputs (`vivijure`) and the doc/RAG store (`skyphusion-llm`). |
 | `Account > AI Gateway > Read` | Resolve the AI Gateway the LLM features route through. |
 | `Account > Account Settings > Read` | `wrangler` reads account metadata at deploy time. |
+| `Account > Secrets Store > Edit` | Bind module secrets from the Cloudflare Secrets Store at deploy (the `[[secrets_store_secrets]]` blocks). Binding a store secret to a worker is a write-level association, so READ is NOT enough -- without Edit the deploy fails with `Secrets store binding authorization failed [code: 10021]`. |
 
 > Why so specific: each line maps to a real deploy step below. If a module never touches D1, its
 > token never gets D1. This is the whole "least-privilege per function" idea -- you can hand the
 > Workers-only token to CI and keep D1/R2 admin off the build runner.
+>
+> NOTE: `wrangler deploy --dry-run` validates binding CONFIG but does NOT authorize a Secrets
+> Store binding against the live API -- only a real deploy does. A dry-run can pass while the deploy
+> still 10021s on a token missing `Secrets Store > Edit`. Verify store-backed bindings with a real deploy.
 
 Store it for CI as the repo secret `CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID` (your
 account id -- an identifier, not a secret).
