@@ -52,7 +52,16 @@
     <section class="cast-list-pane">
       <header class="cast-list-header">
         <h2 class="cast-stage-title">your cast</h2>
-        <button id="cast-new-btn" type="button" class="cast-new-btn">+ new character</button>
+        <div class="cast-list-actions">
+          <!-- #324: import a portable .vvcast bundle. The picker posts the raw
+               file bytes to POST /api/cast/import; the new cast appears in the
+               list on success, the server's error message is shown on failure. -->
+          <label class="cast-import-btn" title="import a .vvcast cast bundle">
+            import
+            <input id="cast-import-file" type="file" accept=".vvcast,application/x-tar" hidden />
+          </label>
+          <button id="cast-new-btn" type="button" class="cast-new-btn">+ new character</button>
+        </div>
       </header>
       <div id="cast-list-status" class="cast-list-status"></div>
       <ul id="cast-list" class="cast-list"></ul>
@@ -62,6 +71,10 @@
       <header class="cast-editor-header">
         <input id="cast-name" type="text" class="cast-name-input" placeholder="character name" />
         <span id="cast-slug" class="cast-slug" title="stable URL slug; does not change when you rename"></span>
+        <!-- #324: export this cast as a portable .vvcast bundle. Plain GET
+             download link (href + download filename set per selection in
+             cast.js); no JS fetch needed for the happy path. -->
+        <a id="cast-export-link" class="cast-secondary-btn cast-accent-outline" href="" download hidden>export .vvcast</a>
         <button id="cast-save-btn" type="button" class="cast-save-btn" disabled>save changes</button>
       </header>
 
