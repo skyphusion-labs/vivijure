@@ -17,8 +17,8 @@ export function passthroughOutput(
   const out: FinishOutput = {
     shot_id: input.shot_id,
     clip_key: input.clip_key,
-    out_fps: input.src_fps,
-    frames: input.frames,
+    out_fps: input.src_fps ?? 24,
+    frames: input.frames ?? 0,
     applied: [`${degraded ? "passthrough" : "noop"}:${reason}`],
   };
   if (degraded) out.degraded = opts.detail ? `${reason}: ${opts.detail}` : reason;
