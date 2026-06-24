@@ -35,6 +35,7 @@ import {
 } from "./cast-media";
 import { exportCastBundle, importCastBundle } from "./cast-bundle";
 import { gateApiRequest } from "./access-auth";
+import { isSpendRoute, enforceSpendLimit } from "./rate-limit";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
 import {
@@ -1123,6 +1124,17 @@ export default {
     const studioPage = STUDIO_PAGE_ASSETS[url.pathname];
     if (studioPage && (request.method === "GET" || request.method === "HEAD")) {
       return serveStudioAsset(env, request, url, studioPage);
+    }
+    // F3: rate-limit the GPU/spend routes (denial-of-wallet). Fails OPEN if the limiter is
+    // unbound/errors -- availability-protective, never blocks a legit render. See src/rate-limit.ts.
+    if (isSpendRoute(request.method, url.pathname)) {
+      const rl = await enforceSpendLimit(request, env);
+      if (!rl.ok) {
+        return new Response(JSON.stringify({ error: "rate limited: too many render/spend requests; slow down" }), {
+          status: 429,
+          headers: { "content-type": "application/json; charset=utf-8", "retry-after": String(rl.retryAfter) },
+        });
+      }
     }
     const hit = match(API_ROUTES, request.method, url.pathname);
     if (hit) {
