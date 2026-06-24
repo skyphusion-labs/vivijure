@@ -25,8 +25,8 @@ import {
 import { buildI2vBody, readOutput, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./i2v";
 
 interface Env {
-  RUNPOD_API_KEY: string;
-  RUNPOD_ENDPOINT_ID: string;
+  RUNPOD_API_KEY: SecretsStoreSecret;
+  RUNPOD_ENDPOINT_ID: SecretsStoreSecret;
 }
 
 // Exported so the core's tier-drift guard (tests/quality-tier-drift.test.ts, issue #124) can assert
@@ -50,9 +50,31 @@ export const MANIFEST: ModuleManifest = {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
-const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
-const endpoint = (env: Env) => "https://api.runpod.ai/v2/" + env.RUNPOD_ENDPOINT_ID;
-const configured = (env: Env) => Boolean(env.RUNPOD_API_KEY && env.RUNPOD_ENDPOINT_ID);
+const auth = (apiKey: string) => ({ authorization: "Bearer " + apiKey });
+const endpoint = (endpointId: string) => "https://api.runpod.ai/v2/" + endpointId;
+const configured = (apiKey: string, endpointId: string) => Boolean(apiKey && endpointId);
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
+
+/** Resolve both RunPod secrets once per request. */
+async function runpodCreds(env: Env): Promise<{ apiKey: string; endpointId: string }> {
+  const [apiKey, endpointId] = await Promise.all([
+    secretValue(env.RUNPOD_API_KEY),
+    secretValue(env.RUNPOD_ENDPOINT_ID),
+  ]);
+  return { apiKey, endpointId };
+}
 
 /** /invoke: validate, submit the i2v_clip job to our backend, return a poll token immediately. */
 async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise<InvokeResponse<MotionBackendOutput>> {
@@ -60,11 +82,12 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
   if (!input || !input.prompt || !input.shot_id) {
     return { ok: false, error: "motion.backend: input needs shot_id and prompt" };
   }
-  if (!configured(env)) return { ok: false, error: "own-gpu: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!configured(apiKey, endpointId)) return { ok: false, error: "own-gpu: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
   try {
-    const r = await fetch(endpoint(env) + "/run", {
+    const r = await fetch(endpoint(endpointId) + "/run", {
       method: "POST",
-      headers: { ...auth(env), "content-type": "application/json" },
+      headers: { ...auth(apiKey), "content-type": "application/json" },
       body: JSON.stringify(buildI2vBody(input, req.config, req.context.project)),
     });
     if (!r.ok) return { ok: false, error: "own-gpu /run -> " + r.status };
@@ -81,12 +104,13 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBackendOutput>> {
   const st = decodePoll(body.poll);
   if (!st) return { ok: false, error: "own-gpu: bad poll token" };
-  if (!configured(env)) return { ok: false, error: "own-gpu: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!configured(apiKey, endpointId)) return { ok: false, error: "own-gpu: RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID not configured" };
 
   let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    const resp = await fetch(endpoint(env) + "/status/" + st.jobId, { headers: auth(env) });
+    const resp = await fetch(endpoint(endpointId) + "/status/" + st.jobId, { headers: auth(apiKey) });
     httpStatus = resp.status;
     s = (await resp.json()) as typeof s;
   } catch {
