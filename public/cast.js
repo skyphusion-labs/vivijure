@@ -237,6 +237,7 @@
     $("#cast-bible").value = c.bible || "";
     $("#cast-voice").value = c.voice_id || "";
     $("#cast-slug").textContent = "/" + c.slug;
+    updateExportLink(c); // #324: point the .vvcast download at this cast
     restoreTrainingStyle(c.id); // v0.135.13: per-character training art-style
 
     const img = $("#cast-portrait-img");
@@ -326,6 +327,46 @@
     renderCastList();
   }
 
+  // #324: point the export link at the selected cast and label the download
+  // with its slug. GET /api/cast/export/:id is a side-effect-free download, so
+  // a plain <a download> link is all the happy path needs. The server sets
+  // Content-Disposition; the download attr is the matching browser fallback.
+  function updateExportLink(c) {
+    const link = $("#cast-export-link");
+    if (!link) return;
+    if (!c) {
+      link.hidden = true;
+      link.removeAttribute("href");
+      return;
+    }
+    link.href = "/api/cast/export/" + c.id;
+    link.setAttribute("download", (c.slug || "cast") + ".vvcast");
+    link.hidden = false;
+  }
+
+  // #324: import a .vvcast bundle. POST the raw file bytes; on 201 the new cast
+  // joins the list and opens, on failure the server's ACTUAL error message is
+  // surfaced (fail loud: no fake success, no swallowing the error). All status
+  // text flows through setListStatus -> textContent, so an untrusted imported
+  // cast name or server error string can never inject markup (no XSS).
+  async function importBundle(file) {
+    if (!file) return;
+    setListStatus("importing " + file.name + "...");
+    try {
+      // Body is the raw file bytes. Content-Type is not enforced by the
+      // importer (the bytes are magic-validated via the manifest), so we let
+      // the browser send the file blob as-is.
+      const data = await api("/api/cast/import", { method: "POST", body: file });
+      const cast = data && data.cast;
+      if (!cast) throw new Error("import returned no cast");
+      state.cast.unshift(cast);
+      selectCast(cast.id);
+      setListStatus("imported " + cast.name + ".");
+    } catch (e) {
+      setListStatus("import failed: " + e.message, true);
+    }
+  }
+
   async function newCast() {
     const name = window.prompt("character name?");
     if (!name || !name.trim()) return;
@@ -363,6 +404,7 @@
       markDirty(false);
       renderCastList();
       $("#cast-slug").textContent = "/" + data.cast.slug;
+      updateExportLink(data.cast); // #324: slug may have changed; refresh filename
     } catch (e) {
       window.alert("save failed: " + e.message);
     }
@@ -1117,6 +1159,14 @@
 
   function wire() {
     $("#cast-new-btn").addEventListener("click", newCast);
+    const importFile = $("#cast-import-file"); // #324: import a .vvcast bundle
+    if (importFile) {
+      importFile.addEventListener("change", (e) => {
+        const f = e.target.files && e.target.files[0];
+        importBundle(f);
+        e.target.value = ""; // reset so the same file can be re-picked
+      });
+    }
     $("#cast-save-btn").addEventListener("click", saveCast);
     $("#cast-delete-btn").addEventListener("click", deleteSelected);
     $("#cast-portrait-clear").addEventListener("click", clearPortrait);

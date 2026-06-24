@@ -281,6 +281,16 @@ body.sw-open .planner-layout { overflow-x: hidden; }
   color: var(--bg); background: linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 .cast-new-btn:hover { filter: brightness(1.08); }
+/* #324: list-header action cluster (import + new). The import control is a
+   <label> wrapping a hidden file input, styled as a pill to sit beside the
+   gradient "new character" button. */
+.cast-list-actions { display: flex; align-items: center; gap: 8px; }
+.cast-import-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+}
+.cast-import-btn:hover { border-color: var(--accent); }
 .cast-list-status { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .cast-list-status.is-error { color: #ff7a8a; }
 
