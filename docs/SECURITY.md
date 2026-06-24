@@ -30,6 +30,32 @@ Artifacts are served by R2 key with no per-row ownership check. This is safe **o
 whole worker is Access-gated and single-tenant: there is exactly one operator, so "serving by key"
 cannot cross an ownership boundary (there is none). This property depends entirely on section 1.
 
+## 1a. In-Worker Access verification backstop (F2)
+
+Section 1's edge boundary is a single point of failure: one Access-config gap (a hostname the app
+does not cover, e.g. a published `workers.dev` route) reopens the whole API. To make that
+un-reopenable, the Worker can ALSO verify the Access JWT itself (`src/access-auth.ts`). When armed,
+it FAILS CLOSED: every `/api/*` request must carry a `Cf-Access-Jwt-Assertion` whose RS256
+signature verifies against the team JWKS (`https://<team>/cdn-cgi/access/certs`) and whose `aud`,
+`iss`, and `exp`/`nbf` match. Absent, malformed, expired, wrong-audience, unknown-key, bad-signature,
+or unverifiable (JWKS unreachable with no cached key) => denied. `/health` and `/welcome` stay open.
+
+**Arming it (config, not secrets -> `wrangler.toml [vars]`):** set `ACCESS_TEAM_DOMAIN` (the Zero
+Trust team hostname) and `ACCESS_AUD` (the Access application AUD tag). When BOTH are set the gate
+enforces. When unset the backstop is NOT armed: the Worker allows `/api/*` (relying solely on the
+edge gate, the pre-F2 model) and logs a loud one-time warning. **Production MUST arm it.**
+
+> ### LOAD-BEARING CAVEAT: internal callers must carry a JWT before arming
+>
+> Arming the backstop denies any caller WITHOUT a valid Access JWT. Email-identity and Access
+> **service-token** callers carry one (a service token's JWT has `common_name` instead of `email`;
+> the gate checks the signature + `aud`, NOT an email claim, so service tokens pass). But a
+> **production-IP BYPASS** policy admits traffic with NO JWT -- so the internal callers that today
+> reach `/api/*` via IP bypass (the GPU backend, the Slate bot) would be DENIED the moment the
+> backstop is armed. Before arming, migrate those callers OFF the IP bypass and ONTO Access service
+> tokens (each its own scoped token, per section 4). This both fixes the conflict and is strictly
+> stronger than IP allow-listing. Arming without this migration is a self-inflicted outage.
+
 ## 2. Job ids are capabilities (possession = access)
 
 Several mutating routes are keyed by a job id (`WHERE job_id = ?`): render progress/finish updates,
@@ -103,6 +129,8 @@ schemes, and control/non-ASCII bytes from steering an object reference.
 - [ ] New module field -> internal/secret values stay off the `GET /api/modules` projection.
 - [ ] New R2/key consumer -> mint a per-function, least-privilege token (Object R/W, single bucket);
       do not reuse a broader token.
+- [ ] Arming the F2 backstop (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) -> first confirm EVERY internal
+      caller carries an Access JWT (service token, not IP bypass), or it will be denied.
 
 ## References
 
