@@ -225,8 +225,9 @@ export async function updateCast(
 }
 
 export async function deleteCast(env: Env, id: number): Promise<CastMember | null> {
-  // Caller is responsible for R2 cleanup of portrait_key + ref keys
-  // BEFORE calling this; we return the row so the route handler can do it.
+  // Caller is responsible for R2 cleanup of the row's artifacts (portrait_key, ref_keys,
+  // source_keys, lora_key); we return the row so the route handler can reclaim them after the
+  // D1 delete. See deleteCastArtifacts in cast-media.ts (issue #298).
   const row = await getCastById(env, id);
   if (!row) return null;
   await env.DB.prepare(
