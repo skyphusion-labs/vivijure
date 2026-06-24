@@ -40,6 +40,21 @@ content-type outside their allowlist (no `"bin"` fallback), so a scriptable type
 True cross-tenant isolation still needs an ownership model (the F13 IDOR follow-up); F4 makes these
 two endpoints safe-by-default for a downstream deployer in the meantime.
 
+### Downstream deployer requirement (F13)
+The single-operator model is **load-bearing**, and this code is public. There is NO ownership
+column or per-identity check anywhere (the identity strip #292 removed tenancy by design): every
+`:id` route -- `/api/cast/:id` (get/patch/delete/**export**), `/api/storyboard/projects/:id`,
+`/api/storyboard/renders/:id`, `/api/render/film/:id` -- trusts the caller. Ids are sequential
+integers, so they are trivially enumerable, and `GET /api/cast/export/:id` exfiltrates a whole
+character bundle (portrait + LoRA + bible) by id. A downstream operator who deploys this
+**multi-tenant, or on a hostname without an Access app, is handed a horizontal IDOR** across all
+casts/projects/renders/films.
+
+This is intentional (anti-SaaS; we are NOT building a multi-tenant authz layer). The requirement
+is therefore a HARD deploy rule, not a code feature: **run this single-operator, behind an
+authenticating proxy on EVERY hostname, never on an unauthenticated route.** Arm the F2 backstop
+(below) so the reference Worker also fails closed in code, not by documentation alone.
+
 ## 1a. In-Worker Access verification backstop (F2)
 
 Section 1's edge boundary is a single point of failure: one Access-config gap (a hostname the app
