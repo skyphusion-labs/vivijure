@@ -160,6 +160,14 @@ export interface FilmJob {
   // keyframe_recovered: the motion.backend (own-gpu) poll can return pending forever on a GC'd RunPod
   // job while the finished clip already sits in R2; recovery collects them by shot name and advances.
   clips_recovered?: boolean;
+  // Wall-clock of the last REAL per-shot progress (#136): re-stamped by advanceFilmJob when the
+  // current phase's done-count advances (a clip/finish/speech shot completed) OR on a phase
+  // transition. The UI stall signal measures against THIS, not phase_started_at, so a healthy
+  // multi-shot clips/finish phase (10 i2v shots at ~3min each = 30+min in ONE phase) no longer
+  // false-trips "stalled". The driver's recovery still measures from phase_started_at (unchanged).
+  last_progress_at?: number;
+  // The progress fingerprint last seen ("<phase>:<doneCount>"); any change is genuine forward progress.
+  progress_marker?: string;
   error?: string;
   created_at: number;
 }
@@ -1572,6 +1580,19 @@ export function phaseAgeSeconds(job: FilmJob, now: number = Date.now()): number 
   return Math.max(0, Math.floor((now - since) / 1000));
 }
 
+/** Progress fingerprint for the stall signal (#136): the current phase plus how many of its per-shot
+ *  units are done. Monotonic within a phase (shots only go pending->done) and it changes on every phase
+ *  transition, so ANY change is genuine forward progress -- which is what re-stamps last_progress_at.
+ *  Phases with no per-shot fan-out (keyframe/dialogue/assemble/master/mux) report :0, so their stall
+ *  window runs from when the phase began, exactly as before. */
+export function filmProgressMarker(job: FilmJob, clipJob: ClipJob | null): string {
+  let done = 0;
+  if (job.phase === "clips") done = (clipJob?.shots || []).filter((s) => s.status === "done").length;
+  else if (job.phase === "finish") done = (job.finish_shots || []).filter((fs) => fs.status === "done").length;
+  else if (job.phase === "speech") done = (job.speech_shots || []).filter((ss) => ss.status === "done").length;
+  return `${job.phase}:${done}`;
+}
+
 /** List the keyframe PNGs the GPU wrote for a project and join them to the job's scenes. The keyframe
  *  stage writes `renders/<project>/keyframes/<shot_id>.png` itself (its own R2 creds; see the keyframe
  *  module), so the core can recover an orphaned keyframe phase straight from R2 presence -- no GPU re-
@@ -1816,12 +1837,26 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
     await putFilm(env, job);
   }
 
+  // Re-stamp the stall clock on REAL progress (#136). The clips/finish/speech phases advance per shot
+  // over many minutes inside ONE phase, so a UI stall signal measured from phase_started_at alone cries
+  // wolf on a healthy long phase. filmProgressMarker changes on any finished shot (or a phase
+  // transition), so a change is genuine progress -> refresh last_progress_at. The DRIVER's recovery
+  // (phaseAgeSeconds + the 90min ceiling) deliberately still measures from phase_started_at; this only
+  // fixes the in-flight UI signal, never the recovery semantics.
+  const marker = filmProgressMarker(job, clipJob);
+  const progressed = marker !== job.progress_marker;
+  if (progressed) {
+    job.progress_marker = marker;
+    job.last_progress_at = Date.now();
+  }
   // On any phase transition this tick, stamp when the new phase began (the stall recovery measures
   // against it) and persist. The phase legs above already persisted on the paths they took; this also
   // covers a recovery that failed the job at the ceiling (no leg ran after it), so that verdict lands
   // in R2. putFilm is an idempotent re-PUT, so the belt-and-suspenders double write is harmless.
   if (job.phase !== entryPhase) {
     job.phase_started_at = Date.now();
+    await putFilm(env, job);
+  } else if (progressed) {
     await putFilm(env, job);
   }
 
