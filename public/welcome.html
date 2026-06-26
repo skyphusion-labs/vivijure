@@ -22,11 +22,10 @@
     <meta name="twitter:description" content="Write a storyboard, render it to video on your own GPU. Bring your own GPU and keys, own every artifact, no subscription, no lock-in." />
     <meta name="twitter:image" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.jpg" />
     <meta name="twitter:image:alt" content="A still from the Vivijure speaks showcase film." />
-    <!-- PRE-LAUNCH GATE: keep the storefront dark (out of search) until Conrad launches.
-         AT LAUNCH: delete this robots line (or set content to "index, follow") to make /welcome findable.
-         No og:url / <link rel=canonical> on purpose: those would bake one deploy domain into the
-         shipped artifact; the canonical host is a per-deploy value, set it at deploy if wanted. -->
-    <meta name="robots" content="noindex" />
+    <!-- The storefront is meant to be discoverable: /welcome is the public Access bypass and
+         the project showcase. No og:url / <link rel=canonical> on purpose: those would bake one
+         deploy host into the shipped artifact; the canonical host is a per-deploy value. -->
+    <meta name="robots" content="index, follow" />
     <!-- Styles are inlined on purpose: the page is one self-contained file so the only
          vivijure-domain path that needs a public Access bypass is /welcome itself. The
          showcase film and poster live on assets.skyphusion.net (separate public domain). -->
