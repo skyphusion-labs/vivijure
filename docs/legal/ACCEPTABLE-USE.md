@@ -11,14 +11,24 @@
 ## BLUF
 
 Vivijure is a generative image and video tool. Powerful creative tools get abused, so the lines have
-to be bright. This policy says what you may not make or do with the hosted Vivijure instance at
-`vivijure.skyphusion.org`. The hardest line is at the top: **no sexual content involving minors,
-ever, full stop.** Everything else flows from "do not use this tool to make illegal content or to
-hurt real people."
+to be bright. The hardest line is at the top: **no sexual content involving minors, ever, full
+stop.** Everything else flows from "do not use this tool to make illegal content or to hurt real
+people."
 
-This AUP applies to the **hosted instance**. If you self-host, you set and enforce your own use
-policy on your own instance; you also take on the legal responsibility for what your instance
-produces and hosts. (The AGPL gives you the software; it does not give you a pass on the law.)
+Vivijure is self-hosted AGPL software, not a service Skyphusion Labs operates for the public. So this
+document is two things at once:
+
+- **Conditions of use for the software and the project.** These prohibitions are a condition of using
+  Vivijure and of taking part in the project and its community. They are also the use policy Conrad
+  applies to his own private instance at `vivijure.skyphusion.org` (which is restricted to Conrad and
+  the crew).
+- **A model policy any operator can adopt.** If you self-host, you set and enforce your own use
+  policy on your own instance, and you take on the legal responsibility for what your instance
+  produces and hosts. This document is a conservative starting point you are free to use. (The AGPL
+  gives you the software; it does not give you a pass on the law.)
+
+Skyphusion Labs maintains the software and does not host or manage instances for other people. There
+is no central platform here; there is software people run themselves.
 
 ---
 
@@ -30,17 +40,23 @@ or appears to be a minor in sexual or sexualized content, and any attempt to "ag
 such content.
 
 This is zero-tolerance. There is no artistic, satirical, fictional, or "it is AI so no real child was
-involved" exception. Apparent CSAM is removed, the access is terminated immediately, and the matter is
-**reported to the appropriate authorities** (for the hosted instance, this includes reporting to the
-National Center for Missing & Exploited Children (NCMEC) and/or law enforcement as required).
-(**Attorney flag:** US providers have specific CSAM reporting duties under 18 U.S.C. 2258A; the exact
-reporting workflow and any preservation duties should be confirmed with counsel before launch.)
+involved" exception. This prohibition is an absolute condition of using the software and of any
+participation in the project.
+
+Because Vivijure is self-hosted, the operator of each instance is the party that removes apparent
+CSAM, terminates the offender's access, and makes any required report to the appropriate authorities,
+including the National Center for Missing & Exploited Children (NCMEC) and/or law enforcement. On
+Conrad's own private instance, Conrad is that operator. Skyphusion Labs maintains the software and
+does not run instances for others, so the reporting and preservation duties for any given instance
+fall on that instance's operator. (Note: US operators may have specific reporting and preservation
+duties under 18 U.S.C. 2258A; each operator should confirm the exact workflow for their own instance
+and jurisdiction.)
 
 ---
 
 ## 2. Other prohibited content and uses
 
-You may not use the hosted instance to create, train models for, or distribute:
+You may not use Vivijure to create, train models for, or distribute:
 
 ### 2.1 Non-consensual intimate imagery (NCII)
 Sexual or nude depictions of a real, identifiable person created or shared without that person's
@@ -57,9 +73,9 @@ result is intended or likely to deceive, defame, defraud, harass, or exploit. Th
 
 (Consensual creative work involving a person who has actually agreed, and clearly-labeled satire or
 commentary that does not deceive, are different; but the burden is on you to have that consent and to
-not cross into the harms above. **Attorney flag:** likeness, publicity, and deepfake law is
-fast-moving and varies by state and country; this section states a conservative floor, not a legal
-opinion.)
+not cross into the harms above. Likeness, publicity, and deepfake law is fast-moving and varies by
+state and country; this section states a conservative floor, and it is your responsibility, as the
+person using Vivijure, to comply with the laws that apply to you.)
 
 ### 2.3 Hateful, harassing, and violent content
 - Content that demeans, dehumanizes, or incites hatred or violence against people based on a protected
@@ -75,14 +91,15 @@ opinion.)
 - Malware, or content designed to compromise systems.
 - Infringing other people's copyright, trademark, or other intellectual-property rights (for example,
   training a model on, or reproducing, protected work you have no right to use).
-- Attempts to break, evade, or abuse the service: bypassing the access gate, evading rate limits,
+- Attempts to break, evade, or abuse an instance: bypassing the access gate, evading rate limits,
   scraping, or burning the operator's compute budget (denial-of-wallet).
 
 ### 2.5 Sexual content generally (operator's call)
-Adult sexual content involving consenting adults is a policy choice the operator makes for their
-instance. (**Operator decision needed before launch:** state plainly whether the hosted instance
-permits, restricts, or prohibits adult NSFW content. Whatever the choice, Sections 1 and 2.1-2.2
-remain absolute regardless.)
+Adult sexual content involving consenting adults is a policy choice each operator makes for their own
+instance. On Conrad's own private instance (`vivijure.skyphusion.org`), which is restricted to Conrad
+and the crew with no outside users authorized, the generation of adult NSFW content is permitted for
+now, at the operator's discretion and subject to change. Whatever an operator chooses, Sections 1 and
+2.1-2.2 (CSAM, NCII, non-consensual deepfakes and likeness abuse) remain absolute regardless.
 
 ---
 
@@ -93,12 +110,14 @@ remain absolute regardless.)
   into the studio (your own photos, properly licensed material, or material you otherwise have the
   right to use).
 - You will not use outputs in a way that breaks the law or this policy after they leave the studio.
+- It is your responsibility to comply with the laws that apply to you and the place you operate from.
 
 ---
 
 ## 4. Enforcement posture
 
-We keep enforcement proportionate but firm:
+Enforcement is whatever the operator of an instance applies, kept proportionate but firm. On Conrad's
+own private instance, Conrad enforces it directly. A model posture:
 
 - **CSAM:** immediate removal, immediate termination, and reporting to authorities. No warning.
 - **Other serious violations** (NCII, non-consensual deepfakes used to harm, targeted harassment,
@@ -107,17 +126,18 @@ We keep enforcement proportionate but firm:
 - **Lesser or ambiguous violations:** the operator may remove content, warn, restrict, or suspend
   access at their discretion.
 
-Because the hosted instance is single-operator and access-gated, enforcement is the operator's
-direct action: removing the offending content/files, revoking the violator's access, and preserving
-or reporting evidence where required. The operator may act on a good-faith belief that a violation
-has occurred and is not obligated to host content while investigating.
+Because an instance is single-operator and access-gated, enforcement is the operator's direct action:
+removing the offending content/files, revoking the violator's access, and preserving or reporting
+evidence where required. The operator may act on a good-faith belief that a violation has occurred and
+is not obligated to host content while investigating.
 
 ---
 
 ## 5. Reporting abuse
 
-If you encounter content or use that violates this policy, report it to:
-**`PLACEHOLDER -- abuse/report contact`** (e.g. an `abuse@` address; set before launch).
+If you encounter content or use that violates this policy **on Conrad's private instance**, or that
+involves the Vivijure project itself, report it to **abuse@skyphusion.org**. For any other instance,
+report to whoever operates that instance; Skyphusion Labs does not run it and cannot act on it.
 
 For suspected CSAM specifically, you may also report directly to NCMEC (CyberTipline) and/or law
 enforcement.
@@ -125,27 +145,29 @@ enforcement.
 When you report, include enough to locate the content (what, where, when) without yourself
 downloading, copying, or redistributing illegal material.
 
-We handle reports in good faith, prioritize the most serious first (CSAM and imminent-harm reports
-ahead of everything), act on what we can verify, and do not retaliate against good-faith reporters.
+Reports about Conrad's instance or the project are handled in good faith, with the most serious first
+(CSAM and imminent-harm reports ahead of everything), acting on what can be verified, and without
+retaliation against good-faith reporters.
 
 ---
 
 ## 6. Relationship to the other documents
 
-- The **Terms of Service** govern the overall agreement, including that violating this AUP can end
-  your access.
-- The **Privacy Policy** describes what data the service handles.
-- Copyright-specific complaints (DMCA) are handled under the takedown process in the Terms of Service,
-  not this AUP, though infringing use also violates Section 2.4 here.
+- The **Terms** govern the overall agreement for using the software and the project, including that
+  violating this AUP can end your access to Conrad's instance and your standing in the project.
+- The **Privacy Policy** describes what data the software handles, and why Skyphusion Labs holds none
+  of it (you self-host).
+- Copyright-specific complaints (DMCA) are handled under the takedown process in the Terms, not this
+  AUP, though infringing use also violates Section 2.4 here.
 
 ---
 
 ## Open items that need a licensed attorney before launch
 
-1. **CSAM reporting mechanics** under 18 U.S.C. 2258A (NCMEC reporting, evidence preservation, what
-   the operator may and may not retain), confirmed for the operator's jurisdiction.
-2. **The adult-NSFW decision** (Section 2.5) -- operator policy choice, then conform the document.
-3. **Deepfake / likeness / publicity-rights wording** against the operator's actual jurisdiction(s),
+1. **CSAM reporting mechanics** under 18 U.S.C. 2258A (NCMEC reporting, evidence preservation, what an
+   operator may and may not retain), confirmed for each operator's jurisdiction. Conrad should confirm
+   the workflow for his own private instance.
+2. **Deepfake / likeness / publicity-rights wording** against the operator's actual jurisdiction(s),
    which are changing quickly.
-4. **Whether and how the operator preserves evidence** of violations consistent with privacy law and
+3. **Whether and how an operator preserves evidence** of violations consistent with privacy law and
    any legal-hold duty.

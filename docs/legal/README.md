@@ -8,23 +8,33 @@ they are not adopted, not wired into the app, and not a substitute for a license
 load-bearing terms (liability caps, governing law, DMCA agent registration, jurisdiction-specific
 compliance). Every document ends with an explicit "needs a licensed attorney" list.
 
+**Important framing:** Vivijure is **self-hosted AGPL software**, not a service Skyphusion Labs
+operates for the public. People run Vivijure themselves, on their own infrastructure (their own
+Cloudflare account, their own GPU/RunPod). Skyphusion Labs maintains the software and does not run a
+hosted, multi-tenant, sign-up service. The only instance Skyphusion Labs runs is Conrad's own private,
+gated instance at `vivijure.skyphusion.org` (for Conrad and the crew, plus the Slate Discord bot via
+an access service token), which is not a public offering anyone signs up for. These documents are
+written accordingly: use terms for the software and the project, an honest privacy baseline (you
+self-host, so we never see your data), and a code of conduct for the project and Conrad's instance.
+
 ## The documents
 
 | File | What it is |
 |---|---|
-| [`PRIVACY.md`](PRIVACY.md) | Privacy policy. Lead promise: self-host and we never see a byte. Hosted-instance data handling is data-minimized to the bone and grounded in the real schema, storage, logging, and processing path. |
-| [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) | Acceptable Use Policy. Prohibited content for a public generative image/video tool. CSAM is the zero-tolerance red line; also NCII, non-consensual deepfakes/likeness, hate/harassment, and other illegal use. Plus enforcement and reporting. |
-| [`TERMS.md`](TERMS.md) | Terms of Service for the hosted instance. AS-IS disclaimer, liability, input/output ownership, the AGPL interplay, DMCA + designated-agent placeholder, termination, governing-law placeholder, and passed-through provider terms. |
+| [`PRIVACY.md`](PRIVACY.md) | Privacy policy. Lead promise made literal: you self-host, so Skyphusion Labs never sees a byte; there is no hosted service collecting user data. Describes what the software stores on the operator's own infrastructure, and what Conrad's own private instance does, grounded in the real schema, storage, logging, and processing path. |
+| [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) | Acceptable Use Policy. Conditions of use for the software and a code of conduct for the project and Conrad's instance. CSAM is the zero-tolerance red line; also NCII, non-consensual deepfakes/likeness, hate/harassment, and other illegal use. Plus enforcement and reporting. |
+| [`TERMS.md`](TERMS.md) | Terms of Use for the software and the project (not a SaaS agreement), plus the conditions for Conrad's own instance. AS-IS disclaimer, liability, input/output ownership, the AGPL interplay, DMCA + designated agent, termination, governing-law placeholder, and passed-through provider terms. |
 
 ## Scope
 
 - **The software** is governed by the **AGPL-3.0-only** license (see the repository `LICENSE` and
   `NOTICE`). These documents do not change that.
-- **The hosted service** at `vivijure.skyphusion.org` is what the Privacy Policy and Terms of Service
-  govern. The studio is single-operator by design (see `../SECURITY.md`); there are no public
-  accounts, which is why the privacy story is as small as it is.
-- **Self-hosters** operate their own instances and take on their own legal posture; the hosted-service
-  documents do not bind them.
+- **The project and Conrad's own instance** at `vivijure.skyphusion.org` are what the Privacy Policy
+  and Terms describe. The studio is single-operator by design (see `../SECURITY.md`); there are no
+  public accounts, which is why the privacy story is as small as it is. Skyphusion Labs does not host
+  Vivijure for the public.
+- **Self-hosters** operate their own instances and take on their own legal posture; these documents are
+  a model they can adopt, not a service agreement that binds them.
 
 ## How these were grounded (so the Privacy policy is true, not vibes)
 
