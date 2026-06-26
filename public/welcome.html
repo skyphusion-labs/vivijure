@@ -14,6 +14,19 @@
     <meta property="og:type" content="website" />
     <meta property="og:image" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.jpg" />
     <meta property="og:video" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.mp4" />
+    <meta property="og:site_name" content="Vivijure" />
+    <meta property="og:image:alt" content="A still from the Vivijure speaks showcase film: a self-hosted AI film studio." />
+    <!-- Twitter / X card. Mirrors the OG showcase so a shared /welcome link renders a large media card. -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Vivijure: a self-hosted AI film studio" />
+    <meta name="twitter:description" content="Write a storyboard, render it to video on your own GPU. Bring your own GPU and keys, own every artifact, no subscription, no lock-in." />
+    <meta name="twitter:image" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.jpg" />
+    <meta name="twitter:image:alt" content="A still from the Vivijure speaks showcase film." />
+    <!-- PRE-LAUNCH GATE: keep the storefront dark (out of search) until Conrad launches.
+         AT LAUNCH: delete this robots line (or set content to "index, follow") to make /welcome findable.
+         No og:url / <link rel=canonical> on purpose: those would bake one deploy domain into the
+         shipped artifact; the canonical host is a per-deploy value, set it at deploy if wanted. -->
+    <meta name="robots" content="noindex" />
     <!-- Styles are inlined on purpose: the page is one self-contained file so the only
          vivijure-domain path that needs a public Access bypass is /welcome itself. The
          showcase film and poster live on assets.skyphusion.net (separate public domain). -->
