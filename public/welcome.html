@@ -126,8 +126,10 @@
       figure.diagram img { width: 100%; min-width: 640px; height: auto; display: block; }
       figure.diagram figcaption { color: var(--muted); font-size: 14px; margin-top: 14px; }
     </style>
-    <!-- Cloudflare Web Analytics (privacy-first: no cookies, no PII, nothing sold) -->
-  <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "cc55ea5bbe1d44a48423f59f8e5a6cc3"}'></script>
+    <!-- Cloudflare Web Analytics is DEPLOY-INJECTED, not baked in: this public artifact ships NO
+         token, so a self-hosted /welcome phones home to NO ONE (privacy-first by default). The
+         operator's own deploy sets WEB_ANALYTICS_TOKEN ([vars]) and the Worker injects the beacon
+         here at serve time (src/asset-response.ts). -->
 </head>
   <body>
     <div class="wrap">

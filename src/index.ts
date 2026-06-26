@@ -36,6 +36,7 @@ import {
 import { exportCastBundle, importCastBundle } from "./cast-bundle";
 import { gateApiRequest } from "./access-auth";
 import { isSpendRoute, enforceSpendLimit } from "./rate-limit";
+import { finalizeAssetResponse } from "./asset-response";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
 import { isSafeRelKey } from "./shared";
@@ -1142,7 +1143,8 @@ export default {
     }
     const studioPage = STUDIO_PAGE_ASSETS[url.pathname];
     if (studioPage && (request.method === "GET" || request.method === "HEAD")) {
-      return serveStudioAsset(env, request, url, studioPage);
+      const res = await serveStudioAsset(env, request, url, studioPage);
+      return finalizeAssetResponse(res, env, studioPage);
     }
     // F3: rate-limit the GPU/spend routes (denial-of-wallet). Fails OPEN if the limiter is
     // unbound/errors -- availability-protective, never blocks a legit render. See src/rate-limit.ts.
@@ -1165,7 +1167,8 @@ export default {
         return json({ error: "internal error" }, 500);
       }
     }
-    return env.ASSETS.fetch(request);
+    const assetRes = await env.ASSETS.fetch(request);
+    return finalizeAssetResponse(assetRes, env, url.pathname);
   },
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sweepUnresolvedJobs(env, ctx));
