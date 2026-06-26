@@ -36,7 +36,7 @@ import {
 import { exportCastBundle, importCastBundle } from "./cast-bundle";
 import { gateApiRequest } from "./access-auth";
 import { isSpendRoute, enforceSpendLimit } from "./rate-limit";
-import { finalizeAssetResponse } from "./asset-response";
+import { applyResponseSecurity } from "./asset-response";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
 import { isSafeRelKey } from "./shared";
@@ -1125,7 +1125,17 @@ function serveStudioAsset(env: Env, request: Request, url: URL, assetPath: strin
 }
 
 export default {
+  // Single security-header chokepoint: EVERY response routeRequest returns is stamped with the right
+  // headers for its class (CF's zone-wide managed transform is off; the worker owns headers, #370).
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    return applyResponseSecurity(await routeRequest(request, env, ctx), request, env);
+  },
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(sweepUnresolvedJobs(env, ctx));
+  },
+};
+
+async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return json({ ok: true, service: "vivijure-studio", phase: 1 });
     // F2: fail-CLOSED Access verification for the whole data plane. /health (above) + static
@@ -1143,8 +1153,7 @@ export default {
     }
     const studioPage = STUDIO_PAGE_ASSETS[url.pathname];
     if (studioPage && (request.method === "GET" || request.method === "HEAD")) {
-      const res = await serveStudioAsset(env, request, url, studioPage);
-      return finalizeAssetResponse(res, env, studioPage);
+      return serveStudioAsset(env, request, url, studioPage);
     }
     // F3: rate-limit the GPU/spend routes (denial-of-wallet). Fails OPEN if the limiter is
     // unbound/errors -- availability-protective, never blocks a legit render. See src/rate-limit.ts.
@@ -1167,10 +1176,5 @@ export default {
         return json({ error: "internal error" }, 500);
       }
     }
-    const assetRes = await env.ASSETS.fetch(request);
-    return finalizeAssetResponse(assetRes, env, url.pathname);
-  },
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(sweepUnresolvedJobs(env, ctx));
-  },
-};
+    return env.ASSETS.fetch(request);
+}
