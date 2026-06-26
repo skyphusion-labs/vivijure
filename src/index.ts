@@ -1108,6 +1108,8 @@ const API_ROUTES: Route[] = [
 // meant to be reachable without CF Access (it gets a public Access bypass on the /welcome
 // prefix), so it carries no studio data and links into the gated app rather than embedding it.
 const STUDIO_PAGE_ASSETS: Record<string, string> = {
+  "/": "/index.html",
+  "/index.html": "/index.html",
   "/welcome": "/welcome.html",
   "/welcome/": "/welcome.html",
   "/planner": "/planner.html",
