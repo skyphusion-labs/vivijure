@@ -206,24 +206,251 @@
     sel.value = value;
   }
 
-  function renderMotionPicker(mods, selected) {
-    if (mods.length <= 1) return null;
-    const wrap = document.createElement("label");
-    wrap.className = "planner-field";
-    const span = document.createElement("span");
-    span.textContent = "motion backend";
-    wrap.appendChild(span);
-    const sel = document.createElement("select");
-    sel.id = "planner-motion-backend";
-    for (const m of mods) {
-      const opt = document.createElement("option");
-      opt.value = m.name;
-      opt.textContent = moduleLabel(m);
-      sel.appendChild(opt);
+  // ---------------------------------------------------------------------------
+  // Backend selector ("one studio, two honest doors"). The motion.backend hook is
+  // pick_one: each installed motion.backend module (local consumer GPU, RunPod
+  // datacenter, any cloud i2v) is one DOOR. The choice rides the EXISTING wire field
+  // `motion_backend` (collect/restore below); this is presentation only, no new wire
+  // field. Everything shown is a PROJECTION of the registry -- nothing per-backend is
+  // hardcoded here, so a new backend door appears the instant its module is bound.
+  //
+  // Honest framing wants per-door positioning copy (locality, cost model, capability
+  // ceiling). The manifest does not yet carry those, so they are read OPTIONALLY from
+  // ui.{locality,cost,blurb,limits} and simply omitted when absent (never fabricated).
+  // Until those manifest fields land (flagged to the lead/Rollins), each door still
+  // shows registry truth: its provides[].label capabilities and the numeric ranges of
+  // its own config_schema knobs. See the run-log for the recommended manifest fields.
+
+  // Read an optional ui hint without assuming the field exists.
+  function uiHint(mod, key) {
+    return mod && mod.ui && mod.ui[key] != null ? mod.ui[key] : undefined;
+  }
+
+  // A short, human "locality" tag derived from the OPTIONAL manifest hint ui.locality.
+  // Returns null when the manifest does not declare it (so we never guess local vs cloud
+  // from a module name -- that is exactly the brittle coupling this replaces).
+  function localityTag(mod) {
+    const loc = uiHint(mod, "locality");
+    if (typeof loc !== "string") return null;
+    const v = loc.trim().toLowerCase();
+    if (v === "local") return { text: "Local (your GPU)", kind: "local" };
+    if (v === "cloud" || v === "datacenter") return { text: "Datacenter", kind: "cloud" };
+    return { text: loc.trim(), kind: "other" };
+  }
+
+  // Registry-truth capability bullets: provides[1..].label (the first label is the door
+  // title). Always real, no new fields needed.
+  function extraCapabilities(mod) {
+    const provs = Array.isArray(mod.provides) ? mod.provides : [];
+    return provs
+      .slice(1)
+      .map((p) => p && p.label && String(p.label).trim())
+      .filter(Boolean);
+  }
+
+  // Registry-truth "what you can tune" summary: each numeric (int/float) config knob with
+  // a declared range, e.g. "fps 8-30, motion (flow shift) 1-12". Skips the core-owned
+  // quality knobs and operator-only install fields. This is a quick at-a-glance ceiling
+  // hint; the full controls still render in the module's own config block below.
+  function knobRanges(mod) {
+    const schema = mod.config_schema || {};
+    const parts = [];
+    for (const key of Object.keys(schema)) {
+      const f = schema[key];
+      if (!f || (f.type !== "int" && f.type !== "float")) continue;
+      if (key === "quality" || key === "quality_tier" || f.scope === "install") continue;
+      const hasMin = typeof f.min === "number";
+      const hasMax = typeof f.max === "number";
+      if (!hasMin && !hasMax) continue;
+      const name = (f.label || key).replace(/\s*\([^)]*\)\s*/g, " ").trim();
+      let range;
+      if (hasMin && hasMax) range = f.min + "-" + f.max;
+      else if (hasMax) range = "up to " + f.max;
+      else range = "from " + f.min;
+      parts.push(name + " " + range);
     }
-    if (selected && mods.some((m) => m.name === selected)) sel.value = selected;
-    wrap.appendChild(sel);
-    return wrap;
+    return parts;
+  }
+
+  function bulletList(items) {
+    const ul = document.createElement("ul");
+    ul.className = "planner-backend-caps";
+    for (const it of items) {
+      const li = document.createElement("li");
+      li.textContent = it;
+      ul.appendChild(li);
+    }
+    return ul;
+  }
+
+  // Build one door card for a motion.backend module. `selectable` adds the radio that
+  // drives the authoritative #planner-motion-backend value; a lone backend renders as a
+  // purely informational card (no radio, no value forced -- the core resolves the only
+  // installed backend, matching prior behavior).
+  function backendDoor(mod, selectable, selected) {
+    const card = document.createElement("label");
+    card.className = "planner-backend-door";
+    card.dataset.module = mod.name;
+
+    const head = document.createElement("div");
+    head.className = "planner-backend-door-head";
+
+    if (selectable) {
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "planner-backend-door";
+      radio.value = mod.name;
+      radio.className = "planner-backend-radio";
+      radio.checked = !!selected;
+      radio.addEventListener("change", function () {
+        if (radio.checked) selectBackend(mod.name);
+      });
+      head.appendChild(radio);
+    }
+
+    const titleWrap = document.createElement("div");
+    titleWrap.className = "planner-backend-title-wrap";
+    const title = document.createElement("span");
+    title.className = "planner-backend-title";
+    title.textContent = moduleLabel(mod);
+    titleWrap.appendChild(title);
+
+    const tags = document.createElement("span");
+    tags.className = "planner-backend-tags";
+    const loc = localityTag(mod);
+    if (loc) {
+      const t = document.createElement("span");
+      t.className = "planner-backend-tag is-" + loc.kind;
+      t.textContent = loc.text;
+      tags.appendChild(t);
+    }
+    const cost = uiHint(mod, "cost");
+    if (typeof cost === "string" && cost.trim()) {
+      const c = document.createElement("span");
+      c.className = "planner-backend-tag is-cost";
+      c.textContent = cost.trim();
+      tags.appendChild(c);
+    }
+    if (tags.childNodes.length) titleWrap.appendChild(tags);
+    head.appendChild(titleWrap);
+    card.appendChild(head);
+
+    const blurb = uiHint(mod, "blurb");
+    if (typeof blurb === "string" && blurb.trim()) {
+      const p = document.createElement("p");
+      p.className = "planner-backend-blurb";
+      p.textContent = blurb.trim();
+      card.appendChild(p);
+    }
+
+    const caps = extraCapabilities(mod);
+    if (caps.length) card.appendChild(bulletList(caps));
+
+    // Honest capability ceiling: prefer the manifest's declared limits (when present),
+    // else fall back to the registry-truth knob ranges so the door is never silent.
+    const limits = uiHint(mod, "limits");
+    if (Array.isArray(limits) && limits.length) {
+      const lim = bulletList(limits.map((x) => String(x)).filter(Boolean));
+      lim.classList.add("planner-backend-limits");
+      card.appendChild(lim);
+    } else {
+      const ranges = knobRanges(mod);
+      if (ranges.length) {
+        const r = document.createElement("p");
+        r.className = "planner-backend-ranges";
+        r.textContent = "Tunable: " + ranges.join(", ") + ".";
+        card.appendChild(r);
+      }
+    }
+
+    return card;
+  }
+
+  // Set the chosen backend on the authoritative hidden <select> AND reflect the choice in
+  // the door cards. Tolerant of being called before the cards exist.
+  function selectBackend(name) {
+    const sel = document.getElementById("planner-motion-backend");
+    if (sel && name && Array.from(sel.options).some((o) => o.value === name)) {
+      sel.value = name;
+    }
+    syncBackendDoors();
+  }
+
+  // Reflect #planner-motion-backend's current value into the door radios + the selected
+  // card highlight. Called after render and from restore() so a restored choice shows.
+  function syncBackendDoors() {
+    const sel = document.getElementById("planner-motion-backend");
+    const wrap = document.getElementById("planner-motion-backend-wrap");
+    if (!wrap) return;
+    const value = sel ? sel.value : "";
+    const cards = wrap.querySelectorAll(".planner-backend-door");
+    cards.forEach((card) => {
+      const isSel = card.dataset.module === value;
+      card.classList.toggle("is-selected", isSel);
+      const radio = card.querySelector(".planner-backend-radio");
+      if (radio) radio.checked = isSel;
+    });
+  }
+
+  // Render the backend selector into motionWrap. Returns true if a real CHOICE (>= 2
+  // backends) was rendered (so the caller can mark the motion slot shown). One backend
+  // renders an informational door; zero renders nothing.
+  function renderBackendSelector(mods, motionWrap) {
+    if (!motionWrap || !mods || !mods.length) return false;
+
+    const section = document.createElement("div");
+    section.className = "planner-backend-selector";
+
+    const cap = document.createElement("div");
+    cap.className = "planner-backend-caption";
+    const capTitle = document.createElement("span");
+    capTitle.className = "planner-backend-caption-title";
+    capTitle.textContent = "Render backend";
+    cap.appendChild(capTitle);
+    const capHint = document.createElement("span");
+    capHint.className = "planner-backend-caption-hint";
+    capHint.textContent = mods.length > 1
+      ? "Pick which backend renders the motion (image-to-video) step."
+      : "This backend renders the motion (image-to-video) step.";
+    cap.appendChild(capHint);
+    section.appendChild(cap);
+
+    const doors = document.createElement("div");
+    doors.className = "planner-backend-doors";
+
+    if (mods.length > 1) {
+      // Authoritative value element: a hidden <select> keeps the collect()/restore()
+      // contract (#planner-motion-backend) byte-identical to the prior dropdown; the
+      // door radios just drive it. Default to the first backend (registry order =
+      // ui.order then name, server-sorted), matching the prior picker's preselect.
+      const sel = document.createElement("select");
+      sel.id = "planner-motion-backend";
+      sel.hidden = true;
+      sel.setAttribute("aria-hidden", "true");
+      sel.tabIndex = -1;
+      for (const m of mods) {
+        const opt = document.createElement("option");
+        opt.value = m.name;
+        opt.textContent = moduleLabel(m);
+        sel.appendChild(opt);
+      }
+      sel.value = mods[0].name;
+      section.appendChild(sel);
+
+      mods.forEach((m, i) => doors.appendChild(backendDoor(m, true, i === 0)));
+      section.appendChild(doors);
+      motionWrap.appendChild(section);
+      syncBackendDoors();
+      return true;
+    }
+
+    // Single backend: informational only. No #planner-motion-backend element, so
+    // collect() emits no motion_backend and the core resolves the one installed backend
+    // (prior behavior preserved).
+    doors.appendChild(backendDoor(mods[0], false, false));
+    section.appendChild(doors);
+    motionWrap.appendChild(section);
+    return false;
   }
 
   async function renderPanel() {
@@ -263,21 +490,19 @@
     }
 
     // Render every panel hook's module config sections in PANEL_ORDER. motion.backend additionally
-    // gets a backend <select> (own-GPU vs cloud) in its own slot above the sections. master and
-    // film.finish now render here because the hook list is the catalog, not a fixed array.
+    // gets the backend selector (the two-door chooser) in its own slot above the sections. master
+    // and film.finish now render here because the hook list is the catalog, not a fixed array.
     let motionShown = false;
     for (const h of hooks) {
       const mods = cache[h.hook] || [];
       if (h.hook === "motion.backend") {
-        const picker = renderMotionPicker(mods, mods[0] && mods[0].name);
-        if (picker && motionWrap) {
-          motionWrap.appendChild(picker);
-          motionShown = true;
-        }
+        if (renderBackendSelector(mods, motionWrap)) motionShown = true;
       }
       for (const mod of mods) root.appendChild(renderModuleSection(mod));
     }
-    if (motionWrap && !motionShown) motionWrap.hidden = true;
+    if (motionWrap && !motionShown && !motionWrap.querySelector(".planner-backend-selector")) {
+      motionWrap.hidden = true;
+    }
   }
 
   function readFieldValue(el) {
@@ -333,6 +558,7 @@
     const motionSel = document.getElementById("planner-motion-backend");
     if (motionSel && typeof overrides.motion_backend === "string") {
       motionSel.value = overrides.motion_backend;
+      syncBackendDoors();
     }
   }
 
