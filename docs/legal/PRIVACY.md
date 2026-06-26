@@ -148,14 +148,19 @@ providers, not ours. We list them so the path is transparent.
 - **RunPod** -- the serverless GPU render backend. To render, the studio hands RunPod a job and
   RunPod pulls the render bundle (storyboard, prompts, cast images, models) from R2, does the GPU
   work (keyframes, image-to-video, model training), and writes the results back to R2. Creative
-  content passes through RunPod's GPUs during a render.
-- **AI model providers, reached through Cloudflare AI Gateway** -- for storyboard planning, image
-  generation, text-to-speech, and cloud motion, the studio (and opt-in modules) send prompts/text to
-  AI providers via the gateway. Depending on what is run, this can include providers such as xAI,
-  OpenAI, Deepgram, MiniMax, and cloud image-to-video services (e.g. Seedance, Kling). Each provider
-  receives only what that specific feature sends it (e.g. prompt text, or an image to animate). Each
-  provider has its own terms and data practices, and the set of providers depends on which optional
-  modules an instance installs.
+  content passes through RunPod's GPUs during a render. For some optional modules, notably the
+  image-to-video (i2v) modules and the cast module, the RunPod backend also reaches out to external
+  AI model providers as part of doing that work, so for those modules your content reaches those
+  providers through the RunPod path (see the next entry).
+- **AI model providers (reached two ways: Cloudflare AI Gateway and RunPod)** -- for storyboard
+  planning, image generation, text-to-speech, and cloud motion, the studio (and opt-in modules) send
+  prompts/text to AI providers. Most are reached through the **Cloudflare AI Gateway**; some,
+  specifically the providers behind the image-to-video (i2v) modules and the cast module, are reached
+  from the **RunPod** backend during a render (see the RunPod entry above). Depending on what is run,
+  this can include providers such as xAI, OpenAI, Deepgram, MiniMax, and cloud image-to-video services
+  (e.g. Seedance, Kling). Each provider receives only what that specific feature sends it (e.g. prompt
+  text, or an image to animate). Each provider has its own terms and data practices, and the set of
+  providers depends on which optional modules an instance installs.
 - **The operator's own fleet** -- some non-GPU finishing steps (assembly, audio mixing, image prep)
   run on servers the operator operates directly.
 
