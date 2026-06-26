@@ -187,6 +187,35 @@ never an unbounded buffer that could OOM/DoS the core Worker.
 > for the layering decision (the generic invoke/poll transport is payload-agnostic, so enforcement
 > belongs at the per-hook terminal-consumption seams, with a test-fixture sweep).
 
+## 8. Response security headers (worker-owned, single source of truth)
+
+Cloudflare's zone-wide "Add security headers" managed transform is **OFF** (captured in IaC). The
+**Worker owns every security header**, stamped at ONE chokepoint: `applyResponseSecurity`
+(`src/asset-response.ts`), called on every response that leaves `fetch()`. Nothing else adds or
+strips them, so the matrix below is the whole truth. Headers are `set` (overwrite), never appended,
+so a re-enabled zone default could not duplicate them.
+
+The CSP is **per response class**: the known studio page routes get the strict studio policy;
+`/welcome` gets its own policy (it has one inline `<style>` block + inline `style=` attributes, so
+`style-src` allows `'unsafe-inline'` -- scripts stay strict `'self'`); **every other response**
+(the JSON API, non-HTML assets, redirects, the 429, and any non-page HTML) gets a **locked**
+`default-src 'none'` CSP. A stray or mislabeled `text/html` response on a non-page route therefore
+never receives the permissive page policy.
+
+| Response class | Content-Security-Policy | X-Content-Type-Options | X-Frame-Options | Referrer-Policy | Permissions-Policy |
+|---|---|---|---|---|---|
+| Studio pages (`/`, `/planner`, `/cast`, `/modules`, `/settings`) | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'` | `nosniff` | `DENY` | `same-origin` | `camera=(), microphone=(), geolocation=()` |
+| `/welcome` (BASE, self-host) | as studio, but `style-src 'self' 'unsafe-inline'`, `img-src`/`media-src` add `https://assets.skyphusion.net` | `nosniff` | `DENY` | `same-origin` | same |
+| `/welcome` (analytics ON: `WEB_ANALYTICS_TOKEN` set + 32-hex valid) | BASE plus `https://static.cloudflareinsights.com` on `script-src` and `https://cloudflareinsights.com` on `connect-src` | `nosniff` | `DENY` | `same-origin` | same |
+| Everything else (API/JSON, assets, redirects, 429, non-page HTML) | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'` | `nosniff` | `DENY` | `same-origin` | (none -- document-only) |
+
+`frame-ancestors 'none'` supersedes `X-Frame-Options`; the latter is kept for pre-CSP agents.
+`Permissions-Policy` is document-only, so it is set on pages, not on JSON/asset responses. The
+`/welcome` analytics CSP delta and the analytics beacon injection share ONE gate (`analyticsTokenValid`),
+so a self-hoster with no token gets neither and the two can never disagree (#363). A downstream
+deployer who re-enables a CDN/proxy header layer should keep it OFF for this origin, or reconcile it
+with this matrix, to preserve the single-source-of-truth property.
+
 ## Checklist when changing the surface
 
 - [ ] New hostname or route -> confirm the Cloudflare Access app still covers it (`/api/*` must stay
@@ -200,6 +229,9 @@ never an unbounded buffer that could OOM/DoS the core Worker.
       before acting on it (a module is community code).
 - [ ] Arming the F2 backstop (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) -> first confirm EVERY internal
       caller carries an Access JWT (service token, not IP bypass), or it will be denied.
+- [ ] New response class / route -> it flows through `applyResponseSecurity`; confirm it lands in
+      the right header class (page vs locked) per section 8. CF managed-transform header layers stay
+      OFF (the Worker is the single source of truth).
 - [ ] New GPU/paid endpoint -> add its path to `SPEND_PATTERNS` (src/rate-limit.ts) so it is
       rate-limited; an unlisted spend route is a denial-of-wallet hole.
 
@@ -209,4 +241,5 @@ never an unbounded buffer that could OOM/DoS the core Worker.
 - #10 -- jobId capability model: entropy + scoping (documented here).
 - #6 -- R2 key / presign input-boundary safety.
 - #18 -- presign credential blast radius + `/api/modules` disclosure posture.
+- #364 / #370 -- worker-owned response security headers (CSP + companions) + the per-class matrix (section 8).
 - [DEPLOYMENT.md](DEPLOYMENT.md) -- per-function key issuance and scopes.

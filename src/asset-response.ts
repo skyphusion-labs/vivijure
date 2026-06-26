@@ -1,17 +1,18 @@
-// Post-process static-asset responses on their way out of the Worker (the studio pages + welcome
-// are served from env.ASSETS; the Worker is the only place to touch them -- a public/_headers file
-// does not apply to env.ASSETS.fetch responses). Two concerns funnel through one chokepoint so the
-// asset exits stay simple:
-//   - Security headers (CSP + companions) on every HTML document.
-//   - Web Analytics deploy-injection: the public artifact ships NO analytics token, so a self-hosted
-//     /welcome phones home to NO ONE; the operator's own deploy sets WEB_ANALYTICS_TOKEN and the
-//     Worker injects the beacon at serve time. (Privacy: the self-host boundary, #363.)
+// THE single source of truth for vivijure's response security headers. Cloudflare's zone-wide
+// "Add security headers" managed transform is OFF (the worker owns headers, #370), so EVERY response
+// leaving fetch() funnels through applyResponseSecurity -- not just the HTML pages. Coverage by class:
 //
-// CSP policies are Joan's verified inventory-derived literals (not guessed): studio pages carry zero
-// inline scripts/styles, so they get the fully strict policy; /welcome has one inline <style> block
-// plus inline style= attributes (a hash cannot cover attributes), so it allows 'unsafe-inline' on
-// style-src ONLY, scripts stay strict 'self'. The analytics CSP delta and the beacon injection share
-// ONE token gate (analyticsTokenValid), so the policy and the beacon can never disagree (#363/CSP).
+//   studio pages (/, /planner, /cast, /modules, /settings)  -> strict studio CSP + companions
+//   /welcome                                                 -> welcome CSP (+ analytics beacon if a
+//                                                               valid token is set) + companions
+//   everything else (api/json, non-HTML assets, redirects,   -> baseline companions + a LOCKED CSP
+//     the 429, and any non-page HTML)                           (default-src 'none')
+//
+// Companions on every response: x-content-type-options: nosniff, referrer-policy: same-origin,
+// x-frame-options: DENY. CSP is page-specific for the known page routes and locked for everything
+// else, so a mislabeled/unknown HTML response can never get the permissive page policy. Headers are
+// SET (overwrite), never appended, so nothing duplicates. Only /welcome+analytics rewrites the body
+// (and drops the stale Content-Length/ETag); every other path streams the original body unchanged.
 
 import type { Env } from "./env";
 
@@ -33,11 +34,16 @@ export const STUDIO_CSP =
   "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; " +
   "frame-ancestors 'none'; form-action 'self'";
 
+/** Locked CSP for every NON-page response (api/json, assets, redirects, the 429, unknown HTML). A
+ *  JSON/asset response is not a document, so it should load nothing; if such a response is ever
+ *  navigated to directly (e.g. an SVG or a stray HTML), default-src 'none' neutralizes it. */
+export const LOCKED_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+
 /** CSP for /welcome. BASE (analyticsOn=false) is the self-hoster policy (no analytics origins).
- *  analyticsOn=true adds EXACTLY the two analytics origins -- static.cloudflareinsights.com on
- *  script-src and cloudflareinsights.com on connect-src -- and is gated on analyticsTokenValid, the
- *  same check the beacon injection uses. 'unsafe-inline' is on style-src only (inline <style> + style=
- *  attributes); scripts stay strict 'self'. */
+ *  analyticsOn=true adds EXACTLY static.cloudflareinsights.com on script-src and cloudflareinsights.com
+ *  on connect-src, gated on analyticsTokenValid -- the same check the beacon injection uses.
+ *  'unsafe-inline' is on style-src only (welcome has one inline <style> block + inline style= attrs;
+ *  a hash cannot cover attributes); scripts stay strict 'self'. */
 export function welcomeCsp(analyticsOn: boolean): string {
   const scriptSrc = analyticsOn ? "script-src 'self' https://static.cloudflareinsights.com" : "script-src 'self'";
   const connectSrc = analyticsOn ? "connect-src 'self' https://cloudflareinsights.com" : "connect-src 'self'";
@@ -49,23 +55,35 @@ export function welcomeCsp(analyticsOn: boolean): string {
   );
 }
 
-/** Set the security headers on an HTML response. OVERWRITE (set, not append): the CF zone already
- *  injects x-content-type-options / x-frame-options / x-xss-protection, so set() avoids duplicates.
- *  CSP frame-ancestors 'none' supersedes X-Frame-Options; X-Frame-Options: DENY is kept as a belt for
- *  pre-CSP agents. */
-function applySecurityHeaders(h: Headers, csp: string): Headers {
-  h.set("content-security-policy", csp);
+// --------------------------------------------------------------------------- header sets
+
+/** The companions present on EVERY response. set() (overwrite) so a zone default can never duplicate.
+ *  x-frame-options: DENY is kept for pre-CSP agents; CSP frame-ancestors 'none' supersedes it. */
+function companions(h: Headers): Headers {
   h.set("x-content-type-options", "nosniff");
-  h.set("x-frame-options", "DENY");
   h.set("referrer-policy", "same-origin");
+  h.set("x-frame-options", "DENY");
+  return h;
+}
+
+/** Page header set: the page-specific CSP + companions + a Permissions-Policy locking down powerful
+ *  browser features the studio never uses (documents only; pointless on a JSON/asset response). */
+function pageHeaders(h: Headers, csp: string): Headers {
+  companions(h);
+  h.set("content-security-policy", csp);
   h.set("permissions-policy", "camera=(), microphone=(), geolocation=()");
+  return h;
+}
+
+/** Baseline header set for every non-page response: companions + the locked CSP. */
+function baselineHeaders(h: Headers): Headers {
+  companions(h);
+  h.set("content-security-policy", LOCKED_CSP);
   return h;
 }
 
 // --------------------------------------------------------------------------- analytics beacon
 
-/** Build the Cloudflare Web Analytics beacon for a token. JSON.stringify escapes the token safely
- *  into the data-cf-beacon attribute. */
 function beaconTag(token: string): string {
   return (
     `<script defer src="https://static.cloudflareinsights.com/beacon.min.js" ` +
@@ -84,37 +102,57 @@ export function injectWelcomeBeacon(html: string, token: string): string {
   return html.slice(0, idx) + `  ${beaconTag(token.trim())}\n` + html.slice(idx);
 }
 
-// --------------------------------------------------------------------------- finalizer
+// --------------------------------------------------------------------------- page classification
 
-/** True for an asset path that is the public welcome page (served at /welcome -> /welcome.html, or
- *  hit directly as /welcome.html through the catch-all). */
-function isWelcomeAsset(assetPath: string): boolean {
-  return assetPath === "/welcome.html" || assetPath.endsWith("/welcome.html");
+/** /welcome aliases (the route + the trailing-slash + the direct asset). */
+const WELCOME_PATHS = new Set(["/welcome", "/welcome/", "/welcome.html"]);
+
+/** Studio app page routes (mirror STUDIO_PAGE_ASSETS in index.ts) + the SPA root + direct .html hits.
+ *  ONLY these HTML responses get the permissive studio CSP; every other response is locked down. */
+const STUDIO_PAGE_PATHS = new Set([
+  "/", "/index.html",
+  "/planner", "/planner/", "/planner.html",
+  "/cast", "/cast/", "/cast.html",
+  "/modules", "/modules/", "/modules.html",
+  "/settings", "/settings/", "/settings.html",
+]);
+
+type PageClass = "welcome" | "studio" | null;
+function pageClass(pathname: string): PageClass {
+  if (WELCOME_PATHS.has(pathname)) return "welcome";
+  if (STUDIO_PAGE_PATHS.has(pathname)) return "studio";
+  return null;
 }
 
-/** Finalize a static-asset response before it leaves the Worker: stamp the security headers (CSP +
- *  companions) on every HTML document, and deploy-inject the Web Analytics beacon into /welcome when
- *  WEB_ANALYTICS_TOKEN is set + valid. Non-HTML responses (css/js/images/fonts) pass straight through
- *  untouched. Only the welcome+analytics path rewrites the body (and drops the now-stale
- *  Content-Length/ETag); the headers-only path streams the original body unchanged. */
-export async function finalizeAssetResponse(res: Response, env: Env, assetPath: string): Promise<Response> {
+function rebuild(res: Response, headers: Headers, body: BodyInit | null): Response {
+  return new Response(body, { status: res.status, statusText: res.statusText, headers });
+}
+
+// --------------------------------------------------------------------------- the chokepoint
+
+/** Stamp the correct security headers on a response by its class. Called ONCE on every response that
+ *  leaves fetch(), so the worker is the complete header authority with CF's managed transforms off. */
+export async function applyResponseSecurity(res: Response, request: Request, env: Env): Promise<Response> {
   const ct = res.headers.get("content-type") || "";
-  if (!ct.includes("text/html")) return res; // CSP/security headers apply to HTML documents only
+  const cls = ct.includes("text/html") ? pageClass(new URL(request.url).pathname) : null;
 
-  const welcome = isWelcomeAsset(assetPath);
-  const analyticsOn = welcome && analyticsTokenValid(env.WEB_ANALYTICS_TOKEN);
-  const csp = welcome ? welcomeCsp(analyticsOn) : STUDIO_CSP;
-
-  if (analyticsOn) {
-    const original = await res.text();
-    const injected = injectWelcomeBeacon(original, (env.WEB_ANALYTICS_TOKEN || "").trim());
-    const headers = applySecurityHeaders(new Headers(res.headers), csp);
-    headers.delete("content-length"); // body grew; let the runtime recompute
-    headers.delete("etag");           // body changed; the asset ETag no longer matches
-    return new Response(injected, { status: res.status, statusText: res.statusText, headers });
+  if (cls === "welcome") {
+    const analyticsOn = analyticsTokenValid(env.WEB_ANALYTICS_TOKEN);
+    const csp = welcomeCsp(analyticsOn);
+    if (analyticsOn) {
+      const original = await res.text();
+      const injected = injectWelcomeBeacon(original, (env.WEB_ANALYTICS_TOKEN || "").trim());
+      const h = pageHeaders(new Headers(res.headers), csp);
+      h.delete("content-length"); // body grew; let the runtime recompute
+      h.delete("etag");           // body changed; the asset ETag no longer matches
+      return rebuild(res, h, injected);
+    }
+    return rebuild(res, pageHeaders(new Headers(res.headers), csp), res.body);
   }
-
-  // Headers-only: stream the original body unchanged (Content-Length/ETag stay valid).
-  const headers = applySecurityHeaders(new Headers(res.headers), csp);
-  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  if (cls === "studio") {
+    return rebuild(res, pageHeaders(new Headers(res.headers), STUDIO_CSP), res.body);
+  }
+  // Non-page: api/json, non-HTML assets, redirects, the 429, or any HTML that is NOT a known page
+  // route (locked down -- never the permissive page CSP).
+  return rebuild(res, baselineHeaders(new Headers(res.headers)), res.body);
 }

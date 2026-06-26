@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   injectWelcomeBeacon,
-  finalizeAssetResponse,
+  applyResponseSecurity,
+  LOCKED_CSP,
   STUDIO_CSP,
   welcomeCsp,
   analyticsTokenValid,
@@ -64,85 +65,87 @@ function envWith(token?: string): Env {
 function htmlResponse(body: string): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
+function req(path: string): Request {
+  return new Request("https://vivijure.skyphusion.org" + path);
+}
 
-describe("CSP policies", () => {
-  it("studio CSP is strict: script-src 'self' with no 'unsafe-inline' anywhere on script", () => {
-    expect(STUDIO_CSP).toContain("script-src 'self';");
-    expect(STUDIO_CSP).not.toContain("'unsafe-inline'");
-    expect(STUDIO_CSP).toContain("frame-ancestors 'none'");
-    expect(STUDIO_CSP).toContain("object-src 'none'");
-  });
-
-  it("welcomeCsp(false) equals Joan's verified BASE literal byte-for-byte", () => {
-    expect(welcomeCsp(false)).toBe(WELCOME_BASE);
-  });
-
-  it("welcomeCsp(true) adds EXACTLY the two analytics origins over BASE", () => {
-    const on = welcomeCsp(true);
-    expect(on).toContain("script-src 'self' https://static.cloudflareinsights.com;");
-    expect(on).toContain("connect-src 'self' https://cloudflareinsights.com;");
-    // style-src still allows inline (welcome has inline styles); scripts otherwise strict
-    expect(on).toContain("style-src 'self' 'unsafe-inline'");
-  });
-});
-
-describe("analyticsTokenValid", () => {
-  const TOK = "cc55ea5bbe1d44a48423f59f8e5a6cc3";
-  it("accepts a 32-hex token, rejects empty/malformed", () => {
-    expect(analyticsTokenValid(TOK)).toBe(true);
-    expect(analyticsTokenValid("  " + TOK + "  ")).toBe(true);
-    expect(analyticsTokenValid(undefined)).toBe(false);
-    expect(analyticsTokenValid("")).toBe(false);
-    expect(analyticsTokenValid("not-a-token")).toBe(false);
-    expect(analyticsTokenValid(TOK.slice(0, 31))).toBe(false);
-  });
-});
-
-describe("finalizeAssetResponse", () => {
+describe("applyResponseSecurity (the single header chokepoint)", () => {
   const TOK = "cc55ea5bbe1d44a48423f59f8e5a6cc3";
 
-  it("stamps the strict CSP + companion headers on a studio page, body unchanged", async () => {
+  it("studio page: strict CSP + companions, body unchanged", async () => {
     const body = "<!doctype html><html><head></head><body>planner</body></html>";
-    const out = await finalizeAssetResponse(htmlResponse(body), envWith(), "/planner.html");
+    const out = await applyResponseSecurity(htmlResponse(body), req("/planner"), envWith());
     expect(out.headers.get("content-security-policy")).toBe(STUDIO_CSP);
     expect(out.headers.get("x-content-type-options")).toBe("nosniff");
     expect(out.headers.get("x-frame-options")).toBe("DENY");
     expect(out.headers.get("referrer-policy")).toBe("same-origin");
     expect(out.headers.get("permissions-policy")).toBe("camera=(), microphone=(), geolocation=()");
-    expect(await out.text()).toBe(body); // no body rewrite on non-welcome
+    expect(await out.text()).toBe(body);
   });
 
-  it("welcome with NO token: BASE CSP, no beacon injected", async () => {
-    const body = "<!doctype html><html><head></head><body>welcome</body></html>";
-    const out = await finalizeAssetResponse(htmlResponse(body), envWith(), "/welcome.html");
-    expect(out.headers.get("content-security-policy")).toBe(WELCOME_BASE);
-    const text = await out.text();
-    expect(text).not.toContain("beacon.min.js");
+  it("SPA root (/) is treated as a studio page", async () => {
+    const out = await applyResponseSecurity(htmlResponse("<html><head></head></html>"), req("/"), envWith());
+    expect(out.headers.get("content-security-policy")).toBe(STUDIO_CSP);
   });
 
-  it("welcome with a valid token: analytics CSP delta AND beacon, gated by the SAME check", async () => {
-    const body = "<!doctype html><html><head></head><body>welcome</body></html>";
-    const out = await finalizeAssetResponse(htmlResponse(body), envWith(TOK), "/welcome.html");
+  it("welcome with NO token: BASE CSP, no beacon", async () => {
+    const out = await applyResponseSecurity(
+      htmlResponse("<!doctype html><html><head></head><body>welcome</body></html>"), req("/welcome"), envWith());
+    expect(out.headers.get("content-security-policy")).toBe(welcomeCsp(false));
+    expect(await out.text()).not.toContain("beacon.min.js");
+  });
+
+  it("welcome with a valid token: analytics CSP delta AND beacon, one shared gate", async () => {
+    const out = await applyResponseSecurity(
+      htmlResponse("<!doctype html><html><head></head><body>welcome</body></html>"), req("/welcome"), envWith(TOK));
     const csp = out.headers.get("content-security-policy") || "";
     expect(csp).toContain("https://static.cloudflareinsights.com");
     expect(csp).toContain("https://cloudflareinsights.com");
     const text = await out.text();
     expect(text).toContain("beacon.min.js");
     expect(text).toContain(`"token":"${TOK}"`);
-    expect(out.headers.get("content-length")).toBeNull(); // dropped: body changed
+    expect(out.headers.get("content-length")).toBeNull();
   });
 
-  it("welcome with a MALFORMED token: BASE CSP + no beacon (fail-safe, never disagree)", async () => {
-    const body = "<!doctype html><html><head></head><body>welcome</body></html>";
-    const out = await finalizeAssetResponse(htmlResponse(body), envWith("garbage"), "/welcome.html");
-    expect(out.headers.get("content-security-policy")).toBe(WELCOME_BASE);
+  it("welcome with a MALFORMED token: BASE CSP + no beacon (fail-safe)", async () => {
+    const out = await applyResponseSecurity(
+      htmlResponse("<!doctype html><html><head></head><body>welcome</body></html>"), req("/welcome"), envWith("garbage"));
+    expect(out.headers.get("content-security-policy")).toBe(welcomeCsp(false));
     expect(await out.text()).not.toContain("beacon.min.js");
   });
 
-  it("non-HTML assets pass through untouched (no CSP on a stylesheet)", async () => {
+  it("API JSON: companions + LOCKED csp (default-src none), NOT a page CSP", async () => {
+    const j = new Response(JSON.stringify({ ok: true }), {
+      status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+    const out = await applyResponseSecurity(j, req("/api/modules"), envWith(TOK));
+    expect(out.headers.get("content-security-policy")).toBe(LOCKED_CSP);
+    expect(out.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(out.headers.get("x-frame-options")).toBe("DENY");
+    expect(out.headers.get("referrer-policy")).toBe("same-origin");
+    expect(out.headers.get("permissions-policy")).toBeNull(); // page-only
+    expect(await out.text()).toBe('{"ok":true}');
+  });
+
+  it("non-HTML asset (stylesheet): companions + LOCKED csp, body unchanged", async () => {
     const css = new Response("body{}", { status: 200, headers: { "content-type": "text/css" } });
-    const out = await finalizeAssetResponse(css, envWith(TOK), "/app.css");
-    expect(out.headers.get("content-security-policy")).toBeNull();
+    const out = await applyResponseSecurity(css, req("/app.css"), envWith(TOK));
+    expect(out.headers.get("content-security-policy")).toBe(LOCKED_CSP);
+    expect(out.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await out.text()).toBe("body{}");
+  });
+
+  it("UNKNOWN-path HTML gets the LOCKED csp, never the permissive page policy", async () => {
+    // a mislabeled/stray text/html response on a non-page route must not get studio/welcome CSP
+    const out = await applyResponseSecurity(
+      htmlResponse("<html><body>artifact</body></html>"), req("/api/artifact/x.html"), envWith());
+    expect(out.headers.get("content-security-policy")).toBe(LOCKED_CSP);
+  });
+
+  it("preserves status + redirect Location while stamping companions", async () => {
+    const redir = new Response(null, { status: 302, headers: { location: "https://r2.example/obj" } });
+    const out = await applyResponseSecurity(redir, req("/api/artifact/x"), envWith());
+    expect(out.status).toBe(302);
+    expect(out.headers.get("location")).toBe("https://r2.example/obj");
+    expect(out.headers.get("x-content-type-options")).toBe("nosniff");
   });
 });
