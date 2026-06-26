@@ -1,11 +1,13 @@
 # Vivijure Terms of Use
 
-> **STATUS: DRAFT for review. Not legal advice. Not yet in force.**
-> Written by Ernst (Conrad's legal-affairs helper, not a lawyer). Conrad signs off, and a licensed
-> attorney sets the load-bearing liability/jurisdiction terms, before this goes live. Attorney-flagged
-> items are collected at the end.
+> **Not legal advice.** This document was written by Ernst (Conrad's legal-affairs helper, who is
+> named after a lawyer and is not one). It is the project's own terms, not legal advice, and reading
+> it does not create an attorney-client relationship. If you are unsure how it applies to you, or you
+> run your own instance, talk to a licensed attorney.
 
-**Last updated:** DRAFT (unpublished)
+**Effective date:** 2026-06-26, except Sections 8 (the fixed liability-cap amount) and 13 (governing
+law and venue), which are pending Conrad's decision and are marked in the "Pending decisions" note at
+the end.
 
 ---
 
@@ -55,9 +57,8 @@ Vivijure is AGPL-3.0-only on purpose. Two consequences worth stating plainly:
   identity layer, partly so it resists being repackaged as a proprietary hosted product. You are free
   to host it; you are not free to strip the freedoms out of it.
 
-(**Attorney flag:** these Terms must not, and are not intended to, add restrictions to the
-AGPL-licensed software beyond the AGPL. Counsel should confirm the Terms and the AGPL sit cleanly side
-by side without the Terms being read as further restrictions on the code.)
+Nothing in these Terms is intended to add restrictions to the AGPL-licensed software beyond the AGPL
+itself; if anything reads that way, the AGPL governs the software.
 
 ---
 
@@ -93,11 +94,10 @@ instance:
 - **You are responsible for your inputs and outputs.** You confirm you have the rights to your inputs
   and that your use of outputs complies with the AUP and the law.
 
-(**Attorney flag and honest caveat:** the *copyright status of AI-generated outputs themselves* is
-unsettled law and varies by jurisdiction. We can disclaim OUR ownership and confirm we do not claim
-yours, but we cannot promise that a given AI output is copyrightable by you, or that it does not
-implicate a third party's rights. That determination is between you, your facts, and your own legal
-advice. Counsel should set the precise ownership/indemnity language.)
+(Honest caveat: the *copyright status of AI-generated outputs themselves* is unsettled law and varies
+by jurisdiction. We can disclaim OUR ownership and confirm we do not claim yours, but we cannot
+promise that a given AI output is copyrightable by you, or that it does not implicate a third party's
+rights. That determination is between you, your facts, and your own legal advice.)
 
 ---
 
@@ -134,12 +134,11 @@ TO THE MAXIMUM EXTENT PERMITTED BY LAW, SKYPHUSION LABS AND CONRAD (AND ANYONE I
 SOFTWARE AVAILABLE) WILL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY,
 OR PUNITIVE DAMAGES, OR FOR LOST PROFITS, DATA, OR GOODWILL, ARISING OUT OF OR RELATED TO YOUR USE OF
 (OR INABILITY TO USE) THE SOFTWARE OR CONRAD'S INSTANCE, EVEN IF ADVISED OF THE POSSIBILITY. BECAUSE
-THE SOFTWARE IS PROVIDED FREE OF CHARGE, THE TOTAL AGGREGATE LIABILITY WILL NOT EXCEED
-**`PLACEHOLDER`** (e.g. the greater of the amount you paid, which is zero, or a small fixed cap).
+THE SOFTWARE IS PROVIDED FREE OF CHARGE, THE TOTAL AGGREGATE LIABILITY WILL NOT EXCEED THE GREATER OF
+(A) THE AMOUNT YOU PAID FOR THE SOFTWARE, WHICH IS ZERO, OR (B) A SMALL FIXED CAP CONRAD SETS.
 
-(**Attorney flag:** the enforceable shape and dollar cap of this clause, and whether certain
-liabilities cannot be disclaimed in the governing jurisdiction, MUST be set by a licensed attorney.
-The placeholder is a stand-in, not a decision.)
+Until Conrad sets a fixed cap, the operative cap is the amount you paid, which is zero. (The fixed-cap
+amount is a pending decision; see the note at the end.)
 
 ---
 
@@ -147,8 +146,7 @@ The placeholder is a stand-in, not a decision.)
 
 You agree to defend, indemnify, and hold Skyphusion Labs and Conrad harmless from claims, damages, and
 costs arising out of content you generate or upload, your breach of these Terms or the AUP, or your
-violation of the law or a third party's rights. (**Attorney flag:** confirm scope and mutuality for
-free software.)
+violation of the law or a third party's rights.
 
 ---
 
@@ -186,19 +184,18 @@ with hosting others' content are yours to determine and meet.
 
 ## 12. Changes to these Terms
 
-This is a draft and will change before adoption. Once live, material changes will be reflected by
-updating the "Last updated" line and, where appropriate, an in-app or repository notice. Continued use
-of Conrad's instance or participation in the project after a change means you accept it.
+Material changes will be reflected by updating the **Effective date** line above and, where
+appropriate, an in-app or repository notice. Continued use of Conrad's instance or participation in the
+project after a change means you accept it.
 
 ---
 
 ## 13. Governing law and disputes
 
-These Terms are governed by the laws of **`PLACEHOLDER -- jurisdiction`**, without regard to conflict-
-of-laws rules, and disputes will be resolved in **`PLACEHOLDER -- venue`**.
-
-(**Attorney flag:** governing-law and venue (and any arbitration / class-action-waiver choice) are
-load-bearing decisions that must be set by a licensed attorney. This draft does not pick them.)
+These Terms do not yet designate a single governing law or venue; that is a decision Conrad has not
+made. Until he designates one, no specific choice of law or venue is asserted by these Terms, and any
+dispute is left to the law and courts that ordinary jurisdictional and conflict-of-laws rules would
+supply. (The governing law and venue are a pending decision; see the note at the end.)
 
 ---
 
@@ -219,12 +216,15 @@ Questions about these Terms: **legal@skyphusion.org**.
 
 ---
 
-## Open items that need a licensed attorney before launch
+## Pending decisions (Conrad to set)
 
-1. **Limitation of liability** -- the enforceable form and the dollar cap (Section 8), and which
-   liabilities cannot be disclaimed in the chosen jurisdiction.
-2. **Governing law, venue, and any arbitration/class-waiver** (Section 13).
-3. **AI-output ownership and indemnity** language (Sections 5 and 9), given unsettled copyright law.
-4. **AGPL-vs-Terms interplay** review, to ensure these Terms add no restriction to the AGPL-licensed
-   software (Section 2).
-5. **Provider pass-through terms** for the exact third parties an instance calls (Section 6).
+Two values in these Terms are deliberately not filled in, because they are Conrad's calls to make, not
+drafting details:
+
+1. **The fixed liability-cap amount in Section 8.** Until set, the operative cap is the amount you
+   paid, which is zero.
+2. **The governing law and venue in Section 13.**
+
+Everything else in these Terms is in force as of the Effective date above. As with the rest of this
+document, this is not legal advice; if these terms matter to your situation, consult a licensed
+attorney.
