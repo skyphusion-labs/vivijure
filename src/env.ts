@@ -79,6 +79,12 @@ export interface Env {
   // ACCESS_TEAM_DOMAIN nor ACCESS_AUD is set, /api/* is DENIED by default unless this is "true".
   ALLOW_UNAUTHENTICATED?: string;
 
+  // Cloudflare Web Analytics token, deploy-injected into /welcome at serve time (src/asset-response.ts).
+  // PUBLIC, non-secret, but DEFAULT EMPTY in the public artifact: a self-hosted /welcome ships NO beacon
+  // and phones home to NO ONE. The operator keeps their own analytics by setting this in their deploy
+  // [vars]; empty/unset -> no beacon. (Self-host privacy boundary, #363.)
+  WEB_ANALYTICS_TOKEN?: string;
+
   // Rate limiting for GPU/spend endpoints (F3, src/rate-limit.ts). The Cloudflare native Rate
   // Limiting binding; added to wrangler.toml [[ratelimits]] by infra (Strummer). Optional: when
   // unbound the spend routes fail OPEN (allowed + warned), since rate-limit is availability-

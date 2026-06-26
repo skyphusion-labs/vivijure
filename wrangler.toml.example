@@ -30,6 +30,10 @@ tail_consumers = [ { service = "vivijure-tail" } ]
 [vars]
 ACCESS_TEAM_DOMAIN = "${ACCESS_TEAM_DOMAIN}"
 ACCESS_AUD = "${ACCESS_AUD}"
+# Cloudflare Web Analytics token, deploy-injected into /welcome by the Worker (src/asset-response.ts).
+# PUBLIC, not a secret -- but DEFAULT EMPTY: a self-hosted deploy that leaves it unset ships NO beacon,
+# so /welcome visitors phone home to NO ONE. Set it ONLY on your own deploy to keep your own analytics.
+WEB_ANALYTICS_TOKEN = "${WEB_ANALYTICS_TOKEN}"
 
 [observability]
 enabled = true
