@@ -1,6 +1,6 @@
 # notify-email
 
-A **`notify`** module (vivijure-module/1): the **email backend** of the notify hook. On a
+A **`notify`** module (vivijure-module/2): the **email backend** of the notify hook. On a
 `render.complete` event it mails the film owner a download link via the native **Cloudflare Email
 Service**. It is **out-of-band** -- it hangs off render completion and is not in the render path, so
 it never gates or delays a film.
@@ -50,15 +50,19 @@ real send (a prerequisite, not part of `wrangler.toml`):
 **From-identity**: fixed in code -- `FROM = render@skyphusion.org` (display name "Vivijure") in
 `src/notify.ts`. To send from a different domain, change `FROM` and onboard that domain.
 
-**Render knobs**: none -- `config_schema` is omitted. The recipient comes from the `notify` input
-`user_email` (the film owner); no recipient (or no `EMAIL` binding) -> no-op.
+**Recipient**: an `install`-scope `config_schema` field, `notify_email`, the operator sets ONCE on
+the studio settings page; the core persists it in the operator-config store and injects it at
+notify-invoke time (it is NOT a per-render knob). The recipient is NOT a per-user identity: after the
+identity strip (#292) the core sends completion facts only, never a recipient. No `notify_email` set
+(or no `EMAIL` binding) -> no-op.
 
 ## Contract
 
 - **Hook**: `notify` (out-of-band; not in the render path). `provides: notify-email` ("Email
   notification (Cloudflare Email Service)"), `ui { section: "notify", order: 10 }`.
 - **Input** (`NotifyInput`): `event` (`render.complete`), `film_id`, `project`, optional
-  `download_url`, `seconds`, and `user_email` (the recipient).
+  `download_url`, `seconds`. There is NO recipient in the input (the identity strip removed it); the
+  recipient comes from the operator-set `notify_email` install-config (see Configuration).
 - **Output** (`NotifyOutput`): `delivered` -- e.g. `["email:<to>"]` on a send, or `[]` for a no-op.
 - **Synchronous**: an email send is fast, well within a Worker request. `POST /invoke` composes the
   render-complete email and sends it, then returns. No recipient or no `EMAIL` binding -> empty

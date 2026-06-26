@@ -11,16 +11,32 @@ See also [`module-api.md`](./module-api.md) for the contract design, and the ref
 
 ## The shape of a module
 
-A module is a standalone Cloudflare Worker that serves exactly two endpoints:
+A module is a standalone Cloudflare Worker. A synchronous module serves two endpoints; an async or
+cancelable one serves up to four:
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /module.json` | the module's **manifest** (which hooks it serves, its config, how it surfaces in the UI) |
-| `POST /invoke` | run one hook: `{ hook, input, config, context }` in, an `InvokeResponse` out |
+| Endpoint | Required | Purpose |
+|---|---|---|
+| `GET /module.json` | always | the module's **manifest** (which hooks it serves, its config, how it surfaces in the UI) |
+| `POST /invoke` | always | run one hook: `{ hook, input, config, context }` in, an `InvokeResponse` out |
+| `POST /poll` | **async modules** | when `/invoke` returns `{ ok: true, pending: true, poll }`, the core polls here with `{ poll }` until the job is terminal (a long RunPod render must be async so no Worker holds a request open) |
+| `POST /cancel` | **`cancelable` modules** | stop an in-flight async job by its poll token, so a cancelled render or an adopted phase does not orphan GPU and bleed spend (#327/#328); best-effort + idempotent. Advertise it with `cancelable: true` in the manifest |
 
 The core discovers your module from a `MODULE_<NAME>` service binding, reads your manifest, indexes
 you by hook, and renders your stage in the studio UI from your `config_schema`. It invokes you when a
 render reaches your hook. **The core never knows who answers** -- it just asks the hook.
+
+### The trust boundary: your module is reachable ONLY through the core (HARD RULE)
+
+The `MODULE_<NAME>` **service binding IS the authentication.** Service-binding calls are
+worker-to-worker and never traverse the public internet, so your `/invoke` never needs (and must not
+add) its own auth check -- the core is the only caller, and the core sits behind Cloudflare Access.
+
+That guarantee holds ONLY while your module has **no public surface.** In your `wrangler.toml` set
+`workers_dev = false` and declare **no `route`** (every first-party module does). A module that
+publishes a `workers.dev` host or a custom route exposes `/invoke` to the open internet with **zero
+authentication** -- and modules wrap real spend (a public `motion.backend`/`keyframe` module is an
+unauthenticated RunPod GPU-spend trigger; a public `notify` module is an open mail relay). Keep the
+surface internal: the service binding is the boundary, do not punch a hole in it.
 
 ## The hooks (vivijure-module/2)
 
