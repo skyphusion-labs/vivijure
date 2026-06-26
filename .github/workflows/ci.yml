@@ -140,10 +140,14 @@ jobs:
           VPC_AUDIO_BEAT_SYNC_ID: ${{ secrets.VPC_AUDIO_BEAT_SYNC_ID }}
           VPC_AUDIO_MIX_ID: ${{ secrets.VPC_AUDIO_MIX_ID }}
           SPEND_RATE_LIMITER_NS_ID: ${{ secrets.SPEND_RATE_LIMITER_NS_ID }}
+          # Optional: CF Web Analytics beacon token. PUBLIC, default EMPTY -- an unset secret
+          # renders WEB_ANALYTICS_TOKEN = "" so /welcome ships NO beacon (token-free). Set the
+          # secret only to enable your own analytics.
+          WEB_ANALYTICS_TOKEN: ${{ secrets.WEB_ANALYTICS_TOKEN }}
         run: |
           set -eu
           apk add --no-cache gettext >/dev/null
-          VARS='$ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID'
+          VARS='$ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
           envsubst "$VARS" < wrangler.toml.example > wrangler.toml
           # fail-closed: no placeholder may survive (a missing secret would leave a literal ${...}).
           if grep -q '${' wrangler.toml; then echo "::error::unsubstituted placeholder in wrangler.toml"; grep -n '${' wrangler.toml; exit 1; fi
