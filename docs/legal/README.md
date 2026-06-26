@@ -8,9 +8,7 @@
 This directory holds the public/project-facing legal scaffolding for Vivijure. As of the effective
 date on each document, these are **in force** as the project's own terms (and the terms Conrad applies
 to his own instance), grounded in the studio's actual code (data handling, architecture, security
-posture). Two values in the Terms (the fixed liability-cap amount in Section 8, and the governing law
-and venue in Section 13) are deliberately left for Conrad to set and are marked as pending in that
-document; everything else is in force.
+posture).
 
 **Important framing:** Vivijure is **self-hosted AGPL software**, not a service Skyphusion Labs
 operates for the public. People run Vivijure themselves, on their own infrastructure (their own
@@ -28,7 +26,7 @@ instance.
 |---|---|
 | [`PRIVACY.md`](PRIVACY.md) | Privacy policy. Lead promise made literal: you self-host, so Skyphusion Labs never sees a byte; there is no hosted service collecting user data. Describes what the software stores on the operator's own infrastructure, and what Conrad's own private instance does, grounded in the real schema, storage, logging, and processing path. |
 | [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) | Acceptable Use Policy. Conditions of use for the software and the project, and the policy Conrad applies to his instance. CSAM is the zero-tolerance red line (synthetic/AI-generated included, and the one exception to the hands-off privacy posture); also NCII, non-consensual deepfakes/likeness, hate/harassment, and other illegal use. Plus enforcement and reporting. |
-| [`TERMS.md`](TERMS.md) | Terms of Use for the software and the project (not a SaaS agreement), plus the conditions for Conrad's own instance. AS-IS disclaimer, liability, input/output ownership, the AGPL interplay, copyright/IP terms, termination, and passed-through provider terms. The liability cap (Section 8) and governing law/venue (Section 13) are pending Conrad's decision. |
+| [`TERMS.md`](TERMS.md) | Terms of Use for the software and the project (not a SaaS agreement), plus the conditions for Conrad's own instance. AS-IS disclaimer, liability, input/output ownership, the AGPL interplay, copyright/IP terms, termination, and passed-through provider terms. |
 
 ## Scope
 
@@ -68,5 +66,4 @@ The Privacy policy was written after reading the actual data path:
 
 Ernst (the author) is named after a lawyer and is not one. These documents structure and research the
 project's legal scaffolding; they do not constitute legal advice or create an attorney-client
-relationship. If you are unsure how they apply to you, consult a licensed attorney; and the two
-pending values in the Terms (liability cap, governing law/venue) are Conrad's to set.
+relationship. If you are unsure how they apply to you, consult a licensed attorney.
