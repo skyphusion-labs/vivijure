@@ -9,7 +9,7 @@
 
 ---
 
-**Skyphusion Labs stands with victims.** You do not use our products to create CSAM or nonconsensual intimate images. Even though we have no way of obtaining data from your self hosted instances, we will cooperate if we find out that someone is using our software to generate such content, because people who victimize people in such a harmful way, especially children, are the *ONE* exception to a blanket privacy policy, you sick fuck.
+**Skyphusion Labs stands with victims.** You do not use our products to create CSAM or nonconsensual intimate images. Even though we have no way of obtaining data from your self-hosted instances, we will cooperate if we find out that someone is using our software to generate such content, because people who victimize people in such a harmful way, especially children, are the *ONE* exception to a blanket privacy policy, you sick fuck.
 
 That is the line, in plain words. Section 1 makes the prohibition on child sexual abuse material absolute; Sections 2.1 and 2.2 do the same for non-consensual intimate imagery and deepfakes. Everything below formalizes what that statement already says.
 
