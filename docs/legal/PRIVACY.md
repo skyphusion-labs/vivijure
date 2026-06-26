@@ -1,11 +1,11 @@
 # Vivijure Privacy Policy
 
-> **STATUS: DRAFT for review. Not legal advice. Not yet in force.**
-> This draft was written by Ernst (Conrad's legal-affairs helper, not a lawyer) and is grounded in
-> the studio's actual code as of this writing. Conrad signs off before it goes live. Items that need
-> a licensed attorney are flagged inline and collected at the end.
+> **Not legal advice.** This document was written by Ernst (Conrad's legal-affairs helper, who is
+> named after a lawyer and is not one). It is grounded in the studio's actual code. It is not legal
+> advice and reading it does not create an attorney-client relationship. If you are unsure how it
+> applies to you, or you run your own instance, talk to a licensed attorney.
 
-**Last updated:** DRAFT (unpublished)
+**Effective date:** 2026-06-26
 
 ---
 
@@ -29,6 +29,9 @@ Vivijure service that we operate for you, so there is nothing for us to collect.
 If you want a privacy policy for your Vivijure instance, you write it, because you are the operator
 and the only person who can see that data. This document explains why the software collects so
 little, and what Conrad's own private instance does, so you have an honest baseline to start from.
+
+(One bright-line exception to this hands-off posture exists, and only one: child sexual abuse
+material. See Section 9 and the Acceptable Use Policy, Section 1.)
 
 ---
 
@@ -224,8 +227,12 @@ disclaimer.
 
 ## 9. Children
 
-Vivijure is not directed to children. Generating sexual content involving minors is absolutely
-prohibited as a condition of using the software; see the Acceptable Use Policy.
+Vivijure is not directed to children. Generating sexual content involving minors, real or synthetic,
+is absolutely prohibited as a condition of using the software; see the Acceptable Use Policy,
+Section 1. That prohibition is also the single exception to the otherwise hands-off privacy posture
+described here: child sexual abuse material is the one thing that, wherever the project becomes aware
+of it on infrastructure it operates, is preserved and reported to NCMEC and law enforcement. The
+privacy stance is not a shield for it.
 
 ---
 
@@ -241,21 +248,6 @@ to it.
 
 ## 11. Changes
 
-This is a draft and is expected to change before it is adopted. Once live, material changes will be
-noted by updating the "Last updated" line and, where appropriate, an in-app or repository notice.
-
----
-
-## Open items that need a licensed attorney before launch
-
-1. **Jurisdiction-specific privacy law for any operator.** Because Vivijure is self-hosted, the
-   operator of each instance is the only party that processes user data, and each operator must
-   assess whether GDPR, UK GDPR, CCPA/CPRA, or another regime applies to them. Conrad has determined
-   the GDPR does not apply to his own private instance (US-run, crew-only, not offered to the
-   public); other operators must make their own determination.
-2. **Cookie-consent obligations** for the access auth cookie and Cloudflare Web Analytics, per each
-   operator's own jurisdiction and users.
-3. **A precise processor list** for whichever AI providers and modules a given instance actually
-   calls.
-4. **Controller/processor framing** between an operator and their sub-processors (Cloudflare, RunPod,
-   AI providers), and whether data-processing agreements are required for that operator.
+This policy describes how the software handles data, so it changes when the software's data handling
+changes. Material changes will be noted by updating the **Effective date** line above and, where
+appropriate, an in-app or repository notice.
