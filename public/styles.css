@@ -1043,3 +1043,49 @@ body.sw-open .sw-dock { transform: none; }
 @media (max-width: 720px) {
   .settings-fields { grid-template-columns: 1fr; }
 }
+
+/* Backend selector ("one studio, two honest doors"): the motion.backend pick_one chooser,
+   projected from GET /api/modules. Each installed motion.backend module is one door. Vanilla
+   CSS, house tokens; the door content is registry-driven (planner-render-config.js). */
+.planner-backend-selector { display: grid; gap: 10px; }
+.planner-backend-caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.planner-backend-caption-title { color: var(--ink); font-weight: 600; font-size: 13px; }
+.planner-backend-caption-hint { color: var(--muted); font-size: 12px; }
+.planner-backend-doors {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.planner-backend-door {
+  display: grid; gap: 8px; align-content: start;
+  padding: 14px 16px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.planner-backend-door:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.planner-backend-door.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel-2));
+}
+.planner-backend-door-head { display: flex; align-items: flex-start; gap: 10px; }
+.planner-backend-radio { width: auto; margin-top: 3px; flex: 0 0 auto; accent-color: var(--accent); }
+.planner-backend-title-wrap { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; min-width: 0; }
+.planner-backend-title { color: var(--ink); font-weight: 600; font-size: 14px; }
+.planner-backend-tags { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.planner-backend-tag {
+  font-size: 11px; line-height: 1.6; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); background: var(--panel);
+}
+.planner-backend-tag.is-local {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+.planner-backend-tag.is-cloud {
+  color: var(--accent-2);
+  border-color: color-mix(in srgb, var(--accent-2) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent-2) 10%, var(--panel));
+}
+.planner-backend-blurb { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.5; }
+.planner-backend-caps { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.planner-backend-caps li { margin: 0; }
+.planner-backend-ranges { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
