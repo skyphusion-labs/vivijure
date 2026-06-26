@@ -18,11 +18,12 @@ preview_urls = false
 workers_dev = false
 
 # The studio frontend (public/) served via Workers Assets.
-# run_worker_first=true: route EVERY request (incl. static HTML pages/assets) through the Worker
-# fetch chokepoint so applyResponseSecurity (asset-response.ts) stamps headers on every response
-# class. Without it, Workers Static Assets serves pages like /welcome directly, BYPASSING the
-# worker, so no security headers are applied (the gap the zone Managed Transform used to mask).
-assets = { directory = "./public", binding = "ASSETS", run_worker_first = true }
+# NOTE: run_worker_first was tried (to make the Worker stamp headers on /welcome) but it broke
+# /welcome: the Worker serveStudioAsset fetches /welcome.html, and Workers Assets html_handling
+# 307-redirects .html back to /welcome -> redirect loop / empty page. Reverted. The worker-owned
+# headers-on-static-pages fix needs a worker-side change (html_handling / serveStudioAsset),
+# tracked for Rollins. See the post-v0.7.3 diagnosis.
+assets = { directory = "./public", binding = "ASSETS" }
 
 # Tail consumer -- ships core render logs + exceptions to vivijure-tail -> Loki -> Grafana.
 # DEPLOY-ORDERED: vivijure-tail must be live BEFORE this binding deploys (dangling-binding hazard).
