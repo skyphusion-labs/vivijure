@@ -5,9 +5,7 @@
 > it does not create an attorney-client relationship. If you are unsure how it applies to you, or you
 > run your own instance, talk to a licensed attorney.
 
-**Effective date:** 2026-06-26, except Sections 8 (the fixed liability-cap amount) and 13 (governing
-law and venue), which are pending Conrad's decision and are marked in the "Pending decisions" note at
-the end.
+**Effective date:** 2026-06-26
 
 ---
 
@@ -134,11 +132,10 @@ TO THE MAXIMUM EXTENT PERMITTED BY LAW, SKYPHUSION LABS AND CONRAD (AND ANYONE I
 SOFTWARE AVAILABLE) WILL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY,
 OR PUNITIVE DAMAGES, OR FOR LOST PROFITS, DATA, OR GOODWILL, ARISING OUT OF OR RELATED TO YOUR USE OF
 (OR INABILITY TO USE) THE SOFTWARE OR CONRAD'S INSTANCE, EVEN IF ADVISED OF THE POSSIBILITY. BECAUSE
-THE SOFTWARE IS PROVIDED FREE OF CHARGE, THE TOTAL AGGREGATE LIABILITY WILL NOT EXCEED THE GREATER OF
-(A) THE AMOUNT YOU PAID FOR THE SOFTWARE, WHICH IS ZERO, OR (B) A SMALL FIXED CAP CONRAD SETS.
+THE SOFTWARE IS PROVIDED FREE OF CHARGE, THE TOTAL AGGREGATE LIABILITY WILL NOT EXCEED $0 USD (THE
+AMOUNT YOU PAID FOR THE SOFTWARE, WHICH IS ZERO).
 
-Until Conrad sets a fixed cap, the operative cap is the amount you paid, which is zero. (The fixed-cap
-amount is a pending decision; see the note at the end.)
+Vivijure is free, AGPL-licensed software; there is no charge for it, so the liability cap is zero.
 
 ---
 
@@ -192,10 +189,9 @@ project after a change means you accept it.
 
 ## 13. Governing law and disputes
 
-These Terms do not yet designate a single governing law or venue; that is a decision Conrad has not
-made. Until he designates one, no specific choice of law or venue is asserted by these Terms, and any
-dispute is left to the law and courts that ordinary jurisdictional and conflict-of-laws rules would
-supply. (The governing law and venue are a pending decision; see the note at the end.)
+These Terms are governed by the laws of the **State of Texas**, without regard to its conflict-of-laws
+rules. Any dispute arising out of or relating to these Terms, the software, the project, or Conrad's
+instance will be brought and resolved exclusively in the state or federal courts located in Texas.
 
 ---
 
@@ -214,17 +210,3 @@ supply. (The governing law and venue are a pending decision; see the note at the
 
 Questions about these Terms: **legal@skyphusion.org**.
 
----
-
-## Pending decisions (Conrad to set)
-
-Two values in these Terms are deliberately not filled in, because they are Conrad's calls to make, not
-drafting details:
-
-1. **The fixed liability-cap amount in Section 8.** Until set, the operative cap is the amount you
-   paid, which is zero.
-2. **The governing law and venue in Section 13.**
-
-Everything else in these Terms is in force as of the Effective date above. As with the rest of this
-document, this is not legal advice; if these terms matter to your situation, consult a licensed
-attorney.
