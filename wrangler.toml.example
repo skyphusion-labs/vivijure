@@ -18,7 +18,11 @@ preview_urls = false
 workers_dev = false
 
 # The studio frontend (public/) served via Workers Assets.
-assets = { directory = "./public", binding = "ASSETS" }
+# run_worker_first=true: route EVERY request (incl. static HTML pages/assets) through the Worker
+# fetch chokepoint so applyResponseSecurity (asset-response.ts) stamps headers on every response
+# class. Without it, Workers Static Assets serves pages like /welcome directly, BYPASSING the
+# worker, so no security headers are applied (the gap the zone Managed Transform used to mask).
+assets = { directory = "./public", binding = "ASSETS", run_worker_first = true }
 
 # Tail consumer -- ships core render logs + exceptions to vivijure-tail -> Loki -> Grafana.
 # DEPLOY-ORDERED: vivijure-tail must be live BEFORE this binding deploys (dangling-binding hazard).
