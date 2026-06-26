@@ -216,6 +216,14 @@ so a self-hoster with no token gets neither and the two can never disagree (#363
 deployer who re-enables a CDN/proxy header layer should keep it OFF for this origin, or reconcile it
 with this matrix, to preserve the single-source-of-truth property.
 
+**Load-bearing assets config.** Because the Worker is the header authority, the Workers Assets binding
+MUST route the static pages through the Worker: `run_worker_first = true` (else the edge serves
+`/welcome` and the studio pages directly, bypassing the chokepoint -- they get NO headers) AND
+`html_handling = "none"` (else `serveStudioAsset`'s `.html` fetch 307-redirects to the pretty URL and
+loops). The Worker maps the pretty page routes itself (`STUDIO_PAGE_ASSETS`, including `/` ->
+`/index.html`). Changing either setting silently drops header coverage on the static pages; keep them
+together. See `wrangler.toml.example`.
+
 ## Checklist when changing the surface
 
 - [ ] New hostname or route -> confirm the Cloudflare Access app still covers it (`/api/*` must stay
