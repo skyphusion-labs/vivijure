@@ -151,27 +151,22 @@ free software.)
 
 ---
 
-## 10. Copyright complaints (DMCA) and takedowns
+## 10. Copyright and intellectual property
 
-If you believe content on Conrad's instance, or material distributed through the project, infringes
-your copyright, send a notice to the designated agent with: (a) your signature (physical or
-electronic); (b) identification of the copyrighted work; (c) identification of the allegedly infringing
-material and where it is; (d) your contact information; (e) a statement of good-faith belief that the
-use is not authorized; and (f) a statement, under penalty of perjury, that the notice is accurate and
-you are authorized to act.
+- **The software** is licensed under AGPL-3.0-only (see `LICENSE` and Section 2). Your rights in the
+  Vivijure code come from that license, and you must follow it when you use, modify, or redistribute
+  the code.
+- **Respect other people's intellectual property when you use the software.** Do not feed in, train a
+  model on, or reproduce copyrighted, trademarked, or otherwise protected material that you have no
+  right to use. You are responsible for the content you generate and upload, and for having the rights
+  to your inputs (see Section 5). Infringing use also violates the Acceptable Use Policy (Section 2.4).
+- **We claim no ownership of your outputs** and assert no license to them beyond what Section 5
+  describes.
 
-**Designated agent:** Conrad Rockenhaus, 116 Neely Rd, Hewitt, TX 76643, conrad@skyphusion.org.
-
-We will respond to valid notices about Conrad's instance or the project by removing or disabling access
-to the identified material, and we honor counter-notices per the DMCA process. Repeat infringers lose
-access.
-
-(**Attorney/operator flag:** formal DMCA safe-harbor protection for a host requires REGISTERING a
-designated agent with the U.S. Copyright Office. Because Conrad's instance is single-operator and
-gated, not a public user-generated-content platform, the safe-harbor posture differs from a typical
-UGC host; counsel should confirm what registration is actually warranted here. Each self-hoster is
-responsible for their own DMCA posture, including registering their own agent if they host others'
-content.)
+Because Vivijure is self-hosted software and Skyphusion Labs does not host anyone else's content, the
+project is not an online hosting provider and there is no provider takedown role here. If you self-host
+and choose to let other people put content on your own instance, the copyright obligations that come
+with hosting others' content are yours to determine and meet.
 
 ---
 
@@ -228,10 +223,7 @@ Questions about these Terms: **legal@skyphusion.org**.
 1. **Limitation of liability** -- the enforceable form and the dollar cap (Section 8), and which
    liabilities cannot be disclaimed in the chosen jurisdiction.
 2. **Governing law, venue, and any arbitration/class-waiver** (Section 13).
-3. **DMCA designated-agent registration** with the U.S. Copyright Office, plus confirmation of what
-   safe-harbor posture actually fits a single-operator gated instance versus a self-hoster who hosts
-   others' content (Section 10).
-4. **AI-output ownership and indemnity** language (Sections 5 and 9), given unsettled copyright law.
-5. **AGPL-vs-Terms interplay** review, to ensure these Terms add no restriction to the AGPL-licensed
+3. **AI-output ownership and indemnity** language (Sections 5 and 9), given unsettled copyright law.
+4. **AGPL-vs-Terms interplay** review, to ensure these Terms add no restriction to the AGPL-licensed
    software (Section 2).
-6. **Provider pass-through terms** for the exact third parties an instance calls (Section 6).
+5. **Provider pass-through terms** for the exact third parties an instance calls (Section 6).

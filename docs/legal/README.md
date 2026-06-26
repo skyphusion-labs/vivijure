@@ -5,8 +5,8 @@
 This directory holds the public/project-facing legal scaffolding for Vivijure. These are **drafts**:
 they are grounded in the studio's actual code (data handling, architecture, security posture), but
 they are not adopted, not wired into the app, and not a substitute for a licensed attorney on the
-load-bearing terms (liability caps, governing law, DMCA agent registration, jurisdiction-specific
-compliance). Every document ends with an explicit "needs a licensed attorney" list.
+load-bearing terms (liability caps, governing law, jurisdiction-specific compliance). Every document
+ends with an explicit "needs a licensed attorney" list.
 
 **Important framing:** Vivijure is **self-hosted AGPL software**, not a service Skyphusion Labs
 operates for the public. People run Vivijure themselves, on their own infrastructure (their own
@@ -23,7 +23,7 @@ self-host, so we never see your data), and a code of conduct for the project and
 |---|---|
 | [`PRIVACY.md`](PRIVACY.md) | Privacy policy. Lead promise made literal: you self-host, so Skyphusion Labs never sees a byte; there is no hosted service collecting user data. Describes what the software stores on the operator's own infrastructure, and what Conrad's own private instance does, grounded in the real schema, storage, logging, and processing path. |
 | [`ACCEPTABLE-USE.md`](ACCEPTABLE-USE.md) | Acceptable Use Policy. Conditions of use for the software and a code of conduct for the project and Conrad's instance. CSAM is the zero-tolerance red line; also NCII, non-consensual deepfakes/likeness, hate/harassment, and other illegal use. Plus enforcement and reporting. |
-| [`TERMS.md`](TERMS.md) | Terms of Use for the software and the project (not a SaaS agreement), plus the conditions for Conrad's own instance. AS-IS disclaimer, liability, input/output ownership, the AGPL interplay, DMCA + designated agent, termination, governing-law placeholder, and passed-through provider terms. |
+| [`TERMS.md`](TERMS.md) | Terms of Use for the software and the project (not a SaaS agreement), plus the conditions for Conrad's own instance. AS-IS disclaimer, liability, input/output ownership, the AGPL interplay, copyright/IP terms, termination, governing-law placeholder, and passed-through provider terms. |
 
 ## Scope
 
@@ -65,5 +65,4 @@ The Privacy policy was written after reading the actual data path:
 Ernst (the author) is named after a lawyer and is not one. These documents structure and research the
 project's legal scaffolding; they do not constitute legal advice or create an attorney-client
 relationship. Before launch, a licensed attorney must set the liability limits, governing law/venue,
-DMCA agent registration, and any jurisdiction-specific compliance, per the open-items list at the
-bottom of each document.
+and any jurisdiction-specific compliance, per the open-items list at the bottom of each document.

@@ -157,8 +157,8 @@ retaliation against good-faith reporters.
   violating this AUP can end your access to Conrad's instance and your standing in the project.
 - The **Privacy Policy** describes what data the software handles, and why Skyphusion Labs holds none
   of it (you self-host).
-- Copyright-specific complaints (DMCA) are handled under the takedown process in the Terms, not this
-  AUP, though infringing use also violates Section 2.4 here.
+- Copyright and intellectual-property terms are in the Terms (Section 10); infringing use of others'
+  work also violates Section 2.4 here.
 
 ---
 
