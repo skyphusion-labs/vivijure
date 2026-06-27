@@ -123,7 +123,7 @@ export interface ModuleUi {
   section?: string; // which studio area the module surfaces in (e.g. "finish")
   icon?: string;
   order?: number; // fold/render order within a chain hook
-  locality?: "local" | "cloud"; // door class: own/homelab GPU (local) vs pay-per-render provider (cloud)
+  locality?: "local" | "byo" | "cloud"; // door class: homelab card (local) / your own RunPod endpoint+keys (byo) / pay-per-render provider (cloud)
   cost?: string;   // short cost-model tag, display only (e.g. "Pay per render", "Free after hardware")
   blurb?: string;  // one honest positioning sentence, display only
   limits?: string[]; // honest capability-ceiling bullets, display only (absent => fall back to config_schema)

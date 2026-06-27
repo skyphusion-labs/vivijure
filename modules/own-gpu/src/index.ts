@@ -44,7 +44,7 @@ export const MANIFEST: ModuleManifest = {
     negative_prompt: { type: "string", default: "", label: "negative prompt (additive)" },
     seed: { type: "int", default: -1, min: -1, label: "seed (-1 = random)" },
   },
-  ui: { section: "motion", order: 5, locality: "local", cost: "Own keys (your RunPod endpoint)", blurb: "Renders on your own RunPod GPU endpoint -- own keys, no per-render markup; quality follows the GPU tier you rent." },
+  ui: { section: "motion", order: 5, locality: "byo", cost: "Own keys (your RunPod endpoint)", blurb: "Renders on your own RunPod GPU endpoint -- own keys, no per-render markup; quality follows the GPU tier you rent." },
 };
 
 function json(body: unknown, status = 200): Response {
