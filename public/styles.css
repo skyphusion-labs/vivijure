@@ -1085,6 +1085,13 @@ body.sw-open .sw-dock { transform: none; }
   border-color: color-mix(in srgb, var(--accent-2) 40%, var(--line));
   background: color-mix(in srgb, var(--accent-2) 10%, var(--panel));
 }
+/* byo = your-own-RunPod-endpoint (BYO keys): distinct from local (your card) and cloud
+   (rented datacenter). Neutral ink chip with a faint accent-2 edge so it reads as its own door. */
+.planner-backend-tag.is-byo {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent-2) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent-2) 6%, var(--panel));
+}
 .planner-backend-blurb { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.5; }
 .planner-backend-caps { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .planner-backend-caps li { margin: 0; }

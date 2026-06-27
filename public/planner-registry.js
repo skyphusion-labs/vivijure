@@ -56,12 +56,41 @@
     return hookModules("motion.backend");
   }
 
-  function ownGpuModule() {
-    return motionBackendModules().find((m) => m.name === "own-gpu") || null;
+  // Classify a motion.backend module's locality from its manifest ui.locality hint. Three values:
+  //   "local" -- a genuinely local consumer GPU (a homelab card).
+  //   "byo"   -- your-own-RunPod-endpoint (BYO keys); the own-gpu module, which backs the
+  //              server-side CONTRACT-2.27 finalize route. NOT a homelab card -- badging it
+  //              "Local (your GPU)" would be dishonest.
+  //   "cloud" -- a rented datacenter i2v model.
+  // Prefer the manifest hint (a projection of the registry, the right source of truth); FALL BACK
+  // to the legacy name check ("own-gpu" was the BYO default door) -> "byo" ONLY when a module does
+  // not declare ui.locality, so classification is byte-identical during the rollout window while
+  // the motion.backend manifests gain ui.locality. The "datacenter" alias maps to cloud.
+  // REMOVE the name-check fallback once every motion.backend manifest carries ui.locality
+  // (final cleanup -- a later follow-up).
+  function motionLocality(mod) {
+    const loc = mod && mod.ui && typeof mod.ui.locality === "string"
+      ? mod.ui.locality.trim().toLowerCase()
+      : "";
+    if (loc === "local") return "local";
+    if (loc === "byo") return "byo";
+    if (loc === "cloud" || loc === "datacenter") return "cloud";
+    return mod && mod.name === "own-gpu" ? "byo" : "cloud"; // legacy fallback (removable)
   }
 
+  // The GPU-finalize door: bound to the BYO module (own-gpu) SPECIFICALLY, because it gates the
+  // server-side CONTRACT-2.27 finalize route, which is hardcoded to motion backend own-gpu. Keying
+  // on "byo" (NOT generic "local") means a new homelab "local" door is fully selectable for motion
+  // yet can never hijack the own-gpu finalize route. Name kept ownGpuModule for caller compat.
+  function ownGpuModule() {
+    return motionBackendModules().find((m) => motionLocality(m) === "byo") || null;
+  }
+
+  // Cloud i2v doors (the animate-cloud / hybrid model picker): datacenter-rented backends only.
+  // Excludes byo (the own-gpu finalize door) and local (the homelab door, which the main render
+  // backend selector surfaces directly, not via this cloud picker).
   function cloudMotionModules() {
-    return motionBackendModules().filter((m) => m.name !== "own-gpu");
+    return motionBackendModules().filter((m) => motionLocality(m) === "cloud");
   }
 
   function planEnhanceInstalled() {

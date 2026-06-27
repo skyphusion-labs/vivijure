@@ -234,6 +234,7 @@
     if (typeof loc !== "string") return null;
     const v = loc.trim().toLowerCase();
     if (v === "local") return { text: "Local (your GPU)", kind: "local" };
+    if (v === "byo") return { text: "Your own RunPod (BYO keys)", kind: "byo" };
     if (v === "cloud" || v === "datacenter") return { text: "Datacenter", kind: "cloud" };
     return { text: loc.trim(), kind: "other" };
   }
