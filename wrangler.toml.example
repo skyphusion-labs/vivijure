@@ -143,6 +143,13 @@ service = "vivijure-module-plan-enhance"
 binding = "MODULE_OWN_GPU"
 service = "vivijure-module-own-gpu"
 
+# Local consumer GPU (LTX-Video on the homelabber's own 16GB card). The LOCAL door. Bind only AFTER
+# local-gpu is un-excluded + deployed (flip step 1) and its Secrets Store secrets are seeded, else this
+# [[services]] target dangles and the core deploy fails.
+[[services]]
+binding = "MODULE_LOCAL_GPU"
+service = "vivijure-module-local-gpu"
+
 [[services]]
 binding = "MODULE_SEEDANCE"
 service = "vivijure-module-seedance"
