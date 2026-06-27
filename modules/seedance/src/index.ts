@@ -41,7 +41,7 @@ const MANIFEST: ModuleManifest = {
     generate_audio: { type: "bool", default: false, label: "generate audio" },
     seed: { type: "int", default: -1, min: -1, label: "seed (-1 = random)" },
   },
-  ui: { section: "motion", order: 10 },
+  ui: { section: "motion", order: 10, locality: "cloud", cost: "Pay per render", blurb: "Rents datacenter GPUs by the second -- top quality, scale-to-zero; you pay only for render seconds." },
 };
 
 function json(body: unknown, status = 200): Response {

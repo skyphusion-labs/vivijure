@@ -35,7 +35,7 @@ const MANIFEST: ModuleManifest = {
   api: MODULE_API,
   hooks: ["motion.backend"],
   provides: [{ id: "i2v-cloud", label: "OpenAI Sora 2 (cloud i2v)" }],
-  ui: { section: "motion", order: 80 },
+  ui: { section: "motion", order: 80, locality: "cloud", cost: "Pay per render", blurb: "Rents datacenter GPUs by the second -- top quality, scale-to-zero; you pay only for render seconds." },
 };
 
 function json(body: unknown, status = 200): Response {

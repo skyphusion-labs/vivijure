@@ -1,0 +1,38 @@
+# local-gpu module worker (vivijure-module/2): image-to-video on the user's OWN LOCAL consumer GPU
+# (an RTX 4060 Ti 16GB-class card) via the vivijure-local-backend job server (LTX-Video, the i2v_clip
+# action). Bound into the core as MODULE_LOCAL_GPU; the registry discovers it from GET /module.json and
+# the studio renders the motion.backend stage from it.
+#
+# This is the LOCAL-CONSUMER door (the opposite of the RunPod datacenter backend). The backend SHARES
+# our R2 bucket: it reads the keyframe by key and writes the finished clip itself, returning the
+# clip_key. So this module needs NO R2 binding -- only the backend URL (+ optional token).
+#
+# HARD RULE (the module trust boundary): no public surface. workers_dev = false and NO route, so
+# /invoke is reachable ONLY through the core's service binding. A public motion.backend module is an
+# unauthenticated GPU-spend / DoS trigger against the homelab box.
+#
+# account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
+
+name = "vivijure-module-local-gpu"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+# LOCAL_BACKEND_URL (the Cloudflare tunnel hostname terminating at the homelab box) and the optional
+# LOCAL_BACKEND_TOKEN (a shared secret the local server checks) are bound from the account-level
+# Cloudflare Secrets Store -- declarative config that every `wrangler deploy` re-establishes, so a
+# fresh-create can't start URL-less and silently fail. Seeded ONCE by the operator from the crew secret
+# store; values never touch CI/GitHub. Set store_id at cutover. See docs/DEPLOYMENT.md.
+[[secrets_store_secrets]]
+binding = "LOCAL_BACKEND_URL"
+store_id = "0b04371c738a48a497c3344604114268"
+secret_name = "LOCAL_BACKEND_URL"
+
+[[secrets_store_secrets]]
+binding = "LOCAL_BACKEND_TOKEN"
+store_id = "0b04371c738a48a497c3344604114268"
+secret_name = "LOCAL_BACKEND_TOKEN"

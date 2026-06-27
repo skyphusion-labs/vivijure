@@ -113,11 +113,20 @@ export interface Provides {
   label: string;
 }
 
-/** Hints for the self-assembling studio UI. */
+/** Hints for the self-assembling studio UI. The honest-framing fields below (locality / cost / blurb /
+ *  limits) are OPTIONAL + additive (NO MODULE_API bump): the planner two-door backend selector (#379)
+ *  reads them and OMITS each when absent (never fabricated). `locality` is the load-bearing one -- it
+ *  drives the door tag AND the local-vs-cloud classification that previously name-matched "own-gpu", so
+ *  every motion.backend module SHOULD declare it. The rest are display-only (and `limits`, when absent,
+ *  falls back to the module config_schema knob ranges). */
 export interface ModuleUi {
   section?: string; // which studio area the module surfaces in (e.g. "finish")
   icon?: string;
   order?: number; // fold/render order within a chain hook
+  locality?: "local" | "byo" | "cloud"; // door class: homelab card (local) / your own RunPod endpoint+keys (byo) / pay-per-render provider (cloud)
+  cost?: string;   // short cost-model tag, display only (e.g. "Pay per render", "Free after hardware")
+  blurb?: string;  // one honest positioning sentence, display only
+  limits?: string[]; // honest capability-ceiling bullets, display only (absent => fall back to config_schema)
 }
 
 /** A module's self-description, served at GET /module.json. */
