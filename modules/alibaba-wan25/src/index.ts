@@ -39,7 +39,7 @@ const MANIFEST: ModuleManifest = {
   config_schema: {
     enable_prompt_expansion: { type: "bool", default: false, label: "expand prompt" },
   },
-  ui: { section: "motion", order: 90 },
+  ui: { section: "motion", order: 90, locality: "cloud", cost: "Pay per render", blurb: "Rents datacenter GPUs by the second -- top quality, scale-to-zero; you pay only for render seconds." },
 };
 
 function json(body: unknown, status = 200): Response {

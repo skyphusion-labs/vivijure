@@ -64,7 +64,7 @@ export const MANIFEST: ModuleManifest = {
     negative_prompt: { type: "string", default: "", label: "negative prompt (additive)" },
     seed: { type: "int", default: -1, min: -1, label: "seed (-1 = random)" },
   },
-  ui: { section: "motion", order: 4 }, // ahead of own-gpu (5): a truly-local card needs no rent at all
+  ui: { section: "motion", order: 4, locality: "local", cost: "Free after hardware", blurb: "Renders on your own GPU -- no cloud, no per-render cost; quality scales with your card (16GB / RTX 4060 Ti floor).", limits: ["RTX 4060 Ti 16GB floor; bigger cards add headroom", "LTX-Video i2v up to ~768x512, ~5s clips (draft / standard / final tiers)", "One clip at a time (a 16GB card runs a single i2v job)"] }, // ahead of own-gpu (5): a truly-local card needs no rent at all
   cancelable: true,
 };
 

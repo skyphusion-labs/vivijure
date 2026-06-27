@@ -34,7 +34,7 @@ const MANIFEST: ModuleManifest = {
     negative_prompt: { type: "string", default: "", label: "negative prompt" },
     enable_safety_checker: { type: "bool", default: true, label: "safety checker" },
   },
-  ui: { section: "motion", order: 20 },
+  ui: { section: "motion", order: 20, locality: "cloud", cost: "Pay per render", blurb: "Rents datacenter GPUs by the second -- top quality, scale-to-zero; you pay only for render seconds." },
 };
 
 function json(body: unknown, status = 200): Response {

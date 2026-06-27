@@ -39,7 +39,7 @@ const MANIFEST: ModuleManifest = {
   config_schema: {
     generate_audio: { type: "bool", default: false, label: "native audio (off: core mux chain owns audio)" },
   },
-  ui: { section: "motion", order: 50 },
+  ui: { section: "motion", order: 50, locality: "cloud", cost: "Pay per render", blurb: "Rents datacenter GPUs by the second -- top quality, scale-to-zero; you pay only for render seconds." },
 };
 
 function json(body: unknown, status = 200): Response {

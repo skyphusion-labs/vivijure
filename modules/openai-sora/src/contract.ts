@@ -14,7 +14,7 @@ export type ConfigField =
 export type ConfigSchema = Record<string, ConfigField>;
 
 export interface Provides { id: string; label: string; }
-export interface ModuleUi { section?: string; icon?: string; order?: number; }
+export interface ModuleUi { section?: string; icon?: string; order?: number; locality?: "local" | "cloud"; cost?: string; blurb?: string; limits?: string[]; }
 
 export interface ModuleManifest {
   name: string;

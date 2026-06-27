@@ -129,6 +129,14 @@ describe("local-gpu manifest conformance", () => {
     expect(MANIFEST.api).toBe("vivijure-module/2");
   });
 
+  it("declares honest two-door ui framing: local locality + cost + blurb + real limits (#379)", () => {
+    expect(MANIFEST.ui?.locality).toBe("local"); // load-bearing: drives the door tag + classification
+    expect(typeof MANIFEST.ui?.cost).toBe("string");
+    expect(typeof MANIFEST.ui?.blurb).toBe("string");
+    expect(Array.isArray(MANIFEST.ui?.limits) && MANIFEST.ui!.limits!.length).toBeTruthy();
+    expect(MANIFEST.ui?.blurb).toMatch(/your own gpu/i); // honest: truly-local, not datacenter
+  });
+
   it("quality enum matches the core QUALITY_TIERS set (#124 -- else the injected tier silently drops)", () => {
     const core = QUALITY_TIERS.map((t) => t.value).slice().sort();
     const f = MANIFEST.config_schema?.quality as Extract<ConfigField, { type: "enum" }> | undefined;
