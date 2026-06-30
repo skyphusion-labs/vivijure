@@ -61,7 +61,7 @@ Config (the module's `config_schema`, clamped by the core): `target_lufs` (float
 - Binding: `AUDIO_MASTER_VPC` (in `modules/audio-master/wrangler.toml`). The VPC Service host name MUST
   match the compose service name (`audio-master`); the `service_id` is a clearly-marked placeholder
   (`TBD-STRUMMER-AUDIO-MASTER-VPC`) until the Workers VPC Service is created.
-- Deploy on dischord: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build audio-master`;
+- Deploy on your container host: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build audio-master`;
   health: `curl http://127.0.0.1:8784/health`.
 
 ## Soft-degrade

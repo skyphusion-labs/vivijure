@@ -23,7 +23,7 @@ it looks like the log was dropped. It was not. It is in Loki.
 ```
 worker  --console.log/exceptions-->  tail_consumers = [ vivijure-tail ]
         --(vivijure-tail worker)-->  LOKI_VPC  (vpc_service binding)
-        --(Cloudflare VPC connector)-->  Loki  (monitoring-loki-1 on dischord)
+        --(Cloudflare VPC connector)-->  Loki  (self-hosted on the operator's monitoring host)
         --(datasource)-->  Grafana  (grafana.skyphusion.org)
 ```
 
@@ -99,10 +99,10 @@ So to parse structured fields you unwrap twice: `| json | line_format "{{.msg}}"
 {worker="vivijure-studio"} |~ "d1\\.(retry|exhausted|error)"
 ```
 
-## Reaching Loki from off-fleet (the jello / crew-agent caveat)
+## Reaching Loki when it is network-isolated
 
-Loki and Grafana run on **dischord** (`10.1.1.2`), on the private fleet estate.
-Two facts decide how you query them:
+Loki and Grafana run self-hosted on the operator's monitoring host, on a private
+network. Two facts decide how you query them:
 
 - **Grafana UI is public** at `grafana.skyphusion.org` (cloudflared + Access, same
   pattern as `status.skyphusion.org -> gatus`). From a laptop browser this Just
@@ -110,35 +110,30 @@ Two facts decide how you query them:
 - **Loki itself is network-isolated** (`3100/tcp`, no public port; the tail worker
   pushes to it over the Cloudflare VPC connector, not a public endpoint).
 
-**The caveat for crew agents:** the WARP mesh is **retired** from the fleet, and
-public `:22` is closed fleet-wide. A crew agent running on **jello** therefore has
-**no direct route** to `10.1.1.2:3100` (a `curl http://10.1.1.2:3100/...` returns
-`000` / timeout, NOT a worker fault). To query Loki directly from off-fleet you
-must first cross the **lagwagon bastion**:
+**The caveat:** Loki has no public route, so a host that is not on the monitoring
+host's private network has **no direct path** to it (a `curl` to the Loki port
+returns `000` / timeout, NOT a worker fault). To query Loki directly you must run
+from a host on that private network (or tunnel onto it); from inside, run a
+one-shot query against Loki's own docker network:
 
 ```bash
-# option A: jump host for a one-shot docker-network query on dischord
-ssh -J lagwagon dischord "docker run --rm --network monitoring_default \
-  curlimages/curl:latest -s \
-  --data-urlencode 'query={worker=\"vivijure-studio\"}' \
+# from the monitoring host (or a host on its private network):
+docker run --rm --network monitoring_default curlimages/curl:latest -s \
+  --data-urlencode 'query={worker="vivijure-studio"}' \
   --data-urlencode since=1h \
-  http://monitoring-loki-1:3100/loki/api/v1/query_range"
-
-# option B: route the whole private estate locally, then curl as if on-fleet
-sshuttle --dns -r conrad@lagwagon.internal 10.1.0.0/16
+  http://monitoring-loki-1:3100/loki/api/v1/query_range
 ```
 
-If neither bastion path is set up in your shell (e.g. a non-interactive crew
-session with no `~/.ssh/config` for lagwagon), **use the Grafana web UI or the CF
-Workers Observability API instead**; both are reachable without fleet access, and
-CF-obs already carries the invocation truth (status, timing, cron). Do not read an
+If you do not have private-network access, **use the Grafana web UI or the CF
+Workers Observability API instead**; both are reachable without it, and CF-obs
+already carries the invocation truth (status, timing, cron). Do not read an
 unreachable Loki as a missing-logs / broken-pipeline signal; confirm reachability
 first.
 
-## Direct Loki API (from the fleet, no Grafana UI)
+## Direct Loki API (from the monitoring host, no Grafana UI)
 
-Loki has no published host port (it is `3100/tcp`, network-internal on dischord).
-Query it from inside its docker network:
+Loki has no published host port (it is `3100/tcp`, network-internal on the
+monitoring host). Query it from inside its docker network:
 
 ```bash
 docker run --rm --network monitoring_default curlimages/curl:latest -s \

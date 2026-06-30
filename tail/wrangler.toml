@@ -1,5 +1,5 @@
 # vivijure-tail: tail consumer for the vivijure-studio core. Receives the core's tail events
-# (console logs + uncaught exceptions) and ships them to the self-hosted Loki on dischord over
+# (console logs + uncaught exceptions) and ships them to the self-hosted Loki on the operator's monitoring host over
 # Workers VPC (LOKI_VPC -> http://loki:3100). Wire it up by adding to the core wrangler.toml
 # (deploy-ordered, AFTER this worker is live):  tail_consumers = [ { service = "vivijure-tail" } ]
 #

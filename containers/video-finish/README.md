@@ -57,7 +57,7 @@ pod produced.
 - compose service `video-finish` on `127.0.0.1:8780:8000`, joined to the `vivijure` docker network.
 - Bindings: `VIDEO_FINISH_VPC` on the core (assemble/mux) and on `modules/subtitle` + `modules/film-titles`
   (the `film.finish` routes). Service host name MUST match the compose service name.
-- Deploy on dischord: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build video-finish`;
+- Deploy on your container host: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build video-finish`;
   health: `curl http://127.0.0.1:8780/health`.
 
 ## Soft-degrade

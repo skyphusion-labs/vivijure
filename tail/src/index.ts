@@ -2,7 +2,7 @@
 //
 // The core logs render state via console.log/warn ("film <id>: ..." convention) and surfaces
 // uncaught exceptions. This worker receives those as tail events and pushes them to the self-hosted
-// Loki (dischord) over Workers VPC, shaped into Loki streams. It NEVER throws back into the producer
+// Loki (the operator's monitoring host) over Workers VPC, shaped into Loki streams. It NEVER throws back into the producer
 // and NEVER adds render latency (all sink I/O via ctx.waitUntil; failures are dropped).
 //
 // Label design (Loki cardinality): stream labels are the LOW-cardinality set {worker,level,phase,
