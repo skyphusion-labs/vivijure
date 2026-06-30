@@ -51,7 +51,7 @@ ffmpeg, CPU-only: per-track gain, `sidechaincompress` (music keyed on the dialog
 - compose service `audio-mix` on `127.0.0.1:8783:8000`, `vivijure` network.
 - Binding (to be created when wired): `AUDIO_MIX_VPC`. Service host name MUST match the compose service
   name.
-- Deploy on dischord: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build audio-mix`;
+- Deploy on your container host: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build audio-mix`;
   health: `curl http://127.0.0.1:8783/health`.
 
 ## Soft-degrade

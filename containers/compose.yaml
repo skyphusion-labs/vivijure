@@ -1,6 +1,6 @@
 # Vivijure media stack -- the always-on CPU containers (issue #83).
 #
-# These run always-on on the fleet (dischord) instead of CF Containers (beta,
+# These run always-on on the operator's container host instead of CF Containers (beta,
 # scale-to-zero -> cold-start 504s). The studio Worker reaches each privately
 # over Workers VPC: one cloudflared tunnel (3111f3fe) -> a VPC Service per
 # container -> the docker service name on the `vivijure` network. Service names

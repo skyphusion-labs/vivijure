@@ -40,7 +40,7 @@ authored clip boundaries onto the nearest beats. CPU-only.
 
 - compose service `audio-beat-sync` on `127.0.0.1:8782:8000`, `vivijure` network.
 - Binding: `AUDIO_BEAT_SYNC_VPC` on the core. Service host name MUST match the compose service name.
-- Deploy on dischord: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build audio-beat-sync`;
+- Deploy on your container host: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build audio-beat-sync`;
   health: `curl http://127.0.0.1:8782/health`.
 
 ## Soft-degrade

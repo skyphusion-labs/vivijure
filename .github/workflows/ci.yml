@@ -56,7 +56,7 @@ jobs:
 
       # The 3 CPU containers (video-finish / image-prep / audio-beat-sync) are NOT built or deployed
       # here. CF Containers were dropped in wrangler.toml migration v2-drop-cpu-containers (issue #83);
-      # they run always-on on the fleet (dischord) as Docker services, deployed out of band via
+      # they run always-on on the operator's container host as Docker services, deployed out of band via
       # containers/compose.yaml. `wrangler deploy` ships ONLY the workers, so no Docker/buildx needed.
 
       # Module workers deploy BEFORE the core. The core binds each module as a [[services]] dependency,

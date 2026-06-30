@@ -20,8 +20,8 @@ enabled = true
 # calls the /master route synchronously. Mirrors the subtitle (VIDEO_FINISH_VPC) + beat-sync
 # (AUDIO_BEAT_SYNC_VPC) VPC blocks.
 #
-# AUDIO_MASTER_VPC -> the always-on audio-master CPU container on dischord. Workers VPC Service created
-# 2026-06-23, resolving over the dischord-local tunnel d0835ae0. An unbound binding soft-degrades the
+# AUDIO_MASTER_VPC -> the always-on audio-master CPU container on the operator's container host. Workers VPC Service created
+# 2026-06-23, resolving over the host-local tunnel. An unbound binding soft-degrades the
 # master phase to the un-mastered bed (#249 / #77); it never drops the film.
 [[vpc_services]]
 binding = "AUDIO_MASTER_VPC"

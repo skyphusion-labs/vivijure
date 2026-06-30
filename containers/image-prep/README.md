@@ -40,7 +40,7 @@ healthy before it can serve.
 
 - compose service `image-prep` on `127.0.0.1:8781:8000`, `vivijure` network.
 - Binding: `IMAGE_PREP_VPC` on the core. Service host name MUST match the compose service name.
-- Deploy on dischord: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build image-prep`;
+- Deploy on your container host: `docker compose -p vivijure-media -f containers/compose.yaml up -d --build image-prep`;
   health: `curl http://127.0.0.1:8781/health`.
 
 ## Soft-degrade

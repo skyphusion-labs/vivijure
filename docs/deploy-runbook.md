@@ -35,7 +35,7 @@ Style: no em-dashes or en-dashes (double hyphen `--` only).
   This is the `plan-enhance-py` pattern: keep the core binding commented out until the module worker
   is live, then uncomment it in the SAME change.
 - **The 3 CPU containers are NOT deployed by `wrangler`.** `video-finish`, `image-prep`, and
-  `audio-beat-sync` run always-on on the fleet (dischord) as Docker services via
+  `audio-beat-sync` run always-on on the operator's container host as Docker services via
   `containers/compose.yaml`, reached over Workers VPC bindings (`VIDEO_FINISH_VPC` etc.). They are
   deployed OUT OF BAND. **This cut changes `video-finish` (new `/subtitle` route), so the container
   must be rebuilt + redeployed on the fleet BEFORE the subtitle module goes live** (see section 1.0
@@ -63,10 +63,10 @@ binding and add it to the CI loop in the SAME release change. Do these in the or
 
 The subtitle module forwards its SRT spec to the `video-finish` container over `VIDEO_FINISH_VPC`,
 hitting the new `POST /subtitle` route. That route does not exist on the currently-running fleet
-container. Rebuild + redeploy `video-finish` on dischord before the subtitle module is live:
+container. Rebuild + redeploy `video-finish` on your container host before the subtitle module is live:
 
 ```bash
-# on the fleet host (dischord), from the repo checkout used for the always-on services:
+# on your container host, from the repo checkout used for the always-on services:
 docker compose -f containers/compose.yaml build video-finish
 docker compose -f containers/compose.yaml up -d video-finish
 # confirm the new route is up:
@@ -196,7 +196,7 @@ container is NOT a `wrangler` deploy; it needs its own out-of-band fleet build, 
 section 1.0. At deploy time (Strummer, on Conrad's go):
 
 ```bash
-# on the fleet host (dischord), BEFORE the audio-master module worker is relied on:
+# on your container host, BEFORE the audio-master module worker is relied on:
 docker compose -f containers/compose.yaml build audio-master
 docker compose -f containers/compose.yaml up -d audio-master
 curl -fsS http://<audio-master-host>:<port>/health
@@ -283,8 +283,8 @@ cut; use this split only if master is not ready at go time.
 1. **CI deploy job green.** Actions run for the tag shows module loop + `d1 migrations apply` + core
    deploy all succeeded. A core failure here is almost always a dangling binding (a module that did
    not deploy or a name typo) -- cross-check section 1/2.
-2. **VPC video-finish up on the fleet, new routes reachable.** It is VPC-live on the fleet (NOT a CF
-   Container). From a path that can reach the fleet (mesh `*.internal` or the VPC):
+2. **VPC video-finish up on your container host, new routes reachable.** It is VPC-live on your container host (NOT a CF
+   Container). From a path that can reach it (over your private network or the VPC):
    ```bash
    curl -fsS http://<video-finish-host>:<port>/health
    ```
