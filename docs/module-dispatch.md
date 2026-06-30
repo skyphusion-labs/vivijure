@@ -331,12 +331,14 @@ script SECOND (so an in-flight request mid-`/poll` is not torn out from under). 
 routes on the core, callable from an `install` CLI checked into the repo -- the reproducible,
 no-dashboard onboarding the doctrine asks for.
 
-## 5. Contract-version implications (FLAGGED for Mackaye -- not decided here)
+## 5. Contract-version implications (DECIDED)
 
 **The question:** does dynamic dispatch require a bump of `vivijure-module/2`, or is it host-side-only
 and additive (module contract unchanged)?
 
-Both readings, laid out honestly:
+**The ruling (Mackaye, design-only): ADDITIVE, NO bump. The contract stays `vivijure-module/2`.** Both
+readings are recorded below; section 5.3 carries the decision and the one refinement (a host
+capability flag, not a version) that satisfies the change-control instinct host-side.
 
 ### 5.1 The case for ADDITIVE (no bump) -- the strong reading
 
@@ -366,21 +368,34 @@ Both readings, laid out honestly:
   marker even if the shapes are unchanged, purely so a deployment can assert "this host speaks
   dispatch" distinctly from "this host speaks service bindings".
 
-### 5.3 Strummer's recommendation (for Mackaye's call)
+### 5.3 The decision (Mackaye): additive on `vivijure-module/2`
 
-**Lean ADDITIVE, no `MODULE_API` bump, for the dispatch transport itself** -- because in the design as
-drawn here the module-facing contract is genuinely untouched, and a bump's cost (the 28-module
-migration) buys nothing a module can observe. Keep `vivijure-module/2`.
+**Dispatch ships as additive host-side infrastructure. NO `MODULE_API` bump. The contract stays
+`vivijure-module/2`** -- because the module-facing contract is genuinely untouched
+(`get(name).fetch("/invoke")` delivers the identical request a service binding does), and a bump's cost
+(the ~28-module migration) buys nothing a module can observe. The two decisions section 5.2 raised are
+both ruled NO, which is what keeps this additive:
 
-BUT gate that on two design decisions that ARE Mackaye's:
+1. **Transport hint to modules: NO.** A module stays BLIND to which door it came through. A
+   `context.transport` (or any "you are running under dispatch" signal) would leak host topology into a
+   module-facing type and break "no override grab-bag" -- a module's only inputs remain
+   `{ hook, input, config, context }`, and `context` stays `{ project, job_id }`. A module that wants
+   to assert it has no public route does so in its OWN config (`workers_dev = false`, no route), not by
+   reading a host hint.
+2. **Required manifest dispatch field: NO.** Any dispatch knob (a tenancy class, a
+   `DynamicDispatchLimits` request, an egress allow-list) is OPTIONAL with a host default. Optional
+   manifest fields have never bumped (precedent: `ui.locality`, `cancelable`, `jobId`,
+   `config_schema` `scope`); a REQUIRED one would, so we keep them all optional and host-defaulted.
 
-1. **Do we pass a transport hint to modules?** If yes (a `context.transport` or similar), that bumps,
-   and we should bump deliberately rather than smuggle a field in.
-2. **Does the manifest grow a REQUIRED dispatch field** (tenancy / limits / egress)? Optional ones do
-   not bump (precedent: `ui.locality` et al.); a required one does.
-
-If both stay "no", ship dispatch as additive host-side infrastructure on `vivijure-module/2`. **The
-api-version decision is explicitly Mackaye's; this section is the analysis, not the ruling.**
+**Refinement -- "this host speaks dispatch" is a HOST CAPABILITY FLAG, never a `MODULE_API` version.**
+Section 5.2's change-control instinct (a deployment wanting to assert it speaks dispatch) is real, and
+it is satisfied **host-side**, not by versioning the module contract. The core advertises its own
+capabilities in the `GET /api/modules` projection -- a `host` / `meta` block (e.g.
+`host: { dispatch: true }`) that is the CORE describing itself, orthogonal to `api`
+(`vivijure-module/2`, which describes the module contract). A module never reads it; an operator,
+the studio UI, or a health probe does. This keeps two distinct facts distinct: WHAT the module
+contract is (the `api` version, unchanged) versus WHAT transports the host offers (a host capability,
+newly advertised). Adding a host capability flag bumps nothing in `src/modules/types.ts`.
 
 ## 6. Migration: in-tree-behind-a-flag -> namespace upload
 
@@ -410,8 +425,15 @@ modules behind a flag.
 ### 6.2 Future community doors
 
 A community `motion.backend` (a new cloud provider, a different homelab runtime) follows the same
-path: clone the module template, implement the one hook, pass conformance, and **upload** -- never a PR
-into our tree, never a core release. That is "modules = community territory" as infrastructure.
+path: clone the module template, implement the one hook, pass conformance, and get **installed** --
+never a PR into our tree, never a core release. That is "modules = community territory" as
+infrastructure.
+
+One important boundary (decided, see risk #1): community-territory does NOT mean self-serve upload into
+OUR namespace. For v1 a community module is installed into the vivijure-operated namespace by the
+**operator** (who vets it), or -- the true self-serve path -- the contributor runs the studio on THEIR
+OWN account and uploads into THEIR OWN namespace (the BYO-accounts model, #244). Either way the module
+is the same four files behind the same hook; what differs is whose namespace it lands in.
 
 ### 6.3 Dual-resolution during migration (no big-bang)
 
@@ -432,24 +454,27 @@ The migration is **incremental and reversible**, which is the whole point of kee
   a migrated first-party one, its `[[services]]` binding can be restored. No release is blocked on the
   experiment.
 
-## 7. Open questions / risks (for Mackaye's integration)
+## 7. Decisions + open questions
 
-These are deliberately unresolved -- they want a lead/PM ruling or a follow-up spike, not a unilateral
-infra decision:
+Items 1 and 2 are **DECIDED** (Mackaye, design-only). Items 3 through 7 are correctly-deferred
+follow-ups -- they want a measured number or a follow-up spike, not a v1 ruling, and none blocks this
+design landing.
 
-1. **Upload auth / who may install.** What authenticates a module upload? Options: (a) a core admin API
-   route behind CF Access (operator-only, mirrors the studio's own auth), (b) a scoped Cloudflare API
-   token used only by the `install` CLI, (c) a GitHub-Actions-driven onboarding for first-party
-   modules. The community-territory promise pulls toward a self-serve path, but a self-serve upload of
-   an arbitrary Worker into our namespace is a real attack surface (it runs on our account). Likely
-   answer: operator-gated install for v1 (the operator vets + uploads a community module), self-serve
-   deferred. **PM call.**
+1. **Upload auth / who may install -- DECIDED: operator-gated install for v1.** A module upload is
+   authenticated by a **core admin API route behind CF Access** (operator-only, mirroring the studio's
+   own auth) plus a **scoped install-CLI token** for the WfP upload itself (option (a) + (b) combined).
+   **Self-serve upload into OUR namespace is NOT built** -- letting an outside contributor push an
+   arbitrary Worker into the vivijure-operated namespace runs untrusted code on our account, which we
+   do not open. The genuine self-serve story is **BYO-accounts (#244)**: a contributor runs the studio
+   on THEIR OWN Cloudflare account, uploads into THEIR OWN namespace, and the core dispatches outbound;
+   "modules = community territory" is fulfilled by #244, not by opening our namespace. So for the
+   vivijure-operated deployment, the operator vets and installs a community module via the admin route.
 
-2. **Namespace tenancy.** One namespace for everything, or per-tenant namespaces if vivijure ever hosts
-   multiple operators? Single-operator (the current model) wants one namespace. The unified-deploy /
-   BYO-accounts research (#244) may push multi-tenant, at which point namespace-per-tenant + a tenant
-   column on `installed_modules` is the shape. Out of scope here; flagged so the D1 schema (section
-   3.1) can grow a `tenant` key without a rewrite.
+2. **Namespace tenancy -- DECIDED: single namespace for v1.** The vivijure-operated deployment uses ONE
+   dispatch namespace (`vivijure-modules`); multi-operator tenancy is NOT a v1 concern. The
+   `installed_modules` schema (section 3.1) stays able to grow a `tenant` column without a rewrite, and
+   the multi-tenant question (namespace-per-tenant vs a tenant key) is decided **with the BYO-accounts /
+   unified-deploy research (#244)**, not here. v1 ships single-namespace; the schema is forward-compatible.
 
 3. **User-Worker cold start.** A namespace module is not always warm. For a synchronous hook
    (`plan.enhance`) a cold start adds latency; for an async GPU hook (`motion.backend`) it is in the
@@ -485,7 +510,7 @@ infra decision:
 
 - It does not create the namespace, upload any module, or apply any `wrangler.toml` / `env.ts` change.
   The diffs in sections 2.2 / 2.3 are PROPOSED, shown inline for review.
-- It does not decide the `MODULE_API` version question (section 5) -- that is Mackaye's call.
-- It does not change the module-facing contract (`docs/module-api.md`, `src/modules/types.ts`). If the
-  api-version ruling and the open questions land on "additive", this stays a pure host-side +
-  onboarding spec layered under the existing `vivijure-module/2` contract.
+- It does not change the module-facing contract (`docs/module-api.md`, `src/modules/types.ts`). The
+  api-version ruling (section 5) is **additive, no bump** -- so this stays a pure host-side +
+  onboarding spec layered under the existing `vivijure-module/2` contract. "This host speaks dispatch"
+  is advertised as a host capability flag, never a `MODULE_API` version (section 5.3).
