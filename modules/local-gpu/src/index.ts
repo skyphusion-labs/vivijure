@@ -1,6 +1,9 @@
 // local-gpu: a motion.backend module worker (vivijure-module/2) that renders image-to-video on the
-// user's OWN LOCAL consumer GPU (a 12GB-class consumer card in their homelab), via the
-// vivijure-local-12gb job server (LTX-Video), the i2v_clip action.
+// user's OWN LOCAL consumer GPU in their homelab, via a vivijure-local-backend job server (the
+// i2v_clip action). The module is model-agnostic: one module serves BOTH local doors -- the LTX-Video
+// 12GB backend (vivijure-local-12gb) and the CogVideoX-5B-I2V 16GB backend (vivijure-local-16gb). The
+// homelabber points LOCAL_BACKEND_URL at whichever they run; the wire contract is identical, so the
+// same control plane drives either.
 //
 // This is the LOCAL-CONSUMER door: the deliberate opposite of the RunPod datacenter backend. Unlike
 // own-gpu (which still runs on a RunPod endpoint the user provisions), this targets a long-running
@@ -48,23 +51,24 @@ interface Env {
 
 // Exported so the core's tier-drift guard (tests/quality-tier-drift.test.ts, #124) can assert this
 // module's `quality` enum stays in lockstep with the core QUALITY_TIERS set. The enum VALUES are the
-// core's shared vocabulary (draft/standard/final); the local backend maps each to an LTX engine config
-// a 12GB card can HONESTLY deliver ("final" = the card's honest ceiling, NOT datacenter parity). Same
-// names, backend-specific mapping -- exactly as the Wan datacenter backend maps the tiers to its steps.
+// core's shared vocabulary (draft/standard/final); the local backend maps each to an engine config its
+// card can HONESTLY deliver ("final" = the card's honest ceiling, NOT datacenter parity) -- LTX scales
+// the tiers one way, CogVideoX by inference steps. Same names, backend-specific mapping -- exactly as
+// the Wan datacenter backend maps the tiers to its steps.
 export const MANIFEST: ModuleManifest = {
   name: "local-gpu",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["motion.backend"],
-  provides: [{ id: "i2v-local-gpu", label: "Local GPU (LTX-Video i2v, 12GB consumer card)" }],
+  provides: [{ id: "i2v-local-gpu", label: "Local GPU (image-to-video on your own card)" }],
   config_schema: {
     quality: { type: "enum", values: ["draft", "standard", "final"], default: "standard", label: "quality" },
-    fps: { type: "int", default: 24, min: 8, max: 30, label: "fps" },
-    flow_shift: { type: "float", default: 5.0, min: 1, max: 12, label: "motion (flow shift, lower = faster)" },
+    fps: { type: "int", default: 24, min: 8, max: 30, label: "fps (backend may pin its own; e.g. CogVideoX = 8)" },
+    flow_shift: { type: "float", default: 5.0, min: 1, max: 12, label: "motion (flow shift; LTX door only, ignored otherwise)" },
     negative_prompt: { type: "string", default: "", label: "negative prompt (additive)" },
     seed: { type: "int", default: -1, min: -1, label: "seed (-1 = random)" },
   },
-  ui: { section: "motion", order: 4, locality: "local", cost: "Free after hardware", blurb: "Renders on your own GPU -- no cloud, no per-render cost; quality scales with your card (12GB floor, proven).", limits: ["12GB consumer GPU floor (proven); bigger cards add headroom", "LTX-Video i2v up to ~768x512, ~5s clips (draft / standard / final tiers)", "One clip at a time (a 12GB card runs a single i2v job)"] }, // ahead of own-gpu (5): a truly-local card needs no rent at all
+  ui: { section: "motion", order: 4, locality: "local", cost: "Free after hardware", blurb: "Renders on your own GPU -- no cloud, no per-render cost; quality scales with your card and chosen backend (12GB LTX floor, 16GB CogVideoX).", limits: ["Runs whichever local backend you point it at: LTX (12GB floor) or CogVideoX (16GB floor); bigger cards add headroom", "Short i2v clips (draft / standard / final tiers); resolution + cadence set by the backend", "One clip at a time (a consumer card runs a single i2v job)"] }, // ahead of own-gpu (5): a truly-local card needs no rent at all
   cancelable: true,
 };
 
