@@ -287,6 +287,34 @@ service = "vivijure-module-subtitle"
 # binding = "MODULE_PLANENHANCE_PY"
 # service = "vivijure-module-plan-enhance-py"
 
+# --- Phase 3: Workers for Platforms (WfP) dynamic dispatch -- OPT-IN, ships COMMENTED OUT on purpose.
+# ---
+# --- LEAVE IT COMMENTED for a standard self-host: modules bind as [[services]] (above) and everything
+# --- works with ZERO WfP dependency. Dispatch is an OPERATOR CONVENIENCE (install a module WITHOUT a
+# --- core redeploy), NEVER a requirement to run vivijure. The core dispatch layer is runtime-gated on
+# --- MODULE_DISPATCH being bound, so absent it the behavior is identical.
+# ---
+# --- Uncomment the block below ONLY if you have BOTH (1) enabled Workers for Platforms on your
+# --- Cloudflare account (a PAID add-on) and (2) created the `vivijure-modules` dispatch namespace out
+# --- of band (see docs/deploy-runbook.md "Phase 3: create the dispatch namespace"). A
+# --- [[dispatch_namespaces]] binding is subject to the dangling-binding rule: the namespace must EXIST
+# --- at deploy time or `wrangler deploy` of the core FAILS -- so shipping it ACTIVE on an account
+# --- without WfP would break the deploy (and the free-self-host promise).
+# ---
+# --- When enabled, the core becomes the OUTBOUND dynamic-dispatch Worker for `vivijure-modules`; a
+# --- module uploaded into that namespace is reached at request time via
+# --- env.MODULE_DISPATCH.get(<script>).fetch(...), with no core redeploy. Mirror the binding in
+# --- src/env.ts (MODULE_DISPATCH?: DispatchNamespace).
+# [[dispatch_namespaces]]
+# binding = "MODULE_DISPATCH"
+# namespace = "vivijure-modules"
+#
+# # OPTIONAL hardening (deferred, see docs/module-dispatch.md section 7): an OUTBOUND worker can
+# # intercept every outbound fetch a module makes (egress allow-list, spend metering). Wire it only when
+# # that worker exists, or the core deploy fails on a dangling outbound reference. Left disabled until
+# # vivijure-module-egress-guard is deployed.
+# # outbound = { service = "vivijure-module-egress-guard" }
+
 [[routes]]
 pattern = "vivijure.skyphusion.org"
 custom_domain = true
