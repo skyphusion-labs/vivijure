@@ -299,7 +299,14 @@ service = "vivijure-module-subtitle"
 # --- of band (see docs/deploy-runbook.md "Phase 3: create the dispatch namespace"). A
 # --- [[dispatch_namespaces]] binding is subject to the dangling-binding rule: the namespace must EXIST
 # --- at deploy time or `wrangler deploy` of the core FAILS -- so shipping it ACTIVE on an account
-# --- without WfP would break the deploy (and the free-self-host promise).
+# --- without WfP would break the deploy (and the free-self-host promise). That is why it stays
+# --- COMMENTED here: the committed template is free-self-host-safe by default.
+# ---
+# --- How OUR prod turns it on WITHOUT editing this template: the CI "Render core wrangler.toml" step
+# --- uncomments exactly these three lines when the repo VARIABLE `ENABLE_WFP_DISPATCH` == "1" (set
+# --- only on the account that created the namespace). A community fork never sets that variable, so
+# --- its render leaves this block commented. A manual self-host that DOES want WfP just uncomments
+# --- these lines by hand after creating the namespace.
 # ---
 # --- When enabled, the core becomes the OUTBOUND dynamic-dispatch Worker for `vivijure-modules`; a
 # --- module uploaded into that namespace is reached at request time via
