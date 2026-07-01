@@ -13,6 +13,7 @@ import {
   validateConfig,
 } from "./modules/registry";
 import type { PlanEnhanceStoryboard, RegisteredModule, ScoreInput, ScoreOutput } from "./modules/types";
+import { hookOutputViolation } from "./modules/conformance";
 
 interface FetcherLike {
   fetch(input: Request | string, init?: RequestInit): Promise<Response>;
@@ -184,6 +185,8 @@ export async function pollScoreBedGenerate(
   if (p.ok && (p as { pending?: boolean }).pending === true) return { status: "pending" };
 
   const output = (p as { output: ScoreOutput }).output;
+  const violation = hookOutputViolation(name, "score", output);
+  if (violation) return { status: "failed", job_error: violation };
   const artifact = audioKeyFromApplied(output.applied ?? []);
   if (!artifact) {
     return { status: "failed", job_error: `${name} finished but returned no audio artifact` };

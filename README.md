@@ -318,6 +318,12 @@ are in `wrangler.toml` (committed); secrets go in via `wrangler secret put`.
 
 Vivijure Studio is the primary user-facing surface, so its public policies live one click from here in [docs/legal/](docs/legal/): the [Acceptable Use Policy](docs/legal/ACCEPTABLE-USE.md) (including the absolute CSAM bright line, 18 U.S.C. 1466A / 2252A), the [Privacy Policy](docs/legal/PRIVACY.md), and the [Terms of Service](docs/legal/TERMS.md).
 
+## Support
+
+Questions, bugs, or ideas? Start with this repo's [GitHub Issues](../../issues); see
+[SUPPORT.md](SUPPORT.md) for how to ask and what to include. Found a security problem? Report it
+privately per [SECURITY.md](SECURITY.md), never as a public issue.
+
 ## License
 
 **AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
