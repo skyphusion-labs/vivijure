@@ -359,3 +359,85 @@ gated), so old code runs safely against the newer schema.
   control. Do not wipe/recreate a module worker without re-seeding its secret.
 - **Deploy executor:** Strummer runs the out-of-band fleet container rebuild(s) and the tag at deploy
   time, on Conrad's go, after QA passes.
+
+---
+
+## Phase 3 (Workers for Platforms): create the dispatch namespace  (FUTURE cut -- NOT this release)
+
+> Forward-looking prerequisite for the dynamic-dispatch work in `docs/module-dispatch.md` (sections 2.2
+> / 3.1). It is documented here with the rest of the deploy ordering; it is NOT part of the current
+> feature-complete cut and MUST NOT be run as part of it. This is a PROD action gated on Conrad's
+> explicit go -- the crew does not create the namespace or deploy the core with the binding on its own.
+
+**WfP is OPT-IN, never required to run vivijure.** Dispatch is an OPERATOR CONVENIENCE (install a module
+WITHOUT a core redeploy), not a dependency. Workers for Platforms is a PAID Cloudflare add-on, so the
+`[[dispatch_namespaces]]` block ships **commented out** in `wrangler.toml.example`: a standard self-host
+on the free/standard Workers plan binds modules as `[[services]]` and everything works with ZERO WfP
+dependency (the core dispatch layer is runtime-gated on `MODULE_DISPATCH` being bound, so absent it the
+behavior is identical). This whole section applies ONLY to an operator who deliberately opts into WfP.
+
+**Why it is a deploy-ordering item.** The `[[dispatch_namespaces]]` binding in `wrangler.toml.example`
+(`binding = "MODULE_DISPATCH"`, `namespace = "vivijure-modules"`, shipped commented) is subject to the
+SAME existence rule as a `[[services]]` target: once UNCOMMENTED, the namespace must EXIST before the
+core that binds it deploys, or `wrangler deploy` of the core FAILS. That is exactly why it ships
+commented -- an active binding on an account without WfP breaks the deploy. `npm run typecheck` does NOT
+catch a dangling dispatch binding -- only a real deploy does. So the namespace is created ONCE, out of
+band, ahead of the first core deploy that carries the (uncommented) binding. After that, modules come and
+go INSIDE the namespace with no core redeploy.
+
+**Ordering (once, when Phase 3 ships, on Conrad's go):**
+
+1. Create the `vivijure-modules` dispatch namespace (command below).
+2. Verify it exists (`... list` / `... get`).
+3. THEN deploy the core with the `MODULE_DISPATCH` binding uncommented in `wrangler.toml`.
+
+Reverse that order and the core deploy trips on a namespace that is not there yet.
+
+### Create the namespace (preferred -- wrangler)
+
+Verified against the repo-pinned wrangler (`4.102.0`): the subcommand is
+`wrangler dispatch-namespace create <name>`.
+
+```bash
+# from the repo root, authenticated as the deploy identity (CLOUDFLARE_ACCOUNT_ID +
+# CLOUDFLARE_API_TOKEN with Workers Scripts:Edit / Workers-for-Platforms permission):
+npx wrangler dispatch-namespace create vivijure-modules
+
+# verify:
+npx wrangler dispatch-namespace list
+npx wrangler dispatch-namespace get vivijure-modules
+```
+
+Creating a namespace is idempotent-safe to VERIFY but not to blindly re-run: if it already exists the
+create errors. Check `list`/`get` first.
+
+### Create the namespace (fallback -- CF API, if the CLI is unavailable)
+
+The REST create is a POST (not a PUT) to the dispatch-namespaces collection. `account_id` is never
+hardcoded -- it comes from `$CLOUDFLARE_ACCOUNT_ID`; the token is the privileged Workers-scoped token,
+read from its file, NEVER echoed:
+
+```bash
+curl -fsS -X POST \
+  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/dispatch/namespaces" \
+  -H "Authorization: Bearer ${CF_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  --data {"name":"vivijure-modules"}
+
+# verify:
+curl -fsS \
+  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/dispatch/namespaces/vivijure-modules" \
+  -H "Authorization: Bearer ${CF_API_TOKEN}"
+```
+
+(Wrap the JSON body in single quotes when you actually run it; it is shown unquoted here only to keep
+this doc free of nested-quote noise.)
+
+### Do NOT, as part of the current cut
+
+- Do NOT create the namespace.
+- Do NOT uncomment / ship the `MODULE_DISPATCH` binding in a real `wrangler.toml`.
+- Do NOT run `wrangler deploy` of the core with the binding present.
+- Do NOT run migration `0006_installed_modules.sql` against remote/prod D1.
+
+All of the above are the Phase 3 go, on Conrad's explicit word, sequenced as above.
