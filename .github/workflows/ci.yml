@@ -197,3 +197,37 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run deploy
+
+      # Opt-in, self-host safe edge-cache purge. The core worker is already LIVE by this step, so a
+      # failure here NEVER rolls back the deploy -- it just means /welcome may serve stale from the
+      # edge until purged. Gated exactly like WEB_ANALYTICS_TOKEN / ENABLE_WFP_DISPATCH: a community
+      # self-host sets none of the three values below, so this is a clean no-op (exit 0). Only when a
+      # zone id, purge host, and a purge-scoped token (NOT the deploy token) are all set do we purge.
+      # POSIX sh (BusyBox ash in node:22-alpine); no jq/python in the image, so we grep the JSON.
+      - name: Purge Cloudflare edge cache (/welcome)
+        env:
+          CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
+          CF_PURGE_HOST: ${{ vars.CF_PURGE_HOST }}
+          CF_CACHE_PURGE_TOKEN: ${{ secrets.CF_CACHE_PURGE_TOKEN }}
+        run: |
+          if [ -z "${CF_ZONE_ID:-}" ] || [ -z "${CF_PURGE_HOST:-}" ] || [ -z "${CF_CACHE_PURGE_TOKEN:-}" ]; then
+            echo "cache purge not configured, skipping"
+            exit 0
+          fi
+          command -v curl >/dev/null 2>&1 || apk add --no-cache curl
+          echo "Purging edge cache for https://${CF_PURGE_HOST}/welcome and https://${CF_PURGE_HOST}/ (zone ${CF_ZONE_ID})"
+          CODE="$(curl -s -o /tmp/cf_purge_resp.json -w "%{http_code}" -X POST \
+            "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CF_CACHE_PURGE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "{\"files\":[\"https://${CF_PURGE_HOST}/welcome\",\"https://${CF_PURGE_HOST}/\"]}")" || CODE="000"
+          CODE="${CODE:-000}"
+          BODY="$(cat /tmp/cf_purge_resp.json 2>/dev/null || true)"
+          echo "purge HTTP ${CODE}"
+          printf "%s\n" "$BODY"
+          if [ "$CODE" -ge 200 ] 2>/dev/null && [ "$CODE" -lt 300 ] 2>/dev/null && printf "%s" "$BODY" | grep -Eq "\"success\"[[:space:]]*:[[:space:]]*true"; then
+            echo "Edge cache purged for /welcome and / on ${CF_PURGE_HOST}."
+          else
+            echo "::error::Cloudflare cache purge failed (HTTP ${CODE}). The worker is LIVE; purge https://${CF_PURGE_HOST}/welcome and https://${CF_PURGE_HOST}/ manually for zone ${CF_ZONE_ID}."
+            exit 1
+          fi
