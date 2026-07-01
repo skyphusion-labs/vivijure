@@ -3,6 +3,23 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.8.2
+
+**Planner: upscaled films display correctly; hook-contract enforcement at runtime; support/security
+contact docs.**
+
+- **Upscaled clips no longer blow out the history card.** The inline film player and per-shot motion
+  clips had no CSS sizing, so a 2x-upscaled MP4 rendered at intrinsic resolution and the card's
+  `overflow:hidden` clipped it to a blown-up crop. Players now size to the card and keep the clip's
+  own aspect (#410). Trigger for the full planner regression sweep (#411).
+- **Runtime hook-contract enforcement (F5b).** The core now validates a module's terminal output
+  against its hook contract at the orchestrator consumption seams (render, film, score, cast-image);
+  an envelope-correct but malformed payload takes that seam's existing honest-degrade with a
+  traceable per-module reason instead of being threaded downstream (#345, #408).
+- **Support and security contact docs.** `SUPPORT.md` (GitHub Issues first, support@skyphusion.org
+  next) and a root `SECURITY.md` reporting policy (private reports to security@skyphusion.org,
+  linking the `docs/SECURITY.md` posture doc) now ship in this and every constellation repo (#409).
+
 ## v0.8.1
 
 **Pre-announce polish: honest public docs, a cleaner deploy front door, and edge-cache purge on release.**
