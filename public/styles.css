@@ -840,6 +840,12 @@ details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
 }
 .planner-history-keyframe-wrap { flex: 0 0 auto; width: 140px; display: grid; gap: 6px; }
 .planner-history-keyframe-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 8px; display: block; }
+/* Clip players size to the card, never to the file: an upscaled (2x) MP4 has a larger
+   intrinsic resolution and would otherwise render at native size and overflow the card.
+   height:auto keeps the clip's own aspect (no crop, unlike the keyframe stills above). */
+.planner-history-player { padding: 0 14px 12px; }
+.planner-history-player-video { width: 100%; max-width: 100%; height: auto; border-radius: 8px; display: block; background: #000; }
+.planner-history-keyframe-clip { width: 100%; max-width: 100%; height: auto; border-radius: 8px; display: block; background: #000; }
 .planner-history-keyframe-cap { font-size: 11px; color: var(--muted); }
 .planner-history-empty { color: var(--muted); font-style: italic; padding: 12px 0; }
 /* image lightbox for the history keyframe stills. openShotPreview()
