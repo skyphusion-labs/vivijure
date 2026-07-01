@@ -34,6 +34,16 @@ describe("applyPoll", () => {
     applyPoll(s, { ok: false, error: "boom" });
     expect(s).toMatchObject({ status: "failed", error: "boom" });
   });
+  it("fails a shot whose output is envelope-ok but off-contract (#345), never advancing garbage", () => {
+    const s = shot();
+    s.motion_backend = "seedance";
+    // ok:true + output, but missing clip_key/fps/frames -- the size cap would pass this; the contract must not.
+    applyPoll(s, { ok: true, output: { shot_id: "s" } as never });
+    expect(s.status).toBe("failed");
+    expect(s.clip_key).toBeUndefined();       // no garbage clip key threaded downstream
+    expect(s.error).toContain("seedance");    // traceable: names the module
+    expect(s.error).toContain("motion.backend");
+  });
 });
 
 describe("clipFileMatchesShot (#141/#143 shot-name matching)", () => {

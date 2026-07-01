@@ -210,6 +210,20 @@ export function checkHookOutput(hook: string, output: unknown): ConformanceCheck
   return reason ? bad(label, reason) : ok(label);
 }
 
+/** Terminal-seam guard for a module's RESOLVED hook output. The generic transport (invokeModule /
+ *  pollModule) is payload-agnostic -- it also backs dispatchChain's output->input fold and dispatchPickOne
+ *  and cannot enforce a specific hook's contract without rejecting those legitimate toy payloads. The
+ *  ORCHESTRATOR that consumes a hook enforces it instead: after awaitInvoke / pollModule resolves, the
+ *  payload IS the real contract type. Returns a concise, traceable degrade reason (module id + hook + what
+ *  broke, so it reads cleanly on the event channel) when the output violates the hook contract, or null
+ *  when it honors it, so the core never threads an envelope-correct but malformed payload downstream
+ *  (#345 / F5b). A legitimate soft-degrade (ok:true + passthrough + `degraded`) still carries its required
+ *  contract fields, so it passes this guard untouched -- only a genuinely malformed payload is caught. */
+export function hookOutputViolation(moduleId: string, hook: string, output: unknown): string | null {
+  const check = checkHookOutput(hook, output);
+  return check.pass ? null : `module ${moduleId} violated ${hook} contract: ${check.detail}`;
+}
+
 /** True iff every check passed. */
 export function allPass(checks: ConformanceCheck[]): boolean {
   return checks.every((c) => c.pass);

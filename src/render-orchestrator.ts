@@ -12,6 +12,7 @@
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, resolveFetcher, servingForHook, validateConfig } from "./modules/registry";
 import type { MotionBackendInput, MotionBackendOutput, PollResponse } from "./modules/types";
+import { hookOutputViolation } from "./modules/conformance";
 
 export interface ClipShotInput {
   shot_id: string;
@@ -64,8 +65,11 @@ export function applyPoll(shot: ClipShot, r: PollResponse<MotionBackendOutput>):
     return;
   }
   if ((r as { pending?: boolean }).pending) return; // still running
+  const output = (r as { output: MotionBackendOutput }).output;
+  const violation = hookOutputViolation(shot.motion_backend ?? "motion.backend", "motion.backend", output);
+  if (violation) { shot.status = "failed"; shot.error = violation; return; } // envelope-ok but off-contract: fail loud, never advance garbage
   shot.status = "done";
-  shot.clip_key = (r as { output: MotionBackendOutput }).output.clip_key;
+  shot.clip_key = output.clip_key;
 }
 
 /** Pure: does an R2 clips-object filename belong to this shot? The backend writes a finished motion clip
@@ -176,8 +180,10 @@ export async function startClipJob(
     } else if ((r as { pending?: boolean }).pending) {
       shot.poll = (r as { poll: string }).poll;
     } else if ("output" in r) {
-      shot.status = "done";
-      shot.clip_key = (r.output as MotionBackendOutput).clip_key;
+      const output = r.output as MotionBackendOutput;
+      const violation = hookOutputViolation(mb.name, "motion.backend", output);
+      if (violation) { shot.status = "failed"; shot.error = violation; }
+      else { shot.status = "done"; shot.clip_key = output.clip_key; }
     } else {
       shot.status = "failed";
       shot.error = "module returned neither output nor a poll token";

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkManifest, checkInvokeResponse, checkCancelResponse, checkHookOutput, allPass, failures } from "../src/modules/conformance";
+import { checkManifest, checkInvokeResponse, checkCancelResponse, checkHookOutput, hookOutputViolation, allPass, failures } from "../src/modules/conformance";
 
 const goodManifest = {
   name: "demo",
@@ -159,5 +159,26 @@ describe("conformance: hook output payload", () => {
   });
   it("rejects an unknown hook name", () => {
     expect(checkHookOutput("not.a.hook", { anything: true }).pass).toBe(false);
+  });
+});
+
+describe("hookOutputViolation (terminal-seam guard, #345)", () => {
+  it("returns null for a contract-valid output", () => {
+    const out = { shot_id: "s", clip_key: "renders/p/clips/s.mp4", out_fps: 24, frames: 120, applied: ["upscale:2x"] };
+    expect(hookOutputViolation("finish-upscale", "finish", out)).toBeNull();
+  });
+  it("returns a traceable reason (module id + hook + detail) for a malformed output", () => {
+    const reason = hookOutputViolation("finish-upscale", "finish", { shot_id: "s" });
+    expect(reason).toContain("finish-upscale"); // the module id, for the event channel
+    expect(reason).toContain("finish");         // the hook
+    expect(reason).toContain("clip_key");        // the specific field that broke
+  });
+  it("catches an envelope-correct but empty payload", () => {
+    expect(hookOutputViolation("m", "master", {})).not.toBeNull();
+  });
+  it("does not flag a legitimate soft-degrade (passthrough carries the required fields)", () => {
+    // an honest master degrade: ok:true, audio_key passed through, applied:[], plus a degraded reason
+    const degraded = { audio_key: "renders/p/audio/bed.wav", applied: [], degraded: "container unreachable" };
+    expect(hookOutputViolation("audio-master", "master", degraded)).toBeNull();
   });
 });
