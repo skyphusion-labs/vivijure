@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { updateRenderFromView } from "../src/renders-db";
+import { updateRenderFromView, getRenderByIdForUser } from "../src/renders-db";
 import type { Env } from "../src/env";
 import type { RunpodJobView } from "../src/runpod-submit";
 
@@ -69,5 +69,65 @@ describe("updateRenderFromView log write (issue #15: waitUntil off the hot path)
     await updateRenderFromView(env, terminalView, ctx);
     await Promise.all(scheduled);
     expect(putCalls).toEqual(["renders/logs/job-1.txt"]);
+  });
+});
+
+
+// #411 (Joan finding): D1 returns a SQL-NULL column as JS null, and
+// String(null) === "null". normalizeRow used to coerce project / bundle_key /
+// quality_tier with a bare String(), so a NULL-fielded row shipped the literal
+// truthy string "null", defeating every planner falsy guard (labels,
+// download names, and re-render eligibility that keys off a truthy bundle_key).
+// The fix coerces SQL NULL -> "" to preserve the non-null string contract with
+// a falsy value.
+function makeRowEnv(row: Record<string, unknown> | null) {
+  const stmt = {
+    bind: () => stmt,
+    first: async () => row,
+  };
+  return { DB: { prepare: () => stmt } } as unknown as Env;
+}
+
+describe("normalizeRow SQL-NULL coercion (#411)", () => {
+  it('maps SQL-NULL project / bundle_key / quality_tier to "" not the literal "null"', async () => {
+    // A schema-permitted row (migrations/0001_init.sql) with those three columns NULL.
+    const env = makeRowEnv({
+      id: 7,
+      job_id: "job-null",
+      project: null,
+      bundle_key: null,
+      quality_tier: null,
+      status: "COMPLETED",
+      submitted_at: 1000,
+      updated_at: 1000,
+    });
+    const r = await getRenderByIdForUser(env, 7);
+    expect(r).not.toBeNull();
+    expect(r!.project).toBe("");
+    expect(r!.bundle_key).toBe("");
+    expect(r!.quality_tier).toBe("");
+    // The literal "null" would be truthy and slip past the planner guards.
+    expect(r!.project).not.toBe("null");
+    expect(r!.bundle_key).not.toBe("null");
+    expect(r!.quality_tier).not.toBe("null");
+    // Falsy, so the existing frontend truthiness gating becomes correct on its own.
+    expect(Boolean(r!.bundle_key)).toBe(false);
+  });
+
+  it("preserves real string values unchanged", async () => {
+    const env = makeRowEnv({
+      id: 8,
+      job_id: "job-real",
+      project: "my-film",
+      bundle_key: "bundles/my-film/abc.tar",
+      quality_tier: "full",
+      status: "COMPLETED",
+      submitted_at: 2000,
+      updated_at: 2000,
+    });
+    const r = await getRenderByIdForUser(env, 8);
+    expect(r!.project).toBe("my-film");
+    expect(r!.bundle_key).toBe("bundles/my-film/abc.tar");
+    expect(r!.quality_tier).toBe("full");
   });
 });

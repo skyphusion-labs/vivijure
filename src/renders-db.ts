@@ -847,9 +847,15 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
   return {
     id: Number(r.id),
     job_id: String(r.job_id),
-    project: String(r.project),
-    bundle_key: String(r.bundle_key),
-    quality_tier: String(r.quality_tier),
+    // D1 returns a SQL-NULL column as JS null, and String(null) === "null":
+    // the literal "null" string is truthy and defeats every downstream falsy
+    // guard (planner labels, download names, and re-render eligibility gating
+    // that keys off a truthy bundle_key). The schema permits these three to be
+    // NULL (migrations/0001_init.sql), so coerce SQL NULL to "" here to keep
+    // the RenderRow non-null string contract with a falsy empty value.
+    project: r.project === null || r.project === undefined ? "" : String(r.project),
+    bundle_key: r.bundle_key === null || r.bundle_key === undefined ? "" : String(r.bundle_key),
+    quality_tier: r.quality_tier === null || r.quality_tier === undefined ? "" : String(r.quality_tier),
     render_overrides: overrides,
     status: String(r.status),
     output_key: r.output_key ? String(r.output_key) : null,
