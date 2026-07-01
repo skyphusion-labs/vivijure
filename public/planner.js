@@ -403,8 +403,6 @@ const bundleState = {
 const renderState = {
   jobId: null,
   pollTimer: null,
-  eventSource: null,        // v0.35.0: live SSE connection when streaming
-  streamFallbackHit: false, // set after one failed stream attempt to skip retries
   currentProject: null,     // v0.37.0: display name for notifications
   currentLabel: null,       // v0.37.0: user-authored label, preferred over project
   // v0.44.0: ms since epoch when the first IN_PROGRESS observation
@@ -3832,7 +3830,6 @@ async function submitRender() {
   }
 
   renderState.jobId = data.jobId;
-  renderState.streamFallbackHit = false;
   // v0.44.0: reset the elapsed/ETA anchor on a fresh submit so a
   // previous render's startedAt does not leak in. updateRenderProgress
   // re-anchors on the first non-IN_QUEUE status update.
@@ -4018,7 +4015,6 @@ async function submitScatterRender() {
   }
 
   renderState.jobId = data.jobId;
-  renderState.streamFallbackHit = false;
   renderState.startedAt = null;
   if (renderState.tickTimer !== null) {
     clearInterval(renderState.tickTimer);
@@ -4041,104 +4037,26 @@ async function submitScatterRender() {
   savePersistedState();
 }
 
-// v0.35.0: open a server-sent event connection to the worker so render
-// status updates arrive as RunPod produces them, instead of on a fixed
-// 8-second client poll. The worker proxies RunPod at a 3-second cadence
-// and emits each snapshot as an SSE event with the same JSON shape the
-// one-shot poll endpoint returns; updateRenderProgress / finalizeRender
-// stay unchanged. On any stream error (auth, transient network, or the
-// worker's duration cap), fall back to pollRender() so an in-flight job
-// is never silently abandoned.
+// Render progress tracking. Polls GET /api/storyboard/render/<jobId> on an
+// 8-second loop against the structured status channel (docs/observability.md);
+// updateRenderProgress / finalizeRenderPoll consume each snapshot. A live SSE
+// progress stream was scaffolded here client-side (v0.35.0) but the worker
+// never had a matching /stream endpoint, so the EventSource attempt always
+// errored straight to this poll while flashing a spurious "stream closed;
+// falling back" status. That dead path was removed; the 8s poll is the single
+// honest mechanism. Re-implementing SSE server-side is a post-announce
+// enhancement (see issue #414).
 function startStream() {
-  if (!renderState.jobId) return;
+  pollRender();
+}
 
-  // Clean up any prior stream / poll first so we never have two listeners
-  // racing on the same panel.
-  if (renderState.eventSource) {
-    try { renderState.eventSource.close(); } catch {}
-    renderState.eventSource = null;
-  }
+// Stop render progress tracking. Named closeStream for caller compatibility
+// with the removed SSE path; it now clears the poll loop (the callers that stop
+// tracking pair it with the same clear, so this is idempotent).
+function closeStream() {
   if (renderState.pollTimer) {
     clearTimeout(renderState.pollTimer);
     renderState.pollTimer = null;
-  }
-
-  // EventSource carries the Cloudflare Access cookie automatically (same
-  // origin + same auth gate as every other /api/storyboard/* request).
-  const url = "/api/storyboard/render/" + encodeURIComponent(renderState.jobId) + "/stream";
-  let es;
-  try {
-    es = new EventSource(url);
-  } catch (err) {
-    setRenderStatus("could not open stream: " + err.message + "; falling back to polling", "loading");
-    pollRender();
-    return;
-  }
-  renderState.eventSource = es;
-
-  es.onmessage = (ev) => {
-    let data;
-    try {
-      data = JSON.parse(ev.data);
-    } catch {
-      // Skip malformed event; the next one will catch up.
-      return;
-    }
-
-    if (data && data.ok === false) {
-      const errs = (data.errors || ["unknown stream error"]).join("; ");
-      setRenderStatus("stream error: " + errs, "error");
-      closeStream();
-      pollRender();
-      return;
-    }
-
-    // Sentinel events the worker emits at stream open and duration cap.
-    if (data.status === "STREAM_OPENED") {
-      setRenderStatus("stream open; awaiting first status update", "loading");
-      return;
-    }
-    if (data.status === "STREAM_DURATION_CAP") {
-      // The worker capped this stream's life. Re-open transparently so the
-      // user does not see a status interruption.
-      closeStream();
-      setRenderStatus("stream rotation (duration cap); reconnecting", "loading");
-      startStream();
-      return;
-    }
-
-    updateRenderProgress(data);
-
-    const terminal = ["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"];
-    if (terminal.indexOf(data.status) >= 0) {
-      finalizeRenderPoll(data);
-      maybeNotifyTerminal(data);
-      closeStream();
-      $("#planner-render-btn").disabled = false;
-      // Refresh history so the row's terminal state appears in the list.
-      loadHistory();
-    }
-  };
-
-  es.addEventListener("error", (ev) => {
-    // EventSource fires "error" for both transient blips (which it then
-    // reconnects from on its own) and permanent close. We can distinguish
-    // by readyState: CLOSED means the browser will not retry.
-    const closed = es.readyState === EventSource.CLOSED;
-    if (closed && !renderState.streamFallbackHit) {
-      renderState.streamFallbackHit = true;
-      setRenderStatus("stream closed; falling back to 8s polling", "loading");
-      closeStream();
-      pollRender();
-    }
-    // Transient errors are silent; EventSource handles the reconnect.
-  });
-}
-
-function closeStream() {
-  if (renderState.eventSource) {
-    try { renderState.eventSource.close(); } catch {}
-    renderState.eventSource = null;
   }
 }
 
@@ -4425,7 +4343,6 @@ function dismissRenderResult() {
     renderState.tickTimer = null;
   }
   renderState.jobId = null;
-  renderState.streamFallbackHit = false;
   renderState.currentProject = null;
   renderState.currentLabel = null;
   renderState.startedAt = null;
@@ -4491,7 +4408,6 @@ function resetRenderStage() {
   }
   closeStream();
   renderState.jobId = null;
-  renderState.streamFallbackHit = false;
   $("#planner-render").hidden = true;
   $("#planner-render-result").hidden = true;
   // v0.35.3: clear the renderOverrides textarea on re-plan so a stale
@@ -6511,7 +6427,6 @@ function rerunBundle(row) {
     renderState.pollTimer = null;
   }
   renderState.jobId = null;
-  renderState.streamFallbackHit = false;
   // v0.37.0: carry the row's label / project forward so the post-submit
   // notification (when the new render lands) reads "cherry-final-take1"
   // rather than the slug. Will be overwritten on the next submit.
@@ -6811,8 +6726,7 @@ function resumeRender(row) {
   const terminal = ["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"];
   if (terminal.indexOf(row.status) < 0) {
     setRenderStatus("resumed; opening stream...", "loading");
-    renderState.streamFallbackHit = false;
-    startStream();
+      startStream();
   } else {
     const kind = row.status === "COMPLETED" ? "success" : "error";
     setRenderStatus(row.status.toLowerCase() + " (from history)", kind);

@@ -3,6 +3,37 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.8.3
+
+**Planner regression-sweep fixes (#411): the keyframe lightbox and the dead progress-stream path.**
+
+- **Keyframe lightbox is styled.** Clicking a keyframe thumbnail opened an overlay whose classes had
+  no CSS at all, dumping an unstyled full-size image at the page bottom (same never-implemented class
+  as the v0.8.2 player fix). The lightbox is now a fixed full-viewport overlay: image contained and
+  aspect-preserved at any shape (2x-upscaled, portrait, 1:1), backdrop + Escape dismiss (#412).
+- **Dead render-progress stream removed.** The planner opened an SSE connection to a `/stream`
+  endpoint that never existed server-side, so every render flashed "stream closed; falling back to
+  8s polling" before polling anyway. The dead client path is gone; the 8-second poll on the
+  structured status channel is the single, silent mechanism. Server-side SSE is tracked as a
+  post-announce enhancement (#414, #415).
+
+## v0.8.2
+
+**Planner: upscaled films display correctly; hook-contract enforcement at runtime; support/security
+contact docs.**
+
+- **Upscaled clips no longer blow out the history card.** The inline film player and per-shot motion
+  clips had no CSS sizing, so a 2x-upscaled MP4 rendered at intrinsic resolution and the card's
+  `overflow:hidden` clipped it to a blown-up crop. Players now size to the card and keep the clip's
+  own aspect (#410). Trigger for the full planner regression sweep (#411).
+- **Runtime hook-contract enforcement (F5b).** The core now validates a module's terminal output
+  against its hook contract at the orchestrator consumption seams (render, film, score, cast-image);
+  an envelope-correct but malformed payload takes that seam's existing honest-degrade with a
+  traceable per-module reason instead of being threaded downstream (#345, #408).
+- **Support and security contact docs.** `SUPPORT.md` (GitHub Issues first, support@skyphusion.org
+  next) and a root `SECURITY.md` reporting policy (private reports to security@skyphusion.org,
+  linking the `docs/SECURITY.md` posture doc) now ship in this and every constellation repo (#409).
+
 ## v0.8.1
 
 **Pre-announce polish: honest public docs, a cleaner deploy front door, and edge-cache purge on release.**
