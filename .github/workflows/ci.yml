@@ -84,8 +84,21 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # SECRETS_STORE_ID is a repo VARIABLE (an identifier, not a secret -- it was public in the
+          # repo before #398 templated it out): the account Secrets Store id the module bindings bind.
+          SECRETS_STORE_ID: ${{ vars.SECRETS_STORE_ID }}
         run: |
           set -eu
+          # The committed module tomls ship store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID" (no
+          # real store id in the public repo, #398). Fill it from SECRETS_STORE_ID before each
+          # wrangler deploy, mirroring how the core render injects its placeholders. Fail closed: a
+          # blank store_id would deploy every module with a dangling secrets_store_secrets binding
+          # (silent degrade / deploy fail -- the v0.7.6 class of break), and deploy.sh (the outsider
+          # path that also fills this) never runs in CI.
+          if [ -z "${SECRETS_STORE_ID:-}" ]; then
+            echo "::error::SECRETS_STORE_ID repo variable is unset -- refusing to deploy modules with an unfilled store_id placeholder"
+            exit 1
+          fi
           # Explicit, reviewable skip-list (space-separated module DIR names). Empty = deploy all.
           # DO NOT replace this with a hardcoded include-list: that is what drifted (v0.6.0 omitted
           # 9 modules incl. notify-email, which served config_schema:null). Deploy-by-default; the
@@ -117,6 +130,13 @@ jobs:
               continue
             fi
             echo "Deploying vivijure-module-${module}..."
+            # Fill the store_id placeholder for THIS module (only those actually deployed, post-EXCLUDE),
+            # then guard: a surviving placeholder means an unfilled binding, so fail rather than ship it.
+            sed -i "s/REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID/${SECRETS_STORE_ID}/g" "$toml"
+            if grep -q "REPLACE_WITH_" "$toml"; then
+              echo "::error::store_id placeholder survived in $toml"
+              exit 1
+            fi
             npx wrangler deploy -c "$toml"
             deployed=$((deployed + 1))
           done
