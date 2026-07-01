@@ -307,6 +307,12 @@ npm run deploy        # wrangler deploy
 `account_id` comes from `CLOUDFLARE_ACCOUNT_ID` in the environment, not hardcoded. All bindings
 are in `wrangler.toml` (committed); secrets go in via `wrangler secret put`.
 
+## Legal
+
+Vivijure Studio is the primary user-facing surface, so its public policies live one click from here in [docs/legal/](docs/legal/): the [Acceptable Use Policy](docs/legal/ACCEPTABLE-USE.md) (including the absolute CSAM bright line, 18 U.S.C. 1466A / 2252A), the [Privacy Policy](docs/legal/PRIVACY.md), and the [Terms of Service](docs/legal/TERMS.md).
+
 ## License
 
 **AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
+
+Licensed under AGPL-3.0-only. See [LICENSE](LICENSE).
