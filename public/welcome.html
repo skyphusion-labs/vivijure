@@ -324,9 +324,9 @@
           <div class="prose">
             <p>
               From a storyboard to a finished <code>film.mp4</code>: the keyframe fans into per-shot
-              dialogue and the motion backend; any of seven motion backends (own-GPU or cloud) renders
-              the clip; the opt-in finish chain interpolates, lip-syncs, and upscales it; then the
-              shots gather, assemble, and mux into the film.
+              dialogue and the motion backend; any motion backend you have wired up (own-GPU or cloud)
+              renders the clip; the opt-in finish chain interpolates, lip-syncs, and upscales it; then
+              the shots gather, assemble, and mux into the film.
             </p>
             <p class="muted">
               Motion is backend-agnostic and the finish chain runs the same way over whatever clip
@@ -392,7 +392,15 @@
 
         <section id="ecosystem">
           <h2>How it fits together</h2>
-          <p class="flow">slate&nbsp;&nbsp;--&gt;&nbsp;&nbsp;vivijure&nbsp;&nbsp;--&gt;&nbsp;&nbsp;vivijure-backend</p>
+          <p class="flow">slate&nbsp;&nbsp;--&gt;&nbsp;&nbsp;vivijure&nbsp;&nbsp;--&gt;&nbsp;&nbsp;a GPU (cloud, your backend, or a local door)&nbsp;&nbsp;--&gt;&nbsp;&nbsp;finish satellites</p>
+          <div class="prose" style="margin-bottom: 18px;">
+            <p class="muted">
+              The studio is the center. Everything around it is opt-in: pick a GPU door (rented cloud,
+              your own RunPod backend, or a local card at home), and turn on the finish satellites you
+              want. The full one-page map is in
+              <a href="https://github.com/skyphusion-labs/vivijure/blob/main/docs/constellation.md">docs/constellation.md</a>.
+            </p>
+          </div>
           <table class="eco">
             <thead>
               <tr><th>Repo</th><th>Role</th></tr>
@@ -404,11 +412,31 @@
               </tr>
               <tr>
                 <td><a href="https://github.com/skyphusion-labs/vivijure">vivijure</a></td>
-                <td class="role">AI film studio control plane (Cloudflare Worker); planner, cast, render UI; orchestrates render jobs.</td>
+                <td class="role">AI film studio control plane (Cloudflare Worker); planner, cast, render UI; orchestrates render jobs. <strong>This repo.</strong></td>
               </tr>
               <tr>
                 <td><a href="https://github.com/skyphusion-labs/vivijure-backend">vivijure-backend</a></td>
-                <td class="role">GPU render backend (RunPod serverless); SDXL keyframes, image-to-video, finish, assemble.</td>
+                <td class="role">GPU render backend (RunPod serverless); SDXL keyframes, image-to-video, finish, assemble. The cloud / your-own-RunPod door.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/skyphusion-labs/vivijure-local-12gb">vivijure-local-12gb</a></td>
+                <td class="role">Local render door for a 12GB card (LTX image-to-video), self-hosted with <code>docker compose</code>. Bring your own GPU, zero cloud cost.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/skyphusion-labs/vivijure-local-16gb">vivijure-local-16gb</a></td>
+                <td class="role">Local render door for a 16GB card (CogVideoX image-to-video), self-hosted with <code>docker compose</code>.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/skyphusion-labs/vivijure-musetalk">vivijure-musetalk</a></td>
+                <td class="role">Finish satellite: MuseTalk lip-sync, so a character's mouth matches its dialogue (powers the Vivijure Speaks film above).</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/skyphusion-labs/vivijure-upscale">vivijure-upscale</a></td>
+                <td class="role">Finish satellite: CUDA Real-ESRGAN video upscale for sharper, higher-resolution clips.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/skyphusion-labs/vivijure-audio-upscale">vivijure-audio-upscale</a></td>
+                <td class="role">Finish satellite: speech and music audio cleanup, so dialogue and the score come out clean.</td>
               </tr>
             </tbody>
           </table>
