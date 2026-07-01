@@ -10,7 +10,7 @@
 // cast.image is `pick_one`: one installed module answers (the module owns the model + prompt set).
 
 import type { Env } from "./env";
-import { discoverModules, invokeModule, pollModule, resolvePickOne, validateConfig } from "./modules/registry";
+import { discoverModules, invokeModule, pollModule, resolveFetcher, resolvePickOne, validateConfig } from "./modules/registry";
 import type { CastImageInput, CastImageOutput } from "./modules/types";
 import { presignR2Get } from "./r2-presign";
 import { getCastById, addRefs, type CastRefImage } from "./cast-db";
@@ -32,9 +32,6 @@ export interface CastRefsJob {
   created_at: number;
 }
 
-interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
-const asFetcher = (v: unknown): FetcherLike | null =>
-  v && typeof (v as { fetch?: unknown }).fetch === "function" ? (v as FetcherLike) : null;
 
 const REF_TTL = 1800;  // 30min presign -- covers the whole multi-image run (a few polls of work)
 const MAX_REFS = 4;    // FLUX 2 caps multi-reference inputs at 4 (nano-banana at 3); cap the seed set
@@ -148,7 +145,7 @@ export async function startCastRefsJob(
   }
   job.module_name = module.name;
   job.binding = module.binding;
-  const fetcher = asFetcher(envRec[module.binding]);
+  const fetcher = resolveFetcher(envRec, module.binding);
   if (!fetcher) {
     job.phase = "failed";
     job.error = `cast.image module ${module.name} (${module.binding}) is not bound`;
@@ -199,7 +196,7 @@ export async function advanceCastRefsJob(env: Env, castId: number, jobId: string
   if (job.phase !== "generating" || !job.module_poll || !job.binding) return job;
 
   const envRec = env as unknown as Record<string, unknown>;
-  const fetcher = asFetcher(envRec[job.binding]);
+  const fetcher = resolveFetcher(envRec, job.binding);
   if (!fetcher) {
     job.phase = "failed";
     job.error = "cast.image module no longer bound";

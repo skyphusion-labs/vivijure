@@ -8,7 +8,7 @@
 // No Worker ever holds a multi-minute GPU/cloud render.
 
 import type { Env } from "./env";
-import { discoverModules, invokeModule, pollModule, cancelModule, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
+import { discoverModules, invokeModule, pollModule, cancelModule, resolveFetcher, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
 import { loadInstallConfig } from "./operator-config";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput } from "./modules/types";
 import {
@@ -176,9 +176,6 @@ export interface FilmJob {
   created_at: number;
 }
 
-interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
-const asFetcher = (v: unknown): FetcherLike | null =>
-  v && typeof (v as { fetch?: unknown }).fetch === "function" ? (v as FetcherLike) : null;
 
 const filmKey = (id: string) => `renders/${id}/film-job.json`;
 const clipDocKey = (clipJobId: string) => `renders/${clipJobId}/clips-job.json`; // matches render-orchestrator
@@ -567,7 +564,7 @@ async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
   if (!lines || !lines.length) { await enterSpeechOrFinish(env, job); return; }
   const envRec = env as unknown as Record<string, unknown>;
   const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
-  const fetcher = dialogueModule ? asFetcher(envRec[dialogueModule.binding]) : null;
+  const fetcher = dialogueModule ? resolveFetcher(envRec, dialogueModule.binding) : null;
   if (!fetcher) { await enterSpeechOrFinish(env, job); return; }  // no dialogue module bound: silent film
   const req = {
     hook: "dialogue" as const,
@@ -588,7 +585,7 @@ async function advanceDialoguePhase(env: Env, job: FilmJob): Promise<void> {
   if (!job.dialogue_poll) { await enterSpeechOrFinish(env, job); return; }
   const envRec = env as unknown as Record<string, unknown>;
   const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
-  const fetcher = dialogueModule ? asFetcher(envRec[dialogueModule.binding]) : null;
+  const fetcher = dialogueModule ? resolveFetcher(envRec, dialogueModule.binding) : null;
   if (!fetcher) { job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
   const p = await pollModule<DialogueOutput>(fetcher, { poll: job.dialogue_poll });
   if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
@@ -643,7 +640,7 @@ async function advanceSpeechPhase(env: Env, job: FilmJob): Promise<void> {
   };
   for (const ss of job.speech_shots || []) {
     if (ss.status !== "pending") continue;
-    const fetcher = asFetcher(envRec[ss.chain[ss.idx]]);
+    const fetcher = resolveFetcher(envRec, ss.chain[ss.idx]);
     if (!fetcher) { degrade(ss, `speech module ${ss.chain[ss.idx]} not bound`); continue; }
     const req = {
       hook: "speech" as const,
@@ -713,7 +710,7 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
   };
   for (const fs of job.finish_shots || []) {
     if (fs.status !== "pending") continue;
-    const fetcher = asFetcher(envRec[fs.chain[fs.idx]]);
+    const fetcher = resolveFetcher(envRec, fs.chain[fs.idx]);
     if (!fetcher) { fs.status = "failed"; fs.error = `finish module ${fs.chain[fs.idx]} not bound`; continue; }
     const req = {
       hook: "finish" as const,
@@ -988,7 +985,7 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
     };
     const context = { project: job.project, job_id: job.film_id };
     for (const m of notifiers) {
-      const fetcher = asFetcher(envRec[m.binding]);
+      const fetcher = resolveFetcher(envRec, m.binding);
       if (!fetcher) continue;
       try {
         // Inject the operator-set install-config (e.g. notify-email's notify_email recipient) as the
@@ -1352,7 +1349,7 @@ async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
   }
 
   while (!masterChainDone(m)) {
-    const fetcher = asFetcher(envRec[m.chain[m.idx]]);
+    const fetcher = resolveFetcher(envRec, m.chain[m.idx]);
     if (!fetcher) { degradeMasterStep(m, "module not bound"); continue; }
     if (!m.poll) {
       // CREDENTIALLESS module: the core owns the R2 S3 creds and presigns the bed GET + the mastered PUT
@@ -1622,7 +1619,7 @@ export async function startFilmJob(
     dialogue_lines: args.dialogue_lines && args.dialogue_lines.length ? args.dialogue_lines : undefined,
     cast_loras: args.cast_loras && Object.keys(args.cast_loras).length ? args.cast_loras : undefined,
   };
-  const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
+  const fetcher = kf ? resolveFetcher(envRec, kf.binding) : null;
   if (!kf || !fetcher) {
     job.phase = "failed";
     job.error = kf
@@ -1760,7 +1757,7 @@ export async function cancelInFlightKeyframe(env: Env, job: FilmJob): Promise<vo
   const envRec = env as unknown as Record<string, unknown>;
   const modules = await discoverModules(envRec);
   const kf = modules.find((m) => m.binding === job.keyframe_binding) ?? null;
-  const fetcher = kf ? asFetcher(envRec[kf.binding]) : null;
+  const fetcher = kf ? resolveFetcher(envRec, kf.binding) : null;
   if (!kf || !fetcher) {
     console.warn(`film ${job.film_id}: cannot cancel in-flight keyframe job -- module ${job.keyframe_binding} not bound; RunPod job ${jobId} left running (ORPHAN) (#327)`);
     return;
@@ -1899,7 +1896,7 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
 
   // Phase 1: poll the keyframe job; on completion, presign + hand off to the clip orchestrator.
   if (job.phase === "keyframe" && job.keyframe_poll) {
-    const fetcher = job.keyframe_binding ? asFetcher(envRec[job.keyframe_binding]) : null;
+    const fetcher = job.keyframe_binding ? resolveFetcher(envRec, job.keyframe_binding) : null;
     if (!fetcher) { job.phase = "failed"; job.error = "keyframe module no longer bound"; }
     else {
       const p = await pollModule<KeyframeOutput>(fetcher, { poll: job.keyframe_poll });

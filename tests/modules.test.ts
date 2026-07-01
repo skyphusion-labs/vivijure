@@ -276,7 +276,7 @@ describe("dispatchPickOne", () => {
   it("returns ok:false when the serving module's binding is missing", async () => {
     const r = await dispatchPickOne({}, [mod], "motion.backend", {}, ctx);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/not bound/);
+    if (!r.ok) expect(r.error).toMatch(/not reachable/);
   });
 });
 

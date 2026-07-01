@@ -8,6 +8,7 @@ import type { Env } from "./env";
 import {
   discoverModules,
   invokeModule,
+  resolveFetcher,
   servingForHook,
   validateConfig,
 } from "./modules/registry";
@@ -23,10 +24,6 @@ interface FetcherLike {
   fetch(input: Request | string, init?: RequestInit): Promise<Response>;
 }
 
-function isFetcher(v: unknown): v is FetcherLike {
-  return !!v && typeof (v as { fetch?: unknown }).fetch === "function";
-}
-
 /** Score modules that analyze beat timing (config_schema.clip_seconds). */
 export function beatSyncScoreModules(modules: RegisteredModule[]): RegisteredModule[] {
   return servingForHook(modules, "score").filter(
@@ -35,8 +32,7 @@ export function beatSyncScoreModules(modules: RegisteredModule[]): RegisteredMod
 }
 
 function fetcherForModule(env: Env, mod: RegisteredModule): FetcherLike | null {
-  const f = env[mod.binding as keyof Env];
-  return isFetcher(f) ? f : null;
+  return resolveFetcher(env as unknown as Record<string, unknown>, mod.binding);
 }
 
 function resolveBeatSyncModule(

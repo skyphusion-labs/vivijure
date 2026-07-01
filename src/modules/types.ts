@@ -506,16 +506,24 @@ export interface FilmFinishOutput {
 
 // --------------------------------------------------------------------------- registry view
 
-/** One registered module, INTERNAL to the core: the manifest plus the env binding that serves it.
- *  The binding is internal topology and never leaves the core (see PublicModule for the wire view). */
+/** One registered module, INTERNAL to the core: the manifest plus a `binding` REF telling the core how
+ *  to reach it. The ref is transport-encoded (resolved by registry.resolveFetcher):
+ *   - `MODULE_<NAME>` -> a service binding on env (the legacy, in-tree, deploy-wired path), or
+ *   - `dispatch:<script>` -> a user-Worker script uploaded into the Workers-for-Platforms dispatch
+ *     namespace, reached via env.MODULE_DISPATCH.get(<script>) at request time (installed without a core
+ *     redeploy; see docs/module-dispatch.md). The `dispatch:` prefix cannot collide with a real
+ *     `MODULE_*` env key, so a single string persists a module's transport through job state and both
+ *     kinds re-resolve uniformly across requests.
+ *  The ref is internal topology and NEVER leaves the core -- toPublic strips it (see PublicModule). */
 export interface RegisteredModule extends ModuleManifest {
-  binding: string; // the env binding that serves it (e.g. "MODULE_FINISH_RIFE")
+  binding: string; // transport-encoded ref: "MODULE_<NAME>" (service) or "dispatch:<script>" (WfP)
 }
 
 /** One registered module as the core exposes it to the frontend over GET /api/modules: the manifest
- *  ONLY, with the internal `binding` stripped. The unauthenticated registry route must not leak which
- *  env binding serves a hook (internal module-host topology); the studio UI never needs it -- it
- *  renders from the manifest, and dispatch happens core-side by binding. (Info disclosure, #18.) */
+ *  ONLY, with the internal `binding` ref stripped. The unauthenticated registry route must not leak
+ *  which env binding OR namespace script serves a hook (internal module-host topology); the studio UI
+ *  never needs it -- it renders from the manifest, and the core resolves the transport itself. (Info
+ *  disclosure, #18.) */
 export type PublicModule = ModuleManifest;
 
 /** One hook in the catalog the frontend renders the pipeline panel from, so the panel is a
@@ -544,4 +552,10 @@ export interface ModulesResponse {
   hooks: Partial<Record<HookName, string[]>>; // hook -> module names serving it
   catalog: HookCatalogEntry[];                 // every hook (name + blurb + cardinality)
   render: RenderConfigProjection;              // core-owned render config (tiers); additive (#projection)
+  /** What TRANSPORTS this host offers, the CORE describing ITSELF -- orthogonal to `api` (which is the
+   *  module contract version, unchanged by dispatch). `dispatch: true` means this deployment speaks
+   *  Workers-for-Platforms dynamic dispatch (a module can be installed without a core redeploy). A
+   *  module never reads this; an operator / the studio UI / a health probe does. OPTIONAL + additive:
+   *  a deploy without WfP omits it, and NO MODULE_API bump (docs/module-dispatch.md section 5.3). */
+  host?: { dispatch: boolean };
 }

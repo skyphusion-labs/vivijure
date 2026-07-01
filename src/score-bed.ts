@@ -8,6 +8,7 @@ import {
   discoverModules,
   invokeModule,
   pollModule,
+  resolveFetcher,
   servingForHook,
   validateConfig,
 } from "./modules/registry";
@@ -15,10 +16,6 @@ import type { PlanEnhanceStoryboard, RegisteredModule, ScoreInput, ScoreOutput }
 
 interface FetcherLike {
   fetch(input: Request | string, init?: RequestInit): Promise<Response>;
-}
-
-function isFetcher(v: unknown): v is FetcherLike {
-  return !!v && typeof (v as { fetch?: unknown }).fetch === "function";
 }
 
 export type ScoreBedKind = "music" | "narration";
@@ -44,8 +41,7 @@ export function scoreModuleLabel(mod: RegisteredModule): string {
 }
 
 function fetcherForModule(env: Env, mod: RegisteredModule): FetcherLike | null {
-  const f = env[mod.binding as keyof Env];
-  return isFetcher(f) ? f : null;
+  return resolveFetcher(env as unknown as Record<string, unknown>, mod.binding);
 }
 
 function candidatesForKind(modules: RegisteredModule[], kind: ScoreBedKind): RegisteredModule[] {

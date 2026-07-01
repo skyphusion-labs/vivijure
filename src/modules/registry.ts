@@ -41,10 +41,60 @@ function isFetcher(v: unknown): v is FetcherLike {
   return !!v && typeof (v as { fetch?: unknown }).fetch === "function";
 }
 
-/** The env keys that name module bindings. Convention: `MODULE_<NAME>` service bindings. */
+/** A Workers-for-Platforms dispatch namespace, shaped minimally so the registry stays dependency-free
+ *  (no import of Env / @cloudflare/workers-types). `.get(script)` returns a Fetcher for one resident
+ *  user Worker. Distinct from a service binding: a namespace has `.get()`, a binding has `.fetch()`. */
+interface DispatchLike {
+  get(scriptName: string): FetcherLike;
+}
+
+function isDispatch(v: unknown): v is DispatchLike {
+  return !!v && typeof (v as { get?: unknown }).get === "function";
+}
+
+/** The env key naming the WfP dispatch-namespace binding. Excluded from the `MODULE_*` service scan
+ *  (it is a DispatchNamespace, NOT a module Fetcher): the `isFetcher` guard already rejects it by shape
+ *  (a namespace has `.get()`, not `.fetch()`), but the exclusion is made EXPLICIT so a future
+ *  workers-types change can never accidentally enroll the namespace as a module (docs/module-dispatch
+ *  section 6.3). */
+export const DISPATCH_BINDING = "MODULE_DISPATCH";
+
+/** The reserved prefix marking a `RegisteredModule.binding` ref as a WfP dispatch script rather than a
+ *  service binding: `dispatch:<script-name>`. It cannot collide with a real `MODULE_*` env key, so the
+ *  one `binding` string carries the module's transport through job state and resolveFetcher parses it. */
+export const DISPATCH_REF_PREFIX = "dispatch:";
+
+/** Build a dispatch binding ref from a namespace script name. */
+export function dispatchRef(scriptName: string): string {
+  return DISPATCH_REF_PREFIX + scriptName;
+}
+
+/** Resolve a module `binding` ref to a Fetcher, transport-aware. A `dispatch:<script>` ref resolves
+ *  through the namespace binding (`MODULE_DISPATCH.get(script)`, which THROWS if the script is absent --
+ *  guarded so a missing script becomes an honest null / ok:false degrade, never a core crash); any other
+ *  ref is a service-binding env key. Returns null when the transport is unavailable (no namespace bound,
+ *  script absent, or binding unbound), which every caller already treats as "module not reachable". This
+ *  is the SINGLE resolution primitive: everything after "got a Fetcher" (the invoke/poll/cancel envelope)
+ *  is identical for both transports (docs/module-dispatch.md 3.2). */
+export function resolveFetcher(env: Record<string, unknown>, binding: string): FetcherLike | null {
+  if (binding.startsWith(DISPATCH_REF_PREFIX)) {
+    const ns = env[DISPATCH_BINDING];
+    if (!isDispatch(ns)) return null;
+    try {
+      return ns.get(binding.slice(DISPATCH_REF_PREFIX.length));
+    } catch {
+      return null;
+    }
+  }
+  const v = env[binding];
+  return isFetcher(v) ? v : null;
+}
+
+/** The env keys that name module SERVICE bindings. Convention: `MODULE_<NAME>` service bindings;
+ *  the dispatch-namespace binding is explicitly skipped (it is not a module, it is the transport to N). */
 export function moduleBindingNames(env: Record<string, unknown>): string[] {
   return Object.keys(env)
-    .filter((k) => k.startsWith("MODULE_") && isFetcher(env[k]))
+    .filter((k) => k.startsWith("MODULE_") && k !== DISPATCH_BINDING && isFetcher(env[k]))
     .sort();
 }
 
@@ -133,9 +183,10 @@ export function hookCatalog(): HookCatalogEntry[] {
   }));
 }
 
-/** Strip a registered module down to its PUBLIC view: the manifest, minus the internal `binding`.
- *  The /api/modules route is unauthenticated, so the env binding that serves a hook (internal
- *  module-host topology) must not cross the wire; the frontend renders from the manifest alone (#18). */
+/** Strip a registered module down to its PUBLIC view: the manifest, minus the internal `binding` ref.
+ *  The /api/modules route is unauthenticated, so what serves a hook (a service binding OR a namespace
+ *  script -- internal module-host topology) must not cross the wire; the frontend renders from the
+ *  manifest alone (#18). */
 function toPublic({ binding: _binding, ...manifest }: RegisteredModule): PublicModule {
   return manifest;
 }
@@ -146,13 +197,18 @@ function toPublic({ binding: _binding, ...manifest }: RegisteredModule): PublicM
 /** Build the GET /api/modules projection. `render` (core-owned render config, e.g. quality tiers) is
  *  passed in by the route rather than imported here: it lives in render-module-config, which imports
  *  the registry, so taking it as a param keeps this module free of that back-edge. */
-export function modulesResponse(modules: RegisteredModule[], render: RenderConfigProjection): ModulesResponse {
+export function modulesResponse(
+  modules: RegisteredModule[],
+  render: RenderConfigProjection,
+  host?: { dispatch: boolean },
+): ModulesResponse {
   return {
     api: MODULE_API,
     modules: modules.map(toPublic),
     hooks: indexByHook(modules),
     catalog: hookCatalog(),
     render,
+    ...(host ? { host } : {}),
   };
 }
 
@@ -232,10 +288,87 @@ export function _resetModuleDiscoveryCache(): void {
   discoveryCache = null;
 }
 
-/** Discover every installed module from the env: read each `MODULE_*` binding's manifest in
- *  parallel, drop the ones that fail, and return the live registry. With `opts.cacheTtlMs > 0` the
- *  result is cached per-isolate for that many ms (the /api/modules route uses this); without it the
- *  discovery runs fresh (the dispatch paths). `opts.nowMs` is injectable for tests. */
+/** A D1 database, shaped minimally so the registry stays dependency-free (no import of Env). Only the
+ *  read the dispatch-discovery needs is declared. */
+interface D1Like {
+  prepare(query: string): { all<T = Record<string, unknown>>(): Promise<{ results: T[] }> };
+}
+
+interface InstalledModuleRow {
+  name: string;
+  script_name: string;
+  manifest_json: string;
+  api: string;
+}
+
+/** Discover the modules installed via Workers-for-Platforms dynamic dispatch: read the
+ *  `installed_modules` D1 table (enabled rows), reconstruct each `RegisteredModule` from its stored,
+ *  conformance-checked manifest, and tag it with its `dispatch` descriptor (the namespace analogue of
+ *  `binding`). Gated on `env.MODULE_DISPATCH` (the namespace binding) being present: a deploy WITHOUT
+ *  WfP short-circuits here and never touches D1, so non-WfP / self-host deploys pay ZERO overhead and
+ *  behave exactly as before. Best-effort + total, like the service-binding scan: a D1 error or a
+ *  drifted manifest row is logged and dropped, never crashes discovery. (docs/module-dispatch.md 3.1/3.4) */
+export async function discoverDispatchModules(env: Record<string, unknown>): Promise<RegisteredModule[]> {
+  const ns = env[DISPATCH_BINDING];
+  if (!isDispatch(ns)) return []; // no WfP namespace bound -> nothing to discover, no D1 read
+  const db = env.DB;
+  if (!db || typeof (db as D1Like).prepare !== "function") return [];
+  let rows: InstalledModuleRow[];
+  try {
+    const res = await (db as D1Like)
+      .prepare("SELECT name, script_name, manifest_json, api FROM installed_modules WHERE enabled = 1")
+      .all<InstalledModuleRow>();
+    rows = res.results ?? [];
+  } catch (e) {
+    console.warn(`dispatch discovery: installed_modules read failed (${(e as Error).message}); skipping`);
+    return [];
+  }
+  const out: RegisteredModule[] = [];
+  for (const row of rows) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(row.manifest_json);
+    } catch {
+      console.warn(`dispatch module ${row.name}: manifest_json is not valid JSON; skipping`);
+      continue;
+    }
+    const parsed = validateManifest(raw);
+    if (typeof parsed === "string") {
+      console.warn(`dispatch module ${row.name}: stored manifest invalid (${parsed}); skipping`);
+      continue;
+    }
+    out.push({ ...parsed, binding: dispatchRef(row.script_name) });
+  }
+  return out;
+}
+
+/** Merge the service-binding registry with the dispatch registry into one list the pipeline +
+ *  /api/modules consume. On a NAME collision (a module mid-migration that is both service-bound AND
+ *  installed as a namespace upload -- allowed transiently, section 6.3), the service binding WINS (it
+ *  is the deliberate, in-tree, deploy-tested one) and the dispatch duplicate is dropped with a warning.
+ *  Deterministic + order-preserving: service entries first, then any dispatch-only entries. */
+export function mergeRegistries(
+  service: RegisteredModule[],
+  dispatch: RegisteredModule[],
+): RegisteredModule[] {
+  const byName = new Map<string, RegisteredModule>();
+  for (const m of service) byName.set(m.name, m);
+  for (const m of dispatch) {
+    if (byName.has(m.name)) {
+      console.warn(`module ${m.name}: installed via dispatch AND service-bound; service binding wins (migration overlap)`);
+      continue;
+    }
+    byName.set(m.name, m);
+  }
+  return [...byName.values()];
+}
+
+/** Discover every installed module: the `MODULE_*` service-binding scan (read each binding's manifest
+ *  in parallel) MERGED with the WfP dispatch modules from D1 (discoverDispatchModules, a no-op unless
+ *  MODULE_DISPATCH is bound). Both kinds land in ONE registry, agnostic to how each later resolves to a
+ *  Fetcher. With `opts.cacheTtlMs > 0` the result is cached per-isolate for that many ms (the
+ *  /api/modules route uses this); without it discovery runs fresh (the pipeline paths). `opts.nowMs` is
+ *  injectable for tests. */
 export async function discoverModules(
   env: Record<string, unknown>,
   opts: { cacheTtlMs?: number; nowMs?: number } = {},
@@ -246,10 +379,12 @@ export async function discoverModules(
     return discoveryCache.modules;
   }
   const names = moduleBindingNames(env);
-  const read = await Promise.all(
-    names.map((n) => readManifest(n, env[n] as FetcherLike)),
-  );
-  const modules = read.filter((m): m is RegisteredModule => m !== null);
+  const [read, dispatch] = await Promise.all([
+    Promise.all(names.map((n) => readManifest(n, env[n] as FetcherLike))),
+    discoverDispatchModules(env),
+  ]);
+  const service = read.filter((m): m is RegisteredModule => m !== null);
+  const modules = mergeRegistries(service, dispatch);
   if (ttl > 0) discoveryCache = { modules, expiresAt: now + ttl };
   return modules;
 }
@@ -277,9 +412,19 @@ export function servingForHook(modules: RegisteredModule[], hook: HookName): Reg
     .sort((a, b) => (a.ui?.order ?? 100) - (b.ui?.order ?? 100) || a.name.localeCompare(b.name));
 }
 
+/** A short label for a module's transport, for error/log messages that must name it without leaking to
+ *  the wire (these strings stay core-side, in the pipeline's degrade log). */
+function transportLabel(module: RegisteredModule): string {
+  return module.binding.startsWith(DISPATCH_REF_PREFIX)
+    ? module.binding // already "dispatch:<script>"
+    : `binding ${module.binding}`;
+}
+
+/** Resolve a registered module to a Fetcher by its transport-encoded `binding` ref. Thin wrapper over
+ *  resolveFetcher (the single primitive); everything AFTER "got a Fetcher" is identical for both
+ *  transports. */
 function fetcherFor(env: Record<string, unknown>, module: RegisteredModule): FetcherLike | null {
-  const v = env[module.binding];
-  return isFetcher(v) ? v : null;
+  return resolveFetcher(env, module.binding);
 }
 
 // F5: a module is untrusted (community territory). Read its response through a size cap so a
@@ -438,7 +583,7 @@ export async function dispatchPickOne<I = unknown, O = unknown>(
   if (!module) return { ok: false, error: `no module serves pick_one hook "${hook}"` };
   const fetcher = fetcherFor(env, module);
   if (!fetcher) {
-    return { ok: false, error: `module ${module.name} binding ${module.binding} is not bound` };
+    return { ok: false, error: `module ${module.name} (${transportLabel(module)}) is not reachable` };
   }
   const config = validateConfig(module.config_schema, opts.config);
   return awaitInvoke<I, O>(fetcher, { hook, input, config, context });
@@ -484,7 +629,7 @@ export async function dispatchChain<I = unknown, O = unknown>(
   for (const module of servingForHook(modules, hook)) {
     const fetcher = fetcherFor(env, module);
     if (!fetcher) {
-      errors.push(`${module.name}: binding ${module.binding} is not bound`);
+      errors.push(`${module.name}: ${transportLabel(module)} is not reachable`);
       continue;
     }
     const config = validateConfig(module.config_schema, opts.configFor?.(module.name));
