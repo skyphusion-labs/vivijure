@@ -3,6 +3,25 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.8.1
+
+**Pre-announce polish: honest public docs, a cleaner deploy front door, and edge-cache purge on release.**
+
+- **Welcome page reflects the real constellation.** The "how it fits together" table now lists both
+  local self-host doors (`vivijure-local-12gb` / `-16gb`) and all three finish satellites
+  (`vivijure-musetalk` / `-upscale` / `-audio-upscale`), with a pointer to `docs/constellation.md`. The
+  stale "seven motion backends" claim is replaced with backend-agnostic wording (#403).
+- **Deploy hygiene.** The real account Secrets Store id is templated out of the public module configs
+  behind a `REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID` placeholder; `deploy.sh` (outsider path) fills it
+  from the operator's store and CI fills it from the `SECRETS_STORE_ID` repo variable, fail-closed, so
+  a tag deploy never ships a dangling `[[secrets_store_secrets]]` binding. `deploy/vivijure_deploy.py`
+  is demoted to a labelled alternative so `deploy.sh` is the single documented front door. The
+  speech-upscale opt-in now names its per-module `RUNPOD_ENDPOINT_ID` secret (#404).
+- **Edge-cache purge on release.** The tag-gated deploy job now purges the Cloudflare edge cache for
+  `/welcome` and `/` after the core deploys, so a release stops serving a stale welcome page. Opt-in
+  and self-host safe: a no-op unless `CF_ZONE_ID`, `CF_PURGE_HOST`, and `CF_CACHE_PURGE_TOKEN` are all
+  set; honest failure (the worker is already live, so a purge error never rolls back) (#405).
+
 ## v0.8.0
 
 **Workers-for-Platforms dynamic dispatch goes live: install a module without redeploying the core.**
