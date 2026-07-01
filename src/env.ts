@@ -88,6 +88,12 @@ export interface Env {
   // ACCESS_TEAM_DOMAIN nor ACCESS_AUD is set, /api/* is DENIED by default unless this is "true".
   ALLOW_UNAUTHENTICATED?: string;
 
+  // Dev-only planner AI mock (#411 dev-parity). When "1"/"true", planStoryboard/refineStoryboard
+  // return deterministic canned completions instead of a live model call, so the planner re-prompt
+  // flow is drivable in the fully-local module-bound dev env (no AI binding). UNSET in prod; the
+  // live provider path is unchanged. See src/planner-ai-mock.ts.
+  PLANNER_AI_MOCK?: string;
+
   // Cloudflare Web Analytics token, deploy-injected into /welcome at serve time (src/asset-response.ts).
   // PUBLIC, non-secret, but DEFAULT EMPTY in the public artifact: a self-hosted /welcome ships NO beacon
   // and phones home to NO ONE. The operator keeps their own analytics by setting this in their deploy

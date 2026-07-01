@@ -18,3 +18,8 @@ __pycache__/
 
 # Real deploy.env holds the operator keys (rendered from deploy.env.example); never commit it.
 /deploy.env
+
+# Module-bound local dev (docs/dev-modbound.md): only the launcher script is tracked; everything it
+# generates (rendered configs, logs, seeds) is disposable local state.
+/.dev-modbound/*
+!/.dev-modbound/dev-modbound.sh
