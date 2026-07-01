@@ -3,6 +3,24 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.8.4
+
+**Planner regression sweep closes (#411): the NULL-string mapping fix and a module-bound local dev
+environment.**
+
+- **SQL NULL no longer serialized as the string "null".** The renders list mapped NULL
+  `project` / `bundle_key` / `quality_tier` through a bare `String()`, shipping the literal, truthy
+  string `"null"` to the planner: "null" labels and download names, and a bundle-less row that looked
+  re-render eligible. Those fields now coerce to `""` like the sibling nullable fields, so the
+  planner's existing truthiness gating is correct with no frontend change (#418).
+- **Module-bound local dev environment.** `.dev-modbound/dev-modbound.sh` runs the core plus every
+  in-tree module worker in one local `wrangler dev` fleet: the real 25-module catalog projects into
+  the planner while every module invoke stays inert (binding-free dev configs; no GPU or provider
+  spend possible). Includes a dev-only planner AI mock (`PLANNER_AI_MOCK`, unset in prod, live path
+  unchanged) whose canned output runs the real extract/parse/validate pipeline, with sentinels for
+  pass, validator-reject, and parse-failure. Closes the dev-parity gap the sweep surfaced; recipe in
+  `docs/dev-modbound.md` (#419).
+
 ## v0.8.3
 
 **Planner regression-sweep fixes (#411): the keyframe lightbox and the dead progress-stream path.**
