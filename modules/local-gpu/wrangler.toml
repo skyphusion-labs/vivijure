@@ -1,5 +1,5 @@
 # local-gpu module worker (vivijure-module/2): image-to-video on the user's OWN LOCAL consumer GPU
-# (an RTX 4060 Ti 16GB-class card) via the vivijure-local-backend job server (LTX-Video, the i2v_clip
+# (a 12GB-class consumer card) via the vivijure-local-12gb job server (LTX-Video, the i2v_clip
 # action). Bound into the core as MODULE_LOCAL_GPU; the registry discovers it from GET /module.json and
 # the studio renders the motion.backend stage from it.
 #

@@ -1,6 +1,6 @@
 // local-gpu: a motion.backend module worker (vivijure-module/2) that renders image-to-video on the
-// user's OWN LOCAL consumer GPU (an RTX 4060 Ti 16GB-class card in their homelab), via the
-// vivijure-local-backend job server (LTX-Video), the i2v_clip action.
+// user's OWN LOCAL consumer GPU (a 12GB-class consumer card in their homelab), via the
+// vivijure-local-12gb job server (LTX-Video), the i2v_clip action.
 //
 // This is the LOCAL-CONSUMER door: the deliberate opposite of the RunPod datacenter backend. Unlike
 // own-gpu (which still runs on a RunPod endpoint the user provisions), this targets a long-running
@@ -49,14 +49,14 @@ interface Env {
 // Exported so the core's tier-drift guard (tests/quality-tier-drift.test.ts, #124) can assert this
 // module's `quality` enum stays in lockstep with the core QUALITY_TIERS set. The enum VALUES are the
 // core's shared vocabulary (draft/standard/final); the local backend maps each to an LTX engine config
-// a 16GB card can HONESTLY deliver ("final" = the card's honest ceiling, NOT datacenter parity). Same
+// a 12GB card can HONESTLY deliver ("final" = the card's honest ceiling, NOT datacenter parity). Same
 // names, backend-specific mapping -- exactly as the Wan datacenter backend maps the tiers to its steps.
 export const MANIFEST: ModuleManifest = {
   name: "local-gpu",
   version: "0.1.0",
   api: MODULE_API,
   hooks: ["motion.backend"],
-  provides: [{ id: "i2v-local-gpu", label: "Local GPU (LTX-Video i2v, 16GB consumer card)" }],
+  provides: [{ id: "i2v-local-gpu", label: "Local GPU (LTX-Video i2v, 12GB consumer card)" }],
   config_schema: {
     quality: { type: "enum", values: ["draft", "standard", "final"], default: "standard", label: "quality" },
     fps: { type: "int", default: 24, min: 8, max: 30, label: "fps" },
@@ -64,7 +64,7 @@ export const MANIFEST: ModuleManifest = {
     negative_prompt: { type: "string", default: "", label: "negative prompt (additive)" },
     seed: { type: "int", default: -1, min: -1, label: "seed (-1 = random)" },
   },
-  ui: { section: "motion", order: 4, locality: "local", cost: "Free after hardware", blurb: "Renders on your own GPU -- no cloud, no per-render cost; quality scales with your card (16GB / RTX 4060 Ti floor).", limits: ["RTX 4060 Ti 16GB floor; bigger cards add headroom", "LTX-Video i2v up to ~768x512, ~5s clips (draft / standard / final tiers)", "One clip at a time (a 16GB card runs a single i2v job)"] }, // ahead of own-gpu (5): a truly-local card needs no rent at all
+  ui: { section: "motion", order: 4, locality: "local", cost: "Free after hardware", blurb: "Renders on your own GPU -- no cloud, no per-render cost; quality scales with your card (12GB floor, proven).", limits: ["12GB consumer GPU floor (proven); bigger cards add headroom", "LTX-Video i2v up to ~768x512, ~5s clips (draft / standard / final tiers)", "One clip at a time (a 12GB card runs a single i2v job)"] }, // ahead of own-gpu (5): a truly-local card needs no rent at all
   cancelable: true,
 };
 
