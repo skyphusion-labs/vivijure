@@ -15,6 +15,7 @@ import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
+import { hookOutputViolation } from "./modules/conformance";
 import { presignR2Get, presignR2Put, FILM_DOWNLOAD_TTL_SECONDS } from "./r2-presign";
 import { readShotDurationsFromBundle } from "./bundle-assembler";
 import { buildCaptionCues } from "./captions";
@@ -575,7 +576,11 @@ async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
   const r = await invokeModule<DialogueInput, DialogueOutput>(fetcher, req);
   if (!r.ok) { console.warn(`film ${job.film_id}: dialogue submit failed (${r.error}); silent finish`); await enterSpeechOrFinish(env, job); return; }
   if ((r as { pending?: boolean }).pending) { job.dialogue_poll = (r as { poll: string }).poll; job.phase = "dialogue"; return; }
-  if ("output" in r) { applyDialogueOutput(job, r.output as DialogueOutput); }
+  if ("output" in r) {
+    const v = hookOutputViolation(dialogueModule.name, "dialogue", r.output);
+    if (v) { console.warn(`film ${job.film_id}: dialogue ${v}; silent finish`); await enterSpeechOrFinish(env, job); return; }
+    applyDialogueOutput(job, r.output as DialogueOutput);
+  }
   await enterSpeechOrFinish(env, job);
 }
 
@@ -590,7 +595,10 @@ async function advanceDialoguePhase(env: Env, job: FilmJob): Promise<void> {
   const p = await pollModule<DialogueOutput>(fetcher, { poll: job.dialogue_poll });
   if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
   if ((p as { pending?: boolean }).pending) return;  // still synthesizing
-  applyDialogueOutput(job, (p as { output: DialogueOutput }).output);
+  const out = (p as { output: DialogueOutput }).output;
+  const v = hookOutputViolation(dialogueModule.name, "dialogue", out);
+  if (v) { console.warn(`film ${job.film_id}: dialogue ${v}; silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
+  applyDialogueOutput(job, out);
   job.dialogue_poll = undefined;
   await enterSpeechOrFinish(env, job);
 }
@@ -652,12 +660,14 @@ async function advanceSpeechPhase(env: Env, job: FilmJob): Promise<void> {
       const r = await invokeModule<SpeechInput, SpeechOutput>(fetcher, req);
       if (!r.ok) { blipOrDegrade(ss, r.error, false); }
       else if ((r as { pending?: boolean }).pending) { ss.poll = (r as { poll: string }).poll; }
-      else if ("output" in r) { applySpeechOutput(ss, r.output as SpeechOutput); }
+      else if ("output" in r) { const v = hookOutputViolation(ss.chain[ss.idx], "speech", r.output); if (v) { degrade(ss, v); } else { applySpeechOutput(ss, r.output as SpeechOutput); } }
       else { degrade(ss, "speech module returned neither output nor a poll token"); }
     } else {
       const p = await pollModule<SpeechOutput>(fetcher, { poll: ss.poll });
       if (p.ok && !(p as { pending?: boolean }).pending) {
-        applySpeechOutput(ss, (p as { output: SpeechOutput }).output);
+        const out = (p as { output: SpeechOutput }).output;
+        const v = hookOutputViolation(ss.chain[ss.idx], "speech", out);
+        if (v) { degrade(ss, v); } else { applySpeechOutput(ss, out); }
       } else if (!p.ok && classifyFinishFailure(p.error) === "transient") {
         blipOrDegrade(ss, p.error, true);
       } else if (!p.ok) {
@@ -722,12 +732,14 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
       const r = await invokeModule<FinishInput, FinishOutput>(fetcher, req);
       if (!r.ok) { failOrRetry(fs, r.error, false); }
       else if ((r as { pending?: boolean }).pending) { fs.poll = (r as { poll: string }).poll; }
-      else if ("output" in r) { applyFinishOutput(fs, r.output as FinishOutput); }
+      else if ("output" in r) { const v = hookOutputViolation(fs.chain[fs.idx], "finish", r.output); if (v) { fs.status = "failed"; fs.error = v; } else { applyFinishOutput(fs, r.output as FinishOutput); } }
       else { fs.status = "failed"; fs.error = "finish module returned neither output nor a poll token"; }
     } else {
       const p = await pollModule<FinishOutput>(fetcher, { poll: fs.poll });
       if (p.ok && !(p as { pending?: boolean }).pending) {
-        applyFinishOutput(fs, (p as { output: FinishOutput }).output);
+        const out = (p as { output: FinishOutput }).output;
+        const v = hookOutputViolation(fs.chain[fs.idx], "finish", out);
+        if (v) { fs.status = "failed"; fs.error = v; } else { applyFinishOutput(fs, out); }
       } else if (!p.ok && classifyFinishFailure(p.error) === "transient") {
         failOrRetry(fs, p.error, true); // a transport blip: re-poll the same job under the cap
       } else if (!(await adoptFinishStepFromR2(env, job, fs))) {
@@ -1128,8 +1140,16 @@ export async function runFilmFinish(env: Env, input: RunFilmFinishInput): Promis
   // Record the chain outcome so a degraded or failed film.finish is observable state, not a silent green.
   // The module soft-degrades (passthrough) on a container failure and still returns ok:true, so the only
   // signal that cards were NOT applied is `output.degraded`; surface it (and any chain errors) here. (#207)
-  const out = result.output;
-  const degraded = result.degraded.length > 0 ? result.degraded.join("; ") : undefined;
+  const degradeParts = [...result.degraded];
+  // Terminal-seam contract check (#345 / F5b): a film.finish module can be envelope-correct yet return a
+  // payload that breaks the hook contract (e.g. no film_key). Don't thread it downstream -- record the
+  // violation as an observable degrade and fall back to the input film (never a silent green).
+  let out = result.output;
+  if (out !== null) {
+    const v = hookOutputViolation(result.applied[result.applied.length - 1] ?? "film.finish", "film.finish", out);
+    if (v) { degradeParts.push(v); out = null; }
+  }
+  const degraded = degradeParts.length > 0 ? degradeParts.join("; ") : undefined;
   const finalKey = typeof out?.film_key === "string" && out.film_key.length > 0 ? out.film_key : input.film_key;
   return { ran: true, film_key: finalKey, applied: result.applied, errors: result.errors, steps: out?.applied, degraded };
 }
@@ -1381,12 +1401,15 @@ async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
         degradeMasterStep(m, `invoke failed: ${r.error}`); continue;     // terminal: passthrough + advance
       }
       if ((r as { pending?: boolean }).pending) { m.poll = (r as { poll: string }).poll; m.attempts = 0; return; }
-      if ("output" in r) { job.audio_key = applyMasterOutput(m, job.audio_key, r.output as MasterOutput); continue; }
+      if ("output" in r) { const v = hookOutputViolation(m.chain[m.idx], "master", r.output); if (v) { degradeMasterStep(m, v); continue; } job.audio_key = applyMasterOutput(m, job.audio_key, r.output as MasterOutput); continue; }
       degradeMasterStep(m, "module returned neither output nor a poll token"); continue;
     }
     const p = await pollModule<MasterOutput>(fetcher, { poll: m.poll });
     if (p.ok && !(p as { pending?: boolean }).pending) {
-      job.audio_key = applyMasterOutput(m, job.audio_key, (p as { output: MasterOutput }).output); continue;
+      const out = (p as { output: MasterOutput }).output;
+      const v = hookOutputViolation(m.chain[m.idx], "master", out);
+      if (v) { degradeMasterStep(m, v); continue; }
+      job.audio_key = applyMasterOutput(m, job.audio_key, out); continue;
     }
     if (p.ok) return; // still mastering -- poll again next tick
     const d = classifyFinishRetry(p.error, m.attempts ?? 0, MASTER_STEP_MAX_ATTEMPTS);
@@ -1643,7 +1666,7 @@ export async function startFilmJob(
     });
     if (!r.ok) { job.phase = "failed"; job.error = r.error; }
     else if ((r as { pending?: boolean }).pending) { job.keyframe_poll = (r as { poll: string }).poll; job.keyframe_job_id = (r as { jobId?: string }).jobId; }
-    else if ("output" in r) { await afterKeyframeOutput(env, job, r.output as KeyframeOutput); }
+    else if ("output" in r) { const v = hookOutputViolation(kf.name, "keyframe", r.output); if (v) { job.phase = "failed"; job.error = v; } else { await afterKeyframeOutput(env, job, r.output as KeyframeOutput); } }
     else { job.phase = "failed"; job.error = "keyframe module returned neither output nor a poll token"; }
   }
   await putFilm(env, job);
@@ -1902,7 +1925,10 @@ export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: F
       const p = await pollModule<KeyframeOutput>(fetcher, { poll: job.keyframe_poll });
       if (!p.ok) { job.phase = "failed"; job.error = p.error; }
       else if (!(p as { pending?: boolean }).pending) {
-        await afterKeyframeOutput(env, job, (p as { output: KeyframeOutput }).output);
+        const out = (p as { output: KeyframeOutput }).output;
+        const v = hookOutputViolation(job.keyframe_binding ?? "keyframe", "keyframe", out);
+        if (v) { job.phase = "failed"; job.error = v; }
+        else await afterKeyframeOutput(env, job, out);
       } else if (await keyframeSetCompleteInR2(env, job)) {
         // R2 PRESENCE IS AUTHORITATIVE, even on a *pending* poll (#129 sibling, mirrors #154 for finish):
         // the keyframe job's RunPod envelope can freeze at IN_PROGRESS after the GPU already wrote every

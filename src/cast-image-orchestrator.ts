@@ -12,6 +12,7 @@
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, resolveFetcher, resolvePickOne, validateConfig } from "./modules/registry";
 import type { CastImageInput, CastImageOutput } from "./modules/types";
+import { hookOutputViolation } from "./modules/conformance";
 import { presignR2Get } from "./r2-presign";
 import { getCastById, addRefs, type CastRefImage } from "./cast-db";
 
@@ -177,7 +178,10 @@ export async function startCastRefsJob(
   } else if ((r as { pending?: boolean }).pending) {
     job.module_poll = (r as { poll: string }).poll;
   } else if ("output" in r) {
-    await finalize(env, job, (r as { output: CastImageOutput }).output); // sync path
+    const out = (r as { output: CastImageOutput }).output;
+    const violation = hookOutputViolation(module.name, "cast.image", out);
+    if (violation) { job.phase = "failed"; job.error = violation; }
+    else await finalize(env, job, out); // sync path
   } else {
     job.phase = "failed";
     job.error = "cast.image module returned neither output nor a poll token";
@@ -208,7 +212,10 @@ export async function advanceCastRefsJob(env: Env, castId: number, jobId: string
     job.phase = "failed";
     job.error = p.error;
   } else if (!(p as { pending?: boolean }).pending) {
-    await finalize(env, job, (p as { output: CastImageOutput }).output);
+    const out = (p as { output: CastImageOutput }).output;
+    const violation = hookOutputViolation(job.module_name ?? "cast.image", "cast.image", out);
+    if (violation) { job.phase = "failed"; job.error = violation; }
+    else await finalize(env, job, out);
   }
   await putJob(env, job);
   return job;
