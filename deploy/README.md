@@ -1,9 +1,17 @@
-# vivijure-deploy (guided installer)
+# vivijure-deploy (alternative guided installer)
+
+> **The primary deploy path is the one-script `./deploy.sh` at the repo root** (see the top-level
+> README and [docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md); `deploy/constellation.sh` is the top
+> orchestrator for the whole constellation). This Python installer is an **alternative** for operators
+> who want interactive prompts plus a `down` teardown and want the RunPod side provisioned for them.
+> It is not a competing front door: reach for it when you want the guided UX, otherwise use `deploy.sh`.
 
 Stand up the whole Vivijure stack on **your own** Cloudflare + RunPod accounts (BYO keys + GPU). One
-input surface, idempotent re-runs, a teardown path. This is the primary deploy path from the design
-in #244 (a guided Python installer, not full Terraform -- RunPod's IaC is too immature and the
-Cloudflare side needs Wrangler for code/migrations regardless).
+input surface, idempotent re-runs, a teardown path -- the guided Python installer from the design in
+#244 (not full Terraform -- RunPod's IaC is too immature and the Cloudflare side needs Wrangler for
+code/migrations regardless). What it adds over `deploy.sh`: it also provisions the RunPod template /
+network volume / endpoints, mints the scoped R2 S3 token, creates the Cloudflare Access app, and can
+tear the whole stack back down by recorded id -- steps `deploy.sh` leaves to you.
 
 **Status: complete provisioning spine, NOT yet live-tested.** The CLI, the single input surface, the
 secret handling, and every provider call (Cloudflare + RunPod) are implemented and verified against the

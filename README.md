@@ -175,7 +175,13 @@ Vivijure is for the creative homelabber who is priced out of subscription AI vid
 prefers to own the stack. The control plane is on Cloudflare's free tier (no server to run);
 the GPU work hits whatever endpoint you point it at; the artifacts land in your R2 bucket.
 
-## Quick start
+## Deploying: the security gate and the deploy paths
+
+The one-script `./deploy.sh` in [Quick start](#quick-start) above is **the** front door. The friendly
+walk-through is [docs/quickstart.md](docs/quickstart.md) and the full reference is
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); for the whole constellation (studio + GPU backend + local
+doors), `deploy/constellation.sh` is the top orchestrator that calls each repo's own deploy. Whichever
+path you take, the security gate below is non-negotiable.
 
 > ### ⚠️ Security requirement: this is a SINGLE-OPERATOR studio
 >
@@ -191,12 +197,16 @@ the GPU work hits whatever endpoint you point it at; the artifacts land in your 
 > `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`) that fails closed once armed; see
 > [docs/SECURITY.md](docs/SECURITY.md).
 
-### Guided installer
+### Alternative: guided Python installer
 
-One command stands the whole stack up on **your own** Cloudflare + RunPod accounts (bring your own keys
-and GPU). It collects exactly three infra credentials (a Cloudflare account id + API token and a RunPod
-API key, nothing else, never payment or wallet data), provisions everything in dependency order, and
-gives you an idempotent re-run plus a teardown path.
+`deploy/vivijure_deploy.py` is an **alternative** to `deploy.sh`, not a competing front door: an
+interactive guided installer that also provisions the RunPod side (template, network volume, endpoints),
+mints a scoped R2 token, creates the Cloudflare Access app, and offers a `down` teardown -- things the
+shell path leaves to you. It collects exactly three infra credentials (a Cloudflare account id + API
+token and a RunPod API key, nothing else, never payment or wallet data). **Status: the full provisioning
+spine is implemented and verified against the Cloudflare/RunPod API docs, but the end-to-end `up` has NOT
+yet been run against a live account,** so `deploy.sh` stays the recommended path; reach for this when you
+want the guided prompts plus teardown.
 
 ```bash
 git clone https://github.com/skyphusion-labs/vivijure
@@ -208,11 +218,8 @@ python3 deploy/vivijure_deploy.py up     # provision + seed + deploy (idempotent
 python3 deploy/vivijure_deploy.py down   # teardown by recorded id (keeps your R2/D1 data)
 ```
 
-`up` provisions real resources on your accounts (mints a scoped R2 token, creates a Cloudflare Access
-app, RunPod endpoints, D1, R2 buckets). **Status: the full provisioning spine is implemented and
-verified against the Cloudflare/RunPod API docs, but the end-to-end `up` has not yet been run against a
-live account** -- treat the first run accordingly. Full details, required config, and the secret-handling
-notes are in [deploy/README.md](deploy/README.md).
+Full details, required config, and the secret-handling notes are in
+[deploy/README.md](deploy/README.md).
 
 ### Manual (Wrangler)
 

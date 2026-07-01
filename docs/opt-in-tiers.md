@@ -99,8 +99,13 @@ into the account Secrets Store secret named below.
 ### speech-upscale
 - **What it is:** a speech cleanup step for dialogue audio.
 - **What you get:** clearer spoken lines, which makes lip-sync land better.
-- **What it needs:** its module endpoint set, and the `speech-upscale` (`MODULE_SPEECH_UPSCALE`) binding
-  kept.
+- **What it needs:** a RunPod endpoint running the `vivijure-audio-upscale` image (resemble-enhance);
+  its id set as this module's OWN wrangler secret `RUNPOD_ENDPOINT_ID`, plus `RUNPOD_API_KEY`, which you
+  set yourself:
+  `npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/speech-upscale/wrangler.toml` (and the same for
+  `RUNPOD_API_KEY`). Unlike finish-upscale / finish-lipsync, `deploy.sh` does **not** seed this: it is a
+  per-module wrangler secret, not an account Secrets-Store secret. Keep the `speech-upscale`
+  (`MODULE_SPEECH_UPSCALE`) binding.
 
 ---
 

@@ -138,12 +138,15 @@ if [ "$VIVIJURE_PROFILE" = full ]; then
   seed_secret MUSETALK_RUNPOD_ENDPOINT_ID      "$MUSETALK_RUNPOD_ENDPOINT_ID"
 fi
 
-# Point every module we are about to deploy at YOUR store (the committed configs carry OUR store id).
+# Point every module we are about to deploy at YOUR store. The committed configs ship the
+# REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID placeholder (no real store id in the public repo); this
+# rewrite fills it. The pattern matches whatever is inside the quotes (placeholder OR a prior id),
+# so a re-run is idempotent.
 info "wiring your store id into the module configs"
 for m in $MODULES; do
   f="modules/$m/wrangler.toml"
   [ -f "$f" ] || die "missing $f"
-  sed -i -E "s/store_id = \"[0-9a-fA-F]+\"/store_id = \"$STORE_ID\"/g" "$f"
+  sed -i -E "s/store_id = \"[^\"]*\"/store_id = \"$STORE_ID\"/g" "$f"
 done
 
 # ---- 4. render wrangler.toml from the template ------------------------------
