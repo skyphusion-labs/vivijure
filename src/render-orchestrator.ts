@@ -10,7 +10,7 @@
 // the caller polls sequentially.
 
 import type { Env } from "./env";
-import { discoverModules, invokeModule, pollModule, servingForHook, validateConfig } from "./modules/registry";
+import { discoverModules, invokeModule, pollModule, resolveFetcher, servingForHook, validateConfig } from "./modules/registry";
 import type { MotionBackendInput, MotionBackendOutput, PollResponse } from "./modules/types";
 
 export interface ClipShotInput {
@@ -38,11 +38,6 @@ export interface ClipJob {
   created_at: number;
 }
 
-interface FetcherLike {
-  fetch(input: Request | string, init?: RequestInit): Promise<Response>;
-}
-const asFetcher = (v: unknown): FetcherLike | null =>
-  v && typeof (v as { fetch?: unknown }).fetch === "function" ? (v as FetcherLike) : null;
 
 const jobKey = (jobId: string) => `renders/${jobId}/clips-job.json`;
 
@@ -159,7 +154,7 @@ export async function startClipJob(
     const binding = mb ? mb.binding : null;
     shot.binding = binding;
     shot.motion_backend = mb?.name ?? undefined;
-    const fetcher = binding ? asFetcher(envRec[binding]) : null;
+    const fetcher = binding ? resolveFetcher(envRec, binding) : null;
     const config = mb
       ? validateConfig(mb.config_schema, moduleConfigs[mb.name] ?? (mb.name === defaultMb?.name ? args.config : undefined) ?? args.config)
       : defaultConfig;
@@ -212,7 +207,7 @@ export async function advanceClipJob(env: Env, jobId: string): Promise<ClipJob |
   for (const shot of job.shots) {
     if (shot.status !== "pending" || !shot.poll) continue;
     const binding = shot.binding ?? job.binding;
-    const fetcher = binding ? asFetcher(envRec[binding]) : null;
+    const fetcher = binding ? resolveFetcher(envRec, binding) : null;
     if (!fetcher) {
       shot.status = "failed";
       shot.error = "module binding no longer bound";

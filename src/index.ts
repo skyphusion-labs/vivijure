@@ -1,6 +1,8 @@
 // Vivijure studio core: module host, render API router, planner/cast UI server.
 
-import { discoverModules, modulesResponse, dispatchChain, servingForHook } from "./modules/registry";
+import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest } from "./modules/registry";
+import { runLiveConformance, allPass, failures } from "./modules/conformance";
+import { installModuleRow, uninstallModuleRow, setModuleEnabled, listInstalledModules } from "./installed-modules";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
 import { startClipJob, advanceClipJob, summarizeJob, type ClipShotInput } from "./render-orchestrator";
 import { startFilmJob, advanceFilmJob, cancelFilmJob, startFilmFromKeyframes, summarizeFilm, type FilmScene, type FilmSummary } from "./film-orchestrator";
@@ -1028,6 +1030,69 @@ const hPatchModuleConfig: Handler = async (req, env, _ctx, p) => {
   return json({ ok: true, module: mod.name, config });
 };
 
+// --- WfP dispatch: module install / admin (docs/module-dispatch.md 4.4) ------------------------------
+// Operator-gated by CF Access (every /api/* request is, F2): these routes install / uninstall / disable
+// / list modules that live as user Workers in the `vivijure-modules` dispatch namespace -- WITHOUT a
+// core redeploy. The install CLI (scripts/install-module.ts) uploads the user Worker into the namespace
+// (the WfP upload API, holding the scoped install token), then calls POST /api/modules/install here; the
+// core runs conformance against the just-uploaded, RESIDENT script (reached through MODULE_DISPATCH) and
+// INSERTs the registry row ONLY on a green suite. A resident-but-failing module is never installed and
+// never dispatched -- the gate is load-bearing, not advisory.
+const hListInstalledModules: Handler = async (_req, env) => {
+  return json({ ok: true, modules: await listInstalledModules(env) });
+};
+const hInstallModule: Handler = async (req, env) => {
+  if (!env.MODULE_DISPATCH) throw badRequest("dispatch is not enabled on this host (no MODULE_DISPATCH namespace bound)");
+  const body = await readBody<{ script_name?: string }>(req);
+  const script = typeof body?.script_name === "string" ? body.script_name.trim() : "";
+  if (!script) throw badRequest("script_name required");
+  let fetcher: Fetcher;
+  try {
+    fetcher = env.MODULE_DISPATCH.get(script);
+  } catch (e) {
+    throw badRequest(`script "${script}" is not resident in the namespace: ${(e as Error).message}`);
+  }
+  // Capture the exact manifest that gets gated + stored (so the row never drifts from what passed).
+  let manifestText: string;
+  try {
+    const res = await fetcher.fetch("https://module/module.json");
+    if (!res.ok) throw badRequest(`GET /module.json -> ${res.status}`);
+    manifestText = await res.text();
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw badRequest(`module unreachable: ${(e as Error).message}`);
+  }
+  let raw: unknown;
+  try { raw = JSON.parse(manifestText); } catch { throw badRequest("module.json is not valid JSON"); }
+  const manifest = validateManifest(raw);
+  if (typeof manifest === "string") return json({ ok: false, error: `invalid manifest: ${manifest}` }, 422);
+  // The conformance gate: run the live suite over the SAME dispatch transport it will serve on.
+  const checks = await runLiveConformance(fetcher);
+  if (!allPass(checks)) return json({ ok: false, error: "conformance failed", checks: failures(checks) }, 422);
+  await installModuleRow(env, {
+    name: manifest.name,
+    script_name: script,
+    manifest_json: manifestText,
+    api: manifest.api,
+    installed_at: Date.now(),
+  });
+  return json({ ok: true, module: manifest.name, script_name: script, checks }, 201);
+};
+const hUninstallModule: Handler = async (_req, env, _ctx, p) => {
+  // Row FIRST (the next request stops dispatching it); the CLI evicts the resident script from the
+  // namespace AFTER, so an in-flight /poll is not torn out from under it (section 4.4).
+  const removed = await uninstallModuleRow(env, p.name);
+  if (!removed) throw notFound("module not installed");
+  return json({ ok: true, module: p.name, removed: true });
+};
+const hSetModuleEnabled: Handler = async (req, env, _ctx, p) => {
+  const body = await readBody<{ enabled?: unknown }>(req);
+  if (typeof body?.enabled !== "boolean") throw badRequest("body needs a boolean `enabled`");
+  const matched = await setModuleEnabled(env, p.name, body.enabled);
+  if (!matched) throw notFound("module not installed");
+  return json({ ok: true, module: p.name, enabled: body.enabled });
+};
+
 // --- route table ---------------------------------------------------------
 const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/storyboard/projects",                        handler: hListProjects },
@@ -1098,6 +1163,10 @@ const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/whoami",                          handler: hWhoami },
   { method: "GET",    pattern: "/api/prefs",                           handler: hGetPrefs },
   { method: "PATCH",  pattern: "/api/prefs",                           handler: hPatchPrefs },
+  { method: "GET",    pattern: "/api/modules/installed",              handler: hListInstalledModules },
+  { method: "POST",   pattern: "/api/modules/install",                handler: hInstallModule },
+  { method: "DELETE", pattern: "/api/modules/install/:name",          handler: hUninstallModule },
+  { method: "PATCH",  pattern: "/api/modules/install/:name",          handler: hSetModuleEnabled },
   { method: "GET",    pattern: "/api/modules/:name/config",            handler: hGetModuleConfig },
   { method: "PATCH",  pattern: "/api/modules/:name/config",            handler: hPatchModuleConfig },
 ];
@@ -1151,7 +1220,10 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
       // Cache discovery for 60s per isolate so a refresh storm does not re-fetch every module's
       // manifest each request (issue #17 follow-up). Only this route opts in; dispatch stays fresh.
       const modules = await discoverModules(env as unknown as Record<string, unknown>, { cacheTtlMs: 60_000 });
-      return json(modulesResponse(modules, renderConfigProjection()));
+      // Advertise the host's transport capability (the CORE describing itself, orthogonal to the module
+      // `api` version): `dispatch` is true when this deploy binds the WfP namespace, so an operator /
+      // the studio UI can tell an install-without-redeploy host from a service-binding-only one.
+      return json(modulesResponse(modules, renderConfigProjection(), { dispatch: !!env.MODULE_DISPATCH }));
     }
     const studioPage = STUDIO_PAGE_ASSETS[url.pathname];
     if (studioPage && (request.method === "GET" || request.method === "HEAD")) {

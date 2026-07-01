@@ -1,15 +1,12 @@
 // Best-effort notify on scatter gather completion (mirrors film-orchestrator fireNotify).
 
 import type { Env } from "./env";
-import { discoverModules, invokeModule, servingForHook, validateConfig } from "./modules/registry";
+import { discoverModules, invokeModule, resolveFetcher, servingForHook, validateConfig } from "./modules/registry";
 import { loadInstallConfig } from "./operator-config";
 import type { NotifyInput, NotifyOutput } from "./modules/types";
 import { presignR2Get, FILM_DOWNLOAD_TTL_SECONDS } from "./r2-presign";
 import type { ScatterJob } from "./scatter-orchestrator-types";
 
-interface FetcherLike { fetch(input: Request | string, init?: RequestInit): Promise<Response>; }
-const asFetcher = (v: unknown): FetcherLike | null =>
-  v && typeof (v as { fetch?: unknown }).fetch === "function" ? (v as FetcherLike) : null;
 
 export async function fireNotifyForScatter(env: Env, job: ScatterJob): Promise<void> {
   if (!job.film_key) return;
@@ -26,7 +23,7 @@ export async function fireNotifyForScatter(env: Env, job: ScatterJob): Promise<v
     };
     const context = { project: job.project, job_id: job.scatter_id };
     for (const m of notifiers) {
-      const fetcher = asFetcher(envRec[m.binding]);
+      const fetcher = resolveFetcher(envRec, m.binding);
       if (!fetcher) continue;
       try {
         // Inject the operator-set install-config (e.g. notify-email's notify_email recipient) as the

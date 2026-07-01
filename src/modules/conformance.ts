@@ -11,7 +11,7 @@
 // .test.ts) drives them against a deployed module URL. This is the conformance half of the module
 // SDK: the contract is the law, and this is how a contributor proves they obey it.
 
-import { MODULE_API, SUPPORTED_MODULE_APIS, type HookName } from "./types";
+import { SUPPORTED_MODULE_APIS, type HookName } from "./types";
 import { validateManifest } from "./registry";
 
 export interface ConformanceCheck {
@@ -218,4 +218,101 @@ export function allPass(checks: ConformanceCheck[]): boolean {
 /** The failed checks, for a concise report. */
 export function failures(checks: ConformanceCheck[]): ConformanceCheck[] {
   return checks.filter((c) => !c.pass);
+}
+
+// --------------------------------------------------------------------------- live runner (install gate)
+
+/** A Fetcher-shaped module handle: the SAME thing `MODULE_DISPATCH.get(script)` and a service binding
+ *  both return. The live runner is transport-agnostic -- it drives whatever Fetcher it is handed. */
+export interface ConformanceFetcher {
+  fetch(input: Request | string, init?: RequestInit): Promise<Response>;
+}
+
+// The bad-hook the degrade check submits; deliberately not a real HookName so a conformant module must
+// answer HTTP 200 + { ok:false } (data, never a crash / 4xx / 5xx).
+const DEGRADE_PROBE_HOOK = "not.a.real.hook";
+
+async function fetchJson(
+  fetcher: ConformanceFetcher,
+  path: string,
+  init?: RequestInit,
+): Promise<{ status: number; body: unknown } | { status: number; body: null; err: string }> {
+  try {
+    const res = await fetcher.fetch("https://module" + path, init);
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch (e) {
+      return { status: res.status, body: null, err: `body not JSON: ${(e as Error).message}` };
+    }
+    return { status: res.status, body };
+  } catch (e) {
+    return { status: 0, body: null, err: `unreachable: ${(e as Error).message}` };
+  }
+}
+
+/** Run the full conformance suite against a LIVE module Fetcher (the install-gate teeth,
+ *  docs/module-dispatch.md 4.3). Drives the module over the SAME transport it will run on (a dispatched
+ *  user Worker, or a service binding), asserting: a valid manifest at GET /module.json; a well-formed
+ *  InvokeResponse envelope for its first hook (and, when it answers synchronously, a contract-honoring
+ *  typed payload); and that a bad-hook request DEGRADES (HTTP 200 + { ok:false }, never a crash). The
+ *  install route INSERTs the registry row ONLY when every check passes; a resident-but-failing module is
+ *  never installed and never dispatched. Total: a network failure becomes a failed check, never a throw. */
+export async function runLiveConformance(fetcher: ConformanceFetcher): Promise<ConformanceCheck[]> {
+  const checks: ConformanceCheck[] = [];
+
+  // 1) manifest
+  const man = await fetchJson(fetcher, "/module.json");
+  if ("err" in man || man.status !== 200) {
+    const why = "err" in man ? man.err : `GET /module.json -> ${man.status}`;
+    checks.push(bad("manifest", why));
+    return checks; // no manifest -> nothing else can be meaningfully checked
+  }
+  const manifestChecks = checkManifest(man.body);
+  checks.push(...manifestChecks);
+  const manifest = validateManifest(man.body);
+  if (typeof manifest === "string") return checks; // checkManifest already recorded the failure
+
+  // 2) first-hook invoke: well-formed envelope (+ typed payload when synchronous)
+  const hook = manifest.hooks[0];
+  const probe = await fetchJson(fetcher, "/invoke", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      hook,
+      // A plan.enhance-shaped input; for other hooks the module simply degrades (ok:false), which is
+      // still a conformant envelope. The gate validates the CONTRACT WIRING, not a real render.
+      input: { storyboard: { scenes: [{ prompt: "a quiet street at night" }] } },
+      config: {},
+      context: { project: "conformance", job_id: "install-gate" },
+    }),
+  });
+  if ("err" in probe || probe.status !== 200) {
+    const why = "err" in probe ? probe.err : `POST /invoke -> ${probe.status}`;
+    checks.push(bad("invoke", why));
+  } else {
+    const env = checkInvokeResponse(probe.body);
+    checks.push(env);
+    const b = probe.body as { ok?: boolean; pending?: boolean; output?: unknown };
+    if (env.pass && b.ok === true && b.pending !== true) {
+      checks.push(checkHookOutput(hook, b.output));
+    }
+  }
+
+  // 3) degrade: a bad hook is DATA (HTTP 200 + ok:false), never a crash
+  const deg = await fetchJson(fetcher, "/invoke", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hook: DEGRADE_PROBE_HOOK, input: {}, config: {}, context: { project: "conformance", job_id: "install-gate-degrade" } }),
+  });
+  if ("err" in deg || deg.status !== 200) {
+    const why = "err" in deg ? deg.err : `POST /invoke (bad hook) -> ${deg.status}`;
+    checks.push(bad("degrade", why));
+  } else {
+    const shape = checkInvokeResponse(deg.body);
+    const okFalse = !!deg.body && typeof deg.body === "object" && (deg.body as { ok?: unknown }).ok === false;
+    checks.push(shape.pass && okFalse ? ok("degrade", "bad hook -> 200 + ok:false") : bad("degrade", "bad hook must return 200 + ok:false"));
+  }
+
+  return checks;
 }

@@ -33,6 +33,15 @@ export interface Env {
   // Static frontend (the studio UI), served via Workers Assets.
   ASSETS: Fetcher;
 
+  // Phase 3 (Workers for Platforms): the OUTBOUND dynamic-dispatch binding to the `vivijure-modules`
+  // dispatch namespace. A module uploaded into the namespace is resolved at request time by
+  // MODULE_DISPATCH.get(<script-name>) -> Fetcher, then invoked over the SAME /invoke envelope as a
+  // service-bound module (registry.fetcherFor). OPTIONAL: a deploy without WfP (the standard self-host
+  // path) leaves it unbound, everything falls back to `MODULE_*` service bindings, and the whole
+  // dispatch layer is a no-op (registry.discoverDispatchModules short-circuits). Distinct key from the
+  // `MODULE_${string}` index signature below: a DispatchNamespace has `.get()`, not `.fetch()`.
+  MODULE_DISPATCH?: DispatchNamespace;
+
   // AI Gateway (LLM storyboard planning + image chat + cloud-animate scoring prompts).
   AI: Ai;
   GATEWAY_ID: string;
@@ -97,6 +106,9 @@ export interface Env {
   // BYOK OpenAI image gen (transparent PNG for gpt-image-1.5). Optional.
   OPENAI_API_KEY?: string;
 
-  // Opt-in module workers: `MODULE_<NAME>` service bindings. Discovered by the registry.
-  [key: `MODULE_${string}`]: Fetcher | undefined;
+  // Opt-in module workers: `MODULE_<NAME>` service bindings (Fetcher), discovered by the registry.
+  // The value type also admits DispatchNamespace so the one dispatch binding in this prefix
+  // (MODULE_DISPATCH, above) satisfies this index signature; the registry's `isFetcher` guard keeps a
+  // service-binding access from ever being handed the namespace (it has `.get()`, not `.fetch()`).
+  [key: `MODULE_${string}`]: Fetcher | DispatchNamespace | undefined;
 }

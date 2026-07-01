@@ -1,14 +1,25 @@
 # Module dispatch (Workers for Platforms)
 
-> Status: **DESIGN / PROPOSED** (roadmap Phase 3). Nothing in this document is deployed. It proposes
-> how a Vivijure module installs **without redeploying the core**, by uploading the module as a user
-> Worker into a Cloudflare **Workers for Platforms (WfP)** dispatch namespace and routing hook calls to
-> it through the core's **outbound dynamic-dispatch** binding.
+> Status: **HOST-SIDE IMPLEMENTED, not yet deployed** (roadmap Phase 3). The core now speaks dispatch:
+> registry resolution, the D1 `installed_modules` store, the install/uninstall/disable/list admin routes
+> (behind CF Access), the conformance install-gate, the host capability flag, and the `install-module`
+> CLI all ship in the studio Worker. What is NOT yet done is the DEPLOY step -- creating the
+> `vivijure-modules` dispatch namespace and uncommenting the `[[dispatch_namespaces]]` binding (an
+> operator action gated on a real WfP-enabled account; see the deploy runbook). Until then the binding is
+> unbound and the whole dispatch layer is a no-op: the studio runs exactly as before on service bindings.
 >
 > This is an **infrastructure + onboarding** spec layered UNDER the existing module contract
 > (`docs/module-api.md`, `src/modules/types.ts` = `vivijure-module/2`). It changes WHERE a module lives
 > and HOW the core reaches it; it does not (by design, see section 6) change WHAT a module is. Read
 > `docs/module-api.md` first; this is the transport story beneath it.
+>
+> **Implementation note (transport ref).** The illustrative `RegisteredModule.dispatch` descriptor in
+> section 3.2 shipped as a strictly-internal simplification: a module's transport is encoded in its
+> single `binding` REF string -- `MODULE_<NAME>` for a service binding, `dispatch:<script>` for a
+> namespace upload -- resolved by one primitive, `registry.resolveFetcher`. One string (not a second
+> field) means a module's transport persists cleanly through render job state, so a dispatch module works
+> uniformly across the multi-request finish/speech/master chains, not just the in-request pick_one hooks.
+> Nothing on the module-facing contract or the public wire changes (the ref is stripped by `toPublic`).
 
 ## 0. Why this exists
 
