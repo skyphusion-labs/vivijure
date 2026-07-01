@@ -7,6 +7,44 @@ Vivijure is a self-hosted AI film studio built on Cloudflare Workers. It runs fr
 Workers free tier and connects to whatever GPU backend you attach -- RunPod, your own box, or
 a cloud motion API. You own every artifact.
 
+## Quick start
+
+Fill in your keys once, run one script:
+
+```bash
+npm install
+cp deploy.env.example deploy.env   # then edit deploy.env with your keys
+./deploy.sh
+```
+
+That gives you the studio core plus cloud and own-GPU render (the minimal profile). The friendly
+walk-through is [docs/quickstart.md](docs/quickstart.md); the full reference is
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); the extra "finish" parts you can add later are in
+[docs/opt-in-tiers.md](docs/opt-in-tiers.md).
+
+## Where this fits: the constellation
+
+Vivijure is a small group of programs that work together. The **Studio** (this repo) is the control
+plane in the center. This same map appears in every repo, so you always know where you are; the full
+version with explanations is in [docs/constellation.md](docs/constellation.md).
+
+```mermaid
+flowchart TD
+    you[You: Discord chat or the Studio web page]
+    slate[slate<br/>Discord screenwriter bot]
+    studio[vivijure Studio -- THIS REPO<br/>projects, storyboard, cast,<br/>render orchestration + module registry]
+    modules[Modules: one job each, opt-in<br/>cloud video, finish, audio]
+    gpu[GPU render engines<br/>vivijure-backend cloud,<br/>local-12gb / local-16gb own card]
+    finish[Finish helper engines<br/>musetalk, upscale, audio-upscale]
+
+    you --> slate --> studio
+    you --> studio
+    studio --> modules
+    modules --> gpu
+    modules --> finish
+    studio --> gpu
+```
+
 ## Showcase: four films -- silent, scored, narrated, and now talking
 
 Four real films rendered end to end on Vivijure, unedited renders straight off the pipeline:

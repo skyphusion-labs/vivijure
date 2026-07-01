@@ -64,7 +64,8 @@ the `tail_consumers` log shipper, the four `[[vpc_services]]` (video-finish / im
 audio-beat-sync / audio-mix), and the eight finish modules named above.
 
 For the whole constellation (studio + GPU backend + local doors), `deploy/constellation.sh` is the
-top orchestrator that calls each repo owns its own deploy. Today it drives the studio and stubs the siblings.
+top orchestrator that calls into each repo's own deploy script. Today it drives the studio and stubs
+the siblings; the sibling scripts land as those repos are brought up to this standard.
 
 The rest of this guide explains every key and every manual step, so you can run the pieces by hand
 or understand exactly what the script does.
