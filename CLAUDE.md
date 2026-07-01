@@ -85,6 +85,36 @@ first, green, before considering a change done.
   config is `wrangler.toml.example`; `account_id` is never hardcoded (injected via `CLOUDFLARE_ACCOUNT_ID`).
 - **`npm run typecheck` is the gate.** `tsc` is not part of vitest, so type errors pass tests silently.
 
+## Repo standard (aviation-grade governance)
+
+**Every NEW constellation repo gets the FULL standard applied AT CREATION, never backfilled.** All 8
+existing repos were brought to this standard 2026-07-01; a new repo is not "done" until it meets it. This
+is the definition of done for a new repo, run it like adding a `.gitignore`:
+
+1. **Default branch `main`** (never `master`).
+2. **`ci` workflow** for the language (TS: `tsc --noEmit` + vitest; Python: pytest), on GitHub-hosted
+   `ubuntu-latest` (fork-safe) for public repos, `permissions: contents: read`.
+3. **`coverage` workflow** if there is testable code. For a thin wrapper with nothing meaningfully
+   coverable (e.g. a single RunPod `handler.py` with heavy top-level GPU imports), do NOT fabricate
+   coverage; substitute a minimal `ci` gate = `ruff check --select E9,F .` + `python -m py_compile handler.py`.
+4. **CodeQL** default setup enabled.
+5. **Branch protection on `main`:** PR required; `required_status_checks.contexts` = the repo's real
+   `ci` + `coverage` (+ the `CodeQL` umbrella, never a sub-job like `Analyze (python)`); `strict: true`;
+   `enforce_admins: false` (admin override); no force-push, no deletion.
+6. **Discovery:** homepage -> the main `vivijure` repo (the studio -> its welcome page); topics set.
+   **License** AGPL-3.0 unless it is an explicit public-docs/CC0 case.
+
+Two hard constraints, learned the hard way:
+- **Verify-before-require ordering:** a status check can only be made REQUIRED after it exists and has
+  posted GREEN on a real run, else every merge blocks forever (phantom block). Land the workflow ->
+  confirm it runs green -> then add its exact context to `required_status_checks`. A repo with
+  `required_status_checks:null` needs a full protection PUT (a surgical PATCH 404s), preserving other settings.
+- **Branch protection MUST be in place BEFORE flipping a repo public** (plus a grep-zero
+  secrets/topology scan). The checklist above satisfies the protection half.
+
+Full rationale + the closing 8/8 state live in the project memory (`vivijure-new-repo-standard`,
+`vivijure-repo-governance-ci-sprint`).
+
 ## Roadmap (phases)
 
 0. Module host + registry + self-assembling UI. (**done**, v0.1.0)
