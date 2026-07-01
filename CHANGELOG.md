@@ -3,6 +3,22 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.9.0
+
+**Browser-grade media serving (#416): HTTP byte ranges on artifacts and worker-authoritative cache
+headers.**
+
+- **Byte-range requests on `/api/artifact`.** The artifact route ignored `Range` entirely, so
+  Safari/iOS (which require ranged media) could not play planner films at all and a Chrome seek
+  refetched from byte 0. It now advertises `Accept-Ranges: bytes` and serves 206 + `Content-Range`
+  for closed, open-ended, and suffix ranges, a true 416 with `bytes */size` when out of bounds, a
+  graceful full 200 on malformed or multi-part ranges, and supports HEAD (#421).
+- **Cache headers are the worker's job now.** Bare non-page responses default to `no-store` at the
+  response chokepoint (set-if-absent), artifacts keep `private, max-age=300`, and static assets keep
+  the ASSETS binding's revalidate-always header. A deployment is cache-correct without any zone-level
+  bypass rule; ours is reframed in the docs as optional hardening, so outsider deployments no longer
+  depend on a dashboard setting they cannot see (#421).
+
 ## v0.8.4
 
 **Planner regression sweep closes (#411): the NULL-string mapping fix and a module-bound local dev
