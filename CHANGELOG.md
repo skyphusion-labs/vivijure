@@ -3,7 +3,7 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
-## v0.4.0
+## v0.8.0
 
 **Workers-for-Platforms dynamic dispatch goes live: install a module without redeploying the core.**
 
