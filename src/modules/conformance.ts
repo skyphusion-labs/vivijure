@@ -251,13 +251,24 @@ async function fetchJson(
   }
 }
 
-/** Run the full conformance suite against a LIVE module Fetcher (the install-gate teeth,
- *  docs/module-dispatch.md 4.3). Drives the module over the SAME transport it will run on (a dispatched
- *  user Worker, or a service binding), asserting: a valid manifest at GET /module.json; a well-formed
- *  InvokeResponse envelope for its first hook (and, when it answers synchronously, a contract-honoring
- *  typed payload); and that a bad-hook request DEGRADES (HTTP 200 + { ok:false }, never a crash). The
+/** Run the conformance suite against a LIVE module Fetcher at install time (docs/module-dispatch.md 4.3).
+ *  Drives the module over the SAME transport it will run on (a dispatched user Worker, or a service
+ *  binding), asserting: a valid manifest at GET /module.json; a well-formed InvokeResponse ENVELOPE for
+ *  its first hook; and that a bad-hook request DEGRADES (HTTP 200 + { ok:false }, never a crash). The
  *  install route INSERTs the registry row ONLY when every check passes; a resident-but-failing module is
- *  never installed and never dispatched. Total: a network failure becomes a failed check, never a throw. */
+ *  never installed and never dispatched. Total: a network failure becomes a failed check, never a throw.
+ *
+ *  SCOPE (be honest about what this gate proves): it validates the CONTRACT WIRING -- manifest shape,
+ *  the invoke/degrade envelope, and, for a SYNCHRONOUS hook (a module that answers `ok:true + output`
+ *  right away, e.g. plan.enhance), the typed hook OUTPUT via checkHookOutput. It deliberately does NOT
+ *  validate the typed output of an ASYNC hook (motion.backend / keyframe / finish / speech / master),
+ *  which answers `ok:true + pending + poll`: proving that output shape would require POLLING THE JOB TO
+ *  COMPLETION, i.e. triggering the module's real (often GPU) work just to install it -- an unacceptable
+ *  cost + side effect for an install gate. Typed-output conformance for async hooks is therefore the
+ *  MODULE'S OWN responsibility, proven by its conformance CI (checkHookOutput over a controlled
+ *  completion in tests/conformance.live.test.ts / `npm run conformance`), not by this install-time gate.
+ *  The gate blocks a mis-wired or non-degrading module; it does not (and cannot cheaply) re-run an async
+ *  module's per-shot output contract. */
 export async function runLiveConformance(fetcher: ConformanceFetcher): Promise<ConformanceCheck[]> {
   const checks: ConformanceCheck[] = [];
 
@@ -294,6 +305,9 @@ export async function runLiveConformance(fetcher: ConformanceFetcher): Promise<C
     const env = checkInvokeResponse(probe.body);
     checks.push(env);
     const b = probe.body as { ok?: boolean; pending?: boolean; output?: unknown };
+    // Typed output is validated ONLY for a synchronous answer. An async module returns pending here, and
+    // proving its output shape would mean polling its real (GPU) job to completion at install time --
+    // see the SCOPE note above; async output conformance is the module's own CI, not this gate.
     if (env.pass && b.ok === true && b.pending !== true) {
       checks.push(checkHookOutput(hook, b.output));
     }

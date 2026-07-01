@@ -1037,7 +1037,10 @@ const hPatchModuleConfig: Handler = async (req, env, _ctx, p) => {
 // (the WfP upload API, holding the scoped install token), then calls POST /api/modules/install here; the
 // core runs conformance against the just-uploaded, RESIDENT script (reached through MODULE_DISPATCH) and
 // INSERTs the registry row ONLY on a green suite. A resident-but-failing module is never installed and
-// never dispatched -- the gate is load-bearing, not advisory.
+// never dispatched. Gate SCOPE (see runLiveConformance): it proves the contract WIRING -- manifest +
+// invoke/degrade envelope + (for a synchronous hook) typed output. It does NOT re-run an ASYNC hook's
+// typed output (that would trigger the module's real GPU work at install); that stays the module's own
+// conformance CI.
 const hListInstalledModules: Handler = async (_req, env) => {
   return json({ ok: true, modules: await listInstalledModules(env) });
 };

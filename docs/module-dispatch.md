@@ -325,8 +325,17 @@ installable" (CLAUDE.md, Module conformance).
 - **Gate placement is the whole point:** the `INSERT` into `installed_modules` happens ONLY on a green
   suite. Resident-but-not-conformant = rolled back (script deleted) or left orphaned-and-unlisted; it
   is never dispatched because the registry only ever reads installed rows.
-- A `motion.backend` upload runs the `motion.backend` conformance checks; a `finish` upload runs the
-  `finish` checks; a multi-hook module runs each. The gate is per-hook, matching `HOOK_OUTPUT_CHECKS`.
+- **Gate SCOPE (be honest about the async limit).** The install gate proves the contract WIRING:
+  manifest shape, the invoke/degrade envelope, and -- for a **synchronous** hook (a module that answers
+  `ok:true + output` immediately, e.g. `plan.enhance`) -- the typed hook output via `checkHookOutput`. It
+  deliberately does **not** validate the typed output of an **async** hook (`motion.backend` / `keyframe`
+  / `finish` / `speech` / `master`), which answers `ok:true + pending + poll`: proving that shape would
+  require polling the job **to completion**, i.e. running the module's real (often GPU) work just to
+  install it -- an unacceptable side effect + cost for an install gate. Typed-output conformance for an
+  async hook stays the **module author's** responsibility, proven by its own conformance CI
+  (`checkHookOutput` over a controlled completion in `tests/conformance.live.test.ts` /
+  `npm run conformance`), not by this install-time gate. The gate blocks a mis-wired or non-degrading
+  module; it does not re-run an async hook's per-shot output contract.
 
 ### 4.4 install / uninstall / list
 
