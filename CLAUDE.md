@@ -27,7 +27,7 @@ The GPU render backend is `vivijure-backend` (RunPod serverless). Production UI:
                         |
             +-----------+-------------+-------------------+
             |           |             |                   |
-   vivijure-musetalk  vivijure-   vivijure-audio-   vivijure-local-backend
+   vivijure-musetalk  vivijure-   vivijure-audio-   vivijure-local-12gb
    (lipsync module)   upscale     upscale           (self-host render path)
 ```
 

@@ -1,8 +1,8 @@
 # local-gpu
 
 A first-class **`motion.backend`**-hook module (vivijure-module/2). It animates each start keyframe
-into a clip (image-to-video, **LTX-Video**) on the user's **own local consumer GPU** -- an RTX 4060 Ti
-16GB-class card in their homelab -- via the **vivijure-local-backend** job server (`i2v_clip` action).
+into a clip (image-to-video, **LTX-Video**) on the user's **own local consumer GPU** -- a 12GB-class
+consumer card in their homelab -- via the **vivijure-local-12gb** job server (`i2v_clip` action).
 
 This is the **local-consumer door**: the deliberate opposite of the RunPod datacenter backend
 (`alibaba-wan`) and even of `own-gpu` (which still runs on a RunPod endpoint the user provisions).
@@ -16,7 +16,7 @@ the door:
 
 ```
 DATACENTER door:  control plane --> alibaba-wan / own-gpu --/run--> RunPod --> vivijure-backend (Wan 2.2, H200/B200)
-LOCAL door:       control plane --> local-gpu          --/run--> tunnel --> vivijure-local-backend (LTX-Video, RTX 4060 Ti 16GB)
+LOCAL door:       control plane --> local-gpu          --/run--> tunnel --> vivijure-local-12gb (LTX-Video, 12GB consumer GPU)
 ```
 
 Both speak the SAME `i2v_clip` wire body (`buildI2vBody`); only the box behind the endpoint differs.
@@ -47,9 +47,9 @@ The planner-projected `config_schema` (the core clamps each value against it):
 **Tier honesty (#124).** The `quality` enum is the core's shared vocabulary (`draft/standard/final`);
 the core injects the chosen tier and `validateConfig` silently drops any value not in this enum, so the
 names must match the core `QUALITY_TIERS` exactly. The local backend maps each tier to an **LTX engine
-config a 16GB card can honestly deliver**: `final` here means the card's honest ceiling (LTX full-step
-at its 16GB resolution/frame limit), NOT datacenter (Wan B200) parity. Same names, backend-specific
-mapping -- exactly as the Wan backend maps the tiers to its step counts. See vivijure-local-backend
+config a 12GB card can honestly deliver**: `final` here means the card's honest ceiling (LTX full-step
+at its 12GB resolution/frame limit), NOT datacenter (Wan B200) parity. Same names, backend-specific
+mapping -- exactly as the Wan backend maps the tiers to its step counts. See vivijure-local-12gb
 `docs/i2v-model-selection.md` for the per-tier numbers.
 
 To self-host (service `vivijure-module-local-gpu`, bound into the core as `MODULE_LOCAL_GPU`):
@@ -57,7 +57,7 @@ To self-host (service `vivijure-module-local-gpu`, bound into the core as `MODUL
 - **Env at deploy**: `CLOUDFLARE_ACCOUNT_ID` (account_id is injected, never hardcoded).
 - **Secrets** (Cloudflare Secrets Store): `LOCAL_BACKEND_URL` (the tunnel hostname terminating at your
   homelab render box) and the optional `LOCAL_BACKEND_TOKEN` (a shared secret your server checks).
-- **Provision**: run `vivijure-local-backend` on your box (LTX-Video on a 16GB card), expose it via a
+- **Provision**: run `vivijure-local-12gb` on your box (LTX-Video on a 12GB card), expose it via a
   Cloudflare tunnel, and point `LOCAL_BACKEND_URL` at it. The backend shares the `vivijure` R2 bucket
   and does the clip I/O. No R2 binding on this worker.
 
