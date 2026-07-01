@@ -3,6 +3,23 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.4.0
+
+**Workers-for-Platforms dynamic dispatch goes live: install a module without redeploying the core.**
+
+- **WfP dispatch enabled in prod (Phase 3 deploy).** The `vivijure-modules` dispatch namespace is
+  created and the core now binds `MODULE_DISPATCH`, so a module uploaded into the namespace is reached
+  at request time via `env.MODULE_DISPATCH.get(<script>).fetch(...)` -- no core redeploy to install one.
+  This lands the host-side dispatch work (#391 / #392 / #393) as a running capability; `GET /api/modules`
+  now reports `host.dispatch: true`. Conformance-gated install routes + the operator CLI drive uploads.
+- **Free-self-host promise preserved, by construction.** The `[[dispatch_namespaces]]` block still ships
+  COMMENTED in `wrangler.toml.example`. Our prod render uncomments it only when the repo variable
+  `ENABLE_WFP_DISPATCH == "1"` (set once, after the namespace exists); a community fork never sets it, so
+  its render stays commented and deploys on the free plan with zero WfP dependency. The dispatch layer is
+  also runtime-gated on `MODULE_DISPATCH` being bound, so behavior is identical when it is absent.
+- `local-gpu` stays in the CI deploy EXCLUDE: under WfP the multi-tenant local door becomes a
+  per-tenant namespace upload, not a `[[services]]` deploy -- a follow-on once tenant onboarding lands.
+
 ## v0.2.6
 
 **Launch prep: fail-loud finish, the talking showcase, and the render-pipeline diagram.**

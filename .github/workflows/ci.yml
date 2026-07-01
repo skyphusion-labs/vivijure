@@ -148,6 +148,12 @@ jobs:
           # renders WEB_ANALYTICS_TOKEN = "" so /welcome ships NO beacon (token-free). Set the
           # secret only to enable your own analytics.
           WEB_ANALYTICS_TOKEN: ${{ secrets.WEB_ANALYTICS_TOKEN }}
+          # Opt-in Workers-for-Platforms switch. A repo VARIABLE (not a secret -- not sensitive),
+          # unset by default. Only THIS account sets it to "1", after creating the vivijure-modules
+          # dispatch namespace out of band. A community fork/self-host never sets it, so their render
+          # keeps the [[dispatch_namespaces]] block COMMENTED and deploys on the free plan with zero WfP
+          # dependency -- the free-self-host promise. See docs/deploy-runbook.md "Phase 3".
+          ENABLE_WFP_DISPATCH: ${{ vars.ENABLE_WFP_DISPATCH }}
         run: |
           set -eu
           apk add --no-cache gettext >/dev/null
@@ -157,6 +163,23 @@ jobs:
           if grep -q '${' wrangler.toml; then echo "::error::unsubstituted placeholder in wrangler.toml"; grep -n '${' wrangler.toml; exit 1; fi
           # F2 guard: the armed Access vars must be present + NON-EMPTY (a blank would unarm -> DENY 503).
           grep -Eq 'ACCESS_AUD = ".+"' wrangler.toml && grep -Eq 'ACCESS_TEAM_DOMAIN = ".+"' wrangler.toml || { echo "::error::F2 Access vars empty/missing after render"; exit 1; }
+          # Opt-in WfP: uncomment the [[dispatch_namespaces]] block ONLY when this account set the
+          # ENABLE_WFP_DISPATCH variable to "1" (namespace already created out of band). The committed
+          # wrangler.toml.example ships the block COMMENTED, so with the var unset (every community
+          # self-host) the render stays commented and deploys free. Fail-closed: if the var is set but
+          # the block did not uncomment (example drifted), error rather than deploy a half-config.
+          if [ "${ENABLE_WFP_DISPATCH:-}" = "1" ]; then
+            sed -i \
+              -e 's/^# \(\[\[dispatch_namespaces\]\]\)$/\1/' \
+              -e 's/^# \(binding = "MODULE_DISPATCH"\)$/\1/' \
+              -e 's/^# \(namespace = "vivijure-modules"\)$/\1/' \
+              wrangler.toml
+            grep -q '^\[\[dispatch_namespaces\]\]$' wrangler.toml \
+              && grep -q '^binding = "MODULE_DISPATCH"$' wrangler.toml \
+              && grep -q '^namespace = "vivijure-modules"$' wrangler.toml \
+              || { echo "::error::ENABLE_WFP_DISPATCH=1 but dispatch block did not uncomment (example drifted)"; exit 1; }
+            echo "WfP dispatch ENABLED for this deploy (MODULE_DISPATCH -> vivijure-modules)."
+          fi
           echo "Rendered wrangler.toml from wrangler.toml.example ($(wc -l < wrangler.toml) lines, F2 vars present)."
 
       # Apply D1 schema migrations AFTER the wrangler.toml render above (wrangler needs that config
