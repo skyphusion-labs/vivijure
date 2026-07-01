@@ -848,6 +848,24 @@ details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
 .planner-history-keyframe-clip { width: 100%; max-width: 100%; height: auto; border-radius: 8px; display: block; background: #000; }
 .planner-history-keyframe-cap { font-size: 11px; color: var(--muted); }
 .planner-history-empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+/* image lightbox for the history keyframe stills. openShotPreview()
+   (planner.js) builds these elements in JS with NO inline styles, so without
+   these rules the overlay rendered as an unstyled block dumped at the bottom of
+   the page with the image at its intrinsic size (the #410 bug class: a
+   JS-created element with zero CSS). Fixed-position dim backdrop; the image is
+   contained within the viewport. The global [hidden] !important rule (top of
+   file) drives the open/close toggle via box.hidden, so no [hidden] override is
+   needed here even though the base rule sets display:flex. */
+.planner-lightbox {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(0, 0, 0, 0.82); cursor: zoom-out;
+}
+.planner-lightbox-fig { margin: 0; display: grid; gap: 10px; max-width: min(1200px, 92vw); max-height: 92vh; }
+.planner-lightbox-img { max-width: 100%; max-height: 82vh; object-fit: contain; border-radius: 8px; display: block; background: #000; }
+.planner-lightbox-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--muted); }
+.planner-lightbox-dl { color: var(--accent); text-decoration: none; font-weight: 600; }
+.planner-lightbox-dl:hover { text-decoration: underline; }
 
 /* refine thread body */
 .planner-refine-body { margin-top: 4px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
