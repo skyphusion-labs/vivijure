@@ -20,6 +20,98 @@ for new features). Newest first.
 - `local-gpu` stays in the CI deploy EXCLUDE: under WfP the multi-tenant local door becomes a
   per-tenant namespace upload, not a `[[services]]` deploy -- a follow-on once tenant onboarding lands.
 
+## v0.7.7
+
+- **Exclude the WIP `local-gpu` module from deploy (#382).** It has no core `[[services]]` binding and its Secrets Store secrets are unseeded, so its deploy failed (code 10182) and broke v0.7.6. Fenced out until the homelab door lands.
+
+## v0.7.6
+
+- **Planner: BYO locality tag + bind the finalize gate to the BYO door (#381).** Three-value locality (local | byo | cloud) surfaced to the planner; finalize gated behind the BYO door.
+
+## v0.7.5
+
+- **Run the worker on static pages so security headers actually land (#377).** Re-fixes header stamping on `/welcome` and all pages without the redirect loop v0.7.3 introduced.
+
+## v0.7.4
+
+- **Revert `run_worker_first` (#375).** It broke `/welcome` with a 307 redirect loop; reverted pending the correct fix (landed in v0.7.5).
+
+## v0.7.3
+
+- **`run_worker_first` so the worker stamps headers on `/welcome` + all pages (#374).** Reverted in v0.7.4, superseded by v0.7.5.
+
+## v0.7.2
+
+- **Substitute `WEB_ANALYTICS_TOKEN` in the wrangler.toml render (#373).** The analytics beacon token now renders from the Actions secret.
+
+## v0.7.1
+
+- **Render wrangler.toml BEFORE applying D1 migrations (#372).** `wrangler d1` needs the rendered config to resolve the D1 binding and `migrations_dir`.
+
+## v0.7.0
+
+- **Worker-owned security headers on every response class (#371).** One source of truth for headers across page, API, and asset responses.
+
+## v0.6.6
+
+- **Durable module secrets via Cloudflare Secrets Store (#237).** Module secrets bind declaratively from the account Secrets Store, so a fresh-create can no longer start secretless and silently degrade.
+
+## v0.6.5
+
+- **Open a character on load so highlight + detail pane stay in sync (#146).**
+
+## v0.6.4
+
+- **Reconcile LoRA training rows wedged in `training` back to `failed` (#295).**
+
+## v0.6.3
+
+- **Exclude not-ready modules from deploy (#305):** openai-sora, alibaba-wan25, plan-enhance-py.
+
+## v0.6.2
+
+- **Fix exit-127 in the dynamic module deploy (#304).** POSIX sh only, no bash-isms (the CI container's `/bin/sh` is BusyBox ash).
+
+## v0.6.1
+
+- **Deploy ALL modules dynamically, not a hardcoded include-list (#303).** Fixes deploy-drift where a new module was forgotten and the live worker served stale.
+
+## v0.6.0
+
+- **Operator install-config page, registry-projected (#301).** Per-module install config edited from a settings page projected off the registry.
+
+## v0.5.0
+
+- **Strip `user_email` to zero: identity-free, anti-SaaS by architecture (#292 / #293).** No user identity is stored; the studio is self-hosted software, not a data-collecting service.
+
+## v0.4.2
+
+- **Write the runnable R2 doc before the D1 rows so a submit cannot orphan a render (#289 / #290).**
+
+## v0.4.1
+
+- **Fail loud on a partial assemble (#287 / #288).** Never silently complete a 1-of-N scatter gather.
+
+## v0.4.0
+
+- **Run the `film.finish` chain on the scatter gather (#286).** Subtitles and title/credit cards applied on the scatter assemble path.
+
+## v0.3.3
+
+- **Clamp seedance duration minimum to 4 (#279 / #282).** The endpoint allows [4,12] and 400s on 3.
+
+## v0.3.2
+
+- **Wire `tail_consumers` -> `vivijure-tail` (#278).** Deploy-ordered observability tail consumer.
+
+## v0.3.1
+
+- **Make the keyframe backend user-selectable (#275).** cloud-keyframe becomes reachable alongside the GPU keyframe.
+
+## v0.3.0
+
+- **Wire every `config_schema`-bearing hook end to end (#274):** speech + film.finish + master config knobs plumbed through; gated the v0.3.0 cut.
+
 ## v0.2.6
 
 **Launch prep: fail-loud finish, the talking showcase, and the render-pipeline diagram.**
