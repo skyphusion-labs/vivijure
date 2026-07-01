@@ -33,7 +33,7 @@ export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
 export interface FinishShot {
   shot_id: string;
   clip_key: string;   // current clip key (updated as each finish module completes)
-  chain: string[];    // finish module env-binding names, in ui.order
+  chain: string[];    // finish module transport refs (MODULE_* service or dispatch:<script>), in ui.order
   configs?: Record<string, unknown>[]; // validated config per chain step, parallel to `chain`
   idx: number;
   status: "pending" | "done" | "failed";
@@ -55,7 +55,7 @@ export interface FinishShot {
 export interface SpeechShot {
   shot_id: string;
   audio_key: string;   // current dialogue-audio key (updated as each speech module completes)
-  chain: string[];     // speech module env-binding names, in ui.order
+  chain: string[];     // speech module transport refs (MODULE_* service or dispatch:<script>), in ui.order
   configs?: Record<string, unknown>[];
   idx: number;
   status: "pending" | "done" | "failed";
@@ -114,7 +114,7 @@ export interface FilmJob {
   // film (the #249 / #77 discipline). `chain` is the master module bindings in ui.order; `idx` walks
   // them; `poll` holds the in-flight step's token; `attempts` is its bounded transient-retry counter.
   master?: {
-    chain: string[];     // master module env-binding names, in ui.order
+    chain: string[];     // master module transport refs (MODULE_* service or dispatch:<script>), in ui.order
     idx: number;         // current chain step
     poll?: string;       // in-flight step poll token
     attempts?: number;   // transient-retry counter for the CURRENT step (reset when the step advances)
