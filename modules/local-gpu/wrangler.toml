@@ -29,10 +29,10 @@ enabled = true
 # store; values never touch CI/GitHub. Set store_id at cutover. See docs/DEPLOYMENT.md.
 [[secrets_store_secrets]]
 binding = "LOCAL_BACKEND_URL"
-store_id = "0b04371c738a48a497c3344604114268"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
 secret_name = "LOCAL_BACKEND_URL"
 
 [[secrets_store_secrets]]
 binding = "LOCAL_BACKEND_TOKEN"
-store_id = "0b04371c738a48a497c3344604114268"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
 secret_name = "LOCAL_BACKEND_TOKEN"
