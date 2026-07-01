@@ -75,10 +75,18 @@ function pageHeaders(h: Headers, csp: string): Headers {
   return h;
 }
 
-/** Baseline header set for every non-page response: companions + the locked CSP. */
+/** Baseline header set for every non-page response: companions + the locked CSP + a default
+ *  Cache-Control. #416: the worker is the complete Cache-Control authority so an outsider deployment
+ *  is correct WITHOUT the operator zone-level cache-bypass rule (that rule is optional hardening, not
+ *  a requirement). A dynamic worker-generated non-page response (api/json, the 429, marker downloads)
+ *  that ships no Cache-Control of its own defaults to `no-store`; anything that already set one keeps
+ *  it (SET-IF-ABSENT), so a route's explicit value wins (artifact's `private, max-age=300`,
+ *  cast-bundle's `no-store`) and a static asset from the ASSETS binding -- which always emits its own
+ *  `public, max-age=0, must-revalidate` -- stays cacheable and untouched. */
 function baselineHeaders(h: Headers): Headers {
   companions(h);
   h.set("content-security-policy", LOCKED_CSP);
+  if (!h.has("cache-control")) h.set("cache-control", "no-store");
   return h;
 }
 

@@ -46,6 +46,17 @@ content-type outside their allowlist (no `"bin"` fallback), so a scriptable type
 True cross-tenant isolation still needs an ownership model (the F13 IDOR follow-up); F4 makes these
 two endpoints safe-by-default for a downstream deployer in the meantime.
 
+**Byte-range media serving (#416).** `GET` / `HEAD /api/artifact/<key>` supports HTTP range
+requests (RFC 7233) so a browser can stream and seek a rendered film -- Safari/iOS refuse to play
+media that cannot be range-requested, and Chrome otherwise re-fetches from byte 0 on every seek. A
+ranged request returns `206 Partial Content` + `Content-Range` for a satisfiable single range,
+`416 Range Not Satisfiable` + `Content-Range: bytes */<size>` for an out-of-bounds one, and a full
+`200` (always with `Accept-Ranges: bytes`) when the header is absent, malformed, or a multi-range
+(the worker does not emit `multipart/byteranges`). The `isSafeRelKey` + `ARTIFACT_PREFIXES` guard
+and `nosniff` apply identically on every path; the object size is resolved via `R2_RENDERS.head()`
+up front so an out-of-bounds range is answered `416` rather than mistaken for a missing object
+(an R2 `get()` with a bad range returns null, indistinguishable from not-found).
+
 ### Downstream deployer requirement (F13)
 The single-operator model is **load-bearing**, and this code is public. There is NO ownership
 column or per-identity check anywhere (the identity strip #292 removed tenancy by design): every
@@ -224,6 +235,24 @@ loops). The Worker maps the pretty page routes itself (`STUDIO_PAGE_ASSETS`, inc
 `/index.html`). Changing either setting silently drops header coverage on the static pages; keep them
 together. See `wrangler.toml.example`.
 
+**Cache-Control (worker-authoritative, #416).** The Worker sets `Cache-Control` on every response
+class, so this origin is correct WITHOUT any Cloudflare zone-level cache rule. A dashboard
+cache-bypass rule that a deployment may run is therefore **optional operator hardening, not a
+requirement** -- the worker headers are the source of truth (the same posture as the managed
+security-header transform above). The chokepoint defaults a non-page response that carries no
+`Cache-Control` of its own to `no-store` (SET-IF-ABSENT), so a route's explicit value always wins.
+
+| Response class | Cache-Control | Set by |
+|---|---|---|
+| Static pages + assets (`/welcome`, studio pages, JS/CSS) | `public, max-age=0, must-revalidate` | Workers Assets binding (preserved through the chokepoint) |
+| Artifact (`/api/artifact/<key>`) | `private, max-age=300` | `hServeArtifact` (`private` = never edge-cached, so an authenticated artifact never enters a shared cache) |
+| Cast bundle download | `no-store` | `assembleBundle` |
+| API/JSON, the 429, marker downloads, any other bare non-page response | `no-store` | chokepoint default (set-if-absent) |
+
+`no-store` on the dynamic/authenticated classes keeps a private API body out of any shared or
+browser cache; the static assets keep the binding's revalidating policy so the edge can still cache
+them (the `/welcome` release-purge flow depends on that edge cache existing, #405/#407).
+
 ## Checklist when changing the surface
 
 - [ ] New hostname or route -> confirm the Cloudflare Access app still covers it (`/api/*` must stay
@@ -240,6 +269,9 @@ together. See `wrangler.toml.example`.
 - [ ] New response class / route -> it flows through `applyResponseSecurity`; confirm it lands in
       the right header class (page vs locked) per section 8. CF managed-transform header layers stay
       OFF (the Worker is the single source of truth).
+- [ ] New response class / route -> confirm its `Cache-Control` (a dynamic/authenticated body must
+      not be cacheable): a bare non-page response defaults to `no-store` at the chokepoint, but set
+      an explicit value at the route if it needs a different policy (per section 8).
 - [ ] New GPU/paid endpoint -> add its path to `SPEND_PATTERNS` (src/rate-limit.ts) so it is
       rate-limited; an unlisted spend route is a denial-of-wallet hole.
 
@@ -250,4 +282,5 @@ together. See `wrangler.toml.example`.
 - #6 -- R2 key / presign input-boundary safety.
 - #18 -- presign credential blast radius + `/api/modules` disclosure posture.
 - #364 / #370 -- worker-owned response security headers (CSP + companions) + the per-class matrix (section 8).
+- #416 -- byte-range media serving on `/api/artifact` + worker-authoritative `Cache-Control` (section 8; the zone cache-bypass rule is optional hardening).
 - [DEPLOYMENT.md](DEPLOYMENT.md) -- per-function key issuance and scopes.

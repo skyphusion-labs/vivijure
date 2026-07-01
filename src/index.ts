@@ -41,7 +41,7 @@ import { isSpendRoute, enforceSpendLimit } from "./rate-limit";
 import { applyResponseSecurity } from "./asset-response";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
-import { isSafeRelKey } from "./shared";
+import { isSafeRelKey, parseByteRange } from "./shared";
 import {
   insertRender, updateRenderFromView, getRenderByIdForUser, listRendersForUser, listUserTags,
   setRenderLabel, setRenderLockedShots, setRenderFolder, setRenderTags, deleteRenderRow,
@@ -325,7 +325,24 @@ const ARTIFACT_PREFIXES = [
   "audio/", "bundles/", "cast/", "cast-clean/", "cast-gen/", "character-refs/",
   "characters/", "clips/", "loras/", "out/", "renders/", "uploads/",
 ];
-const hServeArtifact: Handler = async (_req, env, _c, p) => {
+// F4: the fixed artifact response header set. cache-control is `private, max-age=300` (private = never
+// edge-cached, so an authenticated artifact never leaks into a shared cache); accept-ranges advertises
+// byte-range support; nosniff stops a stored content-type being MIME-sniffed into executable script in
+// the operator's authenticated origin (defense-in-depth alongside the upload mime allowlist).
+function artifactHeaders(contentType: string): Headers {
+  const h = new Headers();
+  h.set("content-type", contentType || "application/octet-stream");
+  h.set("cache-control", "private, max-age=300");
+  h.set("accept-ranges", "bytes");
+  h.set("x-content-type-options", "nosniff");
+  return h;
+}
+// #416: serve an artifact with HTTP byte-range support so browsers (Safari/iOS refuse to play media
+// without it; Chrome re-fetches from byte 0 on every seek) can stream and seek planner films. Handles
+// GET and HEAD: a plain GET streams the full body (advertising Accept-Ranges); a ranged request returns
+// 206 + Content-Range for a satisfiable range, 416 + `Content-Range: bytes */size` for an out-of-bounds
+// one, and a full 200 when the Range is absent / malformed / multi-range.
+const hServeArtifact: Handler = async (req, env, _c, p) => {
   const key = p.key;
   // F4: the key is the untrusted URL tail. Reject an unsafe shape (traversal/absolute/scheme/control
   // bytes) and anything outside the known artifact namespaces -> 404 (not 400) so a probe learns
@@ -333,16 +350,48 @@ const hServeArtifact: Handler = async (_req, env, _c, p) => {
   if (!key || !isSafeRelKey(key) || !ARTIFACT_PREFIXES.some((pre) => key.startsWith(pre))) {
     throw notFound("artifact");
   }
+  const isHead = req.method === "HEAD";
+  const rangeHeader = req.headers.get("range");
+
+  // For a HEAD or any ranged GET, resolve the object size up front via head(): an R2 get() with an
+  // out-of-bounds range returns null, indistinguishable from not-found, so the range must be validated
+  // against the real size before any bytes are fetched.
+  if (isHead || rangeHeader) {
+    const meta = await env.R2_RENDERS.head(key);
+    if (!meta) throw notFound("artifact");
+    const ct = meta.httpMetadata?.contentType || "application/octet-stream";
+    const parsed = parseByteRange(rangeHeader, meta.size);
+
+    if (parsed === "unsatisfiable") {
+      const h = artifactHeaders(ct);
+      h.set("content-range", `bytes */${meta.size}`);
+      return new Response(null, { status: 416, headers: h });
+    }
+    if (parsed) {
+      // Satisfiable single range -> 206. HEAD carries the same headers with no body.
+      const h = artifactHeaders(ct);
+      h.set("content-range", `bytes ${parsed.start}-${parsed.end}/${meta.size}`);
+      h.set("content-length", String(parsed.length));
+      if (isHead) return new Response(null, { status: 206, headers: h });
+      const obj = await env.R2_RENDERS.get(key, { range: { offset: parsed.offset, length: parsed.length } });
+      if (!obj) throw notFound("artifact"); // deleted between head() and get()
+      return new Response(obj.body, { status: 206, headers: h });
+    }
+    // No range (or one we ignore) -> full 200. HEAD carries the headers with no body.
+    const h = artifactHeaders(ct);
+    h.set("content-length", String(meta.size));
+    if (isHead) return new Response(null, { status: 200, headers: h });
+    const obj = await env.R2_RENDERS.get(key);
+    if (!obj) throw notFound("artifact");
+    return new Response(obj.body, { status: 200, headers: h });
+  }
+
+  // Plain GET, no Range: stream the full body and advertise range support for the next seek.
   const obj = await env.R2_RENDERS.get(key);
   if (!obj) throw notFound("artifact");
-  const headers = new Headers();
-  headers.set("content-type", obj.httpMetadata?.contentType || "application/octet-stream");
-  headers.set("cache-control", "private, max-age=300");
-  headers.set("content-length", String(obj.size));
-  // F4: never let a stored content-type be MIME-sniffed into executable script in the operator's
-  // authenticated origin (defense-in-depth alongside the upload mime allowlist).
-  headers.set("x-content-type-options", "nosniff");
-  return new Response(obj.body, { headers });
+  const h = artifactHeaders(obj.httpMetadata?.contentType || "application/octet-stream");
+  h.set("content-length", String(obj.size));
+  return new Response(obj.body, { headers: h });
 };
 
 // --- renders (library / metadata) ----------------------------------------
@@ -1127,6 +1176,7 @@ const API_ROUTES: Route[] = [
   { method: "GET",    pattern: "/api/cast/:id/lora-status",            handler: hCastLoraStatus },
   { method: "POST",   pattern: "/api/upload",                          handler: hUpload },
   { method: "GET",    pattern: "/api/artifact/*key",                   handler: hServeArtifact },
+  { method: "HEAD",   pattern: "/api/artifact/*key",                   handler: hServeArtifact },
   { method: "POST",   pattern: "/api/storyboard/preflight",            handler: hPreflight },
   { method: "POST",   pattern: "/api/storyboard/plan",                 handler: hPlan },
   { method: "POST",   pattern: "/api/storyboard/refine",               handler: hRefine },

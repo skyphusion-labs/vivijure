@@ -148,4 +148,38 @@ describe("applyResponseSecurity (the single header chokepoint)", () => {
     expect(out.headers.get("location")).toBe("https://r2.example/obj");
     expect(out.headers.get("x-content-type-options")).toBe("nosniff");
   });
+
+  // #416: the worker is the Cache-Control authority so an outsider deploy is correct without the
+  // operator zone cache-bypass rule. A bare non-page response defaults to no-store; a response that
+  // set its own Cache-Control keeps it; a page keeps whatever the ASSETS binding emitted.
+  it("API JSON with no Cache-Control defaults to no-store", async () => {
+    const j = new Response(JSON.stringify({ ok: true }), {
+      status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
+    const out = await applyResponseSecurity(j, req("/api/modules"), envWith());
+    expect(out.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("preserves a route's own Cache-Control (artifact private, max-age=300) -- set-if-absent", async () => {
+    const art = new Response("bytes", {
+      status: 200,
+      headers: { "content-type": "video/mp4", "cache-control": "private, max-age=300" } });
+    const out = await applyResponseSecurity(art, req("/api/artifact/renders/x.mp4"), envWith());
+    expect(out.headers.get("cache-control")).toBe("private, max-age=300");
+  });
+
+  it("does NOT force no-store on a page: welcome keeps the ASSETS binding Cache-Control", async () => {
+    const page = new Response("<html><head></head><body>welcome</body></html>", {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=0, must-revalidate" } });
+    const out = await applyResponseSecurity(page, req("/welcome"), envWith());
+    expect(out.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+  });
+
+  it("leaves a static asset's own Cache-Control intact (ASSETS stays cacheable)", async () => {
+    const css = new Response("body{}", {
+      status: 200,
+      headers: { "content-type": "text/css", "cache-control": "public, max-age=0, must-revalidate" } });
+    const out = await applyResponseSecurity(css, req("/app.css"), envWith());
+    expect(out.headers.get("cache-control")).toBe("public, max-age=0, must-revalidate");
+  });
 });
