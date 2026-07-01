@@ -15,3 +15,6 @@ __pycache__/
 # values injected from CI secrets via envsubst). Committing it would put the account AUD / resource
 # IDs in the public repo. Edit wrangler.toml.example; render locally to work. See docs/deploy-config-injection.md.
 /wrangler.toml
+
+# Real deploy.env holds the operator keys (rendered from deploy.env.example); never commit it.
+/deploy.env

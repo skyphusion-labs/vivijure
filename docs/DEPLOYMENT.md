@@ -35,6 +35,43 @@ CLOSED, instead of trusting the edge alone. See [SECURITY.md](SECURITY.md).
 
 ---
 
+## One-script deploy (recommended)
+
+The fast path: fill in your keys once, run one script. It creates the database and buckets, seeds
+the module secrets, renders the config, and deploys everything in the right order (modules before
+the core), failing closed if anything is missing.
+
+```bash
+cp deploy.env.example deploy.env   # then edit deploy.env with your keys
+./deploy.sh
+```
+
+`deploy.env` is where all your keys go. It is gitignored -- never commit it. Each line has a short
+note on what the value is and where to get it, matching sections 2a-2d below.
+
+Pick a profile with `VIVIJURE_PROFILE` in `deploy.env`:
+
+- **minimal** (the default) -- the studio core plus cloud and own-GPU render. Needs ONLY Cloudflare,
+  RunPod, and an AI Gateway. Use this for your first deploy.
+- **full** -- also the extra "finish" modules that need your own CPU containers (over a Cloudflare
+  VPC) or a second RunPod endpoint: upscale, lip-sync, titles, subtitles, beat-sync, audio-master,
+  and speech-upscale.
+
+How the split works: in `wrangler.toml.example`, every opt-in piece is wrapped in a comment-marker
+pair, `# >>> OPTIONAL: <name>` ... `# <<< OPTIONAL: <name>`. A minimal deploy strips those blocks so
+their bindings cannot dangle and break the deploy; a full deploy keeps them. The opt-in blocks are:
+the `tail_consumers` log shipper, the four `[[vpc_services]]` (video-finish / image-prep /
+audio-beat-sync / audio-mix), and the eight finish modules named above.
+
+For the whole constellation (studio + GPU backend + local doors), `deploy/constellation.sh` is the
+top orchestrator that calls into each repo's own deploy script. Today it drives the studio and stubs
+the siblings; the sibling scripts land as those repos are brought up to this standard.
+
+The rest of this guide explains every key and every manual step, so you can run the pieces by hand
+or understand exactly what the script does.
+
+---
+
 ## 1. Accounts you need
 
 | Provider | What it is | Sign up |
