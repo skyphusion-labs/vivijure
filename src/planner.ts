@@ -19,6 +19,7 @@ import { callAnthropic } from "./providers/anthropic";
 import { callGemini } from "./providers/google";
 import { callXai } from "./providers/xai";
 import { aiRun, aiLogId } from "./ai-binding";
+import { plannerAiMockEnabled, mockPlannerRaw } from "./planner-ai-mock";
 import { extractOutput, detectProviderFailure } from "./output-extract";
 import {
   validateStoryboard,
@@ -96,7 +97,14 @@ export async function planStoryboard(
   let logId: string | null = null;
 
   try {
-    if (provider === "anthropic") {
+    if (plannerAiMockEnabled(env)) {
+      // Dev-only (#411): replace the live provider call with a deterministic canned completion so
+      // the planner flow is drivable in the fully-local module-bound dev env (which has no AI
+      // binding). The result still runs the real extract/parse/validate pipeline below. In prod
+      // PLANNER_AI_MOCK is unset, so this branch is dead and the live path is unchanged.
+      result = mockPlannerRaw(userMessage);
+      logId = "dev-ai-mock";
+    } else if (provider === "anthropic") {
       // Anthropic Messages API takes system as a top-level field, so we
       // hand systemPrompt to callAnthropic separately and put only the
       // user content in messages.
@@ -236,7 +244,14 @@ export async function refineStoryboard(
   let logId: string | null = null;
 
   try {
-    if (provider === "anthropic") {
+    if (plannerAiMockEnabled(env)) {
+      // Dev-only (#411): replace the live provider call with a deterministic canned completion so
+      // the planner flow is drivable in the fully-local module-bound dev env (which has no AI
+      // binding). The result still runs the real extract/parse/validate pipeline below. In prod
+      // PLANNER_AI_MOCK is unset, so this branch is dead and the live path is unchanged.
+      result = mockPlannerRaw(userMessage);
+      logId = "dev-ai-mock";
+    } else if (provider === "anthropic") {
       const messages = [{ role: "user", content: userMessage }];
       const r = await callAnthropic(env, modelEntry, systemPrompt, messages);
       result = r.raw;
@@ -366,7 +381,14 @@ export async function chatComplete(
   let logId: string | null = null;
 
   try {
-    if (provider === "anthropic") {
+    if (plannerAiMockEnabled(env)) {
+      // Dev-only (#411): replace the live provider call with a deterministic canned completion so
+      // the planner flow is drivable in the fully-local module-bound dev env (which has no AI
+      // binding). The result still runs the real extract/parse/validate pipeline below. In prod
+      // PLANNER_AI_MOCK is unset, so this branch is dead and the live path is unchanged.
+      result = mockPlannerRaw(userMessage);
+      logId = "dev-ai-mock";
+    } else if (provider === "anthropic") {
       const messages = [{ role: "user", content: userMessage }];
       const r = await callAnthropic(env, modelEntry, systemPrompt, messages);
       result = r.raw;

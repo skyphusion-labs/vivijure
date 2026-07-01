@@ -41,6 +41,7 @@ of these areas, update the matching doc.
 - `docs/CONTRACT.md` -- the core <-> backend render contract (bundle in, artifacts out).
 - `docs/observability.md` -- the structured event/tail channel for tracing a render.
 - `docs/DEPLOYMENT.md` + `docs/deploy-runbook.md` + `docs/deploy-config-injection.md` -- deploy, env, `account_id` injection.
+- `docs/dev-modbound.md` -- run the core + every module worker as one local dev so `/api/modules` returns the REAL catalog (no GPU, no prod data). The dev-parity env for driving planner/module flows locally.
 - `docs/SECURITY.md` + `docs/legal/` -- security posture and the public-facing legal/AUP framing.
 
 ## Commands
