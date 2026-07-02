@@ -592,7 +592,7 @@ function showBundleResult(data) {
     btn.className = "planner-primary";
     btn.textContent = "render from keyframes (GPU i2v)";
     btn.title = injectedCount + " injected keyframe" + (injectedCount === 1 ? "" : "s")
-      + ": animate them with Wan i2v on the GPU, no SDXL keyframe pass";
+      + ": animate them with " + gpuMotionLabel() + " on the GPU, no SDXL keyframe pass";
     const status = document.createElement("span");
     status.className = "planner-status";
     btn.addEventListener("click", () => renderFromKeyframes(data.bundleKey, btn, status));
@@ -612,7 +612,7 @@ async function renderFromKeyframes(bundleKey, btn, status) {
   if (!project) { status.textContent = "no project"; return; }
   if (!window.confirm(
     "render this bundle's " + Object.keys(bundleState.sceneStartImages || {}).length
-    + " injected keyframe(s) with GPU Wan i2v (no SDXL keyframe pass)?\n\ncontinue?"
+    + " injected keyframe(s) with " + gpuMotionLabel() + " (no SDXL keyframe pass)?\n\ncontinue?"
   )) return;
   const tierEl = $("#planner-quality-tier");
   const qualityTier = tierEl && tierEl.value ? tierEl.value : "final";

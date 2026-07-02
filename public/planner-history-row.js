@@ -973,7 +973,7 @@ async function finalizeRender(row, btnEl) {
         + kfCount + " keyframes (only the LOCKED shots). "
       : "no shots are locked, so all " + kfCount
         + " keyframes will be included. ")
-    + "Wan I2V + assembly takes roughly " + minMinutes + " to "
+    + gpuMotionLabel() + " + assembly takes roughly " + minMinutes + " to "
     + maxMinutes + " minutes on the final tier.\n\n"
     + (lockedCount > 0 && lockedCount < kfCount
       ? "the unlocked shots (" + (kfCount - lockedCount)
@@ -1014,13 +1014,13 @@ async function finalizeRender(row, btnEl) {
     data = await resp.json();
   } catch (err) {
     btnEl.disabled = false;
-    btnEl.textContent = "finalize (Wan I2V + assemble)";
+    btnEl.textContent = "finalize (" + gpuMotionLabel() + " + assemble)";
     window.alert("finalize submit failed: " + err.message);
     return;
   }
   if (!resp.ok || !data || !data.ok) {
     btnEl.disabled = false;
-    btnEl.textContent = "finalize (Wan I2V + assemble)";
+    btnEl.textContent = "finalize (" + gpuMotionLabel() + " + assemble)";
     const msg = (data && (data.error
       || (Array.isArray(data.errors) && data.errors.join(", "))))
       || ("HTTP " + (resp ? resp.status : "?"));
@@ -1128,7 +1128,7 @@ async function animateHybridRender(row, btnEl, backends) {
     : "";
   const confirmMsg =
     "animate this preview as a HYBRID film?\n\n"
-    + gpuTotal + " shot(s) on GPU Wan, " + cloudN + " on cloud i2v"
+    + gpuTotal + " shot(s) on " + gpuMotionLabel() + ", " + cloudN + " on cloud i2v"
     + (explicitGpuN ? " (" + explicitGpuN + " GPU set explicitly)" : "")
     + ", assembled into one SILENT MP4. add a score afterward with the add-audio "
     + "action.\n\n" + (cloudN === 0
