@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   discoverModules,
+  cloudMotionModules,
+  defaultGpuDoorModule,
   dispatchChain,
   dispatchPickOne,
+  gpuDoorMotionModules,
   indexByHook,
   invokeModule,
   moduleBindingNames,
@@ -377,5 +380,40 @@ describe("readManifest transient retry", () => {
     const m = await readManifest("MODULE_X", fetcher);
     expect(m).toBeNull();
     expect(calls.n).toBe(1);
+  });
+});
+
+// ---- locality classification (S6 debt sprint: locality-driven, never name-matched) -----------
+
+describe("locality classification helpers", () => {
+  const motion = (name: string, order: number, locality?: "local" | "byo" | "cloud") =>
+    ({ name, binding: `MODULE_${name.toUpperCase()}`, hooks: ["motion.backend"], config_schema: {},
+       ui: { order, ...(locality ? { locality } : {}) } }) as unknown as RegisteredModule;
+  const fleet = [
+    motion("local-gpu", 4, "local"),
+    motion("own-gpu", 5, "byo"),
+    motion("seedance", 10, "cloud"),
+    motion("kling", 20, "cloud"),
+    motion("mystery", 30), // no declared locality
+  ];
+
+  it("cloudMotionModules: locality cloud only; undeclared counts cloud; NEVER the doors", () => {
+    expect(cloudMotionModules(fleet).map((m) => m.name)).toEqual(["seedance", "kling", "mystery"]);
+  });
+
+  it("gpuDoorMotionModules: byo + local, order-sorted", () => {
+    expect(gpuDoorMotionModules(fleet).map((m) => m.name)).toEqual(["local-gpu", "own-gpu"]);
+  });
+
+  it("defaultGpuDoorModule: byo preferred over an order-earlier local door", () => {
+    expect(defaultGpuDoorModule(fleet)?.name).toBe("own-gpu");
+  });
+
+  it("defaultGpuDoorModule: falls back to the local door when it is the only door", () => {
+    expect(defaultGpuDoorModule([motion("local-gpu", 4, "local"), motion("seedance", 10, "cloud")])?.name).toBe("local-gpu");
+  });
+
+  it("defaultGpuDoorModule: undefined when no gpu door is installed (callers fail honestly)", () => {
+    expect(defaultGpuDoorModule([motion("seedance", 10, "cloud")])).toBeUndefined();
   });
 });
