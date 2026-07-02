@@ -87,6 +87,14 @@ export interface Env {
   // Conscious opt-out (dev/local/test or a deployer fronting their own auth proxy): when neither
   // ACCESS_TEAM_DOMAIN nor ACCESS_AUD is set, /api/* is DENIED by default unless this is "true".
   ALLOW_UNAUTHENTICATED?: string;
+  // #423 built-in token auth (src/auth-gate.ts). AUTH_MODE selects the /api/* gate: "token" ->
+  // Authorization: Bearer checked against STUDIO_API_TOKEN with a constant-time compare (no Zero
+  // Trust needed); "access" or unset -> the CF Access path above (unset keeps the legacy
+  // resolution, so pre-#423 deploys are untouched). Any other value denies everything (fail
+  // closed). AUTH_MODE is a [vars] entry; STUDIO_API_TOKEN is a worker SECRET deploy.sh mints
+  // (openssl rand -hex 32 | wrangler secret put STUDIO_API_TOKEN). See docs/SECURITY.md.
+  AUTH_MODE?: string;
+  STUDIO_API_TOKEN?: string;
 
   // Dev-only planner AI mock (#411 dev-parity). When "1"/"true", planStoryboard/refineStoryboard
   // return deterministic canned completions instead of a live model call, so the planner re-prompt

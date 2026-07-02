@@ -44,10 +44,21 @@ need R2_S3_ACCESS_KEY_ID     "R2 S3 access key id"
 need R2_S3_SECRET_ACCESS_KEY "R2 S3 secret access key"
 need GATEWAY_ID              "AI Gateway slug"
 need DEPLOY_HOSTNAME         "the hostname your studio serves on"
-# Security gate (matches CI and docs/SECURITY.md): the studio has NO built-in login, so refuse to
-# deploy without the Cloudflare Access identifiers that arm the in-worker backstop.
-need ACCESS_TEAM_DOMAIN      "Cloudflare Access team domain -- the studio has NO built-in login"
-need ACCESS_AUD              "Cloudflare Access application AUD -- the studio has NO built-in login"
+# Auth gate (#423, matches CI and docs/SECURITY.md). token (default) = the built-in bearer-token
+# login: this script mints a 256-bit token, stores it as a worker secret, and prints it ONCE at
+# the end -- no Zero Trust product needed. access = Cloudflare Access in front of the studio; the
+# two Zero Trust identifiers are then required so the in-worker verification arms fail-closed.
+AUTH_MODE="${AUTH_MODE:-token}"
+case "$AUTH_MODE" in
+  token)
+    ACCESS_TEAM_DOMAIN=""; ACCESS_AUD=""   # rendered empty; the token gate ignores them
+    ;;
+  access)
+    need ACCESS_TEAM_DOMAIN  "Cloudflare Access team domain -- required when AUTH_MODE=access"
+    need ACCESS_AUD          "Cloudflare Access application AUD -- required when AUTH_MODE=access"
+    ;;
+  *) die "AUTH_MODE must be token or access (got: $AUTH_MODE)";;
+esac
 
 # derived defaults
 R2_S3_BUCKET="${R2_S3_BUCKET:-vivijure}"
@@ -66,7 +77,7 @@ OPT_MODULES="finish-upscale text-overlay film-titles subtitle beat-sync audio-ma
 finish-lipsync speech-upscale"
 if [ "$VIVIJURE_PROFILE" = full ]; then MODULES="$MIN_MODULES $OPT_MODULES"; else MODULES="$MIN_MODULES"; fi
 
-say "Vivijure Studio deploy -- profile: $VIVIJURE_PROFILE, hostname: $DEPLOY_HOSTNAME"
+say "Vivijure Studio deploy -- profile: $VIVIJURE_PROFILE, auth: $AUTH_MODE, hostname: $DEPLOY_HOSTNAME"
 
 # ---- 1. D1 database ----------------------------------------------------------
 say "Step 1/8: D1 database vivijure-studio"
@@ -152,10 +163,10 @@ done
 # ---- 4. render wrangler.toml from the template ------------------------------
 say "Step 4/8: render wrangler.toml ($VIVIJURE_PROFILE profile)"
 command -v envsubst >/dev/null || die "envsubst not found -- install gettext (apt-get install gettext-base)"
-export ACCESS_TEAM_DOMAIN ACCESS_AUD D1_DATABASE_ID WEB_ANALYTICS_TOKEN SPEND_RATE_LIMITER_NS_ID
+export AUTH_MODE ACCESS_TEAM_DOMAIN ACCESS_AUD D1_DATABASE_ID WEB_ANALYTICS_TOKEN SPEND_RATE_LIMITER_NS_ID
 export VPC_VIDEO_FINISH_ID="${VPC_VIDEO_FINISH_ID:-}" VPC_IMAGE_PREP_ID="${VPC_IMAGE_PREP_ID:-}" \
        VPC_AUDIO_BEAT_SYNC_ID="${VPC_AUDIO_BEAT_SYNC_ID:-}" VPC_AUDIO_MIX_ID="${VPC_AUDIO_MIX_ID:-}"
-VARS="\$ACCESS_TEAM_DOMAIN \$ACCESS_AUD \$D1_DATABASE_ID \$VPC_VIDEO_FINISH_ID \$VPC_IMAGE_PREP_ID \$VPC_AUDIO_BEAT_SYNC_ID \$VPC_AUDIO_MIX_ID \$SPEND_RATE_LIMITER_NS_ID \$WEB_ANALYTICS_TOKEN"
+VARS="\$AUTH_MODE \$ACCESS_TEAM_DOMAIN \$ACCESS_AUD \$D1_DATABASE_ID \$VPC_VIDEO_FINISH_ID \$VPC_IMAGE_PREP_ID \$VPC_AUDIO_BEAT_SYNC_ID \$VPC_AUDIO_MIX_ID \$SPEND_RATE_LIMITER_NS_ID \$WEB_ANALYTICS_TOKEN"
 
 if [ "$VIVIJURE_PROFILE" = minimal ]; then
   # drop each OPTIONAL block whole (markers + body): these need OUR fleet or a 2nd endpoint.
@@ -171,10 +182,14 @@ envsubst "$VARS" < .wrangler.stage.toml > wrangler.toml
 rm -f .wrangler.stage.toml
 # retarget the route: the template ships OUR production hostname; point it at yours.
 sed -i -E "s|^pattern = \"[^\"]+\"|pattern = \"$DEPLOY_HOSTNAME\"|" wrangler.toml
-# fail-closed: no leftover placeholder, and the Access vars must be present + non-empty.
+# fail-closed: no leftover placeholder, AUTH_MODE rendered non-empty, and in access mode the
+# Access vars must be present + non-empty (empty would unarm the F2 backstop -> DENY-everything).
 if grep -q "\${" wrangler.toml; then grep -n "\${" wrangler.toml; die "unsubstituted placeholder left in wrangler.toml"; fi
-grep -Eq "ACCESS_AUD = \".+\"" wrangler.toml && grep -Eq "ACCESS_TEAM_DOMAIN = \".+\"" wrangler.toml \
-  || die "F2 Access vars are empty after render -- refusing to deploy an unauthenticated studio"
+grep -Eq "AUTH_MODE = \".+\"" wrangler.toml || die "AUTH_MODE is empty after render -- refusing to deploy an unauthenticated studio"
+if [ "$AUTH_MODE" = access ]; then
+  grep -Eq "ACCESS_AUD = \".+\"" wrangler.toml && grep -Eq "ACCESS_TEAM_DOMAIN = \".+\"" wrangler.toml \
+    || die "F2 Access vars are empty after render -- refusing to deploy an unauthenticated studio"
+fi
 info "rendered wrangler.toml ($(wc -l < wrangler.toml) lines), route -> $DEPLOY_HOSTNAME"
 
 # ---- 5. D1 migrations --------------------------------------------------------
@@ -210,15 +225,48 @@ put_secret R2_S3_SECRET_ACCESS_KEY  "$R2_S3_SECRET_ACCESS_KEY"
 put_secret R2_S3_ENDPOINT           "$R2_S3_ENDPOINT"
 put_secret R2_S3_BUCKET             "$R2_S3_BUCKET"
 put_secret GATEWAY_ID               "$GATEWAY_ID"
+if [ "$AUTH_MODE" = token ]; then
+  # Mint the studio API token: 256 bits of randomness, hex. Stored as a worker secret; printed
+  # ONCE in the final banner below and NEVER written to any file. openssl is near-universal;
+  # python3 (already required by step 1) is the fallback.
+  if command -v openssl >/dev/null; then
+    STUDIO_API_TOKEN="$(openssl rand -hex 32)"
+  else
+    STUDIO_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))")"
+  fi
+  put_secret STUDIO_API_TOKEN "$STUDIO_API_TOKEN"
+fi
 
 say "Done. Your studio is live at: https://$DEPLOY_HOSTNAME"
+if [ "$AUTH_MODE" = token ]; then
 cat <<MSG
 
-  REQUIRED next step (security): put Cloudflare Access IN FRONT of https://$DEPLOY_HOSTNAME
-  (Zero Trust -> Access -> Applications). The studio has NO built-in login. The ACCESS_TEAM_DOMAIN
-  and ACCESS_AUD you set arm the in-worker backstop, but you still need the Access app itself on
-  the hostname, or anyone can read and delete your projects. See docs/SECURITY.md.
+  ============================= SAVE THIS NOW =============================
+  Your studio API token (shown ONCE, stored nowhere else):
+
+      $STUDIO_API_TOKEN
+
+  This is your login. Open https://$DEPLOY_HOSTNAME and paste it when the
+  studio asks; API callers send it as  Authorization: Bearer <token>.
+  Lost it? Re-run:  openssl rand -hex 32 | npx wrangler secret put STUDIO_API_TOKEN
+  (then paste the new value in the studio). See docs/SECURITY.md section 1b.
+  =========================================================================
+
+  Optional hardening (teams/orgs): put Cloudflare Access in front of the hostname
+  and redeploy with AUTH_MODE=access. See docs/SECURITY.md.
 
   Profile: $VIVIJURE_PROFILE. To add the finish modules later, set VIVIJURE_PROFILE=full in
   deploy.env (with the extra endpoint + VPC ids) and re-run ./deploy.sh.
 MSG
+else
+cat <<MSG
+
+  REQUIRED next step (security): put Cloudflare Access IN FRONT of https://$DEPLOY_HOSTNAME
+  (Zero Trust -> Access -> Applications). AUTH_MODE=access arms the in-worker backstop with
+  ACCESS_TEAM_DOMAIN/ACCESS_AUD, but you still need the Access app itself on the hostname,
+  or anyone can read and delete your projects. See docs/SECURITY.md.
+
+  Profile: $VIVIJURE_PROFILE. To add the finish modules later, set VIVIJURE_PROFILE=full in
+  deploy.env (with the extra endpoint + VPC ids) and re-run ./deploy.sh.
+MSG
+fi
