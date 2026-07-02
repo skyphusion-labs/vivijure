@@ -441,3 +441,21 @@ describe("validateManifest: finish_artifacts shape (optional, but malformed reje
     expect(v({ output_key: { kind: "shot_named", filename: "_f" }, applied: [{ tag: "t", when: { knob: "" } }] })).toMatch(/when/);
   });
 });
+
+describe("validateManifest: keyframe_label (optional, but malformed rejects)", () => {
+  const base = { name: "m", version: "1", api: "vivijure-module/2", hooks: ["keyframe"] };
+  const v = (keyframe_label: unknown) => validateManifest({ ...base, keyframe_label });
+
+  it("absent is fine; a non-empty string passes and survives to the typed manifest", () => {
+    expect(typeof validateManifest(base)).not.toBe("string");
+    expect(v("SDXL")).toMatchObject({ name: "m", keyframe_label: "SDXL" });
+  });
+
+  it("present-but-malformed rejects with a reason", () => {
+    expect(v("")).toMatch(/keyframe_label must be a non-empty string/);
+    expect(v("   ")).toMatch(/keyframe_label must be a non-empty string/);
+    expect(v(42)).toMatch(/keyframe_label must be a non-empty string/);
+    expect(v({ text: "SDXL" })).toMatch(/keyframe_label must be a non-empty string/);
+    expect(v(null)).toMatch(/keyframe_label must be a non-empty string/);
+  });
+});
