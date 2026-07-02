@@ -21,7 +21,7 @@ import {
   type KeyframeInput,
   type KeyframeOutput,
 } from "./contract";
-import { buildPreviewBody, parseKeyframes, parseTrainedLoras, encodePoll, decodePoll, runpodJobGone, classifyGoneState } from "./keyframe";
+import { buildPreviewBody, parseKeyframes, parseTrainedLoras, encodePoll, decodePoll, runpodJobGone, classifyGoneState, workersStillCold, terminalErrorInOutput, RUNPOD_COLD_GRACE_MS } from "./keyframe";
 
 interface Env {
   RUNPOD_API_KEY: SecretsStoreSecret;
@@ -32,6 +32,29 @@ interface Env {
 
 const endpoint = (endpointId: string) => "https://api.runpod.ai/v2/" + endpointId;
 const auth = (apiKey: string) => ({ authorization: "Bearer " + apiKey });
+
+/** Is the endpoint still in its virgin cold start (no worker has ever come up)? Best-effort: any
+ *  transport/HTTP failure reads as "not cold" so the #141 verdict still fires. */
+async function endpointStillCold(apiKey: string, endpointId: string): Promise<boolean> {
+  try {
+    const r = await fetch(endpoint(endpointId) + "/health", { headers: auth(apiKey) });
+    if (!r.ok) return false;
+    return workersStillCold(await r.json());
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort cancel of a RunPod job we are about to fail: a hung-error job otherwise HOLDS the
+ *  billed worker until someone cancels it by hand (F17 spend leak). Never throws; the honest
+ *  failure below is the point, the cancel is damage control. */
+async function cancelRunpodJobBestEffort(apiKey: string, endpointId: string, jobId: string): Promise<void> {
+  try {
+    await fetch(endpoint(endpointId) + "/cancel/" + jobId, { method: "POST", headers: auth(apiKey) });
+  } catch {
+    /* best-effort */
+  }
+}
 
 /** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
  *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
@@ -136,13 +159,33 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<KeyframeO
   // "not COMPLETED" and the poll would report pending forever (issue #141). Past the grace window (or a
   // legacy token) fail; inside it keep polling (post-submit race).
   if (runpodJobGone(httpStatus, s)) {
-    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") {
-      return { ok: false, error: "keyframe job not found on RunPod (GC'd or never ran); failing (#141)" };
+    const now = Date.now();
+    if (classifyGoneState(st.submittedAt, now) === "gone-failed") {
+      // Cold-start tolerance: a virgin host's image pull can outlive the grace window while the job
+      // 404s. If no worker has EVER come up, this is "still initializing", not "dropped" -- keep
+      // polling up to the cold cap instead of false-failing the first-ever job.
+      if (
+        classifyGoneState(st.submittedAt, now, RUNPOD_COLD_GRACE_MS) === "gone-grace" &&
+        (await endpointStillCold(apiKey, endpointId))
+      ) {
+        return { ok: true, pending: true };
+      }
+      return { ok: false, error: "keyframe job " + st.jobId + " not found on RunPod (GC'd or never ran); failing (#141)" };
     }
     return { ok: true, pending: true };
   }
   if (s.status === "FAILED") return { ok: false, error: "keyframe job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
-  if (s.status !== "COMPLETED") return { ok: true, pending: true };
+  if (s.status !== "COMPLETED") {
+    // F17: a backend whose error path RETURNS (instead of raising) leaves the RunPod job IN_PROGRESS
+    // forever -- holding and billing the worker -- while `output` already carries the structured
+    // terminal error. Surface the REAL error (never "not found") and cancel to stop the spend.
+    const backendErr = terminalErrorInOutput(s.output);
+    if (backendErr) {
+      await cancelRunpodJobBestEffort(apiKey, endpointId, st.jobId);
+      return { ok: false, error: "keyframe backend error (job " + st.jobId + ", status stuck " + String(s.status ?? "unknown") + ", cancel issued): " + backendErr };
+    }
+    return { ok: true, pending: true };
+  }
 
   const keyframes = parseKeyframes(s.output);
   if (!keyframes.length) return { ok: false, error: "keyframe job completed but returned no keyframes" };

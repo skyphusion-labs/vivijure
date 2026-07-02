@@ -30,7 +30,8 @@ import {
 } from "./contract";
 import {
   coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
-  successOutput, runpodJobGone, classifyGoneState, type PollState,
+  successOutput, runpodJobGone, classifyGoneState, workersStillCold, terminalErrorInOutput,
+  RUNPOD_COLD_GRACE_MS, type PollState,
 } from "./speech";
 
 interface Env {
@@ -63,6 +64,28 @@ function runpodBase(env: Env): string {
 
 function auth(env: Env) {
   return { authorization: "Bearer " + env.RUNPOD_API_KEY };
+}
+
+/** Is the endpoint still in its virgin cold start (no worker has ever come up)? Best-effort: any
+ *  transport/HTTP failure reads as "not cold" so the #141 verdict still fires. */
+async function endpointStillCold(env: Env): Promise<boolean> {
+  try {
+    const r = await fetch(runpodBase(env) + "/health", { headers: auth(env) });
+    if (!r.ok) return false;
+    return workersStillCold(await r.json());
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort cancel of a RunPod job we are about to degrade away from: a hung-error job otherwise
+ *  HOLDS the billed worker until someone cancels it by hand (F17 spend leak). Never throws. */
+async function cancelRunpodJobBestEffort(env: Env, jobId: string): Promise<void> {
+  try {
+    await fetch(runpodBase(env) + "/cancel/" + jobId, { method: "POST", headers: auth(env) });
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Soft degrade: pass the input audio through unchanged, record `degraded`. `disabled` is the
@@ -125,11 +148,32 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<SpeechOut
   // race -> keep polling; past it the job is really gone -> SOFT-DEGRADE (polish step, never fail the
   // chain), lip-sync uses the original audio.
   if (runpodJobGone(httpStatus, s)) {
-    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") return pollPassthrough(st, "endpoint-gone");
+    const now = Date.now();
+    if (classifyGoneState(st.submittedAt, now) === "gone-failed") {
+      // Cold-start tolerance: a virgin host's image pull can outlive the grace window while the job
+      // 404s. If no worker has EVER come up, keep polling up to the cold cap before degrading.
+      if (
+        classifyGoneState(st.submittedAt, now, RUNPOD_COLD_GRACE_MS) === "gone-grace" &&
+        (await endpointStillCold(env))
+      ) {
+        return { ok: true, pending: true };
+      }
+      return pollPassthrough(st, "endpoint-gone");
+    }
     return { ok: true, pending: true };
   }
   if (s.status === "FAILED") return pollPassthrough(st, "endpoint-failed", JSON.stringify(s.error ?? s).slice(0, 160));
-  if (s.status !== "COMPLETED") return { ok: true, pending: true };
+  if (s.status !== "COMPLETED") {
+    // F17: a backend whose error path RETURNS (instead of raising) leaves the RunPod job IN_PROGRESS
+    // forever -- holding and billing the worker -- while `output` already carries the structured
+    // terminal error. Cancel to stop the spend, then soft-degrade (polish step, never fail the chain).
+    const backendErr = terminalErrorInOutput(s.output);
+    if (backendErr) {
+      await cancelRunpodJobBestEffort(env, st.jobId);
+      return pollPassthrough(st, "endpoint-error", backendErr.slice(0, 160));
+    }
+    return { ok: true, pending: true };
+  }
 
   const out = parseBackendOutput(s.output);
   // The endpoint soft-degrades (ok:false in its payload) on its own failures; without an output_key
