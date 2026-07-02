@@ -28,7 +28,7 @@ workers_dev = false
 #     This is the load-bearing half: with the default handling, serveStudioAsset's env.ASSETS.fetch
 #     of /welcome.html 307-redirects back to /welcome -> redirect loop -> blank page (the #374 -> #375
 #     revert). "none" makes that fetch return the real file (200), and the Worker maps the pretty page
-#     routes itself (STUDIO_PAGE_ASSETS, incl. "/" -> /index.html). Dev-verified, no loop.
+#     routes itself (STUDIO_PAGE_ASSETS, incl. "/" -> /modules.html). Dev-verified, no loop.
 assets = { directory = "./public", binding = "ASSETS", html_handling = "none", run_worker_first = true }
 
 # >>> OPTIONAL: tail-consumer -- core render logs -> Loki/Grafana via OUR vivijure-tail worker

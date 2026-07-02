@@ -293,6 +293,7 @@ body.sw-open .planner-layout { overflow-x: hidden; }
 .cast-import-btn:hover { border-color: var(--accent); }
 .cast-list-status { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .cast-list-status.is-error { color: #ff7a8a; }
+.cast-editor-status { min-height: 1.2em; margin: 6px 0 2px; }
 
 .cast-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .cast-list-item {

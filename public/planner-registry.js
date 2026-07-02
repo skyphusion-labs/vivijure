@@ -1,6 +1,6 @@
 // Planner module registry: one fetch of GET /api/modules, shared helpers for every
 // self-assembling control in the planner. No feature names or providers are
-// hardcoded here -- only hook names from the vivijure-module/1 contract.
+// hardcoded here -- only hook names from the vivijure-module/2 contract.
 (function (global) {
   let cache = null;
   let loadPromise = null;

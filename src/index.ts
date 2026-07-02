@@ -1230,8 +1230,10 @@ const API_ROUTES: Route[] = [
 // meant to be reachable without CF Access (it gets a public Access bypass on the /welcome
 // prefix), so it carries no studio data and links into the gated app rather than embedding it.
 const STUDIO_PAGE_ASSETS: Record<string, string> = {
-  "/": "/index.html",
-  "/index.html": "/index.html",
+  // index.html was a byte-identical copy of modules.html (removed in the 2026-07 truth pass);
+  // the modules/pipeline page IS the landing page, served from the single source file.
+  "/": "/modules.html",
+  "/index.html": "/modules.html",
   "/welcome": "/welcome.html",
   "/welcome/": "/welcome.html",
   "/planner": "/planner.html",
