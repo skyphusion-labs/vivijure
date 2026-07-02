@@ -44,6 +44,15 @@ need R2_S3_ACCESS_KEY_ID     "R2 S3 access key id"
 need R2_S3_SECRET_ACCESS_KEY "R2 S3 secret access key"
 need GATEWAY_ID              "AI Gateway slug"
 need DEPLOY_HOSTNAME         "the hostname your studio serves on"
+
+# Preflight: steps 1-6 run wrangler via npx (auto-fetches), but step 7 is "npm run deploy" ->
+# bare "wrangler", which is only on PATH once node_modules exists. Without this, a fresh clone
+# runs ~10 green minutes and dies at the LAST step with exit 127 "wrangler: not found"
+# (cold-deploy verify, finding F13). Install up front so the failure cannot happen at the end.
+if [ ! -d node_modules ]; then
+  say "Preflight: installing npm dependencies (node_modules missing)"
+  npm ci || die "npm ci failed -- fix the Node/npm install, then re-run ./deploy.sh"
+fi
 # Auth gate (#423, matches CI and docs/SECURITY.md). token (default) = the built-in bearer-token
 # login: this script mints a 256-bit token, stores it as a worker secret, and prints it ONCE at
 # the end -- no Zero Trust product needed. access = Cloudflare Access in front of the studio; the
