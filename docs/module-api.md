@@ -147,6 +147,23 @@ A finish module WITHOUT the declaration gets no R2 shortcut: its stuck steps pen
 deadline honestly instead of the core guessing where its output landed. Present-but-malformed
 `finish_artifacts` REJECTS the manifest at registration.
 
+### Keyframe display label (`keyframe_label`, optional + additive)
+
+A `keyframe` module MAY declare `keyframe_label`: a compact display token for the keyframe-stage
+backend or model (e.g. `"SDXL"`). The planner UI is a projection of the registry, so it reads this
+token and renders it inline (the regen confirm, the keyframes-only badge, the "no `<label>` keyframe
+pass" copy) instead of hardcoding a model name that would drift. The frontend picks the token from the
+`ui.order`-first keyframe module that declares one and falls back to `"SDXL"` when none does, so the
+copy is never blank.
+
+```jsonc
+{ "hooks": ["keyframe"], "keyframe_label": "SDXL" }
+```
+
+Leave it out when the model is not a single fixed name (e.g. a user-selectable model enum): an
+undeclared label is honest, and the fallback covers the copy. `keyframe_label` is OPTIONAL and
+additive (no MODULE_API bump); present-but-empty-or-non-string REJECTS the manifest at registration.
+
 ## Worked example: the `finish` hook
 
 This is the whole contract for one hook, end to end. It is also the first real module.

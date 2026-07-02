@@ -108,6 +108,9 @@ export const MANIFEST: ModuleManifest = {
   // This module is async + GPU-backed, so it implements POST /cancel: the core can stop an in-flight
   // RunPod job (a cancelled render, or an adopted keyframe phase) instead of orphaning it (#327/#328).
   cancelable: true,
+  // #454: compact display token for the keyframe-stage backend, so the planner projects it inline
+  // instead of hardcoding "SDXL". OPTIONAL/additive, mirrors src/modules/types.ts.
+  keyframe_label: "SDXL",
 };
 
 function json(body: unknown, status = 200): Response {
