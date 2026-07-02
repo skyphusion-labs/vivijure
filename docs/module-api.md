@@ -122,6 +122,31 @@ and cancels with its own creds. Without `/cancel`, a cancelled render or a stall
 ORPHANS the GPU job (it keeps billing after the work is satisfied); the core honest-degrade-logs that
 orphan rather than hide it (#327 / #328). Full envelope spec in CONTRACT.md section 4.
 
+### Declared finish artifacts (`finish_artifacts`, optional + additive)
+
+A `finish` module SHOULD declare its artifact conventions in the manifest so the core's
+R2-authoritative recovery (a step whose backend job was GC'd or froze mid-chain, #141/#166) can
+predict the module's output key and reconstruct its `applied` marker FROM THE MANIFEST -- the core
+never pattern-matches module names to guess conventions. Two shapes:
+
+```ts
+finish_artifacts: {
+  // How the module names its output clip in R2, one of:
+  output_key: { kind: "shot_named", filename: "_finished.mp4" }   // renders/<project>/clips/<shot_id><filename>
+  output_key: { kind: "append_suffix", suffix: "_ls" }            // input clip key + suffix before its extension
+  // Optional rules reconstructing `applied` from the validated config; FIRST match wins. `when`
+  // gates a rule on a knob equaling a literal; {knob|default} in a tag reads the knob (else default).
+  applied: [
+    { when: { knob: "interpolate", equals: false }, tag: "noop:interpolate-off" },
+    { tag: "interpolate:{interpolation_factor|2}x" },
+  ]
+}
+```
+
+A finish module WITHOUT the declaration gets no R2 shortcut: its stuck steps pend to the hard
+deadline honestly instead of the core guessing where its output landed. Present-but-malformed
+`finish_artifacts` REJECTS the manifest at registration.
+
 ## Worked example: the `finish` hook
 
 This is the whole contract for one hook, end to end. It is also the first real module.

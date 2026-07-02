@@ -567,6 +567,24 @@
   <script src="planner-render-config.js"></script>
   <script src="lora-preflight.js"></script>
   <script src="render-eta.js"></script>
-  <script src="planner.js"></script>
+  <!-- Planner UI, split out of the former monolithic planner.js. Plain classic
+       scripts sharing one global scope; load order is significant -- top-level
+       declarations are visible across files only in this order. Do not reorder. -->
+  <script src="planner-stepper.js"></script>
+  <script src="planner-fieldhelp.js"></script>
+  <script src="planner-state.js"></script>
+  <script src="planner-restore.js"></script>
+  <script src="planner-cast.js"></script>
+  <script src="planner-preflight.js"></script>
+  <script src="planner-projects.js"></script>
+  <script src="planner-refine.js"></script>
+  <script src="planner-audio.js"></script>
+  <script src="planner-scenes.js"></script>
+  <script src="planner-plan.js"></script>
+  <script src="planner-bundle.js"></script>
+  <script src="planner-render.js"></script>
+  <script src="planner-history-list.js"></script>
+  <script src="planner-history-row.js"></script>
+  <script src="planner-init.js"></script>
 </body>
 </html>

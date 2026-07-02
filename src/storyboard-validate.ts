@@ -186,19 +186,12 @@ function normalizeStyleNone(value: unknown): string {
   return trimmed.length === 0 ? "None" : trimmed; // return the trimmed value, not the raw (issue #17)
 }
 
-export function validateStoryboard(input: unknown): ValidationResult {
-  const errors: string[] = [];
+// ---- validateStoryboard, decomposed (S6 split) -----------------------------------------------
+// One section, one function; every error message and check moved VERBATIM from the former
+// 455-line body, so behavior (and the tests pinning these strings) is unchanged. Each helper
+// pushes into the shared `errors` and returns its validated slice.
 
-  if (!isPlainObject(input)) {
-    return {
-      ok: false,
-      errors: [
-        `storyboard must be an object (got ${describeType(input)})`,
-      ],
-    };
-  }
-
-  // ---- title ------------------------------------------------------------
+function validateTitleSection(input: Record<string, unknown>, errors: string[]): { title: string; projectName: string } {
   let title = "";
   let projectName = "project";
   const rawTitle = input.title;
@@ -208,8 +201,10 @@ export function validateStoryboard(input: unknown): ValidationResult {
     title = rawTitle;
     projectName = normalizeProjectName(rawTitle);
   }
+  return { title, projectName };
+}
 
-  // ---- use_characters ---------------------------------------------------
+function validateUseCharactersSection(input: Record<string, unknown>, errors: string[]): SlotId[] {
   const useCharacters: SlotId[] = [];
   if (input.use_characters !== undefined) {
     if (!Array.isArray(input.use_characters)) {
@@ -240,73 +235,11 @@ export function validateStoryboard(input: unknown): ValidationResult {
       });
     }
   }
+  return useCharacters;
+}
 
-  // ---- scenes -----------------------------------------------------------
-  const validatedScenes: StoryboardScene[] = [];
-  if (!Array.isArray(input.scenes)) {
-    errors.push(
-      `scenes is required and must be a non-empty array (got ${describeType(input.scenes)})`,
-    );
-  } else if (input.scenes.length === 0) {
-    errors.push(
-      "scenes is required and must be a non-empty array (got empty array)",
-    );
-  } else if (input.scenes.length > STORYBOARD_MAX_SCENES) {
-    // v0.80.0: hard cap on scene count. Preflight warns at 24; this
-    // is the firm ceiling. Catches LLM Assist outputs that try to
-    // produce a 100-shot epic on a draft pass.
-    errors.push(
-      `scenes count ${input.scenes.length} exceeds the hard cap of ${STORYBOARD_MAX_SCENES} (preflight warns at 24; consider splitting the storyboard or shortening the duration)`,
-    );
-  } else {
-    input.scenes.forEach((scene, i) => {
-      if (!isPlainObject(scene)) {
-        errors.push(
-          `scenes[${i}] must be an object (got ${describeType(scene)})`,
-        );
-        return;
-      }
-      const label = sceneLabel(scene, i);
-      const out: StoryboardScene = { prompt: "" };
-
-      // prompt: required, non-empty after trim
-      if (
-        typeof scene.prompt !== "string" ||
-        scene.prompt.trim().length === 0
-      ) {
-        errors.push(`${label} is missing prompt (must be a non-empty string)`);
-      } else {
-        out.prompt = scene.prompt;
-        // v0.80.0: token-count guard so LLM Assist outputs that
-        // overflow SDXL's CLIP 77-token limit get caught here
-        // rather than silently truncating at render time. The pod's
-        // regional path prepends triggers + style_prefix, leaving
-        // ~60 tokens of headroom, ~46 words at 1.3 tokens/word; we
-        // cap at 50 with a small margin.
-        const wc = countWords(scene.prompt);
-        if (wc > SCENE_PROMPT_MAX_WORDS) {
-          errors.push(
-            `${label} prompt is ${wc} words; cap is ${SCENE_PROMPT_MAX_WORDS} to fit within SDXL CLIP 77 tokens after triggers + style_prefix. Tighten the prompt or move appearance details to the cast bible.`,
-          );
-        }
-      }
-
-      // id: optional; v0.80.0 always coerces to the shot_NN pattern
-      // the renderer expects. LLM Assist outputs like
-      // "scene_dramatic_sunset" become "shot_NN" in declaration
-      // order. A valid scene.id like "shot_07" survives intact.
-      // Non-string ids are tolerated (coerced to the default).
-      if (scene.id !== undefined && typeof scene.id !== "string") {
-        errors.push(
-          `${label} id must be a string if provided (got ${describeType(scene.id)})`,
-        );
-      }
-      out.id = coerceShotId(
-        typeof scene.id === "string" ? scene.id : undefined,
-        i,
-      );
-
-      // character_slots: optional array of SlotId, must be subset of useCharacters
+// scenes[i].character_slots: optional array of SlotId, must be a subset of use_characters.
+function validateSceneSlots(scene: Record<string, unknown>, label: string, useCharacters: SlotId[], out: StoryboardScene, errors: string[]): void {
       if (scene.character_slots !== undefined) {
         if (!Array.isArray(scene.character_slots)) {
           errors.push(
@@ -349,10 +282,12 @@ export function validateStoryboard(input: unknown): ValidationResult {
           out.character_slots = slotsOut;
         }
       }
+}
 
       // dialogue: optional { slot, text }. The speaker must be in this shot (one of its validated
       // character_slots, which already enforces the use_characters subset rule), and the line is a
       // non-empty string capped to bound TTS cost + how much speech must fit the clip.
+function validateSceneDialogue(scene: Record<string, unknown>, label: string, out: StoryboardScene, errors: string[]): void {
       if (scene.dialogue !== undefined) {
         if (!isPlainObject(scene.dialogue)) {
           errors.push(
@@ -388,7 +323,10 @@ export function validateStoryboard(input: unknown): ValidationResult {
           }
         }
       }
+}
 
+// start / end / target_seconds + the cross-field span rule (per-shot GPU-billing caps).
+function validateSceneTiming(scene: Record<string, unknown>, label: string, out: StoryboardScene, errors: string[]): void {
       // start: optional non-negative number (0.0 is a legal film-time origin)
       if (scene.start !== undefined) {
         if (!isNonNegativeFiniteNumber(scene.start)) {
@@ -442,6 +380,59 @@ export function validateStoryboard(input: unknown): ValidationResult {
           `${label} span (end - start = ${Math.round((out.end - out.start) * 100) / 100}s) exceeds the per-shot cap of ${SCENE_MAX_SECONDS}s`,
         );
       }
+}
+
+// One scene: prompt (CLIP token guard), id coercion, slots, dialogue, timing, act/start_image.
+function validateScene(scene: unknown, i: number, useCharacters: SlotId[], errors: string[]): StoryboardScene | null {
+      if (!isPlainObject(scene)) {
+        errors.push(
+          `scenes[${i}] must be an object (got ${describeType(scene)})`,
+        );
+        return null;
+      }
+      const label = sceneLabel(scene, i);
+      const out: StoryboardScene = { prompt: "" };
+
+      // prompt: required, non-empty after trim
+      if (
+        typeof scene.prompt !== "string" ||
+        scene.prompt.trim().length === 0
+      ) {
+        errors.push(`${label} is missing prompt (must be a non-empty string)`);
+      } else {
+        out.prompt = scene.prompt;
+        // v0.80.0: token-count guard so LLM Assist outputs that
+        // overflow SDXL's CLIP 77-token limit get caught here
+        // rather than silently truncating at render time. The pod's
+        // regional path prepends triggers + style_prefix, leaving
+        // ~60 tokens of headroom, ~46 words at 1.3 tokens/word; we
+        // cap at 50 with a small margin.
+        const wc = countWords(scene.prompt);
+        if (wc > SCENE_PROMPT_MAX_WORDS) {
+          errors.push(
+            `${label} prompt is ${wc} words; cap is ${SCENE_PROMPT_MAX_WORDS} to fit within SDXL CLIP 77 tokens after triggers + style_prefix. Tighten the prompt or move appearance details to the cast bible.`,
+          );
+        }
+      }
+
+      // id: optional; v0.80.0 always coerces to the shot_NN pattern
+      // the renderer expects. LLM Assist outputs like
+      // "scene_dramatic_sunset" become "shot_NN" in declaration
+      // order. A valid scene.id like "shot_07" survives intact.
+      // Non-string ids are tolerated (coerced to the default).
+      if (scene.id !== undefined && typeof scene.id !== "string") {
+        errors.push(
+          `${label} id must be a string if provided (got ${describeType(scene.id)})`,
+        );
+      }
+      out.id = coerceShotId(
+        typeof scene.id === "string" ? scene.id : undefined,
+        i,
+      );
+
+      validateSceneSlots(scene, label, useCharacters, out, errors);
+      validateSceneDialogue(scene, label, out, errors);
+      validateSceneTiming(scene, label, out, errors);
 
       // act / start_image: optional strings. start_image is a path/key consumed downstream as an R2
       // object, so it must be a safe relative key (no traversal / absolute / scheme). (security #6)
@@ -462,7 +453,30 @@ export function validateStoryboard(input: unknown): ValidationResult {
         }
       }
 
-      validatedScenes.push(out);
+  return out;
+}
+
+function validateScenesSection(input: Record<string, unknown>, useCharacters: SlotId[], errors: string[]): StoryboardScene[] {
+  const validatedScenes: StoryboardScene[] = [];
+  if (!Array.isArray(input.scenes)) {
+    errors.push(
+      `scenes is required and must be a non-empty array (got ${describeType(input.scenes)})`,
+    );
+  } else if (input.scenes.length === 0) {
+    errors.push(
+      "scenes is required and must be a non-empty array (got empty array)",
+    );
+  } else if (input.scenes.length > STORYBOARD_MAX_SCENES) {
+    // v0.80.0: hard cap on scene count. Preflight warns at 24; this
+    // is the firm ceiling. Catches LLM Assist outputs that try to
+    // produce a 100-shot epic on a draft pass.
+    errors.push(
+      `scenes count ${input.scenes.length} exceeds the hard cap of ${STORYBOARD_MAX_SCENES} (preflight warns at 24; consider splitting the storyboard or shortening the duration)`,
+    );
+  } else {
+    input.scenes.forEach((scene, i) => {
+      const out = validateScene(scene, i, useCharacters, errors);
+      if (out) validatedScenes.push(out);
     });
   }
 
@@ -484,8 +498,12 @@ export function validateStoryboard(input: unknown): ValidationResult {
       }
     }
   }
+  return validatedScenes;
+}
 
-  // ---- top-level optional fields ---------------------------------------
+interface TopLevelFields { fullPrompt: string; stylePrefix: string; castRules: string; durationSeconds?: number; clipSeconds?: number; refsDir?: string }
+
+function validateTopLevelFields(input: Record<string, unknown>, errors: string[]): TopLevelFields {
   let fullPrompt = "";
   if (input.full_prompt !== undefined) {
     if (typeof input.full_prompt !== "string") {
@@ -582,15 +600,8 @@ export function validateStoryboard(input: unknown): ValidationResult {
       refsDir = input.refs_dir;
     }
   }
-
-  // None-normalization for the two style fields. The renderer disables on
-  // the literal string "None", not on null/undefined, so we collapse to it.
-  const styleCategory = normalizeStyleNone(input.style_category);
-  const stylePreset = normalizeStyleNone(input.style_preset);
-
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
+  return { fullPrompt, stylePrefix, castRules, durationSeconds, clipSeconds, refsDir };
+}
 
   // v0.134.3: backfill each scene's target_seconds when the model omitted the
   // (optional) field, so the planner's scene editor shows an explicit per-shot
@@ -600,6 +611,7 @@ export function validateStoryboard(input: unknown): ValidationResult {
   // default), else an even split of duration_seconds across the scenes. This is
   // the same clip_seconds fallback markers.ts / preflight apply at render time,
   // just materialized into the data. No-op when there's nothing to derive from.
+function backfillTargetSeconds(validatedScenes: StoryboardScene[], clipSeconds: number | undefined, durationSeconds: number | undefined): void {
   const perShotFallback =
     typeof clipSeconds === "number" && clipSeconds > 0
       ? clipSeconds
@@ -616,6 +628,35 @@ export function validateStoryboard(input: unknown): ValidationResult {
       s.target_seconds = perShotFallback;
     }
   }
+}
+
+export function validateStoryboard(input: unknown): ValidationResult {
+  const errors: string[] = [];
+
+  if (!isPlainObject(input)) {
+    return {
+      ok: false,
+      errors: [
+        `storyboard must be an object (got ${describeType(input)})`,
+      ],
+    };
+  }
+
+  const { title, projectName } = validateTitleSection(input, errors);
+  const useCharacters = validateUseCharactersSection(input, errors);
+  const validatedScenes = validateScenesSection(input, useCharacters, errors);
+  const { fullPrompt, stylePrefix, castRules, durationSeconds, clipSeconds, refsDir } = validateTopLevelFields(input, errors);
+
+  // None-normalization for the two style fields. The renderer disables on
+  // the literal string "None", not on null/undefined, so we collapse to it.
+  const styleCategory = normalizeStyleNone(input.style_category);
+  const stylePreset = normalizeStyleNone(input.style_preset);
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  backfillTargetSeconds(validatedScenes, clipSeconds, durationSeconds);
 
   const value: StoryboardValidated = {
     title,
