@@ -282,6 +282,24 @@ The render backend is the `vivijure-backend` container image, run as a **RunPod 
 
 1. Build/pull the image. The image is published to GHCR (`ghcr.io/skyphusion-labs/vivijure-backend`);
    build it yourself from the `vivijure-backend` repo, or pull the public image.
+
+**Scripted standup (recommended).** One command creates the template + endpoint via the RunPod API,
+idempotent by name (re-running reuses what exists). Secrets are read from the environment only,
+never argv:
+
+```bash
+set -a; . ./deploy.env; set +a       # loads RUNPOD_API_KEY, CLOUDFLARE_ACCOUNT_ID, R2_S3_* keys
+python3 scripts/runpod-provision.py  # last line prints RUNPOD_ENDPOINT_ID=<id>
+```
+
+Put the printed id in `deploy.env` as `RUNPOD_ENDPOINT_ID` and run `./deploy.sh`. The endpoint is
+created scale-to-zero (workersMin=0): it costs nothing until a render job runs. Defaults are the
+proven starter pool (RTX 4090 / A5000 / L4, 20GB disk, 1 worker max); `--help` lists the knobs. No
+network volume is attached (the backend self-preloads models from R2 on cold start); for the warm
+H200/B200-class setup below, attach a volume and widen the GPU pool afterwards.
+
+**By hand instead:**
+
 2. In **runpod.io -> Serverless -> New Endpoint**, point it at the image, pick a GPU (H200/B200 class
    for training + i2v), and attach a **network volume** for the model weights (they self-preload from
    R2 on first run, then stay warm -- avoid scaling fully to zero between jobs or every cold worker
