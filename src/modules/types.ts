@@ -130,6 +130,28 @@ export interface ModuleUi {
   limits?: string[]; // honest capability-ceiling bullets, display only (absent => fall back to config_schema)
 }
 
+/** OPTIONAL, additive (no MODULE_API bump, same pattern as `cancelable`): a finish module's declared
+ *  artifact conventions, so the core's R2-authoritative mid-chain recovery (#141/#166) can predict the
+ *  module's output key and reconstruct its `applied` marker from the manifest instead of
+ *  reverse-engineering module internals by binding-name regex. A finish module SHOULD declare this;
+ *  one that does not gets NO R2 shortcut (its GC'd/frozen steps pend to the deadline honestly). */
+export interface FinishArtifactsDecl {
+  /** How the module names its output clip in R2:
+   *  - `shot_named`: `renders/<project>/clips/<shot_id><filename>` (the module names off the shot id;
+   *    e.g. finish-rife's `filename: "_finished.mp4"`).
+   *  - `append_suffix`: insert `suffix` into the INPUT clip key before its extension (the
+   *    append-convention modules; e.g. lip-sync `_ls`, upscale `_up`). */
+  output_key:
+    | { kind: "shot_named"; filename: string }
+    | { kind: "append_suffix"; suffix: string };
+  /** Rules reconstructing the `applied` marker from the step's validated config; FIRST match wins.
+   *  `when` (optional) gates a rule on a config knob equaling a literal; `tag` is a template where
+   *  `{knob}` reads the knob and `{knob|default}` supplies the value when the knob is absent
+   *  (e.g. `"lipsync:{version|v15}"`, `"interpolate:{interpolation_factor|2}x"`). No rules / no
+   *  match -> the core marks the adopted step `<binding>:r2-adopted` so the adoption is never silent. */
+  applied?: Array<{ when?: { knob: string; equals: string | number | boolean }; tag: string }>;
+}
+
 /** A module's self-description, served at GET /module.json. */
 export interface ModuleManifest {
   name: string; // unique module id
@@ -144,6 +166,9 @@ export interface ModuleManifest {
    *  additive (no MODULE_API bump, same as the #318 jobId field). Absent/false => the core cannot
    *  cancel this module's jobs and will HONESTLY degrade-log any orphan rather than hide it. */
   cancelable?: boolean;
+  /** Finish modules SHOULD declare their artifact conventions (see FinishArtifactsDecl) so the core's
+   *  R2-authoritative recovery works from the manifest, not from binding-name pattern-matching. */
+  finish_artifacts?: FinishArtifactsDecl;
 }
 
 // --------------------------------------------------------------------------- invocation

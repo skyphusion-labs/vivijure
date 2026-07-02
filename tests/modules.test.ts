@@ -417,3 +417,27 @@ describe("locality classification helpers", () => {
     expect(defaultGpuDoorModule([motion("seedance", 10, "cloud")])).toBeUndefined();
   });
 });
+
+describe("validateManifest: finish_artifacts shape (optional, but malformed rejects)", () => {
+  const base = { name: "m", version: "1", api: "vivijure-module/2", hooks: ["finish"] };
+  const v = (finish_artifacts: unknown) => validateManifest({ ...base, finish_artifacts });
+
+  it("absent is fine; both valid output_key kinds pass; applied rules pass", () => {
+    expect(typeof validateManifest(base)).not.toBe("string");
+    expect(typeof v({ output_key: { kind: "shot_named", filename: "_f.mp4" } })).not.toBe("string");
+    expect(typeof v({
+      output_key: { kind: "append_suffix", suffix: "_ls" },
+      applied: [{ when: { knob: "interpolate", equals: false }, tag: "noop" }, { tag: "x:{y|2}" }],
+    })).not.toBe("string");
+  });
+
+  it("malformed shapes reject with a reason", () => {
+    expect(v({})).toMatch(/output_key missing/);
+    expect(v({ output_key: { kind: "banana" } })).toMatch(/kind/);
+    expect(v({ output_key: { kind: "shot_named" } })).toMatch(/filename/);
+    expect(v({ output_key: { kind: "append_suffix", suffix: "" } })).toMatch(/suffix/);
+    expect(v({ output_key: { kind: "shot_named", filename: "_f" }, applied: "nope" })).toMatch(/not an array/);
+    expect(v({ output_key: { kind: "shot_named", filename: "_f" }, applied: [{ tag: "" }] })).toMatch(/missing tag/);
+    expect(v({ output_key: { kind: "shot_named", filename: "_f" }, applied: [{ tag: "t", when: { knob: "" } }] })).toMatch(/when/);
+  });
+});
