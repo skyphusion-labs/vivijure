@@ -180,6 +180,9 @@ route LLM/AI calls through a **Cloudflare AI Gateway** (for caching, rate-limit,
   Unified Billing also requires the gateway's **Authenticated Gateway** toggle ON --
   `deploy.sh` enables it via the API, or the banner tells you to flip it in the same
   Settings page. Run tokens are account-scoped (they cannot be pinned to one gateway).
+  Tearing an install down to zero? Also delete the auto-minted `vivijure-planner-aig-run`
+  API token: the auto-mint refuses to stack a second token of the same name, so a stale
+  twin blocks re-arming on the next deploy.
 
 > Why a gateway instead of a raw provider key: it gives you one place to see spend, cache repeat
 > prompts, and swap the underlying model without touching code. Anthropic/other model access is
