@@ -46,6 +46,11 @@ cp deploy.env.example deploy.env   # then edit deploy.env with your keys
 ./deploy.sh
 ```
 
+**One prerequisite the script cannot do for you: enable R2 on the account** (a one-time ToS +
+billing acceptance). Do it once at `https://dash.cloudflare.com/<ACCOUNT_ID>/r2` before the first
+run; without it the script stops at the bucket step with Cloudflare API code 10042 and prints this
+same URL.
+
 `deploy.env` is where all your keys go. It is gitignored -- never commit it. Each line has a short
 note on what the value is and where to get it, matching sections 2a-2d below.
 
