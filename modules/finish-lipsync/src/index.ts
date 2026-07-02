@@ -48,6 +48,11 @@ const MANIFEST: ModuleManifest = {
   },
   // Order < the upscaler's 20 so a lip-synced shot is then upscaled (the 256px face region wants it).
   ui: { section: "finish", icon: "mic", order: 15 },
+  // Declared artifact conventions (S6): the MuseTalk container appends _ls to the input clip key.
+  finish_artifacts: {
+    output_key: { kind: "append_suffix", suffix: "_ls" },
+    applied: [{ tag: "lipsync:{version|v15}" }],
+  },
 };
 
 function json(body: unknown, status = 200): Response {

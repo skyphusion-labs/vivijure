@@ -46,6 +46,11 @@ const MANIFEST: ModuleManifest = {
     model: { type: "enum", values: ["realesr-animevideov3", "RealESRGAN_x4plus"], default: "realesr-animevideov3", label: "model" },
   },
   ui: { section: "finish", icon: "expand", order: 20 },
+  // Declared artifact conventions (S6): the Real-ESRGAN container appends _up to the input clip key.
+  finish_artifacts: {
+    output_key: { kind: "append_suffix", suffix: "_up" },
+    applied: [{ tag: "upscale:{scale|2}x" }],
+  },
 };
 
 function json(body: unknown, status = 200): Response {

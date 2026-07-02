@@ -16,6 +16,15 @@ export type ConfigSchema = Record<string, ConfigField>;
 export interface Provides { id: string; label: string; }
 export interface ModuleUi { section?: string; icon?: string; order?: number; }
 
+/** OPTIONAL, additive: this module's declared artifact conventions, read by the core's
+ *  R2-authoritative finish recovery (see the core's src/modules/types.ts FinishArtifactsDecl). */
+export interface FinishArtifactsDecl {
+  output_key:
+    | { kind: "shot_named"; filename: string }
+    | { kind: "append_suffix"; suffix: string };
+  applied?: Array<{ when?: { knob: string; equals: string | number | boolean }; tag: string }>;
+}
+
 export interface ModuleManifest {
   name: string;
   version: string;
@@ -24,6 +33,7 @@ export interface ModuleManifest {
   provides?: Provides[];
   config_schema?: ConfigSchema;
   ui?: ModuleUi;
+  finish_artifacts?: FinishArtifactsDecl;
 }
 
 export interface InvokeContext { project: string; job_id: string; user_email?: string; }

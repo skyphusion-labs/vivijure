@@ -135,6 +135,11 @@ describe("advanceFilmJob under the lease: two concurrent drivers, ONE submission
       },
       MODULE_FINISH_LIPSYNC: {
         fetch: async (url: string) => {
+          if (String(url).includes("/module.json")) {
+            // Manifest discovery (adoptFinishStepFromR2 reads finish_artifacts): NOT a poll; answer
+            // like a real module and keep it out of the counters.
+            return new Response(JSON.stringify({ name: "finish-lipsync", version: "0.1.0", api: "vivijure-module/2", hooks: ["finish"] }), { status: 200, headers: { "content-type": "application/json" } });
+          }
           if (String(url).includes("/invoke")) {
             calls.invoke += 1;
             // Async-accept: the module parks the GPU job and hands back a poll token.

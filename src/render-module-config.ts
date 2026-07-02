@@ -102,6 +102,10 @@ export function parseModuleRenderOverrides(raw: unknown): ModuleRenderOverridesW
     if (typeof i2v.fps === "number") mapped.fps = i2v.fps;
     if (typeof i2v.flow_shift === "number") mapped.flow_shift = i2v.flow_shift;
     if (typeof i2v.seed === "number" && i2v.seed >= 0) mapped.seed = i2v.seed;
+    // DELIBERATE literal, not locality classification: this parser is pure legacy-row compat, and
+    // every row carrying the old { i2v } namespaced shape was rendered by the own-gpu module by
+    // definition (the shape predates locality and the other doors). Targeting whatever gpu door is
+    // installed TODAY would misdeliver old knobs to a module with a different config_schema.
     if (Object.keys(mapped).length) config["own-gpu"] = mapped;
   }
   return Object.keys(config).length ? { config } : {};

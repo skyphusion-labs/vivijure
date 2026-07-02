@@ -113,6 +113,34 @@ export function validateManifest(raw: unknown): ModuleManifest | string {
   const known = new Set<string>(HOOK_NAMES);
   const bad = (m.hooks as unknown[]).filter((h) => !known.has(h as string));
   if (bad.length) return `manifest declares unknown hooks: ${bad.join(", ")}`;
+  // finish_artifacts is OPTIONAL, but present-and-malformed is a rejected manifest (a wrong shape
+  // here would silently disable -- or worse, misdirect -- the R2-authoritative finish recovery).
+  if (m.finish_artifacts !== undefined) {
+    const fa = m.finish_artifacts as Record<string, unknown>;
+    if (!fa || typeof fa !== "object") return "finish_artifacts is not an object";
+    const ok = fa.output_key as Record<string, unknown> | undefined;
+    if (!ok || typeof ok !== "object") return "finish_artifacts.output_key missing";
+    if (ok.kind === "shot_named") {
+      if (typeof ok.filename !== "string" || !ok.filename) return "finish_artifacts.output_key.filename missing";
+    } else if (ok.kind === "append_suffix") {
+      if (typeof ok.suffix !== "string" || !ok.suffix) return "finish_artifacts.output_key.suffix missing";
+    } else {
+      return `finish_artifacts.output_key.kind ${JSON.stringify(ok.kind)} unknown (shot_named | append_suffix)`;
+    }
+    if (fa.applied !== undefined) {
+      if (!Array.isArray(fa.applied)) return "finish_artifacts.applied is not an array";
+      for (const r of fa.applied as unknown[]) {
+        const rule = r as Record<string, unknown>;
+        if (!rule || typeof rule !== "object" || typeof rule.tag !== "string" || !rule.tag)
+          return "finish_artifacts.applied rule missing tag";
+        if (rule.when !== undefined) {
+          const w = rule.when as Record<string, unknown>;
+          if (!w || typeof w !== "object" || typeof w.knob !== "string" || !w.knob || w.equals === undefined)
+            return "finish_artifacts.applied rule has a malformed when clause";
+        }
+      }
+    }
+  }
   return m as unknown as ModuleManifest;
 }
 
@@ -410,6 +438,34 @@ export function servingForHook(modules: RegisteredModule[], hook: HookName): Reg
   return [...modules]
     .filter((m) => m.hooks.includes(hook))
     .sort((a, b) => (a.ui?.order ?? 100) - (b.ui?.order ?? 100) || a.name.localeCompare(b.name));
+}
+
+// ---- locality classification (#379 ui.locality, wired by the S6 debt sprint) -------------------
+// The core classifies motion.backend modules by their DECLARED ui.locality, never by module name.
+// "cloud" = pay-per-render provider; "byo" = the operator's own RunPod endpoint + keys; "local" =
+// a homelab card. An UNDECLARED locality counts as cloud: that preserves the pre-locality behavior
+// (anything that was not the gpu door was offered as a cloud model), and it is the safe default
+// for a third-party module that never heard of the field.
+
+/** Motion modules the cloud selectors may offer: declared (or defaulted) locality "cloud". */
+export function cloudMotionModules(modules: RegisteredModule[]): RegisteredModule[] {
+  return servingForHook(modules, "motion.backend").filter((m) => (m.ui?.locality ?? "cloud") === "cloud");
+}
+
+/** Motion modules that render on hardware the operator controls (byo or local): the "gpu" lane of
+ *  hybrid renders and the gpu bucket of progress counters. */
+export function gpuDoorMotionModules(modules: RegisteredModule[]): RegisteredModule[] {
+  const l = (m: RegisteredModule) => m.ui?.locality;
+  return servingForHook(modules, "motion.backend").filter((m) => l(m) === "byo" || l(m) === "local");
+}
+
+/** The default gpu door when a render does not name one: the order-first byo module (the studio's
+ *  canonical own-GPU render path), else the order-first local module (a local door is normally an
+ *  explicit pick, so it only becomes the default when it is the ONLY gpu door). Undefined when no
+ *  gpu door is installed -- callers fail honestly instead of submitting to a hardcoded name. */
+export function defaultGpuDoorModule(modules: RegisteredModule[]): RegisteredModule | undefined {
+  const doors = gpuDoorMotionModules(modules);
+  return doors.find((m) => m.ui?.locality === "byo") ?? doors[0];
 }
 
 /** A short label for a module's transport, for error/log messages that must name it without leaking to
