@@ -118,7 +118,10 @@ entirely in-Worker (`src/auth-gate.ts`):
 
 - `deploy.sh` mints a 256-bit random token (`openssl rand -hex 32`), stores it as the
   `STUDIO_API_TOKEN` **worker secret** (never a var, never a tracked file), and prints it ONCE at
-  the end of the deploy.
+  the end of the deploy. The guided installer (`deploy/vivijure_deploy.py`) does the same in its
+  default `AUTH_MODE = "token"`: it skips the CF Access app and mints `STUDIO_API_TOKEN` through the
+  identical `wrangler secret put` path (not a second mint), keeping the existing token on a re-run
+  unless `--rotate-token` is passed. `AUTH_MODE = "access"` provisions the edge Access app instead.
 - Every `/api/*` request must present the token. `Authorization: Bearer <token>` is canonical
   and authenticates EVERY method. The same token in the `vivijure_token` cookie authenticates
   **GET/HEAD only**: the cookie transport exists because the studio loads artifacts through media

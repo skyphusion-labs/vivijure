@@ -4,9 +4,12 @@ Cloudflare + RunPod accounts (BYO keys + GPU). One input surface, idempotent re-
 
 What it does (see issue #244 for the design + options survey):
   - one input surface + correct secret handling (hidden prompts, never echoed, logged, or on argv),
-  - the full provisioning spine: Cloudflare (D1, R2 x2, AI Gateway, Access app, Secrets Store + an
-    R2 S3 token mint), then RunPod (template, network volume, endpoints), then seed -> migrate ->
-    deploy. The cross-wiring order is enforced -- most importantly the Secrets Store is seeded BEFORE
+  - the full provisioning spine: Cloudflare (D1, R2 x2, AI Gateway, Secrets Store + an R2 S3 token
+    mint, plus a CF Access app ONLY when AUTH_MODE=access), then RunPod (template, network volume,
+    endpoints), then seed -> migrate -> deploy. In the default AUTH_MODE=token the studio's /api/* gate
+    is a built-in bearer token (STUDIO_API_TOKEN worker secret, minted + printed once); no CF Access,
+    no Zero Trust dashboard step. AUTH_MODE=access provisions the edge Access app + arms the in-worker
+    JWT backstop instead. This mirrors deploy.sh; see docs/SECURITY.md sections 1b (token) and 1/1a. The cross-wiring order is enforced -- most importantly the Secrets Store is seeded BEFORE
     the workers deploy (a module's secrets_store_secrets binding fails at deploy if its secret does
     not yet exist; see #237), and RunPod endpoint ids are captured before RUNPOD_ENDPOINT_ID is seeded,
   - idempotent reconcile (a local state file of resource IDS, never secrets: create-if-absent),
@@ -62,8 +65,16 @@ STORE_NAME = "vivijure"  # the account-level Secrets Store name (#237/#238)
 # replaces it with the real store id so the secrets_store_secrets bindings resolve at deploy.
 STORE_ID_PLACEHOLDER = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
 # Single-tenant studio gating (config, NOT secrets -- set these for your deploy):
-DEPLOY_DOMAIN = ""    # the studio hostname behind CF Access (match the core worker's route/custom domain)
-OPERATOR_EMAIL = ""   # the one email allowed through the Access self-only policy
+DEPLOY_DOMAIN = ""    # AUTH_MODE=access only: the studio hostname behind CF Access (the edge app host)
+OPERATOR_EMAIL = ""   # AUTH_MODE=access only: the one email allowed through the Access self-only policy
+
+# The /api/* auth gate (mirrors deploy.sh + src/auth-gate.ts). "token" (default -- the self-host
+# quickstart) mints a STUDIO_API_TOKEN worker secret and gates on Authorization: Bearer; NO Cloudflare
+# Access, no Zero Trust dashboard step. "access" puts CF Access at the edge and arms the in-worker JWT
+# backstop (needs the two PUBLIC Zero-Trust identifiers below). See docs/SECURITY.md 1b / 1 / 1a.
+AUTH_MODE = "token"
+ACCESS_TEAM_DOMAIN = ""  # AUTH_MODE=access only: your Zero Trust team hostname (public identifier)
+ACCESS_AUD = ""          # AUTH_MODE=access only: the studio Access application AUD (public identifier)
 
 # The secrets the studio + module workers read. Seeded into the account-level Cloudflare Secrets Store
 # (see #237/#238), NOT via `wrangler secret put`. Keyed by the binding name the code reads.
@@ -305,9 +316,11 @@ def provision_access_app(account: str, token: str, st: State) -> None:
     include:[{email:{email}}]}. Reconciled by domain so a re-run does not duplicate. No-op (with a
     loud warn) if the two config values are unset -- better an explicit ungated warning than a wrong
     gate."""
-    if not DEPLOY_DOMAIN or not OPERATOR_EMAIL:
-        log("  WARN: DEPLOY_DOMAIN / OPERATOR_EMAIL unset -- skipping Access app (studio would be UNGATED); set them to gate it")
+    if AUTH_MODE != "access":
+        log("  token mode: NOT creating a CF Access app -- the built-in bearer-token gate is the studio's auth (docs/SECURITY.md 1b)")
         return
+    if not DEPLOY_DOMAIN or not OPERATOR_EMAIL:
+        die("AUTH_MODE=access needs DEPLOY_DOMAIN + OPERATOR_EMAIL (the edge Access app host + operator email) -- refusing to deploy an ungated studio")
     app_id = create_if_absent(kind="Access app", account=account, token=token,
         list_path="/accounts/{acct}/access/apps", create_path="/accounts/{acct}/access/apps",
         create_body={
@@ -363,7 +376,7 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     Returns the IN-MEMORY derived values the secret seed needs (GATEWAY_ID slug + R2 S3 creds);
     identifiers are also recorded in state. Also mints the scoped R2 S3 token and creates the Access app."""
     acct, tok = s.cf_account_id, s.cf_api_token
-    log("provisioning Cloudflare infra (D1, R2 x2, AI Gateway, Access) ...")
+    log("provisioning Cloudflare infra (D1, R2 x2, AI Gateway; Access app only when AUTH_MODE=access) ...")
 
     d1_id = create_if_absent(kind="D1 database", account=acct, token=tok,
         list_path="/accounts/{acct}/d1/database", create_path="/accounts/{acct}/d1/database",
@@ -576,7 +589,69 @@ def deploy_workers(repo: Path, s: Secrets) -> None:
     env = cf_env_for(s)
     for m in mods:
         wrangler(["deploy", "-c", f"modules/{m}/wrangler.toml"], cwd=repo, cf_env=env)
-    wrangler(["deploy"], cwd=repo, cf_env=env)  # the core, AFTER every module (service bindings)
+    # The core, AFTER every module (service bindings). Carry the /api/* auth mode as a NON-SECRET
+    # [vars] override so the deployed gate matches AUTH_MODE regardless of the committed wrangler.toml
+    # placeholder (STUDIO_API_TOKEN itself is a worker SECRET, set separately -- never a var, never argv).
+    core_vars = ["--var", f"AUTH_MODE:{AUTH_MODE}"]
+    if AUTH_MODE == "access":
+        core_vars += ["--var", f"ACCESS_TEAM_DOMAIN:{ACCESS_TEAM_DOMAIN}", "--var", f"ACCESS_AUD:{ACCESS_AUD}"]
+    wrangler(["deploy", *core_vars], cwd=repo, cf_env=env)
+
+
+def _mint_studio_token() -> str:
+    """256 bits of randomness, hex -- the operator studio API token. Stdlib `secrets` (no openssl dep;
+    deploy.sh uses openssl only because bash has no CSPRNG)."""
+    import secrets as _secrets
+    return _secrets.token_hex(32)
+
+
+def _core_secret_present(repo: Path, s: "Secrets", name: str) -> bool:
+    """True iff `name` is already a secret on the deployed CORE worker. Reads `wrangler secret list`
+    with capture and checks only whether the NAME appears -- the values are never captured or returned
+    (F18-lite: a re-run keeps the existing token so saved studio logins survive)."""
+    child_env = dict(os.environ)
+    child_env.update(cf_env_for(s))
+    try:
+        proc = subprocess.run(["npx", "wrangler", "secret", "list"], cwd=str(repo),
+                              env=child_env, capture_output=True, text=True)
+    except Exception:
+        return False
+    if proc.returncode != 0:
+        return False
+    return f'"{name}"' in (proc.stdout or "")
+
+
+def set_studio_api_token(repo: Path, s: "Secrets", rotate: bool) -> None:
+    """Token mode only, AFTER deploy (a worker secret is safe to set post-deploy, applied live). Mint
+    the operator STUDIO_API_TOKEN and store it as a WORKER SECRET via `wrangler secret put` (piped on
+    STDIN, never argv) -- the SAME path deploy.sh uses, not a second mint. F18-lite: a re-run KEEPS the
+    existing token (saved studio logins keep working) unless --rotate-token is passed. The token is
+    printed ONCE to the operator's own terminal and written to no file. Per-consumer credentials (bots,
+    satellites) are a SEPARATE class: scripts/studio-consumer-token.sh (docs/SECURITY.md 1b-i) -- do NOT
+    hand out the operator token."""
+    if not rotate and _core_secret_present(repo, s, "STUDIO_API_TOKEN"):
+        log("  STUDIO_API_TOKEN already set on the core (prior run); keeping it (pass --rotate-token to mint a fresh one)")
+        return
+    token = _mint_studio_token()
+    wrangler(["secret", "put", "STUDIO_API_TOKEN"], cwd=repo, cf_env=cf_env_for(s), secret_stdin=token)
+    # The one INTENTIONAL secret-to-terminal: the operator's login on their OWN deploy, shown once,
+    # stored nowhere else (mirrors deploy.sh's SAVE-THIS-NOW banner).
+    print("\n  ============================= SAVE THIS NOW =============================")
+    print("  Your studio API token (shown ONCE, stored nowhere else):\n")
+    print(f"      {token}\n")
+    print("  This is your studio login. Open the studio and paste it when asked; API callers")
+    print("  send it as  Authorization: Bearer <token>. Re-run with --rotate-token to mint a")
+    print("  fresh one (invalidates the old). Per-bot/satellite tokens: scripts/studio-consumer-token.sh")
+    print("  (docs/SECURITY.md 1b-i) -- never hand out this operator token.")
+    print("  =========================================================================\n")
+
+
+def validate_auth_config() -> None:
+    """Fail fast on a bad auth config before touching anything (mirrors deploy.sh's AUTH_MODE guard)."""
+    if AUTH_MODE not in ("token", "access"):
+        die(f'AUTH_MODE must be "token" or "access" (got: {AUTH_MODE!r})')
+    if AUTH_MODE == "access" and (not ACCESS_TEAM_DOMAIN or not ACCESS_AUD):
+        die("AUTH_MODE=access requires ACCESS_TEAM_DOMAIN + ACCESS_AUD (the public Zero-Trust identifiers)")
 
 
 def bring_up_containers(repo: Path) -> None:
@@ -595,19 +670,25 @@ def finalize(repo: Path, st: State) -> None:
 # --------------------------------------------------------------------------------------------------
 
 
-def cmd_up(repo: Path, dry_run: bool, noninteractive: bool) -> None:
+def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool = False) -> None:
+    validate_auth_config()  # cheap, credential-free; runs for plan and up alike
     # The plan is order-only -- it needs NO credentials, so never prompt for secrets in a dry-run.
     if dry_run:
-        log("PLAN (dry-run) -- order (no credentials needed, no changes made):")
-        for i, name in enumerate([
+        log(f"PLAN (dry-run) -- AUTH_MODE={AUTH_MODE}; order (no credentials needed, no changes made):")
+        cf_step = ("provision Cloudflare infra (D1, R2 x2, AI Gateway, scoped R2 token"
+                   + (", Access app" if AUTH_MODE == "access" else "; NO Access app -- token mode") + ")")
+        steps = [
             "preflight (deps + token validity)",
-            "provision Cloudflare infra (D1, R2 x2, AI Gateway, Access, scoped R2 token)",
+            cf_step,
             "provision RunPod (registry-auth?, template, volume, endpoints) -> capture endpoint ids",
             "seed Cloudflare Secrets Store  <-- BEFORE deploy (#237)",
             "run D1 migrations",
-            "deploy module workers, then the core",
-            "(phase 2) bring up CPU containers + VPC services",
-        ], 1):
+            "deploy module workers, then the core (core carries the AUTH_MODE var)",
+        ]
+        if AUTH_MODE == "token":
+            steps.append("mint + put STUDIO_API_TOKEN worker secret (operator login; kept on re-run unless --rotate-token)")
+        steps.append("(phase 2) bring up CPU containers + VPC services")
+        for i, name in enumerate(steps, 1):
             log(f"  {i}. {name}")
         return
     s = collect_secrets(noninteractive_env=noninteractive)
@@ -619,6 +700,8 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool) -> None:
     seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
     run_migrations(repo, s)
     deploy_workers(repo, s)
+    if AUTH_MODE == "token":
+        set_studio_api_token(repo, s, rotate_token)  # operator login (worker secret, safe post-deploy)
     restore_store_id_placeholder(repo, st.get("store_id"))  # leave the working tree clean post-deploy
     bring_up_containers(repo)
     finalize(repo, st)
@@ -701,6 +784,8 @@ def main(argv: list[str] | None = None) -> None:
     up = sub.add_parser("up", help="provision + seed + deploy (idempotent; safe to re-run)")
     up.add_argument("--dry-run", action="store_true", help="print the ordered plan and exit (no changes)")
     up.add_argument("--noninteractive", action="store_true", help="read creds from env (CI/headless), never argv")
+    up.add_argument("--rotate-token", action="store_true",
+                    help="token mode: mint a FRESH STUDIO_API_TOKEN even if one exists (invalidates the old login)")
     sub.add_parser("plan", help="alias for `up --dry-run`")
     down = sub.add_parser("down", help="teardown by recorded id")
     down.add_argument("--delete-data", action="store_true", help="ALSO delete R2 buckets + D1 (your data)")
@@ -708,7 +793,7 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     repo = Path.cwd()
     if args.cmd == "up":
-        cmd_up(repo, dry_run=args.dry_run, noninteractive=args.noninteractive)
+        cmd_up(repo, dry_run=args.dry_run, noninteractive=args.noninteractive, rotate_token=args.rotate_token)
     elif args.cmd == "plan":
         cmd_up(repo, dry_run=True, noninteractive=False)
     elif args.cmd == "down":
