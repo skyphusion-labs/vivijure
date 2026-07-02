@@ -23,28 +23,55 @@ keyframes, and lip-sync all run **through RunPod**, so one RunPod key covers the
 
 Vivijure is a **single-operator** studio. It does **NO per-user authorization** -- every `:id`
 route trusts the caller, ids are sequential/enumerable, and `GET /api/cast/export/:id` returns a
-full character bundle (portrait + LoRA + bible) by id. You **MUST** put the Studio Worker behind
-an authenticating proxy (**Cloudflare Access** or equivalent) on **every** hostname it serves --
-including the `*.workers.dev` host (disable it with `workers_dev = false`, or cover it with the
-same Access app). Do **NOT** deploy multi-tenant or on an unauthenticated route, or any visitor
-can read and delete every project, cast member, and film by walking the ids.
+full character bundle (portrait + LoRA + bible) by id. Every deploy MUST therefore run an auth
+gate. The studio has one BUILT IN; pick the mode with the `AUTH_MODE` worker var:
 
-Arm the in-code backstop too: set `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` (your Zero Trust team
-hostname + the Access application AUD) so the Worker itself verifies the Access JWT and FAILS
-CLOSED, instead of trusting the edge alone. See [SECURITY.md](SECURITY.md).
+- **`token` (the quickstart default):** the Worker itself requires
+  `Authorization: Bearer <token>` on every `/api/*` request, checked against the
+  `STUDIO_API_TOKEN` worker secret with a constant-time compare. `deploy.sh` mints a 256-bit
+  random token, stores the secret, and prints the token ONCE at the end of the deploy -- save it.
+  The studio UI asks for it on first load and keeps it in your browser only. No Zero Trust
+  product, no extra dashboard step.
+- **`access`:** the Worker verifies a Cloudflare Access JWT in-code (fail closed) BEHIND an edge
+  Access app you configure -- the recommended hardening for team/org deployments (SSO identity,
+  device posture, audit logs). Set `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` (your Zero Trust team
+  hostname + the Access application AUD). See [SECURITY.md](SECURITY.md).
+
+Fail closed either way: no mode, an unknown mode, or token mode without its secret denies every
+`/api/*` request (`ALLOW_UNAUTHENTICATED` is the dev-only opt-out, local only). Do **NOT** deploy
+multi-tenant or unauthenticated, or any visitor can read and delete every project, cast member,
+and film by walking the ids. The `*.workers.dev` host stays disabled (`workers_dev = false`).
 
 ---
 
 ## One-script deploy (recommended)
 
-The fast path: fill in your keys once, run one script. It creates the database and buckets, seeds
-the module secrets, renders the config, and deploys everything in the right order (modules before
-the core), failing closed if anything is missing.
+The fast path: three steps, ONE dashboard visit.
+
+1. **Create a Cloudflare API token** (section 2a) and gather the rest of your keys: RunPod key +
+   endpoint id, R2 S3 keys, AI Gateway slug (sections 2b-2d).
+2. **Enable R2** for your account -- a one-time ToS/billing acknowledgement Cloudflare only
+   accepts in the dashboard. Open <https://dash.cloudflare.com/?to=/:account/r2> and click
+   through the enable screen (the `?to=/:account/...` deep link fills in your account id for
+   you; no URL hand-editing).
+3. **Run the script** (below). It creates the database and buckets, seeds the module secrets,
+   renders the config, deploys everything in the right order (modules before the core), mints
+   your studio API token (`AUTH_MODE=token`, the default), and prints that token ONCE at the
+   end -- save it. It fails closed if anything is missing.
+
+No Zero Trust / Cloudflare Access setup is required: the built-in token mode is the deploy
+default, and Access remains available as optional hardening (`AUTH_MODE=access`, see the security
+section above).
 
 ```bash
 cp deploy.env.example deploy.env   # then edit deploy.env with your keys
 ./deploy.sh
 ```
+
+**One prerequisite the script cannot do for you: enable R2 on the account** (a one-time ToS +
+billing acceptance). Do it once at `https://dash.cloudflare.com/<ACCOUNT_ID>/r2` before the first
+run; without it the script stops at the bucket step with Cloudflare API code 10042 and prints this
+same URL.
 
 `deploy.env` is where all your keys go. It is gitignored -- never commit it. Each line has a short
 note on what the value is and where to get it, matching sections 2a-2d below.
@@ -168,6 +195,11 @@ echo "<r2-s3-secret-access-key>"    | npx wrangler secret put R2_S3_SECRET_ACCES
 echo "https://<account-id>.r2.cloudflarestorage.com" | npx wrangler secret put R2_S3_ENDPOINT
 echo "vivijure"                     | npx wrangler secret put R2_S3_BUCKET
 echo "<ai-gateway-slug>"            | npx wrangler secret put GATEWAY_ID
+
+# Token auth mode (AUTH_MODE = "token" in wrangler.toml [vars]): mint the studio API token.
+# SAVE the printed value -- it is your only login; the UI asks for it on first load.
+TOKEN="$(openssl rand -hex 32)"; echo "STUDIO API TOKEN: $TOKEN"
+printf %s "$TOKEN"                  | npx wrangler secret put STUDIO_API_TOKEN
 
 # 3c. Apply the database schema
 npx wrangler d1 migrations apply vivijure-studio --remote
@@ -341,6 +373,8 @@ config; everything else in the Studio is single-user and needs no email.
 ## Quick checklist
 
 - [ ] Cloudflare API token (Workers/D1/R2/Vectorize/AI-Gateway scopes above) + account id
+- [ ] R2 enabled on the account (one dashboard click: <https://dash.cloudflare.com/?to=/:account/r2>)
+- [ ] auth mode picked: `token` (default; SAVE the printed token) or `access` (Zero Trust team + AUD)
 - [ ] RunPod API key + a Serverless endpoint running `vivijure-backend` (its id)
 - [ ] R2 S3 access key/secret scoped to the render bucket
 - [ ] AI Gateway slug (`GATEWAY_ID`) (+ `CF_AIG_TOKEN` for plan-enhance)

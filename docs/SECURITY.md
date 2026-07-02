@@ -6,13 +6,20 @@ authoritative reference; the contract should be reproducible from here without r
 
 The studio is **single-operator by design**. There is no tenant model, no per-user identity, no
 account system: the anti-SaaS identity strip (#292) deliberately removed the `user_email` /
-tenancy primitive so there is no seam to hang multi-tenancy on. "Who are you" is answered once, at
-the edge, by Cloudflare Access; everything behind it belongs to the one operator.
+tenancy primitive so there is no seam to hang multi-tenancy on. "Who are you" is answered once, by
+the deploy's auth gate: the built-in studio API token (`AUTH_MODE = "token"`, section 1b, the
+quickstart default) or Cloudflare Access (`AUTH_MODE = "access"`, sections 1/1a, the recommended
+hardening for team/org deployments). Everything behind the gate belongs to the one operator.
 
-## 1. The trust boundary is Cloudflare Access (at the edge)
+## 1. Access mode: the trust boundary is Cloudflare Access (at the edge)
 
-Authentication is enforced by the **Cloudflare Access** application in front of the worker, not by
-in-worker code. The Access app covers the whole production surface:
+Sections 1 and 1a describe `AUTH_MODE = "access"` -- OUR production posture, and the recommended
+hardening for team/org deployments (SSO identity, device posture, audit logs, per-caller service
+tokens). A self-host quickstart runs token mode instead (section 1b) and needs NONE of this;
+Access is optional hardening there, not a deploy prerequisite (#423).
+
+In access mode, authentication is enforced by the **Cloudflare Access** application in front of
+the worker, not by in-worker code. The Access app covers the whole production surface:
 
 - `vivijure.skyphusion.org` (production UI + JSON API). The `*.workers.dev` host is disabled
   (`workers_dev = false`, #349), so the custom domain is the only served hostname.
@@ -101,6 +108,52 @@ opt-out.
 > backstop is armed. Before arming, migrate those callers OFF the IP bypass and ONTO Access service
 > tokens (each its own scoped token, per section 4). This both fixes the conflict and is strictly
 > stronger than IP allow-listing. Arming without this migration is a self-inflicted outage.
+
+## 1b. Token mode: built-in studio API token (`AUTH_MODE = "token"`, #423)
+
+The quickstart deploy needs an auth gate WITHOUT the Zero Trust product (the 2026-07-02 cold-deploy
+dry run proved the Access enable flow kills a first deploy: a fresh account had to hand-edit an
+account id into a dashboard URL just to reach the enable button). Token mode is that gate,
+entirely in-Worker (`src/auth-gate.ts`):
+
+- `deploy.sh` mints a 256-bit random token (`openssl rand -hex 32`), stores it as the
+  `STUDIO_API_TOKEN` **worker secret** (never a var, never a tracked file), and prints it ONCE at
+  the end of the deploy.
+- Every `/api/*` request must present the token. `Authorization: Bearer <token>` is canonical
+  and authenticates EVERY method. The same token in the `vivijure_token` cookie authenticates
+  **GET/HEAD only**: the cookie transport exists because the studio loads artifacts through media
+  elements (`img`/`video`/`audio` `src` on `/api/artifact/*`, the #416 Range paths) and a media
+  element cannot send a header -- and media elements only ever issue GETs, so read-only cookie
+  authority costs zero call sites while making the cookie useless for anything state-changing
+  even in a SameSite-bypass scenario. A cookie-only mutation is answered `403` (deliberately not
+  `405`: the method is allowed, the CREDENTIAL is insufficient) with a reason pointing at the
+  bearer header. The frontend shim (`public/auth-token.js`, loaded first on every studio page)
+  adds the bearer header to every same-origin `/api/*` fetch and mirrors the same pasted token
+  into the cookie (`Secure; SameSite=Strict; Path=/api/`); `SameSite=Strict` stops cross-site
+  auto-send. One credential; the second transport is read-only. When a bearer header IS present
+  it is authoritative: a bad header denies even if a good cookie rides along.
+- The compare is CONSTANT-TIME: both sides are SHA-256 digested and the two fixed-length digests
+  are XOR-folded over all 32 bytes, so neither the presented token's length nor the position of
+  the first mismatching byte can modulate the comparison time.
+- FAIL CLOSED everywhere: token mode with no `STUDIO_API_TOKEN` bound denies everything (403); an
+  unknown `AUTH_MODE` value denies everything; `AUTH_MODE` unset keeps the exact pre-#423
+  resolution (Access vars set -> verify the JWT; else deny unless the dev-only
+  `ALLOW_UNAUTHENTICATED` opt-out), so an existing deploy is untouched by this feature.
+- The browser keeps the token in `localStorage`, pasted once into the studio's token prompt. It is
+  the operator's single capability for the whole studio: treat it like a password. Rotate it any
+  time with `openssl rand -hex 32 | npx wrangler secret put STUDIO_API_TOKEN` and re-paste.
+
+Threat-model honesty: token mode authenticates POSSESSION of one bearer secret. It has no
+identity, no device posture, no per-caller revocation, no audit trail -- exactly the things
+Cloudflare Access adds. A single operator on a personal deploy: token mode is enough. A team, an
+org, or anything with staff turnover: put Access in front and run `AUTH_MODE = "access"`
+(sections 1/1a).
+
+> **Choosing Access anyway -- the enable-flow workaround.** Zero Trust must be enabled once per
+> account before an Access app can exist, and the dashboard's entry link can dead-end on a fresh
+> account. Go directly to `https://one.dash.cloudflare.com/<account-id>/home` (paste your account
+> id), pick a team name (this sets `ACCESS_TEAM_DOMAIN` = `<team>.cloudflareaccess.com`), create
+> the Access application for your studio hostname, and copy its AUD tag into `ACCESS_AUD`.
 
 ## 2. Job ids are capabilities (possession = access)
 
@@ -266,6 +319,11 @@ them (the `/welcome` release-purge flow depends on that edge cache existing, #40
       before acting on it (a module is community code).
 - [ ] Arming the F2 backstop (`ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`) -> first confirm EVERY internal
       caller carries an Access JWT (service token, not IP bypass), or it will be denied.
+- [ ] Token-mode surface change -> `STUDIO_API_TOKEN` stays a worker SECRET (never a var or a
+      tracked file); a new frontend API caller inherits the bearer header from the auth-token.js
+      fetch shim automatically. ONLY media-element `src` URLs may rely on the cookie transport,
+      which authenticates GET/HEAD alone -- a new mutating route needs no thought here, the cookie
+      can never authorize it.
 - [ ] New response class / route -> it flows through `applyResponseSecurity`; confirm it lands in
       the right header class (page vs locked) per section 8. CF managed-transform header layers stay
       OFF (the Worker is the single source of truth).
@@ -283,4 +341,5 @@ them (the `/welcome` release-purge flow depends on that edge cache existing, #40
 - #18 -- presign credential blast radius + `/api/modules` disclosure posture.
 - #364 / #370 -- worker-owned response security headers (CSP + companions) + the per-class matrix (section 8).
 - #416 -- byte-range media serving on `/api/artifact` + worker-authoritative `Cache-Control` (section 8; the zone cache-bypass rule is optional hardening).
+- #423 -- built-in token auth mode (section 1b); Cloudflare Access becomes optional hardening, not a deploy prerequisite.
 - [DEPLOYMENT.md](DEPLOYMENT.md) -- per-function key issuance and scopes.
