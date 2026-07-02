@@ -71,6 +71,8 @@ into `${NAME}` tokens. What is parameterized here, and why each is a value not s
 | `${D1_DATABASE_ID}` | the D1 database UUID |
 | `${VPC_VIDEO_FINISH_ID}` / `${VPC_IMAGE_PREP_ID}` / `${VPC_AUDIO_BEAT_SYNC_ID}` / `${VPC_AUDIO_MIX_ID}` | Workers-VPC service IDs |
 | `${SPEND_RATE_LIMITER_NS_ID}` | the rate-limit namespace id |
+| `${AUTH_MODE}` | the #423 auth-gate mode: `token` (the self-host default) or `access` (our prod posture) |
+| `${WEB_ANALYTICS_TOKEN}` | optional CF Web Analytics beacon token for `/welcome`; blank = no beacon ships |
 
 `account_id` is **not** in the file at all -- wrangler reads it from `CLOUDFLARE_ACCOUNT_ID` (already a
 CI secret), the cleaner mechanism. Binding names, bucket names, the route pattern, and the module
@@ -104,26 +106,35 @@ gh secret list --repo skyphusion-labs/vivijure        # names only; values are n
 ```yaml
 - name: Render core wrangler.toml
   env:
+    AUTH_MODE:          ${{ vars.AUTH_MODE }}    # a VARIABLE, not a secret; unset -> defaulted below
     ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
     ACCESS_AUD:         ${{ secrets.ACCESS_AUD }}
-    # ... the rest
+    # ... the rest (D1 / VPC / rate-limit ids, WEB_ANALYTICS_TOKEN)
   run: |
     set -eu
     apk add --no-cache gettext >/dev/null          # node:22-alpine has no envsubst; gettext provides it
-    VARS='$ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID'
+    AUTH_MODE="${AUTH_MODE:-access}"; export AUTH_MODE   # OUR tag deploy stays Access-armed (#423)
+    VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
     envsubst "$VARS" < wrangler.toml.example > wrangler.toml
     grep -q '${' wrangler.toml && { echo "::error::unsubstituted placeholder"; exit 1; } || true
-    grep -Eq 'ACCESS_AUD = ".+"' wrangler.toml || { echo "::error::F2 vars empty"; exit 1; }
+    # mode-aware auth guard (#423): AUTH_MODE always non-empty; access mode also needs armed vars.
+    grep -Eq 'AUTH_MODE = ".+"' wrangler.toml || { echo "::error::AUTH_MODE empty"; exit 1; }
+    if [ "$AUTH_MODE" = "access" ]; then
+      grep -Eq 'ACCESS_AUD = ".+"' wrangler.toml && grep -Eq 'ACCESS_TEAM_DOMAIN = ".+"' wrangler.toml \
+        || { echo "::error::F2 vars empty"; exit 1; }
+    fi
 ```
 Three things worth understanding:
 - **`apk add gettext`**: Alpine ships no `envsubst`. On a stock `ubuntu-latest` (no container) it is
   already present and you can drop this line.
 - **Explicit `VARS` list** (the SHELL-FORMAT arg to `envsubst`): without it, `envsubst` substitutes
-  *every* `${...}` it finds, which can clobber unrelated tokens. Listing only our 8 means any other
+  *every* `${...}` it finds, which can clobber unrelated tokens. Listing only ours means any other
   `${...}` in the file is left alone. Safer and self-documenting.
-- **Fail-closed guards**: a missing secret leaves a literal `${NAME}` (caught by the first grep); a
-  *blank* secret renders an empty value -- for the F2 Access vars that would silently **un-arm** the
-  in-Worker gate (deny-default -> `/api` 503), so the second grep refuses to deploy an empty AUD.
+- **Fail-closed guards, mode-aware since #423**: a missing secret leaves a literal `${NAME}`
+  (caught by the first grep); a *blank* secret renders an empty value. `AUTH_MODE` must always
+  render non-empty, and in access mode a blank Access var would silently **un-arm** the in-Worker
+  gate (deny-default -> `/api` 503), so the render refuses an empty AUD or team domain there. Token
+  mode needs no Access vars: they render empty and the token gate ignores them.
 
 ### 3e. The deploy gate
 The `deploy` job only runs for a pushed version tag:
@@ -151,10 +162,15 @@ redeploy prod or unset F2. Releases are deliberate: `git tag v0.x.y && git push 
 ## 5. Local development
 A fresh clone has no `wrangler.toml`. Render it once:
 ```
-export ACCESS_TEAM_DOMAIN=... ACCESS_AUD=... D1_DATABASE_ID=...   # from crew-secrets / your store
-VARS='$ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID'
+export AUTH_MODE=token D1_DATABASE_ID=...        # ids from your store; token mode needs no ACCESS_*
+export ACCESS_TEAM_DOMAIN= ACCESS_AUD= WEB_ANALYTICS_TOKEN=
+VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
 envsubst "$VARS" < wrangler.toml.example > wrangler.toml
 ```
+
+(`./deploy.sh` performs exactly this render for you -- including the profile strip and the
+workers.dev branch -- so the manual export is only for driving `wrangler dev` against a
+hand-rendered config.)
 `CLOUDFLARE_ACCOUNT_ID` and any `wrangler secret`s go in `.dev.vars` (also gitignored) for
 `wrangler dev`. After editing bindings: **edit `wrangler.toml.example`**, then re-render.
 
@@ -169,9 +185,10 @@ envsubst "$VARS" < wrangler.toml.example > wrangler.toml
   ```
 - **Rotation**: change a value in your store -> `gh secret set NAME` -> cut a release tag. The next
   deploy renders the new value. Nothing in git changes.
-- **F2 invariant**: `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` must render non-empty or the worker denies
-  `/api` (503). The render step enforces this; the external watchdog (`skyphusion-monitor`) catches a
-  regression within ~5 min from outside.
+- **Auth invariant (mode-aware, #423)**: `AUTH_MODE` must render non-empty, and in access mode
+  `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` must render non-empty too, or the worker denies `/api` (503).
+  The render step enforces both; the external watchdog (`skyphusion-monitor`) catches a regression
+  within ~5 min from outside.
 
 ## 7. Gotchas
 - Alpine has no `envsubst` -> `apk add gettext`.
