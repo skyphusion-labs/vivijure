@@ -37,7 +37,7 @@ import {
   encodePoll,
   decodePoll,
   runpodJobGone,
-  classifyGoneState,
+  classifyGoneState, workersStillCold, terminalErrorInOutput, RUNPOD_COLD_GRACE_MS,
 } from "./wan-lora";
 
 interface Env {
@@ -70,6 +70,30 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
+
+/** Is the endpoint still in its virgin cold start (no worker has ever come up)? Best-effort: any
+ *  transport/HTTP failure reads as "not cold" so the #141 verdict still fires. */
+async function endpointStillCold(env: Env): Promise<boolean> {
+  try {
+    const r = await fetch(ENDPOINT + "/health", { headers: auth(env) });
+    if (!r.ok) return false;
+    return workersStillCold(await r.json());
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort cancel of a RunPod job we are about to fail: a hung-error job otherwise HOLDS the
+ *  billed worker until someone cancels it by hand (F17 spend leak). Never throws; the honest
+ *  failure below is the point, the cancel is damage control. */
+async function cancelRunpodJobBestEffort(env: Env, jobId: string): Promise<void> {
+  try {
+    await fetch(ENDPOINT + "/cancel/" + jobId, { method: "POST", headers: auth(env) });
+  } catch {
+    /* best-effort */
+  }
+}
+
 
 /** /invoke: validate, submit to RunPod, return a poll token immediately. No blocking. */
 async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise<InvokeResponse<MotionBackendOutput>> {
@@ -128,13 +152,33 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBac
   // only on COMPLETED, so a never-completed job has no recoverable artifact: past the grace window
   // (or a legacy token) fail the shot; inside it keep polling (post-submit race).
   if (runpodJobGone(httpStatus, s)) {
-    if (classifyGoneState(st.submittedAt, Date.now()) === "gone-failed") {
+    const now = Date.now();
+    if (classifyGoneState(st.submittedAt, now) === "gone-failed") {
+      // Cold-start tolerance: a virgin host's image pull can outlive the grace window while the job
+      // 404s. If no worker has EVER come up, this is "still initializing", not "dropped" -- keep
+      // polling up to the cold cap instead of false-failing the first-ever job.
+      if (
+        classifyGoneState(st.submittedAt, now, RUNPOD_COLD_GRACE_MS) === "gone-grace" &&
+        (await endpointStillCold(env))
+      ) {
+        return { ok: true, pending: true };
+      }
       return { ok: false, error: "alibaba-wan-lora job not found on RunPod (GC'd or never ran); failing shot " + st.shotId + " (#141)" };
     }
     return { ok: true, pending: true };
   }
   if (s.status === "FAILED") return { ok: false, error: "alibaba-wan-lora job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
-  if (s.status !== "COMPLETED") return { ok: true, pending: true }; // IN_QUEUE / IN_PROGRESS
+  if (s.status !== "COMPLETED") {
+    // F17: a backend whose error path RETURNS (instead of raising) leaves the RunPod job IN_PROGRESS
+    // forever -- holding and billing the worker -- while `output` already carries the structured
+    // terminal error. Surface the REAL error (never "not found") and cancel to stop the spend.
+    const backendErr = terminalErrorInOutput(s.output);
+    if (backendErr) {
+      await cancelRunpodJobBestEffort(env, st.jobId);
+      return { ok: false, error: "alibaba-wan-lora backend error (job " + st.jobId + ", status stuck " + String(s.status ?? "unknown") + ", cancel issued): " + backendErr };
+    }
+    return { ok: true, pending: true }; // IN_QUEUE / IN_PROGRESS
+  }
 
   const url = extractVideoUrl(s.output);
   if (!url) return { ok: false, error: "alibaba-wan-lora output had no video url" };

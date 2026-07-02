@@ -125,3 +125,47 @@ export function classifyGoneState(
   if (submittedAt === undefined) return "gone-failed";
   return now - submittedAt >= graceMs ? "gone-failed" : "gone-grace";
 }
+
+// Cold-start cap: on a VIRGIN host the image pull (10-20GB) can outlive the normal #141 grace window
+// while /status 404s, so the first-ever job on a fresh endpoint false-failed ("GC'd or never ran")
+// and only the warm retry succeeded. When the endpoint's /health shows no worker has EVER come up,
+// the 404 means "still initializing", not "dropped" -- keep polling up to this cap instead.
+export const RUNPOD_COLD_GRACE_MS = 900_000; // 15 min; the film pipeline's 90-min deadline still bounds it
+
+/** Pure: has NO worker ever come up on this endpoint (ready/idle/running all 0) while one is still
+ *  coming (initializing/throttled > 0)? That is the virgin-host image pull. A dead endpoint (nothing
+ *  up, nothing coming) returns false so a gone job still fails instead of pending forever. */
+export function workersStillCold(health: unknown): boolean {
+  if (!health || typeof health !== "object") return false;
+  const w = (health as Record<string, unknown>).workers;
+  if (!w || typeof w !== "object") return false;
+  const n = (k: string): number => {
+    const v = (w as Record<string, unknown>)[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  };
+  const up = n("ready") + n("idle") + n("running");
+  const coming = n("initializing") + n("throttled");
+  return up === 0 && coming > 0;
+}
+
+/** Pure: did the backend report a TERMINAL error inside `output` while the RunPod envelope status
+ *  never advanced? (F17: a handler error path that returns instead of raising leaves the job
+ *  IN_PROGRESS forever -- billing the worker -- while output already carries
+ *  {status:"error", error:{stage, message}}.) Returns the human error string, or null when the
+ *  output is a normal progress snapshot. */
+export function terminalErrorInOutput(output: unknown): string | null {
+  if (!output || typeof output !== "object") return null;
+  const o = output as Record<string, unknown>;
+  const err = o.error;
+  if (err && typeof err === "object") {
+    const e = err as Record<string, unknown>;
+    const msg = typeof e.message === "string" && e.message.length > 0
+      ? e.message
+      : JSON.stringify(e).slice(0, 200);
+    const stage = typeof e.stage === "string" && e.stage.length > 0 ? " (stage: " + e.stage + ")" : "";
+    return msg + stage;
+  }
+  if (typeof err === "string" && err.length > 0) return err;
+  if (o.status === "error") return "backend reported status=error with no error detail";
+  return null;
+}
