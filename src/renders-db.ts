@@ -104,6 +104,47 @@ export interface RenderRow {
   parent_id: number | null;
 }
 
+// The renders row as D1 hands it back: TEXT -> string, INTEGER -> number,
+// nullable columns -> | null. This is a COMPILE-TIME claim only (D1's
+// .first<T>() / .all<T>() are unchecked casts), so normalizeRow keeps its
+// runtime guards: a legacy, hand-edited, or corrupted row can still be
+// missing fields or carry the wrong type, and must degrade instead of crash.
+// Column order mirrors RENDER_ROW_COLUMNS below; keep the two in sync.
+interface RawRenderRow {
+  id: number;
+  job_id: string;
+  project: string | null;
+  bundle_key: string | null;
+  quality_tier: string | null;
+  render_overrides: string | null;
+  status: string;
+  output_key: string | null;
+  output: string | null; // output_json AS output
+  error: string | null;
+  execution_time_ms: number | null;
+  delay_time_ms: number | null;
+  submitted_at: number;
+  updated_at: number;
+  completed_at: number | null;
+  label: string | null;
+  keyframes_json: string | null;
+  mode: string | null;
+  locked_shots_json: string | null;
+  project_id: number | null;
+  folder_path: string | null;
+  tags_json: string | null;
+  parent_id: number | null;
+}
+
+// The one column list every full-row SELECT uses, so the SQL and RawRenderRow
+// cannot drift apart independently in two call sites.
+const RENDER_ROW_COLUMNS = `
+      id, job_id, project, bundle_key, quality_tier,
+      render_overrides, status, output_key, output_json AS output,
+      error, execution_time_ms, delay_time_ms,
+      submitted_at, updated_at, completed_at, label, keyframes_json, mode,
+      locked_shots_json, project_id, folder_path, tags_json, parent_id`;
+
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
@@ -369,6 +410,16 @@ export interface RenderPollRow {
   error: string | null;
 }
 
+// Raw shape of the poll snapshot SELECT (same unchecked-cast caveat as
+// RawRenderRow; the runtime coercions below stay).
+interface RawRenderPollRow {
+  status: string;
+  submitted_at: number;
+  output: string | null; // output_json AS output
+  output_key: string | null;
+  error: string | null;
+}
+
 export async function getRenderForPoll(
   env: Env,
   jobId: string,
@@ -378,7 +429,7 @@ export async function getRenderForPoll(
      FROM renders WHERE job_id = ?`,
   )
     .bind(jobId)
-    .first<Record<string, unknown>>();
+    .first<RawRenderPollRow>();
   if (!r) return null;
   let output: unknown = null;
   const opRaw = r.output;
@@ -587,9 +638,8 @@ export async function listUnresolvedNotifiableJobs(
        LIMIT ?`,
   )
     .bind(cutoff, Math.min(Math.max(1, limit), 100))
-    .all();
-  const rows = (res.results ?? []) as Array<{ job_id?: unknown }>;
-  return rows.map((r) => String(r.job_id)).filter((s) => s.length > 0);
+    .all<{ job_id: string }>();
+  return (res.results ?? []).map((r) => String(r.job_id)).filter((s) => s.length > 0);
 }
 
 // Stranded post-clips film jobs the normal age-windowed sweep no longer picks up.
@@ -625,9 +675,8 @@ export async function listStrandedPostClipsFilmJobs(
        LIMIT ?`,
   )
     .bind(cutoff, Math.min(Math.max(1, limit), 100))
-    .all();
-  const rows = (res.results ?? []) as Array<{ job_id?: unknown }>;
-  return rows.map((r) => String(r.job_id)).filter((s) => s.length > 0);
+    .all<{ job_id: string }>();
+  return (res.results ?? []).map((r) => String(r.job_id)).filter((s) => s.length > 0);
 }
 
 export async function markFinishFailed(env: Env, jobId: string, error: string): Promise<void> {
@@ -766,17 +815,12 @@ export async function getRenderByIdForUser(
   id: number,
 ): Promise<RenderRow | null> {
   const r = await env.DB.prepare(
-    `SELECT
-      id, job_id, project, bundle_key, quality_tier,
-      render_overrides, status, output_key, output_json AS output,
-      error, execution_time_ms, delay_time_ms,
-      submitted_at, updated_at, completed_at, label, keyframes_json, mode,
-      locked_shots_json, project_id, folder_path, tags_json, parent_id
+    `SELECT${RENDER_ROW_COLUMNS}
     FROM renders
     WHERE id = ?`,
   )
     .bind(id)
-    .first<Record<string, unknown>>();
+    .first<RawRenderRow>();
   if (!r) return null;
   return normalizeRow(r);
 }
@@ -836,12 +880,7 @@ export async function listRendersForUser(
 ): Promise<RenderRow[]> {
   // Clamp limit so a runaway client cannot drain the DB binding.
   const cap = Math.min(Math.max(1, Math.floor(limit)), 200);
-  const baseSelect = `SELECT
-      id, job_id, project, bundle_key, quality_tier,
-      render_overrides, status, output_key, output_json AS output,
-      error, execution_time_ms, delay_time_ms,
-      submitted_at, updated_at, completed_at, label, keyframes_json, mode,
-      locked_shots_json, project_id, folder_path, tags_json, parent_id
+  const baseSelect = `SELECT${RENDER_ROW_COLUMNS}
     FROM renders`;
   const stmt = projectId !== null && projectId > 0
     ? env.DB.prepare(
@@ -855,15 +894,17 @@ export async function listRendersForUser(
          ORDER BY submitted_at DESC
          LIMIT ?`
       ).bind(cap);
-  const result = await stmt.all();
-  const rows = (result.results ?? []) as unknown as Array<Record<string, unknown>>;
-  return rows.map(normalizeRow);
+  const result = await stmt.all<RawRenderRow>();
+  return (result.results ?? []).map(normalizeRow);
 }
 
 // D1 returns JSON columns as opaque strings; parse them back. A malformed
 // stored JSON falls back to null (overrides) or the raw string (output) so
-// a corrupted row never crashes a list response.
-function normalizeRow(r: Record<string, unknown>): RenderRow {
+// a corrupted row never crashes a list response. The RawRenderRow type is a
+// compile-time claim only, so every guard below still handles a missing
+// (undefined) or wrongly-typed field at runtime (`== null` covers both
+// SQL NULL and an absent column).
+function normalizeRow(r: RawRenderRow): RenderRow {
   let overrides: Record<string, unknown> | null = null;
   const oRaw = r.render_overrides;
   if (typeof oRaw === "string" && oRaw.length > 0) {
@@ -911,28 +952,22 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
     // that keys off a truthy bundle_key). The schema permits these three to be
     // NULL (migrations/0001_init.sql), so coerce SQL NULL to "" here to keep
     // the RenderRow non-null string contract with a falsy empty value.
-    project: r.project === null || r.project === undefined ? "" : String(r.project),
-    bundle_key: r.bundle_key === null || r.bundle_key === undefined ? "" : String(r.bundle_key),
-    quality_tier: r.quality_tier === null || r.quality_tier === undefined ? "" : String(r.quality_tier),
+    project: r.project == null ? "" : String(r.project),
+    bundle_key: r.bundle_key == null ? "" : String(r.bundle_key),
+    quality_tier: r.quality_tier == null ? "" : String(r.quality_tier),
     render_overrides: overrides,
     status: String(r.status),
     output_key: r.output_key ? String(r.output_key) : null,
     output,
     error: r.error ? String(r.error) : null,
     execution_time_ms:
-      r.execution_time_ms === null || r.execution_time_ms === undefined
-        ? null
-        : Number(r.execution_time_ms),
+      r.execution_time_ms == null ? null : Number(r.execution_time_ms),
     delay_time_ms:
-      r.delay_time_ms === null || r.delay_time_ms === undefined
-        ? null
-        : Number(r.delay_time_ms),
+      r.delay_time_ms == null ? null : Number(r.delay_time_ms),
     submitted_at: Number(r.submitted_at),
     updated_at: Number(r.updated_at),
     completed_at:
-      r.completed_at === null || r.completed_at === undefined
-        ? null
-        : Number(r.completed_at),
+      r.completed_at == null ? null : Number(r.completed_at),
     label:
       typeof r.label === "string" && r.label.length > 0 ? r.label : null,
     keyframes,
@@ -966,9 +1001,7 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
     })(),
     // v0.55.0: NULL for legacy rows or transient (no-project) submits.
     project_id:
-      r.project_id === null || r.project_id === undefined
-        ? null
-        : Number(r.project_id),
+      r.project_id == null ? null : Number(r.project_id),
     // v0.126.0: organization fields. folder_path is stored verbatim (already
     // normalized on the write path); tags_json is a JSON array re-normalized
     // on read so a hand-edited / corrupted row can never bloat a list.
@@ -989,9 +1022,7 @@ function normalizeRow(r: Record<string, unknown>): RenderRow {
     // v0.145.2: NULL on top-level renders; set on finalize / animate-cloud
     // children to the keyframes-only preview render they derive from.
     parent_id:
-      r.parent_id === null || r.parent_id === undefined
-        ? null
-        : Number(r.parent_id),
+      r.parent_id == null ? null : Number(r.parent_id),
   };
 }
 
@@ -1087,8 +1118,8 @@ export async function listUserTags(env: Env): Promise<string[]> {
       LIMIT ?`,
   )
     .bind(TAG_SCAN_LIMIT)
-    .all();
-  const rows = (result.results ?? []) as unknown as Array<{ tags_json: unknown }>;
+    .all<{ tags_json: string }>();
+  const rows = result.results ?? [];
   const counts = new Map<string, number>();
   for (const row of rows) {
     if (typeof row.tags_json !== "string") continue;
