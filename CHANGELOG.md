@@ -3,6 +3,37 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.10.0
+
+**Deploy ratification + the fix-it-all sprint: a cold deploy provisions everything (planner armed,
+gateway created, tokens minted once), renders fail honestly instead of masking or leaking spend, and
+concurrency/spend safety get real guards.**
+
+- **One-script cold deploy, ratified end to end.** deploy.sh now arms the storyboard planner cold
+  (auto-mints the AI-Gateway Run token when the deploy token can, with a paste fallback; #434),
+  script-creates the AI Gateway itself with authentication + cache-invalidate-on-update ON at birth
+  (#442), serves on workers.dev hostnames (#433), preflights npm ci (#432), and STOPS reminting
+  `STUDIO_API_TOKEN` on re-runs -- saved logins survive; `--rotate-token` mints fresh (#442). The
+  provisioner writes the env names the backend handler actually reads (#438). Proven by a virgin
+  re-run: green end to end, zero interventions.
+- **Honest RunPod polls (F17/#141, all 16 RunPod-driving modules; #440).** A backend whose error
+  path leaves the job status stuck now gets its structured error surfaced (stage + message + job id)
+  instead of polling forever and masking as "job not found"; the module cancels the hung job so it
+  stops billing the worker; and a virgin endpoint's image pull no longer false-fails the first-ever
+  job (the poll consults `/health` and waits out a genuine cold start, bounded at 15 min).
+- **No more double-submits.** `advanceFilmJob` runs under a whole-tick D1 lease (migration 0007), so
+  the 1-min cron and client polls can no longer race the same phase transition into duplicated GPU
+  spend; the loser reads the job read-only (#439).
+- **Spend posture knobs (#441).** `SPEND_LIMIT_FAIL_CLOSED` flips the F3 rate-limit guard to deny
+  (503) when the limiter itself is broken; `SPEND_DAILY_CEILING` caps spend-route submissions per UTC
+  day in D1 (migration 0008), returning 429 until midnight. Both off unless set.
+- **Contract consistency (additive, no api bump; #443).** `score` output gains the shared `degraded`
+  chain convention; `film.finish`'s optional `applied` is now a documented decision, and conformance
+  type-checks both when present.
+- **Docs tell the token-mode truth (#435-#437).** Quickstart/README/DEPLOYMENT rewritten for the
+  shipped token auth (Access is optional hardening), the deploy docs match the ratified script, and
+  teardown deletes the auto-minted Run token.
+
 ## v0.9.0
 
 **Browser-grade media serving (#416): HTTP byte ranges on artifacts and worker-authoritative cache
