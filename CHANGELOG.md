@@ -3,6 +3,38 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.11.0
+
+**The structural-debt sprint: per-consumer API tokens, locality-driven classification, contract-carried
+finish conventions, and the god-files split -- 21 PRs across the constellation, zero behavior regressions
+(1233 tests green throughout).**
+
+- **Named per-consumer bearer tokens (#445 -> #446).** The studio auth-gate now accepts named tokens
+  beside the operator login: D1 `api_tokens` (migration 0009) stores SHA-256 hashes only; a match
+  authenticates as `api-token:<name>`; deny reasons are identical across credential classes (no oracle).
+  `scripts/studio-consumer-token.sh` mints (plaintext lands ONLY in a chmod-600 file), revokes, lists.
+  A bot or satellite gets its own independently revocable credential instead of the operator login.
+- **Locality-driven motion classification (#448).** The core classifies motion.backend modules by their
+  declared `ui.locality`, never by module name. Fixes a live mislabel: a local door serving
+  motion.backend passed the old name filter and could become the default "cloud" model. Missing door
+  classes now fail honestly, naming the missing locality.
+- **Contract-carried finish conventions (#450).** Finish modules declare `finish_artifacts` in the
+  manifest (output-key convention + applied-tag rules); the core's R2-authoritative recovery reads the
+  declaration instead of regexing binding names. Third-party finish modules can now opt into recovery.
+- **God-files split (#451, #453).** `validateStoryboard` decomposed into section validators;
+  the pure film model (shapes, summaries, retry/adoption logic, stall math) extracted to
+  `src/film-model.ts` with a re-export barrel -- zero test edits either time. `public/planner.js`
+  (7224 lines) split into 16 modules with byte-identical-slice proof (#447), i2v labels project
+  through the registry (#455).
+- **Installer parity (#452).** `vivijure_deploy.py` learns AUTH_MODE token/access: token mode mints
+  the operator secret via the same path as deploy.sh (F18-lite keep-unless-rotate) and skips the
+  Access app; consumer tokens point at studio-consumer-token.sh, never a second mint.
+- **Constellation (same sprint, other repos):** satellite CI unified on semver-tagged immutable images
+  (no :latest); musetalk loads models once per warm worker (~5GB reload per job eliminated); the finish
+  stage NVENC-encodes with honest CPU fallback and streams interpolation (bounded RAM); the local doors
+  share a byte-identical `vivijure_local/core/`; the backend gains a live SECURE-only RunPod pod client,
+  proven by a paid smoke that caught two real bugs before any gate depended on it.
+
 ## v0.10.0
 
 **Deploy ratification + the fix-it-all sprint: a cold deploy provisions everything (planner armed,
