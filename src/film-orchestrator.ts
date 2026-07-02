@@ -10,7 +10,7 @@
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, cancelModule, resolveFetcher, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
 import { loadInstallConfig } from "./operator-config";
-import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput } from "./modules/types";
+import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput, RegisteredModule } from "./modules/types";
 import {
   startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
@@ -500,26 +500,64 @@ export function reclaimFinishShotsFromR2(finishShots: FinishShot[], present: Map
  *  upscale -> `_up`; see vivijure-musetalk / vivijure-upscale handler.py). Returns null for a module whose
  *  convention we do not model (e.g. text-overlay), so an unmodeled step gets NO R2 shortcut and can never
  *  be advanced off a sibling step's artifact -- the mid-chain phantom-adopt the silent-render bug warned of. */
-export function finishStepOutputKey(project: string, fs: FinishShot): string | null {
+export function finishStepOutputKey(project: string, fs: FinishShot, modules?: RegisteredModule[]): string | null {
   const binding = fs.chain[fs.idx] ?? "";
+  // Contract-carried convention first (finish_artifacts, S6): the module DECLARES how it names its
+  // output, so the core stops reverse-engineering module internals from the binding name.
+  const decl = moduleByBinding(modules, binding)?.finish_artifacts;
+  if (decl) {
+    if (decl.output_key.kind === "shot_named") return `renders/${project}/clips/${fs.shot_id}${decl.output_key.filename}`;
+    return insertKeySuffix(fs.clip_key, decl.output_key.suffix);
+  }
+  // Legacy fallback for module deploys predating finish_artifacts: the shipped modules' conventions,
+  // derived from the binding name. Returns null for a module whose convention we do not model, so an
+  // unmodeled step gets NO R2 shortcut and can never adopt a sibling step's artifact.
   if (/RIFE/i.test(binding)) return `renders/${project}/clips/${fs.shot_id}_finished.mp4`;
   const suffix = /LIPSYNC|MUSETALK/i.test(binding) ? "_ls" : /UPSCALE/i.test(binding) ? "_up" : null;
   if (!suffix) return null;
-  const key = fs.clip_key;
+  return insertKeySuffix(fs.clip_key, suffix);
+}
+
+/** Insert an artifact suffix into an R2 key before its extension (`a/b.mp4` + `_ls` -> `a/b_ls.mp4`). */
+function insertKeySuffix(key: string, suffix: string): string {
   const slash = key.lastIndexOf("/");
   const dotInBase = key.slice(slash + 1).lastIndexOf(".");
   if (dotInBase < 0) return `${key}${suffix}`;
   const at = slash + 1 + dotInBase;
-  return `${key.slice(0, at)}${suffix}${key.slice(at)}`; // insert the suffix before the extension
+  return `${key.slice(0, at)}${suffix}${key.slice(at)}`;
+}
+
+/** The finish module (if any) whose transport-encoded binding ref serves this chain step. */
+function moduleByBinding(modules: RegisteredModule[] | undefined, binding: string): RegisteredModule | undefined {
+  return modules?.find((m) => m.binding === binding);
+}
+
+/** Resolve a `{knob}` / `{knob|default}` applied-tag template against the step's validated config. */
+function resolveAppliedTemplate(tag: string, cfg: Record<string, unknown>): string {
+  return tag.replace(/\{([A-Za-z0-9_]+)(?:\|([^}]*))?\}/g, (_all, knob: string, dflt: string | undefined) => {
+    const v = cfg[knob];
+    return v === undefined ? (dflt ?? "") : String(v);
+  });
 }
 
 /** Pure: the `applied` tag the CURRENT finish step would report, reconstructed from its validated config
  *  so an R2-adopted step (whose job is gone, so its real response is lost) still carries the marker the
  *  verifier and UI read (e.g. `lipsync:v15`, `upscale:2x`, `interpolate:2x`). Mirrors each module's own
  *  `applied` string. Unmodeled modules get a `<binding>:r2-adopted` marker so the adoption is never silent. */
-export function finishStepAppliedTag(fs: FinishShot): string {
+export function finishStepAppliedTag(fs: FinishShot, modules?: RegisteredModule[]): string {
   const binding = fs.chain[fs.idx] ?? "";
   const cfg = (fs.configs?.[fs.idx] ?? {}) as Record<string, unknown>;
+  // Contract-carried rules first (finish_artifacts.applied, S6): first matching rule wins; a rule
+  // with `when` applies only when the named knob equals its literal.
+  const rules = moduleByBinding(modules, binding)?.finish_artifacts?.applied;
+  if (rules) {
+    for (const rule of rules) {
+      if (rule.when && cfg[rule.when.knob] !== rule.when.equals) continue;
+      return resolveAppliedTemplate(rule.tag, cfg);
+    }
+    return `${binding}:r2-adopted`; // declared rules, none matched: never silent
+  }
+  // Legacy fallback (module deploys predating finish_artifacts), binding-name derived.
   if (/LIPSYNC|MUSETALK/i.test(binding)) return `lipsync:${String(cfg.version ?? "v15")}`;
   if (/UPSCALE/i.test(binding)) return `upscale:${Number(cfg.scale ?? 2)}x`;
   if (/RIFE/i.test(binding)) return cfg.interpolate === false ? "noop:interpolate-off" : `interpolate:${Number(cfg.interpolation_factor ?? 2)}x`;
@@ -694,10 +732,12 @@ async function advanceSpeechPhase(env: Env, job: FilmJob): Promise<void> {
  *  still run and it can never ship a half-finished clip (the mid-chain phantom-adopt the silent-render bug
  *  warned against). Returns true iff it advanced the step. */
 async function adoptFinishStepFromR2(env: Env, job: FilmJob, fs: FinishShot): Promise<boolean> {
-  const expected = finishStepOutputKey(job.project, fs);
+  // Registry discovery is cached, so reading the manifests here (for finish_artifacts) is cheap.
+  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+  const expected = finishStepOutputKey(job.project, fs, modules);
   if (!expected) return false;
   if ((await env.R2_RENDERS.head(expected)) === null) return false;
-  applyFinishOutput(fs, { shot_id: fs.shot_id, clip_key: expected, out_fps: 0, frames: 0, applied: [finishStepAppliedTag(fs)] });
+  applyFinishOutput(fs, { shot_id: fs.shot_id, clip_key: expected, out_fps: 0, frames: 0, applied: [finishStepAppliedTag(fs, modules)] });
   return true;
 }
 

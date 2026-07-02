@@ -1792,3 +1792,57 @@ describe("summarizeFilm surfaces film_finish (#211 follow-up)", () => {
     expect(summarizeFilm(base as unknown as FilmJob, null).film_finish).toBeUndefined();
   });
 });
+
+describe("finish_artifacts: contract-carried conventions beat the legacy name-derived fallback (S6)", () => {
+  const fs = (over: Partial<FinishShot>): FinishShot => ({
+    shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4",
+    chain: [], configs: [], idx: 0, status: "pending", applied: [], ...over,
+  } as FinishShot);
+  const mod = (binding: string, finish_artifacts: unknown) =>
+    ({ name: binding.toLowerCase(), binding, hooks: ["finish"], finish_artifacts }) as any;
+
+  it("shot_named declaration predicts renders/<project>/clips/<shot><filename>", () => {
+    const modules = [mod("MODULE_X_SMOOTH", { output_key: { kind: "shot_named", filename: "_smooth.mp4" } })];
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_X_SMOOTH"] }), modules))
+      .toBe("renders/neon/clips/shot_01_smooth.mp4");
+  });
+
+  it("append_suffix declaration inserts before the input key's extension", () => {
+    const modules = [mod("MODULE_X_DENOISE", { output_key: { kind: "append_suffix", suffix: "_dn" } })];
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_X_DENOISE"] }), modules))
+      .toBe("renders/neon/clips/shot_01_i2v_dn.mp4");
+  });
+
+  it("the declaration WINS over the name fallback (an UPSCALE-named module can declare shot_named)", () => {
+    const modules = [mod("MODULE_FINISH_UPSCALE", { output_key: { kind: "shot_named", filename: "_hires.mp4" } })];
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_FINISH_UPSCALE"] }), modules))
+      .toBe("renders/neon/clips/shot_01_hires.mp4");
+  });
+
+  it("no declaration + unmodeled name -> null (no R2 shortcut), and the legacy names still resolve", () => {
+    const modules = [mod("MODULE_TEXT_OVERLAY", undefined)];
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_TEXT_OVERLAY"] }), modules)).toBeNull();
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_FINISH_RIFE"] }), modules))
+      .toBe("renders/neon/clips/shot_01_finished.mp4");
+  });
+
+  it("applied rules: template {knob|default} + first-match-wins `when` gating", () => {
+    const decl = {
+      output_key: { kind: "shot_named", filename: "_finished.mp4" },
+      applied: [
+        { when: { knob: "interpolate", equals: false }, tag: "noop:interpolate-off" },
+        { tag: "interpolate:{interpolation_factor|2}x" },
+      ],
+    };
+    const modules = [mod("MODULE_X_RIFE", decl)];
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_X_RIFE"], configs: [{ interpolation_factor: 4 }] }), modules)).toBe("interpolate:4x");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_X_RIFE"], configs: [{}] }), modules)).toBe("interpolate:2x");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_X_RIFE"], configs: [{ interpolate: false }] }), modules)).toBe("noop:interpolate-off");
+  });
+
+  it("declared rules with NO match mark r2-adopted (never silent), and no-decl falls back to name rules", () => {
+    const modules = [mod("MODULE_X_ODD", { output_key: { kind: "append_suffix", suffix: "_o" }, applied: [{ when: { knob: "on", equals: true }, tag: "on" }] })];
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_X_ODD"], configs: [{}] }), modules)).toBe("MODULE_X_ODD:r2-adopted");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_LIPSYNC"], configs: [{ version: "v1" }] }), modules)).toBe("lipsync:v1");
+  });
+});
