@@ -143,11 +143,32 @@ entirely in-Worker (`src/auth-gate.ts`):
   the operator's single capability for the whole studio: treat it like a password. Rotate it any
   time with `openssl rand -hex 32 | npx wrangler secret put STUDIO_API_TOKEN` and re-paste.
 
-Threat-model honesty: token mode authenticates POSSESSION of one bearer secret. It has no
-identity, no device posture, no per-caller revocation, no audit trail -- exactly the things
-Cloudflare Access adds. A single operator on a personal deploy: token mode is enough. A team, an
-org, or anything with staff turnover: put Access in front and run `AUTH_MODE = "access"`
-(sections 1/1a).
+### 1b-i. Named per-consumer tokens (#445)
+
+The operator login above is the human/deploy credential. Every OTHER API consumer (a Discord bot,
+a satellite) gets its OWN named token instead of reusing the operator's, per the per-function-keys
+rule: a leak burns one consumer, a rotation touches one consumer, and the operator login is never
+handed out.
+
+- Mint: `scripts/studio-consumer-token.sh mint <name>` generates a 256-bit token, inserts ONLY its
+  SHA-256 hash into the D1 `api_tokens` table (migration 0009), and writes the plaintext to a
+  local `chmod 600` file exactly once -- it is never printed to the terminal or stored anywhere
+  else. Hand the file's value to the consumer (its `.env`), then delete the file.
+- Revoke: `scripts/studio-consumer-token.sh revoke <name>` (idempotent); `list` shows names +
+  created/revoked timestamps (never hashes' preimages -- there is nothing secret in the table).
+- The gate (`src/auth-gate.ts`) checks the operator secret first (constant-time), then looks the
+  presented token's hash up in `api_tokens` where `revoked_at IS NULL`. A named match
+  authenticates as `api-token:<name>` (visible in observability), same transport rules as the
+  operator token (bearer any method, cookie GET/HEAD only). The deny reason is identical for both
+  classes, so a probe cannot learn which class it missed.
+- FAIL CLOSED: no D1 binding, an unapplied migration, or a D1 outage simply means no named token
+  matches; the operator path is independent and unaffected.
+
+Threat-model honesty: token mode authenticates POSSESSION of a bearer secret. Named tokens add
+per-caller issuance, revocation, and an identity string in logs -- but still no device posture and
+no human identity; that is what Cloudflare Access adds. A single operator on a personal deploy:
+token mode is enough. A team, an org, or anything with staff turnover: put Access in front and run
+`AUTH_MODE = "access"` (sections 1/1a).
 
 > **Choosing Access anyway -- the enable-flow workaround.** Zero Trust must be enabled once per
 > account before an Access app can exist, and the dashboard's entry link can dead-end on a fresh

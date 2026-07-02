@@ -31,7 +31,10 @@ gate. The studio has one BUILT IN; pick the mode with the `AUTH_MODE` worker var
   `STUDIO_API_TOKEN` worker secret with a constant-time compare. `deploy.sh` mints a 256-bit
   random token, stores the secret, and prints the token ONCE at the end of the deploy -- save it.
   The studio UI asks for it on first load and keeps it in your browser only. No Zero Trust
-  product, no extra dashboard step.
+  product, no extra dashboard step. Other consumers (bots, satellites) do NOT reuse this
+  operator token: mint each one its own named token with
+  `scripts/studio-consumer-token.sh mint <name>` (independently revocable; see
+  [SECURITY.md](SECURITY.md) section 1b-i).
 - **`access`:** the Worker verifies a Cloudflare Access JWT in-code (fail closed) BEHIND an edge
   Access app you configure -- the recommended hardening for team/org deployments (SSO identity,
   device posture, audit logs). Set `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` (your Zero Trust team

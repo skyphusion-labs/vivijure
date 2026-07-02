@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { gateApi, verifyTokenRequest, constantTimeEqual, TOKEN_COOKIE } from "../src/auth-gate";
+import { gateApi, verifyTokenRequest, constantTimeEqual, sha256Hex, TOKEN_COOKIE } from "../src/auth-gate";
 import worker from "../src/index";
 import type { Env } from "../src/env";
 import { __resetJwksCacheForTest, type CertsFetcher } from "../src/access-auth";
@@ -265,5 +265,80 @@ describe("worker.fetch in token mode -- the wiring the frontend shim depends on"
     expect((await worker.fetch(new Request("https://studio.example/health"), env, ctx)).status).toBe(200);
     const page = await worker.fetch(new Request("https://studio.example/planner"), env, ctx);
     expect(await page.text()).toBe("ASSET");
+  });
+});
+
+// ---- named per-consumer tokens (#445) --------------------------------------------------------
+
+describe("verifyTokenRequest -- named per-consumer tokens (#445)", () => {
+  const NAMED = "c".repeat(64); // a consumer's minted token
+  let namedHash: string;
+  beforeEach(async () => {
+    namedHash = await sha256Hex(NAMED);
+  });
+
+  // Emulates the api_tokens lookup: hash -> live row (the SQL filters revoked_at IS NULL, so the
+  // fake returns null for a revoked row exactly as D1 would).
+  function fakeDb(rows: Array<{ hash: string; name: string; revoked?: boolean }>) {
+    return {
+      prepare: (_sql: string) => ({
+        bind: (hash: string) => ({
+          first: async () => {
+            const r = rows.find((x) => x.hash === hash && !x.revoked);
+            return r ? { name: r.name } : null;
+          },
+        }),
+      }),
+    } as any;
+  }
+
+  function env(db: any): any {
+    return { AUTH_MODE: "token", STUDIO_API_TOKEN: SECRET, DB: db };
+  }
+
+  it("a live named token admits, with the consumer identity in sub", async () => {
+    const e = env(fakeDb([{ hash: namedHash, name: "slate-bot" }]));
+    const d = await verifyTokenRequest(bearer(NAMED), e);
+    expect(d).toMatchObject({ ok: true, sub: "api-token:slate-bot" });
+  });
+
+  it("a REVOKED named token denies with the same reason as any bad token (no oracle)", async () => {
+    const e = env(fakeDb([{ hash: namedHash, name: "slate-bot", revoked: true }]));
+    const d = await verifyTokenRequest(bearer(NAMED), e);
+    expect(d).toMatchObject({ ok: false, status: 403, reason: "bad API token" });
+  });
+
+  it("an unknown token still denies with the identical reason", async () => {
+    const e = env(fakeDb([]));
+    const d = await verifyTokenRequest(bearer("d".repeat(64)), e);
+    expect(d).toMatchObject({ ok: false, status: 403, reason: "bad API token" });
+  });
+
+  it("the operator token is checked FIRST and never touches D1", async () => {
+    const exploding = { prepare: () => { throw new Error("must not be called"); } } as any;
+    const d = await verifyTokenRequest(bearer(SECRET), env(exploding));
+    expect(d).toMatchObject({ ok: true, sub: "studio-api-token" });
+  });
+
+  it("a D1 failure FAILS CLOSED for named tokens and leaves the operator path intact", async () => {
+    const broken = { prepare: () => { throw new Error("D1 down"); } } as any;
+    const named = await verifyTokenRequest(bearer(NAMED), env(broken));
+    expect(named).toMatchObject({ ok: false, status: 403 });
+    const operator = await verifyTokenRequest(bearer(SECRET), env(broken));
+    expect(operator.ok).toBe(true);
+  });
+
+  it("no DB binding -> named tokens deny (fail closed), operator unaffected", async () => {
+    const e: any = { AUTH_MODE: "token", STUDIO_API_TOKEN: SECRET };
+    expect((await verifyTokenRequest(bearer(NAMED), e)).ok).toBe(false);
+    expect((await verifyTokenRequest(bearer(SECRET), e)).ok).toBe(true);
+  });
+
+  it("named tokens ride the same transport rules: cookie admits on GET, denied on a mutation", async () => {
+    const e = env(fakeDb([{ hash: namedHash, name: "slate-bot" }]));
+    const get = new Request("https://studio/api/cast", { headers: { cookie: `${TOKEN_COOKIE}=${NAMED}` } });
+    expect((await verifyTokenRequest(get, e)).ok).toBe(true);
+    const post = new Request("https://studio/api/cast", { method: "POST", headers: { cookie: `${TOKEN_COOKIE}=${NAMED}` } });
+    expect((await verifyTokenRequest(post, e)).ok).toBe(false);
   });
 });
