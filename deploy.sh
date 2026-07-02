@@ -185,7 +185,13 @@ $WR d1 migrations apply vivijure-studio --remote
 say "Step 6/8: deploy module workers -- these MUST ship before the core"
 for m in $MODULES; do
   info "deploying vivijure-module-$m"
-  $WR deploy -c "modules/$m/wrangler.toml"
+  # Retry a transient Cloudflare API flake (e.g. 10013 on the per-worker /subdomain call) so a
+  # single hiccup does not abort the whole ordered deploy under set -e.
+  n=0
+  until $WR deploy -c "modules/$m/wrangler.toml"; do
+    n=$((n+1)); [ "$n" -ge 3 ] && die "module $m failed to deploy after 3 attempts"
+    info "  transient deploy failure for $m -- retry $n/3"; sleep 3
+  done
 done
 info "deployed $(printf "%s" "$MODULES" | wc -w) module worker(s)"
 
