@@ -11,7 +11,7 @@ import {
 } from "./film-orchestrator";
 import { filmJobToPollView, mapRenderOverridesToModuleConfigs } from "./film-render-bridge";
 import { readBundleScenes } from "./bundle-storyboard";
-import { discoverModules, servingForHook } from "./modules/registry";
+import { cloudMotionModules, defaultGpuDoorModule, discoverModules, servingForHook } from "./modules/registry";
 import { coerceQualityTier } from "./runpod-submit";
 import type { RenderRow } from "./renders-db";
 import { insertRender, type NewRenderRow } from "./renders-db";
@@ -31,16 +31,13 @@ export interface AnimateFromPreviewArgs {
   audioKey?: string;
 }
 
-async function allowedCloudModules(env: Env): Promise<string[]> {
-  const modules = await discoverModules(env as unknown as Record<string, unknown>);
-  return servingForHook(modules, "motion.backend")
-    .map((m) => m.name)
-    .filter((n) => n !== "own-gpu");
-}
-
-function resolveCloudModel(requested: string | undefined, allowed: string[]): string {
+// Locality-driven (see registry.ts): the cloud list is the modules DECLARING locality "cloud",
+// so a local door serving motion.backend is never offered (or defaulted!) as a cloud model.
+// Undefined when nothing cloud is installed -- callers answer with an honest 400, never a
+// hardcoded module name that then fails the installed-check under a misleading message.
+function resolveCloudModel(requested: string | undefined, allowed: string[]): string | undefined {
   if (requested && allowed.includes(requested)) return requested;
-  return allowed[0] ?? "seedance";
+  return allowed[0];
 }
 
 /** Scene metadata for each shot: parent output, else bundle storyboard.yaml. */
@@ -87,17 +84,25 @@ function perShotMotionFromHybrid(
   scenes: FilmScene[],
   backends: Record<string, { backend: "gpu" | "cloud"; model?: string }>,
   defaultBackend: "gpu" | "cloud",
-  defaultCloud: string,
-): Record<string, string> {
+  defaultCloud: string | undefined,
+  gpuDoor: string | undefined,
+): { perShot: Record<string, string> } | { error: string } {
   const out: Record<string, string> = {};
   for (const sc of scenes) {
     const entry = backends[sc.shot_id];
-    if (entry?.backend === "cloud") out[sc.shot_id] = entry.model ?? defaultCloud;
-    else if (entry?.backend === "gpu") out[sc.shot_id] = "own-gpu";
-    else if (defaultBackend === "cloud") out[sc.shot_id] = defaultCloud;
-    else out[sc.shot_id] = "own-gpu";
+    const wantsCloud = entry?.backend === "cloud" || (entry?.backend !== "gpu" && defaultBackend === "cloud");
+    if (wantsCloud) {
+      const model = entry?.backend === "cloud" ? (entry.model ?? defaultCloud) : defaultCloud;
+      if (!model) return { error: `shot "${sc.shot_id}": no cloud motion.backend module is installed` };
+      out[sc.shot_id] = model;
+    } else {
+      if (!gpuDoor) {
+        return { error: `shot "${sc.shot_id}": no gpu-door motion.backend module (ui.locality "byo"/"local") is installed` };
+      }
+      out[sc.shot_id] = gpuDoor;
+    }
   }
-  return out;
+  return { perShot: out };
 }
 
 function perShotMotionFromCloud(
@@ -140,22 +145,30 @@ export async function animateFromPreview(
   const tier = coerceQualityTier(args.parent.quality_tier) ?? "final";
   const modules = await discoverModules(env as unknown as Record<string, unknown>);
   const mapped = mapRenderOverridesToModuleConfigs(args.parent.render_overrides ?? undefined, tier, modules);
-  const cloudAllowed = await allowedCloudModules(env);
+  const cloudAllowed = cloudMotionModules(modules).map((m) => m.name);
+  const gpuDoor = defaultGpuDoorModule(modules)?.name;
 
   let motionBackend: string | undefined;
   let perShotMotion: Record<string, string> | undefined;
 
   if (args.hybridBackends !== undefined) {
     const defaultCloud = resolveCloudModel(args.defaultCloudModel, cloudAllowed);
-    perShotMotion = perShotMotionFromHybrid(
+    const hybrid = perShotMotionFromHybrid(
       scenes,
       args.hybridBackends,
       args.defaultBackend ?? "gpu",
       defaultCloud,
+      gpuDoor,
     );
-    motionBackend = "own-gpu";
+    if ("error" in hybrid) return { ok: false, error: hybrid.error, status: 400 };
+    perShotMotion = hybrid.perShot;
+    // The job-level default only matters for a shot the per-shot map missed (it covers every
+    // scene); prefer the gpu door, else the cloud default. Both absent cannot happen here: the
+    // per-shot mapping above already failed honestly if a lane had no module.
+    motionBackend = gpuDoor ?? defaultCloud;
   } else if (args.deriveMode === "cloud-finalized") {
     const defaultCloud = resolveCloudModel(args.motionBackend ?? args.defaultCloudModel, cloudAllowed);
+    if (!defaultCloud) return { ok: false, error: "no cloud motion.backend module is installed", status: 400 };
     const normalized = args.perShotModels
       ? normalizePerShotModels(args.perShotModels, new Set(cloudAllowed))
       : { perShot: {}, errors: [] as string[] };
@@ -163,7 +176,10 @@ export async function animateFromPreview(
     motionBackend = defaultCloud;
     perShotMotion = perShotMotionFromCloud(scenes, defaultCloud, normalized.perShot);
   } else {
-    motionBackend = mapped.motion_backend ?? "own-gpu";
+    motionBackend = mapped.motion_backend ?? gpuDoor;
+    if (!motionBackend) {
+      return { ok: false, error: 'no gpu-door motion.backend module (ui.locality "byo"/"local") is installed', status: 400 };
+    }
   }
 
   const motionInstalled = new Set(servingForHook(modules, "motion.backend").map((m) => m.name));
@@ -209,8 +225,11 @@ export async function animateFromPreview(
   return { ok: true, view };
 }
 
-/** Progress counters for cloud / hybrid animate rows during clip phase polling. */
-export function clipAnimateProgress(clipJob: ClipJob): {
+/** Progress counters for cloud / hybrid animate rows during clip phase polling. `gpuDoors` is the
+ *  set of installed gpu-door module names (locality byo/local, see gpuDoorMotionModules) -- the
+ *  gpu bucket is locality-classified, so a local door's shots count as gpu, not "cloud". A shot
+ *  with no resolvable backend counts gpu (the pre-locality default lane). */
+export function clipAnimateProgress(clipJob: ClipJob, gpuDoors: ReadonlySet<string>): {
   done: number;
   total: number;
   gpu: { done: number; total: number; status?: string };
@@ -221,8 +240,8 @@ export function clipAnimateProgress(clipJob: ClipJob): {
   let cloudDone = 0;
   let cloudTotal = 0;
   for (const sh of clipJob.shots) {
-    const mod = sh.motion_backend ?? clipJob.motion_backend ?? "own-gpu";
-    if (mod === "own-gpu") {
+    const mod = sh.motion_backend ?? clipJob.motion_backend;
+    if (mod == null || gpuDoors.has(mod)) {
       gpuTotal++;
       if (sh.status === "done") gpuDone++;
     } else {

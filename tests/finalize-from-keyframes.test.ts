@@ -70,22 +70,44 @@ describe("selectPreviewKeyframes", () => {
 });
 
 describe("clipAnimateProgress", () => {
+  const GPU_DOORS = new Set(["own-gpu", "local-gpu"]);
+  const baseJob = (shots: ClipJob["shots"]): ClipJob => ({
+    job_id: "clips-1",
+    project: "demo",
+    motion_backend: "own-gpu",
+    binding: "MODULE_OWN_GPU",
+    shots,
+    created_at: Date.now(),
+  });
+
   it("splits gpu and cloud lane counts", () => {
-    const job: ClipJob = {
-      job_id: "clips-1",
-      project: "demo",
-      motion_backend: "own-gpu",
-      binding: "MODULE_OWN_GPU",
-      shots: [
-        { shot_id: "shot_01", keyframe_url: "u1", prompt: "a", seconds: 4, status: "done", motion_backend: "own-gpu", binding: "MODULE_OWN_GPU" },
-        { shot_id: "shot_02", keyframe_url: "u2", prompt: "b", seconds: 4, status: "pending", motion_backend: "seedance", binding: "MODULE_SEEDANCE" },
-      ],
-      created_at: Date.now(),
-    };
-    const p = clipAnimateProgress(job);
+    const job = baseJob([
+      { shot_id: "shot_01", keyframe_url: "u1", prompt: "a", seconds: 4, status: "done", motion_backend: "own-gpu", binding: "MODULE_OWN_GPU" },
+      { shot_id: "shot_02", keyframe_url: "u2", prompt: "b", seconds: 4, status: "pending", motion_backend: "seedance", binding: "MODULE_SEEDANCE" },
+    ]);
+    const p = clipAnimateProgress(job, GPU_DOORS);
     expect(p.gpu).toEqual({ done: 1, total: 1, status: "done" });
     expect(p.cloud).toEqual({ done: 0, total: 1 });
     expect(p.done).toBe(1);
     expect(p.total).toBe(2);
+  });
+
+  it("classifies by LOCALITY, not name: a local door's shots count gpu, not cloud", () => {
+    const job = baseJob([
+      { shot_id: "shot_01", keyframe_url: "u1", prompt: "a", seconds: 4, status: "done", motion_backend: "local-gpu", binding: "MODULE_LOCAL_GPU" },
+      { shot_id: "shot_02", keyframe_url: "u2", prompt: "b", seconds: 4, status: "pending", motion_backend: "kling", binding: "MODULE_KLING" },
+    ]);
+    const p = clipAnimateProgress(job, GPU_DOORS);
+    expect(p.gpu).toEqual({ done: 1, total: 1, status: "done" });
+    expect(p.cloud).toEqual({ done: 0, total: 1 });
+  });
+
+  it("a shot with no resolvable backend counts gpu (the default lane)", () => {
+    const job = { ...baseJob([
+      { shot_id: "shot_01", keyframe_url: "u1", prompt: "a", seconds: 4, status: "pending", binding: "MODULE_OWN_GPU" } as ClipJob["shots"][number],
+    ]), motion_backend: undefined } as unknown as ClipJob;
+    const p = clipAnimateProgress(job, GPU_DOORS);
+    expect(p.gpu.total).toBe(1);
+    expect(p.cloud.total).toBe(0);
   });
 });

@@ -412,6 +412,34 @@ export function servingForHook(modules: RegisteredModule[], hook: HookName): Reg
     .sort((a, b) => (a.ui?.order ?? 100) - (b.ui?.order ?? 100) || a.name.localeCompare(b.name));
 }
 
+// ---- locality classification (#379 ui.locality, wired by the S6 debt sprint) -------------------
+// The core classifies motion.backend modules by their DECLARED ui.locality, never by module name.
+// "cloud" = pay-per-render provider; "byo" = the operator's own RunPod endpoint + keys; "local" =
+// a homelab card. An UNDECLARED locality counts as cloud: that preserves the pre-locality behavior
+// (anything that was not the gpu door was offered as a cloud model), and it is the safe default
+// for a third-party module that never heard of the field.
+
+/** Motion modules the cloud selectors may offer: declared (or defaulted) locality "cloud". */
+export function cloudMotionModules(modules: RegisteredModule[]): RegisteredModule[] {
+  return servingForHook(modules, "motion.backend").filter((m) => (m.ui?.locality ?? "cloud") === "cloud");
+}
+
+/** Motion modules that render on hardware the operator controls (byo or local): the "gpu" lane of
+ *  hybrid renders and the gpu bucket of progress counters. */
+export function gpuDoorMotionModules(modules: RegisteredModule[]): RegisteredModule[] {
+  const l = (m: RegisteredModule) => m.ui?.locality;
+  return servingForHook(modules, "motion.backend").filter((m) => l(m) === "byo" || l(m) === "local");
+}
+
+/** The default gpu door when a render does not name one: the order-first byo module (the studio's
+ *  canonical own-GPU render path), else the order-first local module (a local door is normally an
+ *  explicit pick, so it only becomes the default when it is the ONLY gpu door). Undefined when no
+ *  gpu door is installed -- callers fail honestly instead of submitting to a hardcoded name. */
+export function defaultGpuDoorModule(modules: RegisteredModule[]): RegisteredModule | undefined {
+  const doors = gpuDoorMotionModules(modules);
+  return doors.find((m) => m.ui?.locality === "byo") ?? doors[0];
+}
+
 /** A short label for a module's transport, for error/log messages that must name it without leaking to
  *  the wire (these strings stay core-side, in the pipeline's degrade log). */
 function transportLabel(module: RegisteredModule): string {
