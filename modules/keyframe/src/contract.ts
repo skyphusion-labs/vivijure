@@ -27,6 +27,9 @@ export interface ModuleManifest {
   /** This module implements POST /cancel (it is async + GPU-backed), so the core can stop an in-flight
    *  RunPod job instead of orphaning it. OPTIONAL/additive, mirrors src/modules/types.ts. */
   cancelable?: boolean;
+  /** #454: compact display token for the keyframe-stage backend/model (e.g. "SDXL"), which the planner
+   *  projects inline. OPTIONAL/additive, mirrors src/modules/types.ts. */
+  keyframe_label?: string;
 }
 
 export interface InvokeContext {

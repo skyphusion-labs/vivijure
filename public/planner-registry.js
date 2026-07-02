@@ -114,6 +114,19 @@
     return m ? moduleLabel(m) : "GPU i2v";
   }
 
+  // The keyframe hook is pick_one; the planner default is the ui.order-first serving module. Its
+  // manifest keyframe_label is the compact display token for the keyframe-stage backend/model (e.g.
+  // "SDXL"), which the planner projects inline instead of hardcoding the model name. First serving
+  // module that declares one wins; fall back to "SDXL" (the GPU keyframe default) when none is
+  // declared, so the copy is never blank.
+  function keyframeLabel() {
+    for (const m of hookModules("keyframe")) {
+      const l = m && typeof m.keyframe_label === "string" && m.keyframe_label.trim();
+      if (l) return l;
+    }
+    return "SDXL";
+  }
+
   global.plannerRegistry = {
     load,
     moduleLabel,
@@ -127,5 +140,6 @@
     cloudModelLabel,
     cloudModelOptions,
     gpuMotionLabel,
+    keyframeLabel,
   };
 })(window);

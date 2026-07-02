@@ -71,7 +71,7 @@ function buildHistoryRow(r, childrenByParent) {
     const modeBadge = document.createElement("span");
     modeBadge.className = "planner-history-mode planner-history-mode-keyframes-only";
     modeBadge.textContent = "kf only";
-    modeBadge.title = "this render produced SDXL keyframes only; no motion / no silent MP4";
+    modeBadge.title = "this render produced " + keyframeLabel() + " keyframes only; no motion / no silent MP4";
     meta.appendChild(modeBadge);
   }
 
@@ -575,7 +575,7 @@ function buildHistoryRow(r, childrenByParent) {
         btn.type = "button";
         btn.className = "planner-history-keyframe-regen";
         btn.dataset.shotId = kf.shot_id;
-        btn.title = "regenerate this keyframe (SDXL only; about 30-60s)";
+        btn.title = "regenerate this keyframe (" + keyframeLabel() + " only; about 30-60s)";
         if (active) {
           btn.disabled = true;
           btn.textContent = "regen...";
@@ -751,7 +751,7 @@ function buildHistoryRow(r, childrenByParent) {
 async function regenShot(row, kf, btnEl, imgEl) {
   const confirmMsg =
     "regen keyframe for " + kf.shot_id + "?\n\n"
-    + "this runs SDXL only (no motion, no assembly) and overwrites the "
+    + "this runs " + keyframeLabel() + " only (no motion, no assembly) and overwrites the "
     + "thumbnail above. takes about 30 to 60 seconds.";
   if (!window.confirm(confirmMsg)) return;
 

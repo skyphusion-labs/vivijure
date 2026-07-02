@@ -807,7 +807,16 @@ const hPreflight: Handler = async (req, env) => {
     : null;
   // Only touch D1 when there are bindings to check.
   if (bindings && Object.keys(bindings).length > 0) {
-    issues.push(...checkCastBindingsReady(bindings, await listCast(env)));
+    // #454: project the keyframe-stage backend label from the registry (the ui.order-first keyframe
+    // module that declares one), so the cast-readiness message names the real backend instead of a
+    // hardcoded "SDXL". No declaration -> the pure-function "SDXL" default covers it.
+    const kfModules = servingForHook(
+      await discoverModules(env as unknown as Record<string, unknown>, { cacheTtlMs: 60_000 }),
+      "keyframe",
+    );
+    const keyframeLabel =
+      kfModules.map((m) => m.keyframe_label).find((l) => typeof l === "string" && l.trim()) || "SDXL";
+    issues.push(...checkCastBindingsReady(bindings, await listCast(env), keyframeLabel));
   }
   return json(summarize(issues), 200);
 };

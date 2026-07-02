@@ -122,6 +122,9 @@ export function checkStoryboardShape(storyboard: StoryboardLike): PreflightIssue
 export function checkCastBindingsReady(
   bindings: Record<string, number> | null | undefined,
   catalog: CastMemberLike[],
+  // #454: the keyframe-stage backend display token (the route resolves it from the module registry;
+  // default "SDXL" keeps the pure-function callers and their tests backend-agnostic).
+  keyframeLabel = "SDXL",
 ): PreflightIssue[] {
   const issues: PreflightIssue[] = [];
   if (!bindings) return issues;
@@ -143,7 +146,7 @@ export function checkCastBindingsReady(
       issues.push({
         level: "error",
         scope,
-        message: `${member.name} (slot ${slot}) has no portrait; render will fail at the SDXL keyframe stage`,
+        message: `${member.name} (slot ${slot}) has no portrait; render will fail at the ${keyframeLabel} keyframe stage`,
       });
     }
     if (refCount === 0) {
