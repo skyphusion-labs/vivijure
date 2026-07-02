@@ -11,15 +11,18 @@ input surface, idempotent re-runs, a teardown path -- the guided Python installe
 #244 (not full Terraform -- RunPod's IaC is too immature and the Cloudflare side needs Wrangler for
 code/migrations regardless). What it adds over `deploy.sh`: interactive prompts, the
 network-volume + registry-auth side of RunPod (the shell path covers template + endpoint via
-`scripts/runpod-provision.py`), a scoped R2 S3 token mint, the Cloudflare Access app, and a
-`down` teardown by recorded id.
+`scripts/runpod-provision.py`), a scoped R2 S3 token mint, the Cloudflare Access app (access mode
+only), and a `down` teardown by recorded id.
 
-> **Auth-mode honesty (#423):** this installer predates the built-in token login. It provisions the
-> ORIGINAL posture -- a Cloudflare Access app in front of the studio (`DEPLOY_DOMAIN` +
-> `OPERATOR_EMAIL` below), the equivalent of `AUTH_MODE=access`. That still works and is the
-> stronger front door; it is just no longer the only path. `deploy.sh` defaults to
-> `AUTH_MODE=token` and needs no Zero Trust product at all. Teaching this installer token mode is
-> an open follow-up; until then it requires a domain + Access, exactly as written here.
+> **Auth mode (#423 / #445):** the installer supports BOTH gates, matching `deploy.sh`.
+> `AUTH_MODE=token` (the default) mints a `STUDIO_API_TOKEN` operator login as a worker secret and
+> gates `/api/*` on `Authorization: Bearer` -- no Cloudflare Access, no Zero Trust product, and no
+> `DEPLOY_DOMAIN`/`OPERATOR_EMAIL` needed. `AUTH_MODE=access` provisions the edge Access app in
+> front of the studio (`DEPLOY_DOMAIN` + `OPERATOR_EMAIL`) and arms the in-worker JWT backstop
+> (`ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`) -- the stronger front door for a team or org. Either way the
+> core deploy carries the `AUTH_MODE` var so the deployed gate matches. Per-consumer credentials
+> (bots, satellites) are a SEPARATE class minted by `scripts/studio-consumer-token.sh`
+> (docs/SECURITY.md 1b-i), never the operator token.
 
 **Status: complete provisioning spine, NOT yet live-tested.** The CLI, the single input surface, the
 secret handling, and every provider call (Cloudflare + RunPod) are implemented and verified against the
@@ -34,11 +37,15 @@ account. Treat the first run accordingly, and **set the required config below fi
 A few non-secret values must be set (constants at the top of `vivijure_deploy.py`; the run **dies loud**
 if any is missing, rather than POSTing an empty value):
 
-- `DEPLOY_DOMAIN` -- the studio hostname behind CF Access (match the core worker's route).
-- `OPERATOR_EMAIL` -- the one email allowed through the Access self-only policy.
+Always:
 - `DATACENTER_ID` -- an available RunPod data-center id (`GET /datacenters`) for the network volumes.
 - `BACKEND_IMAGE_TAG` -- an explicit released backend tag (e.g. `0.3.3`); never `latest`.
 - `GPU_TYPE_IDS` -- the endpoint GPU type id(s) (`GET /gputypes`).
+
+`AUTH_MODE` defaults to `token` and needs nothing else. For `AUTH_MODE=access` ALSO set:
+- `DEPLOY_DOMAIN` -- the studio hostname behind CF Access (match the core worker's route).
+- `OPERATOR_EMAIL` -- the one email allowed through the Access self-only policy.
+- `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` -- the public Zero-Trust identifiers that arm the in-worker backstop.
 
 ## What it collects (and never will)
 
@@ -59,6 +66,7 @@ and shell history). Values reach Wrangler via stdin and the provider APIs via an
 # from the vivijure repo root
 python3 deploy/vivijure_deploy.py plan          # print the ordered plan, change nothing
 python3 deploy/vivijure_deploy.py up            # provision + seed + deploy (idempotent)
+python3 deploy/vivijure_deploy.py up --rotate-token     # token mode: mint a FRESH login (invalidates the old)
 python3 deploy/vivijure_deploy.py up --noninteractive   # read creds from env (CI/headless)
 python3 deploy/vivijure_deploy.py down          # teardown by recorded id (keeps your R2/D1 data)
 python3 deploy/vivijure_deploy.py down --delete-data    # also delete R2 buckets + D1
@@ -71,8 +79,9 @@ For `--noninteractive`, export `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, 
 
 The pieces are mutually dependent, so the order is load-bearing:
 
-1. **Cloudflare infra** -- D1, the two R2 buckets, AI Gateway (its slug = `GATEWAY_ID`), the Access
-   app; mint a scoped R2 S3 token for the GPU backend.
+1. **Cloudflare infra** -- D1, the two R2 buckets, AI Gateway (its slug = `GATEWAY_ID`); mint a
+   scoped R2 S3 token for the GPU backend. The CF Access app is created here ONLY in `AUTH_MODE=access`
+   (token mode skips it).
 2. **RunPod** -- registry-auth (only if the image is private; leave it UNSET for the public GHCR
    image, or a stale auth aborts even a public pull), template (pins the image), network volume,
    endpoints. Captures `RUNPOD_ENDPOINT_ID`(s). Must precede step 3.

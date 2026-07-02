@@ -207,8 +207,10 @@ path you take, the security gate below is non-negotiable.
 
 `deploy/vivijure_deploy.py` is an **alternative** to `deploy.sh`, not a competing front door: an
 interactive guided installer that also provisions the RunPod side (template, network volume, endpoints),
-mints a scoped R2 token, can create the Cloudflare Access app (only needed for the optional `access` mode), and offers a `down` teardown -- things the
-shell path leaves to you. It collects exactly three infra credentials (a Cloudflare account id + API
+mints a scoped R2 token, and offers a `down` teardown -- things the
+shell path leaves to you. Like `deploy.sh` it defaults to `AUTH_MODE = "token"` (mints the
+`STUDIO_API_TOKEN` operator login as a worker secret; no Cloudflare Access, no Zero Trust step) and
+creates the edge Access app ONLY when you set `AUTH_MODE = "access"`. It collects exactly three infra credentials (a Cloudflare account id + API
 token and a RunPod API key, nothing else, never payment or wallet data). **Status: the full provisioning
 spine is implemented and verified against the Cloudflare/RunPod API docs, but the end-to-end `up` has NOT
 yet been run against a live account,** so `deploy.sh` stays the recommended path; reach for this when you
@@ -218,10 +220,13 @@ want the guided prompts plus teardown.
 git clone https://github.com/skyphusion-labs/vivijure
 cd vivijure
 # set the non-secret config at the top of deploy/vivijure_deploy.py first:
-#   DEPLOY_DOMAIN, OPERATOR_EMAIL, DATACENTER_ID, BACKEND_IMAGE_TAG, GPU_TYPE_IDS
-python3 deploy/vivijure_deploy.py plan   # print the ordered plan, change nothing
-python3 deploy/vivijure_deploy.py up     # provision + seed + deploy (idempotent)
-python3 deploy/vivijure_deploy.py down   # teardown by recorded id (keeps your R2/D1 data)
+#   always:            DATACENTER_ID, BACKEND_IMAGE_TAG, GPU_TYPE_IDS
+#   AUTH_MODE=token:   nothing else (the default; mints STUDIO_API_TOKEN, no CF Access)
+#   AUTH_MODE=access:  also DEPLOY_DOMAIN, OPERATOR_EMAIL, ACCESS_TEAM_DOMAIN, ACCESS_AUD
+python3 deploy/vivijure_deploy.py plan               # print the ordered plan, change nothing
+python3 deploy/vivijure_deploy.py up                 # provision + seed + deploy (idempotent)
+python3 deploy/vivijure_deploy.py up --rotate-token  # token mode: mint a FRESH login (invalidates the old)
+python3 deploy/vivijure_deploy.py down               # teardown by recorded id (keeps your R2/D1 data)
 ```
 
 Full details, required config, and the secret-handling notes are in
