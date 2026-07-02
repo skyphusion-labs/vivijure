@@ -55,6 +55,14 @@ ACCESS_AUD = "${ACCESS_AUD}"
 # PUBLIC, not a secret -- but DEFAULT EMPTY: a self-hosted deploy that leaves it unset ships NO beacon,
 # so /welcome visitors phone home to NO ONE. Set it ONLY on your own deploy to keep your own analytics.
 WEB_ANALYTICS_TOKEN = "${WEB_ANALYTICS_TOKEN}"
+# S4 spend-posture knobs (src/rate-limit.ts). Both OFF unless set:
+#   SPEND_LIMIT_FAIL_CLOSED = "true"  -- a broken/unbound spend limiter (or a failing daily-ceiling
+#     check) DENIES spend routes with 503 instead of allowing. Default (unset) keeps the F3 fail-open
+#     posture: a limiter blip never blocks a legitimate render.
+#   SPEND_DAILY_CEILING = "25"        -- at most N spend-route submissions per UTC day (counted in
+#     D1, migration 0008). Over the ceiling returns 429 until UTC midnight. Submissions, not dollars.
+# SPEND_LIMIT_FAIL_CLOSED = "true"
+# SPEND_DAILY_CEILING = "25"
 
 [observability]
 enabled = true
