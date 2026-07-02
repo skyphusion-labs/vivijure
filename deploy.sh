@@ -108,7 +108,13 @@ for b in vivijure skyphusion-llm; do
     elif printf "%s" "$out" | grep -qiE "already|exists|10004"; then
       info "bucket $b already exists"
     else
-      printf "%s\n" "$out"; die "r2 bucket create $b failed"
+      printf "%s\n" "$out"
+      # A fresh account that never enabled R2 fails here with API code 10042; the raw error does
+      # not say what to do. R2 enable is a one-time ToS + billing gate that cannot be scripted.
+      if printf "%s" "$out" | grep -q "10042"; then
+        die "R2 is not enabled on this account. Enable it once (ToS + billing) at https://dash.cloudflare.com/${CLOUDFLARE_ACCOUNT_ID}/r2 then re-run ./deploy.sh"
+      fi
+      die "r2 bucket create $b failed"
     fi
   fi
 done
