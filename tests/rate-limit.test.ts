@@ -52,10 +52,10 @@ describe("enforceSpendLimit -- denial-of-wallet guard", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("DENIES (with Retry-After) when the limiter says over-limit", async () => {
+  it("DENIES 429 (with Retry-After) when the limiter says over-limit", async () => {
     const limiter: RateLimitBinding = { limit: async () => ({ success: false }) };
     const r = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: limiter });
-    expect(r).toEqual({ ok: false, retryAfter: SPEND_RETRY_AFTER_SECONDS });
+    expect(r).toMatchObject({ ok: false, status: 429, retryAfter: SPEND_RETRY_AFTER_SECONDS });
   });
 
   it("keys the limiter by client IP", async () => {
@@ -96,5 +96,145 @@ describe("enforceSpendLimit -- denial-of-wallet guard", () => {
     };
     const r = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: limiter });
     expect(r.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------- S4: fail-closed posture
+
+describe("enforceSpendLimit -- SPEND_LIMIT_FAIL_CLOSED", () => {
+  beforeEach(() => __resetRateLimitWarnForTest());
+
+  it("an unbound limiter DENIES 503 under fail-closed", async () => {
+    const r = await enforceSpendLimit(req(), { SPEND_LIMIT_FAIL_CLOSED: "true" });
+    expect(r).toMatchObject({ ok: false, status: 503 });
+    expect((r as { message: string }).message).toContain("fail-closed");
+  });
+
+  it("a throwing limiter DENIES 503 under fail-closed", async () => {
+    const limiter: RateLimitBinding = { limit: async () => { throw new Error("limiter down"); } };
+    const r = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: limiter, SPEND_LIMIT_FAIL_CLOSED: "true" });
+    expect(r).toMatchObject({ ok: false, status: 503 });
+  });
+
+  it("a WORKING limiter still allows under fail-closed (the flag changes failure handling, not verdicts)", async () => {
+    const limiter: RateLimitBinding = { limit: async () => ({ success: true }) };
+    const r = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: limiter, SPEND_LIMIT_FAIL_CLOSED: "true" });
+    expect(r.ok).toBe(true);
+  });
+
+  it("anything but the literal \"true\" keeps the default fail-open posture", async () => {
+    for (const v of ["TRUE", "1", "yes", ""]) {
+      const r = await enforceSpendLimit(req(), { SPEND_LIMIT_FAIL_CLOSED: v });
+      expect(r.ok).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------- S4: daily budget ceiling
+
+import { dailyCeiling, utcDay, type SpendCounterDb } from "../src/rate-limit";
+
+/** In-memory D1 fake honoring the one UPSERT..RETURNING the ceiling uses. */
+function fakeCounterDb(opts: { failWith?: Error } = {}) {
+  const counts = new Map<string, number>();
+  const db: SpendCounterDb = {
+    prepare: (_sql: string) => ({
+      bind: (...values: unknown[]) => ({
+        async first<T>(): Promise<T | null> {
+          if (opts.failWith) throw opts.failWith;
+          const day = String(values[0]);
+          const next = (counts.get(day) ?? 0) + 1;
+          counts.set(day, next);
+          return { count: next } as T;
+        },
+      }),
+    }),
+  };
+  return { db, counts };
+}
+
+const okLimiter: RateLimitBinding = { limit: async () => ({ success: true }) };
+
+describe("dailyCeiling / utcDay (pure)", () => {
+  it("parses a positive integer; off for unset / 0 / negative / garbage", () => {
+    expect(dailyCeiling({ SPEND_DAILY_CEILING: "25" })).toBe(25);
+    expect(dailyCeiling({})).toBeNull();
+    expect(dailyCeiling({ SPEND_DAILY_CEILING: "" })).toBeNull();
+    expect(dailyCeiling({ SPEND_DAILY_CEILING: "0" })).toBeNull();
+    expect(dailyCeiling({ SPEND_DAILY_CEILING: "-3" })).toBeNull();
+    expect(dailyCeiling({ SPEND_DAILY_CEILING: "lots" })).toBeNull();
+    expect(dailyCeiling({ SPEND_DAILY_CEILING: "2.5" })).toBeNull();
+  });
+
+  it("utcDay yields the UTC date and seconds to UTC midnight", () => {
+    // 2026-07-02T23:59:00Z -> 60s to reset
+    const t = Date.UTC(2026, 6, 2, 23, 59, 0);
+    expect(utcDay(t)).toEqual({ day: "2026-07-02", secondsToReset: 60 });
+    // midnight boundary belongs to the NEW day, full day to reset
+    const m = Date.UTC(2026, 6, 3, 0, 0, 0);
+    expect(utcDay(m)).toEqual({ day: "2026-07-03", secondsToReset: 86400 });
+  });
+});
+
+describe("enforceSpendLimit -- SPEND_DAILY_CEILING", () => {
+  beforeEach(() => __resetRateLimitWarnForTest());
+  const NOW = Date.UTC(2026, 6, 2, 12, 0, 0);
+
+  it("allows up to the ceiling, then DENIES 429 with Retry-After = seconds to UTC midnight", async () => {
+    const { db } = fakeCounterDb();
+    const env = { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "2", DB: db };
+    expect((await enforceSpendLimit(req(), env, NOW)).ok).toBe(true);
+    expect((await enforceSpendLimit(req(), env, NOW)).ok).toBe(true);
+    const third = await enforceSpendLimit(req(), env, NOW);
+    expect(third).toMatchObject({ ok: false, status: 429, retryAfter: 12 * 3600 });
+    expect((third as { message: string }).message).toContain("daily spend ceiling");
+  });
+
+  it("the counter is per-UTC-day: a new day starts fresh", async () => {
+    const { db } = fakeCounterDb();
+    const env = { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "1", DB: db };
+    expect((await enforceSpendLimit(req(), env, NOW)).ok).toBe(true);
+    expect((await enforceSpendLimit(req(), env, NOW)).ok).toBe(false);
+    const nextDay = NOW + 24 * 3600 * 1000;
+    expect((await enforceSpendLimit(req(), env, nextDay)).ok).toBe(true);
+  });
+
+  it("no ceiling set -> D1 never touched", async () => {
+    let touched = false;
+    const db: SpendCounterDb = { prepare: () => { touched = true; return { bind: () => ({ first: async () => null }) }; } };
+    const r = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: okLimiter, DB: db }, NOW);
+    expect(r.ok).toBe(true);
+    expect(touched).toBe(false);
+  });
+
+  it("ceiling set but DB unbound: fail-open allows, fail-closed denies 503", async () => {
+    const open = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5" }, NOW);
+    expect(open.ok).toBe(true);
+    const closed = await enforceSpendLimit(
+      req(),
+      { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", SPEND_LIMIT_FAIL_CLOSED: "true" },
+      NOW,
+    );
+    expect(closed).toMatchObject({ ok: false, status: 503 });
+  });
+
+  it("a throwing D1: fail-open allows, fail-closed denies 503", async () => {
+    const { db } = fakeCounterDb({ failWith: new Error("d1 down") });
+    const open = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", DB: db }, NOW);
+    expect(open.ok).toBe(true);
+    const closed = await enforceSpendLimit(
+      req(),
+      { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", SPEND_LIMIT_FAIL_CLOSED: "true", DB: db },
+      NOW,
+    );
+    expect(closed).toMatchObject({ ok: false, status: 503 });
+  });
+
+  it("an over-LIMIT verdict short-circuits before the ceiling counter (denied requests do not spend a slot before 429)", async () => {
+    const { db, counts } = fakeCounterDb();
+    const overLimiter: RateLimitBinding = { limit: async () => ({ success: false }) };
+    const r = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: overLimiter, SPEND_DAILY_CEILING: "5", DB: db }, NOW);
+    expect(r).toMatchObject({ ok: false, status: 429 });
+    expect(counts.size).toBe(0);
   });
 });

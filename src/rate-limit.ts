@@ -2,12 +2,21 @@
 //
 // The studio's render/train/generate routes each submit a RunPod GPU job or paid AI work. With no
 // limit, a compromised or abused session can hammer them and burn the operator's balance (Conrad
-// self-funds). This caps the submission rate.
+// self-funds). This caps the submission rate, and (S4) optionally the per-day submission total.
 //
-// Posture: FAIL OPEN. Rate limiting is availability-protective, NOT an auth gate -- a limiter blip
-// (binding unbound or `.limit()` throws) must never block a legitimate render. We allow + warn in
-// that case; the wallet exposure during a brief limiter outage is bounded. (This is the deliberate
-// OPPOSITE of the F2 auth backstop, which fails closed.)
+// Posture: FAIL OPEN by default. Rate limiting is availability-protective, NOT an auth gate -- a
+// limiter blip (binding unbound or `.limit()` throws) must never block a legitimate render. We
+// allow + warn in that case; the wallet exposure during a brief limiter outage is bounded. (This
+// is the deliberate OPPOSITE of the F2 auth backstop, which fails closed.)
+//
+// S4 adds two operator knobs, both off unless set:
+//   SPEND_LIMIT_FAIL_CLOSED="true" -- flip the posture: a broken/unbound limiter (or a failing
+//     daily-ceiling check) DENIES spend routes with 503 instead of allowing. For operators who
+//     would rather have renders block than spend unmetered.
+//   SPEND_DAILY_CEILING="<n>" -- at most n spend-route submissions per UTC day, counted atomically
+//     in D1 (spend_counter, migration 0008). Submissions, not dollars: every spend route is one
+//     bounded GPU/paid-AI job, so a per-day cap is an honest ceiling the operator can size. Over
+//     the ceiling denies 429 with Retry-After = seconds to UTC midnight.
 //
 // Backend: the Cloudflare native Rate Limiting binding (`env.SPEND_RATE_LIMITER.limit({ key })`),
 // zero-storage and per-colo. The binding is added to wrangler.toml by infra (Strummer); this module
@@ -19,8 +28,20 @@ export interface RateLimitBinding {
   limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
+// Structural D1 slice the daily ceiling needs (keeps this module testable with a fake).
+export interface SpendCounterDb {
+  prepare(sql: string): {
+    bind(...values: unknown[]): { first<T = unknown>(): Promise<T | null> };
+  };
+}
+
 export interface SpendLimitEnv {
   SPEND_RATE_LIMITER?: RateLimitBinding;
+  // "true" flips the fail posture for BOTH checks: broken limiter / broken ceiling check => deny.
+  SPEND_LIMIT_FAIL_CLOSED?: string;
+  // Positive integer as a string; unset/0/garbage = ceiling off.
+  SPEND_DAILY_CEILING?: string;
+  DB?: SpendCounterDb;
 }
 
 // Retry-After (seconds) advertised on a 429. Matches the binding's configured period (Strummer sets
@@ -49,31 +70,104 @@ export function isSpendRoute(method: string, pathname: string): boolean {
   return SPEND_PATTERNS.some((re) => re.test(pathname));
 }
 
-export type SpendLimitResult = { ok: true } | { ok: false; retryAfter: number };
+export type SpendLimitResult =
+  | { ok: true }
+  // status 429 = an explicit over-limit / over-ceiling verdict (Retry-After set);
+  // status 503 = fail-closed posture denying because a check itself is broken.
+  | { ok: false; status: 429 | 503; retryAfter?: number; message: string };
 
 let warnedUnbound = false;
 
-// Enforce the spend limit for a request already known to be a spend route. Fails OPEN on an unbound
-// or throwing limiter (warns once per isolate); denies only on an explicit over-limit verdict.
-export async function enforceSpendLimit(request: Request, env: SpendLimitEnv): Promise<SpendLimitResult> {
+/** Pure: the daily ceiling from env, or null when the knob is off (unset / 0 / garbage). */
+export function dailyCeiling(env: SpendLimitEnv): number | null {
+  const raw = env.SPEND_DAILY_CEILING;
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+export function failClosed(env: SpendLimitEnv): boolean {
+  return env.SPEND_LIMIT_FAIL_CLOSED === "true";
+}
+
+/** Pure: UTC day key + seconds until the counter resets (UTC midnight), for Retry-After. */
+export function utcDay(nowMs: number): { day: string; secondsToReset: number } {
+  const d = new Date(nowMs);
+  const day = d.toISOString().slice(0, 10);
+  const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+  return { day, secondsToReset: Math.max(1, Math.ceil((midnight - nowMs) / 1000)) };
+}
+
+// Atomically count this submission against the UTC-day row and return the post-increment total.
+// Denied requests also increment -- that only makes the ceiling stricter, and a denial spends
+// nothing. Throws on a D1 error; the caller maps that through the fail posture.
+async function bumpDailyCount(db: SpendCounterDb, day: string): Promise<number> {
+  const row = await db
+    .prepare(
+      "INSERT INTO spend_counter (day, count) VALUES (?, 1) " +
+        "ON CONFLICT(day) DO UPDATE SET count = count + 1 RETURNING count",
+    )
+    .bind(day)
+    .first<{ count: number }>();
+  if (!row || typeof row.count !== "number") throw new Error("spend_counter increment returned no row");
+  return row.count;
+}
+
+// Enforce the spend limit for a request already known to be a spend route: the per-IP rate limiter
+// first, then the optional daily ceiling. Default posture fails OPEN on a broken check (warns);
+// SPEND_LIMIT_FAIL_CLOSED="true" denies 503 instead. An explicit over-limit / over-ceiling verdict
+// is always a 429.
+export async function enforceSpendLimit(
+  request: Request,
+  env: SpendLimitEnv,
+  nowMs: number = Date.now(),
+): Promise<SpendLimitResult> {
+  const closed = failClosed(env);
+
   const limiter = env.SPEND_RATE_LIMITER;
   if (!limiter) {
     if (!warnedUnbound) {
       warnedUnbound = true;
-      console.warn("rate-limit: SPEND_RATE_LIMITER unbound -> spend endpoints are NOT rate-limited (fail open). Bind it in wrangler.toml.");
+      console.warn(
+        `rate-limit: SPEND_RATE_LIMITER unbound -> ${closed ? "DENYING spend endpoints (fail closed)" : "spend endpoints are NOT rate-limited (fail open)"}. Bind it in wrangler.toml.`,
+      );
     }
-    return { ok: true };
+    if (closed) return { ok: false, status: 503, message: "spend limiter unavailable (fail-closed posture); renders are blocked until the limiter binding is fixed" };
+  } else {
+    // Key by client IP so one abusive source is throttled without starving others. (Single-operator
+    // today; IP keying is the right primitive if this is ever fronted for multiple users.)
+    const key = request.headers.get("cf-connecting-ip") || "global";
+    try {
+      const { success } = await limiter.limit({ key });
+      if (!success) {
+        return { ok: false, status: 429, retryAfter: SPEND_RETRY_AFTER_SECONDS, message: "rate limited: too many render/spend requests; slow down" };
+      }
+    } catch (e) {
+      console.warn(`rate-limit: limiter errored (${(e as Error).message}) -> ${closed ? "denying (fail closed)" : "allowing (fail open)"}`);
+      if (closed) return { ok: false, status: 503, message: "spend limiter unavailable (fail-closed posture); renders are blocked until the limiter recovers" };
+    }
   }
-  // Key by client IP so one abusive source is throttled without starving others. (Single-operator
-  // today; IP keying is the right primitive if this is ever fronted for multiple users.)
-  const key = request.headers.get("cf-connecting-ip") || "global";
-  try {
-    const { success } = await limiter.limit({ key });
-    return success ? { ok: true } : { ok: false, retryAfter: SPEND_RETRY_AFTER_SECONDS };
-  } catch (e) {
-    console.warn(`rate-limit: limiter errored (${(e as Error).message}) -> allowing (fail open)`);
-    return { ok: true };
+
+  const ceiling = dailyCeiling(env);
+  if (ceiling !== null) {
+    const { day, secondsToReset } = utcDay(nowMs);
+    if (!env.DB) {
+      console.warn(`rate-limit: SPEND_DAILY_CEILING set but DB unbound -> ${closed ? "denying (fail closed)" : "ceiling NOT enforced (fail open)"}`);
+      if (closed) return { ok: false, status: 503, message: "daily spend ceiling cannot be checked (no database); renders are blocked (fail-closed posture)" };
+    } else {
+      try {
+        const count = await bumpDailyCount(env.DB, day);
+        if (count > ceiling) {
+          return { ok: false, status: 429, retryAfter: secondsToReset, message: `daily spend ceiling reached (${ceiling} submissions today); resets at UTC midnight` };
+        }
+      } catch (e) {
+        console.warn(`rate-limit: daily ceiling check errored (${(e as Error).message}) -> ${closed ? "denying (fail closed)" : "allowing (fail open)"}`);
+        if (closed) return { ok: false, status: 503, message: "daily spend ceiling check failed (fail-closed posture); renders are blocked until the database recovers" };
+      }
+    }
   }
+
+  return { ok: true };
 }
 
 // Test-only: reset the one-time unbound warning latch.

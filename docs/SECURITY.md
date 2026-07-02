@@ -231,11 +231,23 @@ passes a rate limiter before dispatch (`src/rate-limit.ts`, the spend surface is
 auditable `SPEND_PATTERNS` list). Backend: the Cloudflare native Rate Limiting binding
 (`SPEND_RATE_LIMITER`), keyed by `CF-Connecting-IP`; over-limit returns `429` + `Retry-After`.
 
-Posture: **FAIL OPEN.** Rate limiting is availability-protective, not an auth gate -- if the
-limiter is unbound or `.limit()` throws, the request is ALLOWED (with a one-time warning) so a
+Posture: **FAIL OPEN by default.** Rate limiting is availability-protective, not an auth gate -- if
+the limiter is unbound or `.limit()` throws, the request is ALLOWED (with a one-time warning) so a
 limiter blip never blocks a legitimate render. This is the deliberate OPPOSITE of the F2 auth
 backstop (section 1a), which fails closed. The binding is per-colo; a Durable Object token bucket
 is the documented upgrade if cross-colo (global) accuracy is ever needed.
+
+Two operator knobs harden this further (both `[vars]`, both off unless set):
+
+- `SPEND_LIMIT_FAIL_CLOSED = "true"` flips the posture: a broken/unbound limiter (or a failing
+  daily-ceiling check) DENIES spend routes with `503` instead of allowing. For operators who prefer
+  blocked renders over any window of unmetered spend.
+- `SPEND_DAILY_CEILING = "<n>"` caps total spend-route submissions per UTC day, counted atomically
+  in D1 (`spend_counter`, migration 0008). Over the ceiling returns `429` with `Retry-After` set to
+  UTC midnight. The unit is submissions, not dollars: the studio cannot see GPU pricing, but every
+  spend route is one bounded job, so a per-day count is an honest ceiling the operator can size
+  (e.g. `"25"` on a hobby deploy). The per-IP limiter runs first; a rate-limited request does not
+  consume a ceiling slot.
 
 ## 7. Module response hardening (F5)
 

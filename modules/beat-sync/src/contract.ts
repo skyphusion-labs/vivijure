@@ -43,6 +43,9 @@ export interface ScoreInput {
 export interface ScoreOutput {
   film_key: string;
   applied: string[];
+  // The shared chain degrade convention (S4 consistency pass): set ONLY when the module could not
+  // do what was asked and passed through / partially applied, carrying the reason. Never silent.
+  degraded?: string;
 }
 
 export interface TimedScene {

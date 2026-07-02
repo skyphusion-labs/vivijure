@@ -114,6 +114,15 @@ export interface Env {
   // protective, not an auth gate. See docs/SECURITY.md.
   SPEND_RATE_LIMITER?: RateLimitBinding;
 
+  // S4 spend-posture knobs ([vars], both off unless set; src/rate-limit.ts):
+  // "true" flips the spend checks to FAIL CLOSED: a broken/unbound limiter or a failing daily-
+  // ceiling check DENIES spend routes (503) instead of allowing. For operators who prefer blocked
+  // renders over unmetered spend.
+  SPEND_LIMIT_FAIL_CLOSED?: string;
+  // Positive integer: max spend-route submissions per UTC day, counted atomically in D1
+  // (spend_counter, migration 0008). Over the ceiling denies 429, Retry-After = UTC midnight.
+  SPEND_DAILY_CEILING?: string;
+
   // Transactional mail (render-complete notification). Optional; guard with `if (env.EMAIL)`.
   EMAIL?: EmailServiceBinding;
 
