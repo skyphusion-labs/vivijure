@@ -70,7 +70,7 @@ OPERATOR_EMAIL = ""   # the one email allowed through the Access self-only polic
 #   from the user's input:   RUNPOD_API_KEY
 #   minted/derived here:      RUNPOD_ENDPOINT_ID (from RunPod step), GATEWAY_ID (from the AI Gateway),
 #                             R2_S3_ACCESS_KEY_ID / R2_S3_SECRET_ACCESS_KEY (scoped R2 token), etc.
-STORE_SECRETS = (
+STORE_BINDING_NAMES = (  # binding NAMES only (never values) -- the store keys the workers read
     "RUNPOD_API_KEY",
     "RUNPOD_ENDPOINT_ID",
     "GATEWAY_ID",
@@ -134,11 +134,15 @@ def collect_secrets(noninteractive_env: bool = False) -> Secrets:
         runpod_api_key = getpass.getpass("  RunPod API key (hidden): ").strip()
         s = Secrets(cf_account_id, cf_api_token, runpod_api_key)
 
-    missing = [n for n, v in (
-        ("cloudflare_account_id", s.cf_account_id),
-        ("cloudflare_api_token", s.cf_api_token),
-        ("runpod_api_key", s.runpod_api_key),
-    ) if not v]
+    # Presence map holds BOOLEANS only: the credential values themselves never enter the data
+    # structure the logged `missing` names are derived from, so no static-analysis taint path
+    # (and no future refactor accident) can carry a value into die()/log().
+    present = {
+        "cloudflare_account_id": bool(s.cf_account_id),
+        "cloudflare_api_token": bool(s.cf_api_token),
+        "runpod_api_key": bool(s.runpod_api_key),
+    }
+    missing = [n for n, ok in present.items() if not ok]
     if missing:
         die(f"missing required credential(s): {', '.join(missing)}")
     return s
@@ -546,7 +550,7 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
     # COUPLING NOTE: on a re-run, mint_r2_s3_token returns an EMPTY R2 secret (CF returns the token
     # value only once). The skip-empty guard below is what protects the already-seeded R2 secret from
     # being overwritten with a blank on a reconcile -- do NOT "fix" it to seed empty values.
-    for name in STORE_SECRETS:
+    for name in STORE_BINDING_NAMES:
         v = values.get(name, "")
         if not v:
             log(f"  skip {name}: no value this run (already seeded, or not yet resolved) -- left as-is")
