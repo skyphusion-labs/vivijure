@@ -172,7 +172,9 @@ RunPod secrets the GPU modules pass through).
 The storyboard planner, cast-image prompts, dialogue/music generation, and cloud-animate scoring
 route LLM/AI calls through a **Cloudflare AI Gateway** (for caching, rate-limit, and one bill).
 
-- `GATEWAY_ID` -- the gateway slug. Create a gateway at **dash.cloudflare.com -> AI -> AI Gateway**.
+- `GATEWAY_ID` -- the gateway slug. **Optional:** leave it blank and `deploy.sh` creates an
+  authenticated gateway named `vivijure` for you (needs **AI Gateway: Edit** on your API token); set
+  it only to point at an existing gateway (**dash.cloudflare.com -> AI -> AI Gateway**).
 - `CF_AIG_TOKEN` -- an AI Gateway authentication token: a Cloudflare API token with
   **AI Gateway: Run** permission. **The core storyboard planner requires it** (every release
   planning model bills through Unified Billing), and the `plan-enhance` module's Opus pass

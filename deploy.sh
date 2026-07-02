@@ -21,6 +21,16 @@ die()  { printf "\nERROR: %s\n" "$*" >&2; exit 1; }
 
 WR="npx wrangler"                 # the repo-pinned wrangler (run npm install first)
 
+# CLI flags. --rotate-token forces a fresh STUDIO_API_TOKEN even if one already exists (finding
+# F18-lite); by default a re-run KEEPS the existing token so saved studio logins keep working.
+ROTATE_TOKEN=""
+for arg in "$@"; do
+  case "$arg" in
+    --rotate-token) ROTATE_TOKEN=1 ;;
+    *) die "unknown argument: $arg (supported: --rotate-token)" ;;
+  esac
+done
+
 # cut off any accidental VAR= prefix and strip all whitespace/newlines, so a stray paste of
 # "NAME=value" or a trailing newline cannot poison a stored secret (see docs/DEPLOYMENT.md).
 strip_val() { printf "%s" "$1" | cut -d= -f2- | tr -d "[:space:]"; }
@@ -42,8 +52,12 @@ need RUNPOD_API_KEY          "your RunPod API key"
 need RUNPOD_ENDPOINT_ID      "your RunPod backend endpoint id"
 need R2_S3_ACCESS_KEY_ID     "R2 S3 access key id"
 need R2_S3_SECRET_ACCESS_KEY "R2 S3 secret access key"
-need GATEWAY_ID              "AI Gateway slug"
 need DEPLOY_HOSTNAME         "the hostname your studio serves on"
+
+# GATEWAY_ID is optional (finding F2): if unset, the deploy creates an authenticated AI Gateway with
+# this default slug, so a first-time operator has no manual AI-Gateway prereq. Set it in deploy.env
+# only to point at an existing gateway.
+GATEWAY_ID="${GATEWAY_ID:-vivijure}"
 
 # Preflight: steps 1-6 run wrangler via npx (auto-fetches), but step 7 is "npm run deploy" ->
 # bare "wrangler", which is only on PATH once node_modules exists. Without this, a fresh clone
@@ -283,25 +297,41 @@ else
     info "could not mint (deploy token lacks Account API Tokens: Edit?) -- see the banner below"
   fi
 fi
+# Ensure the AI Gateway exists (finding F2). When GATEWAY_ID was not supplied we create it here with
+# authentication + cache_invalidate_on_update ON at birth (a fresh gateway otherwise defaults to
+# authentication=false, which breaks Unified Billing). Best-effort: a deploy token without
+# "AI Gateway: Edit" cannot create it, so this never fails the deploy -- the banner prints the one
+# manual step. An already-existing gateway is a no-op success.
+GW_CREATE_OK="$(python3 scripts/create-gateway.py 2>/dev/null || true)"
+if [ "$GW_CREATE_OK" = ok ]; then info "AI Gateway '$GATEWAY_ID' present (created if missing)"; else info "could not create the AI Gateway via API -- see the banner below"; fi
+
 # Unified Billing ALSO requires the gateway itself to be AUTHENTICATED (empirically proven in
 # the cold run: authentication=false passes planner calls through keyless and the provider
 # 401s even with a valid token). Flip it via the API; else the banner points at the toggle.
 GW_AUTH_OK="$(python3 scripts/enable-gateway-auth.py 2>/dev/null || true)"
 if [ "$GW_AUTH_OK" = ok ]; then info "AI Gateway authentication: on"; else info "could not enable gateway authentication via API -- see the banner below"; fi
+STUDIO_TOKEN_MINTED=""
 if [ "$AUTH_MODE" = token ]; then
-  # Mint the studio API token: 256 bits of randomness, hex. Stored as a worker secret; printed
-  # ONCE in the final banner below and NEVER written to any file. openssl is near-universal;
-  # python3 (already required by step 1) is the fallback.
-  if command -v openssl >/dev/null; then
-    STUDIO_API_TOKEN="$(openssl rand -hex 32)"
+  if [ -z "$ROTATE_TOKEN" ] && $WR secret list 2>/dev/null | grep -q '"STUDIO_API_TOKEN"'; then
+    # A prior run already minted the login. Re-minting every deploy would silently invalidate every
+    # saved studio login (finding F18-lite), so keep it. Pass --rotate-token to force a new one.
+    info "STUDIO_API_TOKEN already set on the worker (prior run); keeping it (use --rotate-token to mint a new one)"
   else
-    STUDIO_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))")"
+    # Mint the studio API token: 256 bits of randomness, hex. Stored as a worker secret; printed
+    # ONCE in the final banner below and NEVER written to any file. openssl is near-universal;
+    # python3 (already required by step 1) is the fallback.
+    if command -v openssl >/dev/null; then
+      STUDIO_API_TOKEN="$(openssl rand -hex 32)"
+    else
+      STUDIO_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))")"
+    fi
+    put_secret STUDIO_API_TOKEN "$STUDIO_API_TOKEN"
+    STUDIO_TOKEN_MINTED=1
   fi
-  put_secret STUDIO_API_TOKEN "$STUDIO_API_TOKEN"
 fi
 
 say "Done. Your studio is live at: https://$DEPLOY_HOSTNAME"
-if [ "$AUTH_MODE" = token ]; then
+if [ "$AUTH_MODE" = token ] && [ -n "$STUDIO_TOKEN_MINTED" ]; then
 cat <<MSG
 
   ============================= SAVE THIS NOW =============================
@@ -311,12 +341,21 @@ cat <<MSG
 
   This is your login. Open https://$DEPLOY_HOSTNAME and paste it when the
   studio asks; API callers send it as  Authorization: Bearer <token>.
-  Lost it? Re-run:  openssl rand -hex 32 | npx wrangler secret put STUDIO_API_TOKEN
-  (then paste the new value in the studio). See docs/SECURITY.md section 1b.
+  Lost it or want a fresh one? Re-run:  ./deploy.sh --rotate-token
+  (mints a new token and invalidates the old one). See docs/SECURITY.md section 1b.
   =========================================================================
 
   Optional hardening (teams/orgs): put Cloudflare Access in front of the hostname
   and redeploy with AUTH_MODE=access. See docs/SECURITY.md.
+
+  Profile: $VIVIJURE_PROFILE. To add the finish modules later, set VIVIJURE_PROFILE=full in
+  deploy.env (with the extra endpoint + VPC ids) and re-run ./deploy.sh.
+MSG
+elif [ "$AUTH_MODE" = token ]; then
+cat <<MSG
+
+  Login unchanged: your existing STUDIO_API_TOKEN was kept, so saved studio logins keep working.
+  Need a fresh token? Re-run:  ./deploy.sh --rotate-token  (invalidates the old one).
 
   Profile: $VIVIJURE_PROFILE. To add the finish modules later, set VIVIJURE_PROFILE=full in
   deploy.env (with the extra endpoint + VPC ids) and re-run ./deploy.sh.
@@ -340,6 +379,7 @@ cat <<MSG
 
   Planner: ARMED. Storyboard planning bills your AI Gateway credits -- load them on the
   gateway's Credits page if you have not (the planner will not run on a \$0.00 balance).
+  How to load credits: see docs/DEPLOYMENT.md (AI Gateway credits).
 MSG
 else
 cat <<MSG
@@ -354,6 +394,13 @@ cat <<MSG
        https://dash.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/ai/ai-gateway/gateways/$GATEWAY_ID
     2. Add it to deploy.env:   CF_AIG_TOKEN=<the token>
     3. Re-run ./deploy.sh (safe: a re-run updates in place)
+MSG
+fi
+if [ "$GW_CREATE_OK" != ok ]; then
+cat <<MSG
+  The AI Gateway "$GATEWAY_ID" could not be created automatically (your deploy token likely lacks
+  "AI Gateway: Edit"). Create it once: dashboard -> AI Gateway -> Create Gateway, name it
+  "$GATEWAY_ID", and turn ON "Authenticated Gateway". Then re-run ./deploy.sh.
 MSG
 fi
 if [ "$GW_AUTH_OK" != ok ]; then
