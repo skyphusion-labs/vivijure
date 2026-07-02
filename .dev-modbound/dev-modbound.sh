@@ -39,7 +39,7 @@ for ln in src:
     out.append(ln)
 t = "\n".join(out)
 t = t.replace("\${D1_DATABASE_ID}","dev-local-modbound")
-t = t.replace("\${ACCESS_TEAM_DOMAIN}","").replace("\${ACCESS_AUD}","").replace("\${WEB_ANALYTICS_TOKEN}","")
+t = t.replace("\${AUTH_MODE}","").replace("\${ACCESS_TEAM_DOMAIN}","").replace("\${ACCESS_AUD}","").replace("\${WEB_ANALYTICS_TOKEN}","")
 t = t.replace("[vars]\n","[vars]\nALLOW_UNAUTHENTICATED = \"true\"\nPLANNER_AI_MOCK = \"true\"\n",1)
 pathlib.Path("wrangler.toml").write_text(t); print("rendered ./wrangler.toml")
 PY

@@ -1,0 +1,269 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { gateApi, verifyTokenRequest, constantTimeEqual, TOKEN_COOKIE } from "../src/auth-gate";
+import worker from "../src/index";
+import type { Env } from "../src/env";
+import { __resetJwksCacheForTest, type CertsFetcher } from "../src/access-auth";
+
+// ---- shared fixtures -----------------------------------------------------------------------
+
+const SECRET = "a".repeat(32) + "b".repeat(32); // 64 hex chars, the deploy.sh mint shape
+const NOW = 1_750_000_000_000;
+const nowSec = Math.floor(NOW / 1000);
+const TEAM = "test.cloudflareaccess.com";
+const AUD = "AUD-423";
+
+function req(headers: Record<string, string> = {}): Request {
+  return new Request("https://studio/api/cast", { headers });
+}
+
+function bearer(token: string): Request {
+  return req({ authorization: `Bearer ${token}` });
+}
+
+// Minimal RS256 kit (same shape as tests/access-auth.test.ts) so the access-mode legs of the
+// matrix verify REAL signatures, not stubs.
+function b64url(input: Uint8Array | string): string {
+  const u8 = typeof input === "string" ? new TextEncoder().encode(input) : input;
+  let bin = "";
+  for (const b of u8) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function makeKit(kid = "kid-1") {
+  const kp = (await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const jwk = (await crypto.subtle.exportKey("jwk", kp.publicKey)) as unknown as Record<string, unknown>;
+  jwk.kid = kid;
+  jwk.alg = "RS256";
+  jwk.use = "sig";
+  const certs: CertsFetcher = async () => ({ keys: [jwk as any] });
+  return { priv: kp.privateKey, certs, kid };
+}
+
+async function signJwt(priv: CryptoKey, header: object, payload: object): Promise<string> {
+  const h = b64url(JSON.stringify(header));
+  const p = b64url(JSON.stringify(payload));
+  const sig = new Uint8Array(
+    await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, priv, new TextEncoder().encode(`${h}.${p}`)),
+  );
+  return `${h}.${p}.${b64url(sig)}`;
+}
+
+function accessReq(token: string | null): Request {
+  return token === null ? req() : req({ "cf-access-jwt-assertion": token });
+}
+
+// ---- mode dispatch (the gate matrix) ---------------------------------------------------------
+
+describe("gateApi -- AUTH_MODE dispatch, fail closed", () => {
+  beforeEach(() => __resetJwksCacheForTest());
+
+  it("NO MODE, nothing configured -> DENY (legacy fail-closed default, unchanged)", async () => {
+    const d = await gateApi(req(), {} as any);
+    expect(d).toMatchObject({ ok: false, status: 503, reason: expect.stringMatching(/auth not configured/) });
+  });
+
+  it("NO MODE + ALLOW_UNAUTHENTICATED=true -> allow (dev-only escape hatch, unchanged)", async () => {
+    const d = await gateApi(req(), { ALLOW_UNAUTHENTICATED: "true" } as any);
+    expect(d.ok).toBe(true);
+  });
+
+  it("NO MODE + Access vars set -> verifies the Access JWT exactly as before (prod regression)", async () => {
+    const { priv, certs, kid } = await makeKit();
+    const env = { ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD } as any;
+    const token = await signJwt(priv, { alg: "RS256", kid }, { iss: `https://${TEAM}`, aud: AUD, exp: nowSec + 3600, sub: "u" });
+    const ok = await gateApi(accessReq(token), env, { certsFetcher: certs, nowMs: NOW });
+    expect(ok.ok).toBe(true);
+    const denied = await gateApi(accessReq(null), env, { certsFetcher: certs, nowMs: NOW });
+    expect(denied).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("AUTH_MODE=access -> the same Access path (good JWT admits, bad JWT denies)", async () => {
+    const { priv, certs, kid } = await makeKit();
+    const env = { AUTH_MODE: "access", ACCESS_TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD } as any;
+    const good = await signJwt(priv, { alg: "RS256", kid }, { iss: `https://${TEAM}`, aud: AUD, exp: nowSec + 3600 });
+    expect((await gateApi(accessReq(good), env, { certsFetcher: certs, nowMs: NOW })).ok).toBe(true);
+    const wrongAud = await signJwt(priv, { alg: "RS256", kid }, { iss: `https://${TEAM}`, aud: "OTHER", exp: nowSec + 3600 });
+    expect(await gateApi(accessReq(wrongAud), env, { certsFetcher: certs, nowMs: NOW })).toMatchObject({
+      ok: false,
+      status: 403,
+    });
+  });
+
+  it("AUTH_MODE=token -> bearer gate (good admits, bad denies)", async () => {
+    const env = { AUTH_MODE: "token", STUDIO_API_TOKEN: SECRET } as any;
+    expect((await gateApi(bearer(SECRET), env)).ok).toBe(true);
+    expect(await gateApi(bearer("wrong-" + SECRET), env)).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("UNKNOWN mode -> DENY 403 (a typo never opens the API)", async () => {
+    const env = { AUTH_MODE: "tokn", STUDIO_API_TOKEN: SECRET } as any;
+    const d = await gateApi(bearer(SECRET), env);
+    expect(d).toMatchObject({ ok: false, status: 403, reason: expect.stringMatching(/unknown AUTH_MODE/) });
+  });
+
+  it("AUTH_MODE=token IGNORES ALLOW_UNAUTHENTICATED (the hatch stays scoped to the legacy path)", async () => {
+    const env = { AUTH_MODE: "token", ALLOW_UNAUTHENTICATED: "true" } as any; // note: no secret either
+    const d = await gateApi(req(), env);
+    expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+});
+
+// ---- token mode ------------------------------------------------------------------------------
+
+describe("verifyTokenRequest -- fail-closed bearer token gate", () => {
+  const env = { AUTH_MODE: "token", STUDIO_API_TOKEN: SECRET } as any;
+
+  it("accepts the exact token", async () => {
+    const d = await verifyTokenRequest(bearer(SECRET), env);
+    expect(d.ok).toBe(true);
+  });
+
+  it("accepts a case-insensitive Bearer scheme (bearer/BEARER)", async () => {
+    expect((await verifyTokenRequest(req({ authorization: `bearer ${SECRET}` }), env)).ok).toBe(true);
+    expect((await verifyTokenRequest(req({ authorization: `BEARER ${SECRET}` }), env)).ok).toBe(true);
+  });
+
+  it("accepts the token via the vivijure_token cookie on GET (media-element transport)", async () => {
+    const d = await verifyTokenRequest(req({ cookie: `other=1; ${TOKEN_COOKIE}=${SECRET}; more=2` }), env);
+    expect(d.ok).toBe(true);
+  });
+
+  it("accepts the cookie on HEAD too (safe method)", async () => {
+    const r = new Request("https://studio/api/artifact/renders/x.mp4", {
+      method: "HEAD",
+      headers: { cookie: `${TOKEN_COOKIE}=${SECRET}` },
+    });
+    expect((await verifyTokenRequest(r, env)).ok).toBe(true);
+  });
+
+  it("REJECTS a cookie-only mutation: the cookie transport is GET/HEAD-only (403, documented -- the credential is insufficient, not the method)", async () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      const r = new Request("https://studio/api/cast", {
+        method,
+        headers: { cookie: `${TOKEN_COOKIE}=${SECRET}` },
+      });
+      const d = await verifyTokenRequest(r, env);
+      expect(d).toMatchObject({ ok: false, status: 403, reason: expect.stringMatching(/Bearer/) });
+    }
+  });
+
+  it("a mutation WITH the bearer header still authenticates (header covers every method)", async () => {
+    const r = new Request("https://studio/api/cast", {
+      method: "POST",
+      headers: { authorization: `Bearer ${SECRET}` },
+    });
+    expect((await verifyTokenRequest(r, env)).ok).toBe(true);
+  });
+
+  it("header wins over cookie: a BAD bearer denies even with a good cookie present", async () => {
+    const d = await verifyTokenRequest(
+      req({ authorization: "Bearer nope", cookie: `${TOKEN_COOKIE}=${SECRET}` }),
+      env,
+    );
+    expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("DENIES a missing Authorization header", async () => {
+    const d = await verifyTokenRequest(req(), env);
+    expect(d).toMatchObject({ ok: false, status: 403, reason: expect.stringMatching(/token/i) });
+  });
+
+  it("DENIES a wrong token", async () => {
+    const d = await verifyTokenRequest(bearer(SECRET.slice(0, -1) + "X"), env);
+    expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("DENIES a non-Bearer scheme", async () => {
+    const d = await verifyTokenRequest(req({ authorization: `Basic ${btoa("u:" + SECRET)}` }), env);
+    expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("DENIES a prefix and a superstring of the real token", async () => {
+    expect((await verifyTokenRequest(bearer(SECRET.slice(0, 32)), env)).ok).toBe(false);
+    expect((await verifyTokenRequest(bearer(SECRET + "0"), env)).ok).toBe(false);
+  });
+
+  it("DENIES an empty cookie value", async () => {
+    const d = await verifyTokenRequest(req({ cookie: `${TOKEN_COOKIE}=` }), env);
+    expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("FAIL CLOSED: no STUDIO_API_TOKEN secret bound -> 403 everything, even a would-be match", async () => {
+    const bare = { AUTH_MODE: "token" } as any;
+    const d = await verifyTokenRequest(bearer(SECRET), bare);
+    expect(d).toMatchObject({ ok: false, status: 403, reason: expect.stringMatching(/STUDIO_API_TOKEN/) });
+    const empty = { AUTH_MODE: "token", STUDIO_API_TOKEN: "   " } as any;
+    expect(await verifyTokenRequest(bearer(SECRET), empty)).toMatchObject({ ok: false, status: 403 });
+  });
+});
+
+// ---- constant-time compare ---------------------------------------------------------------------
+
+describe("constantTimeEqual -- digest-compare properties", () => {
+  it("equal strings compare true; any difference compares false", async () => {
+    expect(await constantTimeEqual(SECRET, SECRET)).toBe(true);
+    expect(await constantTimeEqual(SECRET, SECRET.slice(0, -1) + "X")).toBe(false);
+    expect(await constantTimeEqual("", "")).toBe(true);
+    expect(await constantTimeEqual("", SECRET)).toBe(false);
+  });
+
+  it("compares differing-length inputs without throwing (digests are fixed-length)", async () => {
+    // The timing property itself is structural: both sides are SHA-256 digested to 32 bytes and the
+    // XOR fold always scans all 32, so input length / first-mismatch position cannot modulate the
+    // comparison time. This case pins the API contract that makes that structure reachable.
+    expect(await constantTimeEqual("short", SECRET)).toBe(false);
+    expect(await constantTimeEqual(SECRET + SECRET, SECRET)).toBe(false);
+  });
+});
+
+// ---- integration: the index.ts wiring (routeRequest -> gateApi) --------------------------------
+
+describe("worker.fetch in token mode -- the wiring the frontend shim depends on", () => {
+  const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+
+  function makeEnv(): Env {
+    return {
+      AUTH_MODE: "token",
+      STUDIO_API_TOKEN: SECRET,
+      ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
+    } as unknown as Env;
+  }
+
+  const apiReq = (headers: Record<string, string> = {}) =>
+    new Request("https://studio.example/api/modules", { headers });
+
+  it("/api/* without a token -> 403 with a token-shaped JSON error (the shim prompt trigger)", async () => {
+    const res = await worker.fetch(apiReq(), makeEnv(), ctx);
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/api token/i);
+  });
+
+  it("/api/* with the bearer token -> served (200 modules projection)", async () => {
+    const res = await worker.fetch(apiReq({ authorization: `Bearer ${SECRET}` }), makeEnv(), ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { modules?: unknown[] };
+    expect(Array.isArray(body.modules)).toBe(true);
+  });
+
+  it("/api/* with the cookie transport -> served (media-element path)", async () => {
+    const res = await worker.fetch(apiReq({ cookie: `${TOKEN_COOKIE}=${SECRET}` }), makeEnv(), ctx);
+    expect(res.status).toBe(200);
+  });
+
+  it("/api/* with a WRONG bearer -> 403", async () => {
+    const res = await worker.fetch(apiReq({ authorization: "Bearer nope" }), makeEnv(), ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it("/health and the static pages stay open in token mode (the auth gate covers /api/* only)", async () => {
+    const env = makeEnv();
+    expect((await worker.fetch(new Request("https://studio.example/health"), env, ctx)).status).toBe(200);
+    const page = await worker.fetch(new Request("https://studio.example/planner"), env, ctx);
+    expect(await page.text()).toBe("ASSET");
+  });
+});

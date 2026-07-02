@@ -13,6 +13,12 @@
 -- ALTER TABLE DROP COLUMN (>= 3.35), but only when the column is unreferenced by an index -- hence
 -- each DROP INDEX precedes its DROP COLUMN. user_prefs keys user_email as its PRIMARY KEY (a PK
 -- column cannot be dropped in place), so it is recreated as a global singleton.
+--
+-- NOTE (2026-07-02, cold-deploy dry run finding F12): the END STATE of this migration is squashed
+-- into migrations/0001_init.sql + 0002_user_prefs.sql, so a FRESH install builds the post-strip
+-- schema directly and never needs this file. It remains for exactly one audience: an install that
+-- applied the PRE-squash 0001/0002 but never ran this strip; apply it once, as documented above.
+-- scripts/verify-migration-squash.sh proves both build paths converge on the same schema.
 
 -- storyboard_projects: per-user slug-unique -> global slug-unique.
 DROP INDEX IF EXISTS idx_projects_user_slug;
