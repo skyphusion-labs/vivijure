@@ -141,6 +141,12 @@ export function validateManifest(raw: unknown): ModuleManifest | string {
       }
     }
   }
+  // keyframe_label is OPTIONAL, but present-and-malformed is a rejected manifest (same doctrine as
+  // finish_artifacts: a wrong shape would ship a blank/garbage token into the UI projection).
+  if (m.keyframe_label !== undefined) {
+    if (typeof m.keyframe_label !== "string" || !m.keyframe_label.trim())
+      return "keyframe_label must be a non-empty string";
+  }
   return m as unknown as ModuleManifest;
 }
 

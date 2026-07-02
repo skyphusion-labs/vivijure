@@ -169,6 +169,11 @@ export interface ModuleManifest {
   /** Finish modules SHOULD declare their artifact conventions (see FinishArtifactsDecl) so the core's
    *  R2-authoritative recovery works from the manifest, not from binding-name pattern-matching. */
   finish_artifacts?: FinishArtifactsDecl;
+  /** OPTIONAL, additive (no MODULE_API bump, same pattern as `cancelable`). A keyframe module's
+   *  compact display token for the keyframe-stage backend/model (e.g. "SDXL"), which the planner UI
+   *  projects inline instead of hardcoding a model name. Distinct from provides[].label, which is
+   *  the section-title-length label ("GPU Keyframe (SDXL on RunPod)"); this is the short inline noun. */
+  keyframe_label?: string;
 }
 
 // --------------------------------------------------------------------------- invocation
