@@ -119,7 +119,7 @@ seed_secret() {   # name value
   val="$(strip_val "$2")"
   [ -n "$val" ] || die "refusing to seed empty secret $name"
   id="$($WR secrets-store secret list "$STORE_ID" --remote --per-page 100 2>/dev/null \
-        | grep -w "$name" | grep -oiE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" | head -1 || true)"
+        | grep -w "$name" | grep -oiE "[0-9a-f]{32}" | head -1 || true)"
   if [ -n "$id" ]; then
     printf "%s" "$val" | $WR secrets-store secret update "$STORE_ID" --secret-id "$id" --scopes workers --remote >/dev/null
     info "updated $name"
