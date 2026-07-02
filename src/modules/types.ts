@@ -374,6 +374,10 @@ export interface ScoreInput {
 export interface ScoreOutput {
   film_key: string;     // R2 key of the scored film (mp4)
   applied: string[];    // e.g. ["music:minimax", "narration:tts"]
+  degraded?: string;    // the shared chain convention (as on FinishOutput / MasterOutput /
+                        // SpeechOutput / FilmFinishOutput): set ONLY when the module could not do
+                        // what was asked and passed through / partially applied, carrying the
+                        // reason. A degrade is never silent -- the consumer records it.
 }
 
 // cast.image (v1) -------------------------------------------------------------------------------
@@ -500,7 +504,13 @@ export interface FilmFinishOutput {
                       // omitted), so the core always gets a usable key. REQUIRED to match the
                       // conformance checker (HOOK_OUTPUT_CHECKS["film.finish"]) and every shipping
                       // module (subtitle / film-titles both always return it).
-  applied?: string[]; // module name on success; "passthrough:<reason>" / "noop:no-cards" on a soft-degrade
+  applied?: string[]; // module name on success; "passthrough:<reason>" / "noop:no-cards" on a soft-degrade.
+                      // OPTIONAL by decision (S4 consistency pass): every SHIPPING module always returns
+                      // it, but module repos vendor this file, so requiring it now would compile-break +
+                      // conformance-fail external modules built against the shipped v2 -- an api bump for
+                      // a field the core already defaults (film-orchestrator reads `applied ?? []`).
+                      // Conformance enforces the TYPE when present (string[]); requiring it outright is
+                      // queued for the next genuine api bump.
   degraded?: string;  // set ONLY when the film was passed through UNCARDED, carrying the reason (#207)
 }
 
