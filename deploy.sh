@@ -250,6 +250,44 @@ put_secret R2_S3_SECRET_ACCESS_KEY  "$R2_S3_SECRET_ACCESS_KEY"
 put_secret R2_S3_ENDPOINT           "$R2_S3_ENDPOINT"
 put_secret R2_S3_BUCKET             "$R2_S3_BUCKET"
 put_secret GATEWAY_ID               "$GATEWAY_ID"
+
+# ---- CF_AIG_TOKEN: pays the storyboard planner via Unified Billing (finding F16) -------------
+# The planner's release models (Anthropic) and the plan-enhance Opus pass authenticate to the
+# AI Gateway with cf-aig-authorization; without this secret the planner is dead on arrival.
+# Three doors, in order: (1) pasted in deploy.env; (2) already on the worker from a prior run;
+# (3) auto-mint a purpose-named "AI Gateway Run"-only token (needs "Account API Tokens: Edit"
+# on CLOUDFLARE_API_TOKEN). If all three miss, the deploy still completes and the final banner
+# prints the exact dashboard steps (re-runs are idempotent, finding F9).
+PLANNER_ARMED=""
+arm_plan_enhance() { # $1 = the token value; per-module secrets so the Opus pass works too
+  printf "%s" "$1"                         | $WR secret put CF_AIG_TOKEN --config modules/plan-enhance/wrangler.toml >/dev/null && info "set plan-enhance CF_AIG_TOKEN"
+  printf "%s" "$(strip_val "$GATEWAY_ID")" | $WR secret put GATEWAY_ID   --config modules/plan-enhance/wrangler.toml >/dev/null && info "set plan-enhance GATEWAY_ID"
+}
+if [ -n "${CF_AIG_TOKEN:-}" ]; then
+  put_secret CF_AIG_TOKEN "$CF_AIG_TOKEN"
+  arm_plan_enhance "$(strip_val "$CF_AIG_TOKEN")"
+  PLANNER_ARMED=1
+elif $WR secret list 2>/dev/null | grep -q '"CF_AIG_TOKEN"'; then
+  info "CF_AIG_TOKEN already set on the worker (prior run); skipping mint"
+  PLANNER_ARMED=1
+else
+  say "CF_AIG_TOKEN not in deploy.env -- minting a Run-only token via the API"
+  # The mint response contains the secret value: it goes STRAIGHT from the script into the
+  # secret puts and is never echoed or logged (same discipline as the STUDIO_API_TOKEN mint).
+  AIG_MINTED="$(python3 scripts/mint-aig-run-token.py 2>/dev/null || true)"
+  if [ -n "$AIG_MINTED" ]; then
+    printf "%s" "$AIG_MINTED" | $WR secret put CF_AIG_TOKEN >/dev/null && info "set CF_AIG_TOKEN (auto-minted: vivijure-planner-aig-run)"
+    arm_plan_enhance "$AIG_MINTED"
+    PLANNER_ARMED=1
+  else
+    info "could not mint (deploy token lacks Account API Tokens: Edit?) -- see the banner below"
+  fi
+fi
+# Unified Billing ALSO requires the gateway itself to be AUTHENTICATED (empirically proven in
+# the cold run: authentication=false passes planner calls through keyless and the provider
+# 401s even with a valid token). Flip it via the API; else the banner points at the toggle.
+GW_AUTH_OK="$(python3 scripts/enable-gateway-auth.py 2>/dev/null || true)"
+if [ "$GW_AUTH_OK" = ok ]; then info "AI Gateway authentication: on"; else info "could not enable gateway authentication via API -- see the banner below"; fi
 if [ "$AUTH_MODE" = token ]; then
   # Mint the studio API token: 256 bits of randomness, hex. Stored as a worker secret; printed
   # ONCE in the final banner below and NEVER written to any file. openssl is near-universal;
@@ -293,5 +331,40 @@ cat <<MSG
 
   Profile: $VIVIJURE_PROFILE. To add the finish modules later, set VIVIJURE_PROFILE=full in
   deploy.env (with the extra endpoint + VPC ids) and re-run ./deploy.sh.
+MSG
+fi
+
+# ---- planner status (finding F16): tell the operator exactly where the planner stands --------
+if [ -n "$PLANNER_ARMED" ] && [ "$GW_AUTH_OK" = ok ]; then
+cat <<MSG
+
+  Planner: ARMED. Storyboard planning bills your AI Gateway credits -- load them on the
+  gateway's Credits page if you have not (the planner will not run on a \$0.00 balance).
+MSG
+else
+cat <<MSG
+
+  ====================== PLANNER NOT FULLY ARMED YET ======================
+MSG
+if [ -z "$PLANNER_ARMED" ]; then
+cat <<MSG
+  CF_AIG_TOKEN is not set, so storyboard planning is DISABLED until you:
+    1. Mint an AI Gateway auth token: dashboard -> AI Gateway -> your gateway ->
+       Settings -> "Create authentication token" (Run permission). Direct URL:
+       https://dash.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/ai/ai-gateway/gateways/$GATEWAY_ID
+    2. Add it to deploy.env:   CF_AIG_TOKEN=<the token>
+    3. Re-run ./deploy.sh (safe: a re-run updates in place)
+MSG
+fi
+if [ "$GW_AUTH_OK" != ok ]; then
+cat <<MSG
+  The gateway must also have AUTHENTICATION ENABLED (a Unified Billing requirement; without
+  it planner calls pass through keyless and fail). Flip the toggle: dashboard -> AI Gateway ->
+  your gateway -> Settings -> "Authenticated Gateway". No re-deploy needed after the toggle.
+MSG
+fi
+cat <<MSG
+  Everything else about your studio works now.
+  =========================================================================
 MSG
 fi
