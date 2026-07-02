@@ -171,6 +171,10 @@ echo "<ai-gateway-slug>"            | npx wrangler secret put GATEWAY_ID
 
 # 3c. Apply the database schema
 npx wrangler d1 migrations apply vivijure-studio --remote
+# The numbered chain builds the CURRENT (post-identity-strip) schema directly; a fresh install
+# needs nothing else. Only an install created before 2026-07-02 that never applied
+# migrations/manual/0004_drop_user_email.sql must apply that file once (see its header).
+# scripts/verify-migration-squash.sh proves fresh chain == prod history.
 
 # 3d. Deploy. Module workers MUST deploy before the core (the core binds each as a service;
 #     a binding to a not-yet-deployed module makes the core deploy fail).

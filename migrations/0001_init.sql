@@ -6,15 +6,23 @@
 -- the columns those modules read/write. Fresh DB by design (Conrad: "just use a clean db" -- no
 -- migration of the old playground data). Apply with:
 --   wrangler d1 migrations apply vivijure-studio
--- Ownership model: every row is scoped by user_email; handlers filter on it. (The "anonymous"
--- fallback in shared.ts:getUserEmail is a Stage-2 hardening item, vivijure#4.)
+--
+-- SQUASHED 2026-07-02 (cold-deploy dry run, finding F12): this file now creates the POST-#292
+-- identity-strip schema directly. The strip (drop user_email everywhere; global slug uniqueness;
+-- singleton user_prefs) originally shipped as migrations/manual/0004_drop_user_email.sql, which the
+-- migrations_dir scan never auto-applies -- so a fresh install got the pre-strip schema while the
+-- code writes post-strip shapes, and EVERY write path failed (project create, prefs save, cast add,
+-- render insert). Squashing is safe for existing installs: wrangler d1 tracks applied migrations by
+-- FILENAME, so a database that already ran the old 0001 never re-runs this file, and prod applied
+-- manual/0004 in its supervised window, landing on this exact end state. An install that ran the
+-- old 0001 but never applied manual/0004 is broken today regardless; it must apply manual/0004 once.
 
 -- ---------------------------------------------------------------------------
--- storyboard_projects: a user's named planning project (prefs + last storyboard).
+-- storyboard_projects: a named planning project (prefs + last storyboard).
+-- Single-operator studio: no per-user scoping (identity strip, #292).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS storyboard_projects (
   id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_email           TEXT    NOT NULL,
   slug                 TEXT    NOT NULL,
   name                 TEXT    NOT NULL,
   prefs_json           TEXT    NOT NULL DEFAULT '{}',
@@ -22,16 +30,15 @@ CREATE TABLE IF NOT EXISTS storyboard_projects (
   created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
 );
--- Per-user slug uniqueness (allocateProjectSlug relies on it).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_user_slug
-  ON storyboard_projects (user_email, slug);
+-- Global slug uniqueness (allocateProjectSlug relies on it).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_slug
+  ON storyboard_projects (slug);
 
 -- ---------------------------------------------------------------------------
--- cast_members: a user's character (bible, portrait/ref images, trained LoRA).
+-- cast_members: a character (bible, portrait/ref images, trained LoRA).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS cast_members (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_email       TEXT    NOT NULL,
   slug             TEXT    NOT NULL,
   name             TEXT    NOT NULL,
   bible            TEXT,
@@ -47,15 +54,14 @@ CREATE TABLE IF NOT EXISTS cast_members (
   lora_error       TEXT,
   lora_trained_at  TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cast_user_slug
-  ON cast_members (user_email, slug);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cast_slug
+  ON cast_members (slug);
 
 -- ---------------------------------------------------------------------------
 -- renders: one submitted render job (RunPod), its lifecycle, output + metadata.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS renders (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_email        TEXT    NOT NULL,
   job_id            TEXT    NOT NULL UNIQUE,        -- RunPod job id; ON CONFLICT(job_id) DO NOTHING
   project           TEXT,
   bundle_key        TEXT,
@@ -81,9 +87,9 @@ CREATE TABLE IF NOT EXISTS renders (
   finish_state      TEXT,                           -- NULL|finishing|done|failed
   notified_at       INTEGER                         -- unix seconds; set when render-done mail claimed
 );
--- List endpoint hot path (v0.55.0): renders for a user, optionally a project, newest first.
-CREATE INDEX IF NOT EXISTS idx_renders_user_project_submitted
-  ON renders (user_email, project_id, submitted_at DESC);
+-- List endpoint hot path (v0.55.0): renders, optionally per project, newest first.
+CREATE INDEX IF NOT EXISTS idx_renders_project_submitted
+  ON renders (project_id, submitted_at DESC);
 -- Scatter/finalize children lookup by parent.
 CREATE INDEX IF NOT EXISTS idx_renders_parent
   ON renders (parent_id);
