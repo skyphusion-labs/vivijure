@@ -11,6 +11,15 @@ audio-master (master hook) modules, so it is a MINOR bump, see section 3).
 > (cloud i2v duration fixes) are also live. The sections below have been reconciled to that shipped
 > reality (module names, audio-master = CPU VPC container not RunPod, speech-upscale shipped).
 
+> **Historical runbook (the 2026-06 v0.3.0 cut) -- read with today's map.** The deploy-ordering
+> rules here (modules before core, tag-gated CI, rollback) still hold, and this stays the reference
+> for them. Since it was written: module secrets moved to declarative Secrets Store bindings (#237
+> shipped -- the imperative `wrangler secret put` seeding below is the old way), the CI deploy job
+> iterates EVERY modules/*/wrangler.toml with an explicit reviewed skip-list (no hardcoded loop to
+> maintain), the studio gained a built-in token login (#423; Cloudflare Access is optional
+> hardening now), and Phase 3 WfP dispatch SHIPPED (v0.8.0, 2026-07-01). Standing up a NEW studio?
+> Use `./deploy.sh` + [DEPLOYMENT.md](DEPLOYMENT.md), not this document.
+
 Scope decision: this is ONE feature-complete v0.3.0 cut WITH master. The QA contract walk runs after
 master merges and before we tag, so master is merged + green before the tag. The out-of-band fleet
 container rebuild(s) (video-finish, and audio-master if it ships a container) are Strummer's to run at
@@ -43,8 +52,8 @@ Style: no em-dashes or en-dashes (double hyphen `--` only).
 - **Fresh-create workers start with NO secrets.** `wrangler deploy` preserves secrets on an EXISTING
   worker, but a brand-new module worker (cloud-keyframe, alibaba-wan-lora) is created empty. Its
   secrets must be seeded once, by hand, AFTER its first deploy and BEFORE it is relied on. (The
-  durable fix for this -- Secrets Store bindings, PR #237 -- is not merged yet, so for this cut we
-  seed secrets imperatively.)
+  durable fix for this -- Secrets Store bindings, PR #237 -- shipped AFTER this cut; module secrets
+  are declarative store bindings today, and this imperative seeding is the historical mitigation.)
 
 Pre-flight identity / account:
 - `CLOUDFLARE_ACCOUNT_ID` is injected (never hardcoded); CI uses the `CLOUDFLARE_ACCOUNT_ID` +
@@ -226,7 +235,9 @@ build). This keeps every binding pointing at an already-deployed module.
    audio-master CONTAINER's `AUDIO_MASTER_VPC`, see 1.5) is NOT covered by that index signature and
    MUST be added as an explicit `Fetcher` field in `Env`, or `npm run typecheck` (the CI gate) fails.
 3. `.github/workflows/ci.yml` deploy loop: add the new module dir names so future tag deploys keep
-   them live. Current loop:
+   them live. The loop at the time (ci.yml has SINCE moved to deploy-by-default -- it iterates every
+   `modules/*/wrangler.toml` with an explicit reviewed skip-list, so this maintenance step no longer
+   exists):
    ```
    for module in own-gpu finish-rife finish-upscale finish-lipsync keyframe seedance kling \
      minimax-hailuo google-veo vidu-q3 alibaba-wan text-overlay film-titles dialogue-gen; do
@@ -354,20 +365,21 @@ gated), so old code runs safely against the newer schema.
 - **src/env.ts mirroring -- RESOLVED:** `Env` uses the generic `[key: \`MODULE_${string}\`]: Fetcher`
   index signature (line 71 on `main`), so `MODULE_*` bindings need NO `Env` edit. Only a NEW
   `[[vpc_services]]` binding (an audio-master container) needs an explicit `Fetcher` field.
-- **Secrets durability:** until PR #237 (Secrets Store bindings) merges, module secrets are
-  imperative; a fresh-create or wipe loses them. For this cut, seed-by-hand-then-verify is the
-  control. Do not wipe/recreate a module worker without re-seeding its secret.
+- **Secrets durability -- RESOLVED since:** PR #237 (Secrets Store bindings) shipped after this
+  cut; module secrets are declarative store bindings now, re-established by every deploy.
+  Seed-by-hand-then-verify was this cut's mitigation, kept here for the record.
 - **Deploy executor:** Strummer runs the out-of-band fleet container rebuild(s) and the tag at deploy
   time, on Conrad's go, after QA passes.
 
 ---
 
-## Phase 3 (Workers for Platforms): create the dispatch namespace  (FUTURE cut -- NOT this release)
+## Phase 3 (Workers for Platforms): create the dispatch namespace  (SHIPPED 2026-07-01 as v0.8.0)
 
 > Forward-looking prerequisite for the dynamic-dispatch work in `docs/module-dispatch.md` (sections 2.2
-> / 3.1). It is documented here with the rest of the deploy ordering; it is NOT part of the current
-> feature-complete cut and MUST NOT be run as part of it. This is a PROD action gated on Conrad's
-> explicit go -- the crew does not create the namespace or deploy the core with the binding on its own.
+> / 3.1). HISTORY: this shipped 2026-07-01 (v0.8.0, #391-#395) on Conrad's go -- the `vivijure-modules`
+> namespace exists in prod and `MODULE_DISPATCH` binds behind the `ENABLE_WFP_DISPATCH` CI variable.
+> The section is kept for the ordering rationale, and for a self-hoster who opts into WfP on their
+> own account (it remains opt-in and paid; a standard self-host never needs it).
 
 **WfP is OPT-IN, never required to run vivijure.** Dispatch is an OPERATOR CONVENIENCE (install a module
 WITHOUT a core redeploy), not a dependency. Workers for Platforms is a PAID Cloudflare add-on, so the
@@ -433,7 +445,7 @@ curl -fsS \
 (Wrap the JSON body in single quotes when you actually run it; it is shown unquoted here only to keep
 this doc free of nested-quote noise.)
 
-### Do NOT, as part of the current cut
+### Do NOT, as part of the v0.3.0 cut (historical gate; Phase 3 has since shipped on Conrad's go)
 
 - Do NOT create the namespace.
 - Do NOT uncomment / ship the `MODULE_DISPATCH` binding in a real `wrangler.toml`.

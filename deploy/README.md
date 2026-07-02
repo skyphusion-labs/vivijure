@@ -9,9 +9,17 @@
 Stand up the whole Vivijure stack on **your own** Cloudflare + RunPod accounts (BYO keys + GPU). One
 input surface, idempotent re-runs, a teardown path -- the guided Python installer from the design in
 #244 (not full Terraform -- RunPod's IaC is too immature and the Cloudflare side needs Wrangler for
-code/migrations regardless). What it adds over `deploy.sh`: it also provisions the RunPod template /
-network volume / endpoints, mints the scoped R2 S3 token, creates the Cloudflare Access app, and can
-tear the whole stack back down by recorded id -- steps `deploy.sh` leaves to you.
+code/migrations regardless). What it adds over `deploy.sh`: interactive prompts, the
+network-volume + registry-auth side of RunPod (the shell path covers template + endpoint via
+`scripts/runpod-provision.py`), a scoped R2 S3 token mint, the Cloudflare Access app, and a
+`down` teardown by recorded id.
+
+> **Auth-mode honesty (#423):** this installer predates the built-in token login. It provisions the
+> ORIGINAL posture -- a Cloudflare Access app in front of the studio (`DEPLOY_DOMAIN` +
+> `OPERATOR_EMAIL` below), the equivalent of `AUTH_MODE=access`. That still works and is the
+> stronger front door; it is just no longer the only path. `deploy.sh` defaults to
+> `AUTH_MODE=token` and needs no Zero Trust product at all. Teaching this installer token mode is
+> an open follow-up; until then it requires a domain + Access, exactly as written here.
 
 **Status: complete provisioning spine, NOT yet live-tested.** The CLI, the single input surface, the
 secret handling, and every provider call (Cloudflare + RunPod) are implemented and verified against the
@@ -29,7 +37,7 @@ if any is missing, rather than POSTing an empty value):
 - `DEPLOY_DOMAIN` -- the studio hostname behind CF Access (match the core worker's route).
 - `OPERATOR_EMAIL` -- the one email allowed through the Access self-only policy.
 - `DATACENTER_ID` -- an available RunPod data-center id (`GET /datacenters`) for the network volumes.
-- `BACKEND_IMAGE_TAG` -- an explicit released backend tag (e.g. `0.2.27`); never `latest`.
+- `BACKEND_IMAGE_TAG` -- an explicit released backend tag (e.g. `0.3.3`); never `latest`.
 - `GPU_TYPE_IDS` -- the endpoint GPU type id(s) (`GET /gputypes`).
 
 ## What it collects (and never will)
