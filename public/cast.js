@@ -43,6 +43,15 @@
     el.classList.toggle("is-error", !!isError);
   }
 
+  // Inline editor status (replaces the old window.alert error dialogs): errors render in the
+  // page, styled by the shared .is-error class, and clear on the next selection or success.
+  function setEditorStatus(text, isError) {
+    const el = $("#cast-editor-status");
+    if (!el) return;
+    el.textContent = text || "";
+    el.classList.toggle("is-error", !!isError);
+  }
+
   function setEditorVisible(visible) {
     $("#cast-editor").hidden = !visible;
     $("#cast-editor-empty").hidden = !!visible;
@@ -233,6 +242,7 @@
   }
 
   function populateEditor(c) {
+    setEditorStatus("");
     $("#cast-name").value = c.name;
     $("#cast-bible").value = c.bible || "";
     $("#cast-voice").value = c.voice_id || "";
@@ -379,7 +389,7 @@
       state.cast.unshift(data.cast);
       selectCast(data.cast.id);
     } catch (e) {
-      window.alert("create failed: " + e.message);
+      setListStatus("Could not create the character: " + e.message, true);
     }
   }
 
@@ -390,7 +400,7 @@
     const bible = $("#cast-bible").value;
     const voice_id = $("#cast-voice").value; // "" clears the voice
     if (!name) {
-      window.alert("name cannot be empty");
+      setEditorStatus("Name cannot be empty.", true);
       return;
     }
     try {
@@ -402,11 +412,12 @@
       const idx = state.cast.findIndex((c) => c.id === id);
       if (idx >= 0) state.cast[idx] = data.cast;
       markDirty(false);
+      setEditorStatus("");
       renderCastList();
       $("#cast-slug").textContent = "/" + data.cast.slug;
       updateExportLink(data.cast); // #324: slug may have changed; refresh filename
     } catch (e) {
-      window.alert("save failed: " + e.message);
+      setEditorStatus("Save failed: " + e.message, true);
     }
   }
 
@@ -423,7 +434,7 @@
       setEditorVisible(false);
       renderCastList();
     } catch (e) {
-      window.alert("delete failed: " + e.message);
+      setEditorStatus("Delete failed: " + e.message, true);
     }
   }
 
@@ -452,7 +463,7 @@
       populateEditor(data.cast);
       renderCastList();
     } catch (e) {
-      window.alert("portrait upload failed: " + e.message);
+      setEditorStatus("Portrait upload failed: " + e.message, true);
     }
   }
 
@@ -467,7 +478,7 @@
       populateEditor(data.cast);
       renderCastList();
     } catch (e) {
-      window.alert("clear failed: " + e.message);
+      setEditorStatus("Could not clear the portrait: " + e.message, true);
     }
   }
 
@@ -527,7 +538,7 @@
       populateEditor(data.cast);
       renderCastList();
     } catch (e) {
-      window.alert("source upload failed: " + e.message);
+      setEditorStatus("Source photo upload failed: " + e.message, true);
     }
   }
 
@@ -544,7 +555,7 @@
       populateEditor(data.cast);
       renderCastList();
     } catch (e) {
-      window.alert("remove failed: " + e.message);
+      setEditorStatus("Could not remove the source photo: " + e.message, true);
     }
   }
 
@@ -563,7 +574,7 @@
       populateEditor(data.cast);
       renderCastList();
     } catch (e) {
-      window.alert("ref upload failed: " + e.message);
+      setEditorStatus("Reference image upload failed: " + e.message, true);
     }
   }
 
@@ -580,7 +591,7 @@
       populateEditor(data.cast);
       renderCastList();
     } catch (e) {
-      window.alert("remove failed: " + e.message);
+      setEditorStatus("Could not remove the reference image: " + e.message, true);
     }
   }
 

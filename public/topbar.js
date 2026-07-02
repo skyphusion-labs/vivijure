@@ -1,6 +1,6 @@
 // Shared topbar helper (v0.66.0, modernized v0.120.0).
 //
-// Loaded on pages that do NOT pull in app.js (planner.html, cast.html, index.html).
+// Loaded on pages that do NOT pull in app.js (planner.html, cast.html).
 // Two jobs, both dependency-free and idempotent on element existence:
 //
 //   1. Fill the signed-in user's email (#account-email in the account menu, or the legacy

@@ -4,6 +4,26 @@ There are **two** observability surfaces for the Vivijure workers, and they hold
 different things. Querying the wrong one is the single most common diagnosability
 trap on this project, so read this before you conclude "the logs are missing."
 
+## Self-hosting honesty: a stock deploy is poll-only
+
+Everything below describes the REFERENCE pipeline (the skyphusion production instance). A stock
+`./deploy.sh` install does NOT have it: the `tail_consumers` block is an OPTIONAL block in
+`wrangler.toml.example` (the minimal profile strips it), and the tail worker, Loki, and Grafana
+are operator-run infrastructure this repo does not stand up for you.
+
+Out of the box a self-hosted studio has:
+
+- **Cloudflare Workers Observability** (the dashboard "Observability" tab): invocation summaries,
+  status codes, timings, cron runs. `[observability] enabled = true` ships on in the template.
+- **The studio's own status routes**: render and job progress is polled over `/api/*` (the studio
+  UI does this polling for you). There is no push/streaming log channel.
+
+That is enough to operate a single-user studio. If you want the full structured-event pipeline
+below (Loki labels, LogQL over the `{"ev": ...}` events), you stand it up yourself: run a Loki +
+Grafana somewhere you control, deploy a tail worker that ships to it, and keep the
+`tail_consumers` optional block in your rendered config. The rest of this doc is the map of that
+setup, written against our reference instance.
+
 ## TL;DR -- which tool for what
 
 | You want...                                                              | Use                                   |
