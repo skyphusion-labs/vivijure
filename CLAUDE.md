@@ -8,7 +8,8 @@ Guidance for Claude Code (and the crew) working in this repo.
 framework, no build step beyond TypeScript) that owns the core (project / storyboard / cast / render
 orchestration) and a **module registry**. Every capability beyond the core is an opt-in module
 worker plugged in through a typed hook contract. Read **docs/module-api.md** first; it is the
-contract everything builds to. Currently **v0.3.0**, ~20+ modules shipped (cloud i2v, finish/lipsync,
+contract everything builds to. Pre-1.0 (the current version is the latest `v*` git tag; see
+CHANGELOG.md), ~25 modules shipped (cloud i2v, finish/lipsync,
 audio, cast-image, dialogue, titles).
 
 The GPU render backend is `vivijure-backend` (RunPod serverless). Production UI:
@@ -48,7 +49,7 @@ of these areas, update the matching doc.
 
 ```bash
 npm run typecheck   # tsc --noEmit && tsc -p tsconfig.scripts.json -- the CI gate; run before pushing
-npm test            # vitest run (690+ tests)
+npm test            # vitest run (1100+ tests)
 npm run conformance # the module conformance suites (a module must pass these to be installable)
 npm run dev         # wrangler dev
 npm run deploy      # wrangler deploy

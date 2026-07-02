@@ -14,7 +14,7 @@ Vivijure has three pieces:
    for a first deploy (the Worker degrades gracefully without the finish container, just no final
    concat/cards).
 
-You do NOT need a separate API key per video provider. Seedance, Kling, MiniMax, Veo, Sora, Wan,
+You do NOT need a separate API key per video provider. Seedance, Kling, MiniMax Hailuo, Google Veo, Vidu, Wan,
 keyframes, and lip-sync all run **through RunPod**, so one RunPod key covers them.
 
 ---
@@ -40,7 +40,10 @@ gate. The studio has one BUILT IN; pick the mode with the `AUTH_MODE` worker var
 Fail closed either way: no mode, an unknown mode, or token mode without its secret denies every
 `/api/*` request (`ALLOW_UNAUTHENTICATED` is the dev-only opt-out, local only). Do **NOT** deploy
 multi-tenant or unauthenticated, or any visitor can read and delete every project, cast member,
-and film by walking the ids. The `*.workers.dev` host stays disabled (`workers_dev = false`).
+and film by walking the ids. Hostnames: a custom-domain deploy keeps the `*.workers.dev` host
+disabled (`workers_dev = false`), and a `*.workers.dev` `DEPLOY_HOSTNAME` is a supported target --
+`deploy.sh` flips `workers_dev = true`, drops the custom-domain route, and the auth gate covers
+that host exactly the same way.
 
 ---
 
@@ -188,6 +191,34 @@ route LLM/AI calls through a **Cloudflare AI Gateway** (for caching, rate-limit,
 > prompts, and swap the underlying model without touching code. Anthropic/other model access is
 > billed through Cloudflare's Unified Billing, so you don't manage a separate provider key here.
 
+### 2e. Load AI credits (the planner runs on these)
+
+Unified Billing means no Anthropic/provider key -- storyboard planning spends Cloudflare
+**AI credits** on your account. A fresh account has $0.00, and the planner will not run on a
+$0.00 balance. The ORDER matters: the credits page only appears once your gateway exists, so
+create the gateway (2d) first, then load credits.
+
+1. Dashboard -> **AI** -> **AI Gateway** -> click your gateway. The upper right of the Overview
+   shows a dollar chip (next to the **Playground** button):
+
+   ![The gateway Overview header: the credits chip sits left of the Playground button](screenshots/aig-gateway-credits-chip.png)
+
+2. Click the chip -- or go straight to
+   `https://dash.cloudflare.com/<ACCOUNT_ID>/ai/ai-gateway/credits`. The Credits page shows your
+   balance and a **Top-up credits** button. The **Auto recharge** toggle under it is your call:
+   on means the planner never dies mid-project on an empty balance; off means no surprise charges.
+
+   ![The Credits page: balance, Top-up credits button, Auto recharge toggle](screenshots/aig-credits-page.png)
+
+3. Click **Top-up credits**, pick an amount, confirm. Expect a **$10 minimum plus a small
+   card-processing fee** (a $10 load invoices about $10.83), charged to the account's default
+   payment method.
+
+   ![The top-up dialog: amount, min $10 / max $1,000, processing fee, total](screenshots/aig-topup-modal.png)
+
+Credits pay for **AI Gateway usage only** (storyboard planning). GPU renders bill your RunPod
+account, and storage bills your Cloudflare account, separately.
+
 ---
 
 ## 3. Deploy the Studio (Cloudflare)
@@ -224,11 +255,15 @@ npx wrangler d1 migrations apply vivijure-studio --remote
 
 # 3d. Deploy. Module workers MUST deploy before the core (the core binds each as a service;
 #     a binding to a not-yet-deployed module makes the core deploy fail).
-for m in own-gpu finish-rife finish-upscale finish-lipsync keyframe seedance kling \
-         minimax-hailuo google-veo vidu-q3 alibaba-wan text-overlay film-titles \
-         dialogue-gen cast-image plan-enhance music-gen narration-gen notify-email; do
+# The minimal-profile modules (this list mirrors MIN_MODULES in deploy.sh):
+for m in own-gpu seedance kling keyframe cloud-keyframe finish-rife plan-enhance cast-image \
+         notify-email music-gen narration-gen dialogue-gen minimax-hailuo google-veo vidu-q3 \
+         alibaba-wan alibaba-wan-lora; do
   npx wrangler deploy -c modules/$m/wrangler.toml
 done
+# The full profile also deploys (OPT_MODULES in deploy.sh; they need the CPU containers or a
+# separate RunPod endpoint): finish-upscale text-overlay film-titles subtitle beat-sync
+# audio-master finish-lipsync speech-upscale
 npm run deploy   # the core Studio Worker
 ```
 
@@ -392,6 +427,7 @@ config; everything else in the Studio is single-user and needs no email.
 - [ ] RunPod API key + a Serverless endpoint running `vivijure-backend` (its id)
 - [ ] R2 S3 access key/secret scoped to the render bucket
 - [ ] AI Gateway slug (`GATEWAY_ID`) + `CF_AIG_TOKEN` (required by the storyboard planner; auto-minted or pasted, see 2d)
+- [ ] AI credits loaded on the gateway ($10 minimum; the planner will not run on $0.00 -- see 2e)
 - [ ] `wrangler d1 create` + both `r2 bucket create`s, ids in `wrangler.toml`
 - [ ] secrets set, migrations applied, **modules deployed before core**
 - [ ] (optional) CPU containers up + VPC services wired

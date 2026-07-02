@@ -191,17 +191,23 @@ path you take, the security gate below is non-negotiable.
 > whole character bundle (portrait + LoRA + bible) by id. This is safe ONLY when exactly one operator
 > can reach the Worker.
 >
-> You MUST place the Worker behind an authenticating proxy (**Cloudflare Access** or equivalent) on
-> **every** hostname it serves -- including the `*.workers.dev` host. Do **NOT** deploy it multi-tenant
-> or on any unauthenticated route. The Worker also ships an in-code Access JWT backstop (set
-> `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`) that fails closed once armed; see
-> [docs/SECURITY.md](docs/SECURITY.md).
+> The deploy ships with that lock built in: `AUTH_MODE = "token"` (the `deploy.sh` default) makes
+> the Worker itself require `Authorization: Bearer <token>` on every `/api/*` request, checked
+> against the 256-bit `STUDIO_API_TOKEN` secret the script mints and prints ONCE at the end of the
+> deploy. No Zero Trust product, no extra dashboard step, and it fails closed: no token bound means
+> every `/api/*` request is denied. Keep the gate on -- never deploy multi-tenant or unauthenticated
+> (`ALLOW_UNAUTHENTICATED` is a local-dev opt-out only).
+>
+> Want a stronger front door (SSO identity, device posture, audit logs, per-caller revocation)? Put
+> **Cloudflare Access** in front and run `AUTH_MODE = "access"`: the Worker then verifies the Access
+> JWT in-code (fail closed) behind your edge Access app. That is optional hardening now, not a
+> deploy prerequisite; see [docs/SECURITY.md](docs/SECURITY.md).
 
 ### Alternative: guided Python installer
 
 `deploy/vivijure_deploy.py` is an **alternative** to `deploy.sh`, not a competing front door: an
 interactive guided installer that also provisions the RunPod side (template, network volume, endpoints),
-mints a scoped R2 token, creates the Cloudflare Access app, and offers a `down` teardown -- things the
+mints a scoped R2 token, can create the Cloudflare Access app (only needed for the optional `access` mode), and offers a `down` teardown -- things the
 shell path leaves to you. It collects exactly three infra credentials (a Cloudflare account id + API
 token and a RunPod API key, nothing else, never payment or wallet data). **Status: the full provisioning
 spine is implemented and verified against the Cloudflare/RunPod API docs, but the end-to-end `up` has NOT
@@ -229,7 +235,9 @@ cd vivijure
 npm install
 
 # Configure: edit wrangler.toml (R2 bucket, D1 database, module service bindings);
-# set secrets (RunPod key, CF Access token for R2, AI Gateway) via `wrangler secret put`.
+# set secrets via `wrangler secret put`: the RunPod key + endpoint id, the R2 S3 key pair
+# for the GPU backend, the AI Gateway ids, and STUDIO_API_TOKEN (the built-in login).
+# The full list with commands is docs/DEPLOYMENT.md section 3b.
 
 npm run dev        # wrangler dev -- hot reload at localhost:8787
 npm run deploy     # wrangler deploy
@@ -246,8 +254,11 @@ project, storyboard, cast, bundle assembly, render orchestration, and a module r
 capability beyond that is an opt-in **module worker** plugged into the pipeline through a typed
 hook contract.
 
-Install only the modules you want. The studio UI assembles itself from `GET /api/modules` -- it
-never hardcodes a feature section. Install none and you get a clean, empty studio.
+Install only the modules you want. The studio UI assembles itself from `GET /api/modules` -- the
+pipeline stages and every module's config controls are projected from the registry, and installing
+none gives you a clean, empty studio. (Honest footnote: a couple of surfaces, like the cast page's
+training-tool catalog, are still hand-wired to known module names; making the projection total is
+tracked work, not a design change.)
 
 ```
 core (this worker)

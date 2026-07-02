@@ -151,7 +151,7 @@ org, or anything with staff turnover: put Access in front and run `AUTH_MODE = "
 
 > **Choosing Access anyway -- the enable-flow workaround.** Zero Trust must be enabled once per
 > account before an Access app can exist, and the dashboard's entry link can dead-end on a fresh
-> account. Go directly to `https://one.dash.cloudflare.com/<account-id>/home` (paste your account
+> account. Go directly to `https://dash.cloudflare.com/<account-id>/one/dashboard` (paste your account
 > id), pick a team name (this sets `ACCESS_TEAM_DOMAIN` = `<team>.cloudflareaccess.com`), create
 > the Access application for your studio hostname, and copy its AUD tag into `ACCESS_AUD`.
 
@@ -180,19 +180,20 @@ malformed value cannot steer a request or force a needless 404 round-trip. It do
 entropy and is not the capability check: the entropy lives at mint time (`crypto.randomUUID()`),
 not in this regex. Do not mistake loosening/tightening the regex for an entropy change.
 
-## 3. Intentionally public (unauthenticated) surfaces
+## 3. Intentionally public surfaces, and the `/api/modules` projection
 
-Two surfaces are reachable without Access, by design. Both are reviewed to leak nothing internal:
+Only **`/welcome`** (the marketing landing page, `welcome.html`) and **`/health`** are reachable
+without authentication, by design; both are reviewed to leak nothing internal. In access mode the
+`/welcome` bypass is a separate path-scoped Access app, and it does NOT extend to `/api/*`.
 
-- **`/welcome`** -- the marketing landing page (`welcome.html`). It is the ONLY path with a public
-  Access bypass, scoped to `/welcome` by a separate path-scoped Access app; that bypass does NOT
-  extend to `/api/*`.
-- **`GET /api/modules`** -- the registry projection that the self-assembling UI renders from. It
-  returns only the PUBLIC view of each installed module (name, version, hooks, config schema
-  markers). Internal binding VALUES never cross this projection; an `install`-scope config value
-  (e.g. a notify-email recipient) lives only behind the authenticated config route and is never
-  emitted here. Today the projection is empty (no modules installed). If you add a module, keep its
-  secret/internal fields off the public projection.
+**`GET /api/modules`** -- the registry projection that the self-assembling UI renders from -- sits
+BEHIND the auth gate like every other `/api/*` route. Its payload is scrubbed as defense in depth:
+it returns only the PUBLIC view of each installed module (name, version, hooks, config schema
+markers). Internal binding VALUES never cross this projection; an `install`-scope config value
+(e.g. a notify-email recipient) lives only behind the authenticated config route and is never
+emitted here. The projection lists whatever the deploy installed -- a minimal `deploy.sh` profile
+installs 17 module workers, so it is populated from first boot. If you add a module, keep its
+secret/internal fields off the projection.
 
 ## 4. Credential blast radius (least privilege per function)
 
