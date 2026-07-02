@@ -164,7 +164,8 @@ Create at **dash.cloudflare.com -> R2 -> Manage R2 API Tokens -> Create API toke
 |---|
 | The RunPod backend is NOT a Cloudflare Worker, so it can't use a Worker R2 binding. It talks to R2 over the S3 API to read inputs (refs, bundles) and write outputs (LoRAs, keyframes, clips). Hence a classic access-key/secret pair, scoped to just the render bucket. |
 
-These become the backend env `R2_S3_ACCESS_KEY_ID` / `R2_S3_SECRET_ACCESS_KEY` (and the matching
+These become the backend env `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` (the handler's names;
+`scripts/runpod-provision.py` maps your pasted `R2_S3_*` values onto them) (and the matching
 RunPod secrets the GPU modules pass through).
 
 ### 2d. AI Gateway (LLM features)
@@ -385,7 +386,7 @@ H200/B200-class setup below, attach a volume and widen the GPU pool afterwards.
    for training + i2v), and attach a **network volume** for the model weights (they self-preload from
    R2 on first run, then stay warm -- avoid scaling fully to zero between jobs or every cold worker
    re-pulls the image).
-3. Set the backend env on the endpoint: `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`, `R2_BUCKET`,
+3. Set the backend env on the endpoint: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`,
    `R2_ENDPOINT` (your `https://<account>.r2.cloudflarestorage.com`), and the HuggingFace/offline
    flags the image documents.
 4. Copy the endpoint id into the Studio's `RUNPOD_ENDPOINT_ID` secret (section 3b).

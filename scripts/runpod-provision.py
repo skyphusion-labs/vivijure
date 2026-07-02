@@ -132,8 +132,11 @@ def main() -> None:
             "isServerless": True,
             "containerDiskInGb": args.disk_gb,
             "env": {
-                "R2_S3_ACCESS_KEY_ID": r2_key,
-                "R2_S3_SECRET_ACCESS_KEY": r2_secret,
+                # HANDLER-side names (finding F17): the backend config-gates on
+                # R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY. The R2_S3_* names above are the
+                # deploy.env PASTE names only; do not leak them into the template env.
+                "R2_ACCESS_KEY_ID": r2_key,
+                "R2_SECRET_ACCESS_KEY": r2_secret,
                 "R2_BUCKET": args.bucket,
                 "R2_ENDPOINT": "https://%s.r2.cloudflarestorage.com" % acc,
                 "HF_HUB_OFFLINE": "1",
