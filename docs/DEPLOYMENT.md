@@ -64,6 +64,7 @@ default, and Access remains available as optional hardening (`AUTH_MODE=access`,
 section above).
 
 ```bash
+npm ci                             # installs wrangler + deps (deploy.sh checks and does this too)
 cp deploy.env.example deploy.env   # then edit deploy.env with your keys
 ./deploy.sh
 ```
