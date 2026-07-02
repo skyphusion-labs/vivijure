@@ -1,6 +1,6 @@
 // Vivijure studio core: module host, render API router, planner/cast UI server.
 
-import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest } from "./modules/registry";
+import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest, cloudMotionModules, defaultGpuDoorModule, gpuDoorMotionModules } from "./modules/registry";
 import { runLiveConformance, allPass, failures } from "./modules/conformance";
 import { installModuleRow, uninstallModuleRow, setModuleEnabled, listInstalledModules } from "./installed-modules";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
@@ -468,9 +468,10 @@ const hFinalizePreview: Handler = async (req, env, _c, p) => {
     const b = await readBody<{ audioKey?: string; castLoras?: Record<string, string> }>(req);
     audioKey = b.audioKey;
   } catch { /* empty body ok */ }
+  // No motionBackend: animateFromPreview ignores it for "finalized" mode and resolves the gpu
+  // door from the registry by locality (the old hardcoded "own-gpu" here was dead config).
   return animatePreviewHandler(env, idParam(p.id), {
     deriveMode: "finalized",
-    motionBackend: "own-gpu",
     audioKey,
   });
 };
@@ -493,9 +494,7 @@ const hAnimateHybrid: Handler = async (req, env, _c, p) => {
     audioKey?: string;
   }>(req);
   const modules = await discoverModules(env as unknown as Record<string, unknown>);
-  const allowed = new Set(
-    servingForHook(modules, "motion.backend").map((m) => m.name).filter((n) => n !== "own-gpu"),
-  );
+  const allowed = new Set(cloudMotionModules(modules).map((m) => m.name));
   const normalized = normalizeHybridBackends(b.backends, allowed);
   if (normalized.errors.length) throw badRequest(normalized.errors.join("; "));
   return animatePreviewHandler(env, idParam(p.id), {
@@ -610,7 +609,10 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
   }
 
   const mapped = mapRenderOverridesToModuleConfigs(b.renderOverrides, tier, modules);
-  const motionBackend = b.motion_backend ?? mapped.motion_backend ?? "own-gpu";
+  const motionBackend = b.motion_backend ?? mapped.motion_backend ?? defaultGpuDoorModule(modules)?.name;
+  if (!motionBackend) {
+    return json({ error: 'no gpu-door motion.backend module (ui.locality "byo"/"local") is installed' }, 400);
+  }
 
   const job = await startFilmFromKeyframes(env, {
     project,
@@ -701,7 +703,9 @@ const hPollRender: Handler = async (_req, env, ctx, p) => {
     && r.job.phase !== "failed"
     && !r.job.cancelled
   ) {
-    const prog = clipAnimateProgress(r.clipJob);
+    const modules = await discoverModules(env as unknown as Record<string, unknown>);
+    const gpuDoors = new Set(gpuDoorMotionModules(modules).map((m) => m.name));
+    const prog = clipAnimateProgress(r.clipJob, gpuDoors);
     if (prog.gpu.total > 0 && prog.cloud.total > 0) {
       await setHybridProgress(env, p.jobId, { gpu: prog.gpu, cloud: prog.cloud });
     } else if (prog.cloud.total > 0) {

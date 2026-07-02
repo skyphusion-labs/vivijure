@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   discoverModules,
+  cloudMotionModules,
+  defaultGpuDoorModule,
   dispatchChain,
   dispatchPickOne,
+  gpuDoorMotionModules,
   indexByHook,
   invokeModule,
   moduleBindingNames,
@@ -377,5 +380,64 @@ describe("readManifest transient retry", () => {
     const m = await readManifest("MODULE_X", fetcher);
     expect(m).toBeNull();
     expect(calls.n).toBe(1);
+  });
+});
+
+// ---- locality classification (S6 debt sprint: locality-driven, never name-matched) -----------
+
+describe("locality classification helpers", () => {
+  const motion = (name: string, order: number, locality?: "local" | "byo" | "cloud") =>
+    ({ name, binding: `MODULE_${name.toUpperCase()}`, hooks: ["motion.backend"], config_schema: {},
+       ui: { order, ...(locality ? { locality } : {}) } }) as unknown as RegisteredModule;
+  const fleet = [
+    motion("local-gpu", 4, "local"),
+    motion("own-gpu", 5, "byo"),
+    motion("seedance", 10, "cloud"),
+    motion("kling", 20, "cloud"),
+    motion("mystery", 30), // no declared locality
+  ];
+
+  it("cloudMotionModules: locality cloud only; undeclared counts cloud; NEVER the doors", () => {
+    expect(cloudMotionModules(fleet).map((m) => m.name)).toEqual(["seedance", "kling", "mystery"]);
+  });
+
+  it("gpuDoorMotionModules: byo + local, order-sorted", () => {
+    expect(gpuDoorMotionModules(fleet).map((m) => m.name)).toEqual(["local-gpu", "own-gpu"]);
+  });
+
+  it("defaultGpuDoorModule: byo preferred over an order-earlier local door", () => {
+    expect(defaultGpuDoorModule(fleet)?.name).toBe("own-gpu");
+  });
+
+  it("defaultGpuDoorModule: falls back to the local door when it is the only door", () => {
+    expect(defaultGpuDoorModule([motion("local-gpu", 4, "local"), motion("seedance", 10, "cloud")])?.name).toBe("local-gpu");
+  });
+
+  it("defaultGpuDoorModule: undefined when no gpu door is installed (callers fail honestly)", () => {
+    expect(defaultGpuDoorModule([motion("seedance", 10, "cloud")])).toBeUndefined();
+  });
+});
+
+describe("validateManifest: finish_artifacts shape (optional, but malformed rejects)", () => {
+  const base = { name: "m", version: "1", api: "vivijure-module/2", hooks: ["finish"] };
+  const v = (finish_artifacts: unknown) => validateManifest({ ...base, finish_artifacts });
+
+  it("absent is fine; both valid output_key kinds pass; applied rules pass", () => {
+    expect(typeof validateManifest(base)).not.toBe("string");
+    expect(typeof v({ output_key: { kind: "shot_named", filename: "_f.mp4" } })).not.toBe("string");
+    expect(typeof v({
+      output_key: { kind: "append_suffix", suffix: "_ls" },
+      applied: [{ when: { knob: "interpolate", equals: false }, tag: "noop" }, { tag: "x:{y|2}" }],
+    })).not.toBe("string");
+  });
+
+  it("malformed shapes reject with a reason", () => {
+    expect(v({})).toMatch(/output_key missing/);
+    expect(v({ output_key: { kind: "banana" } })).toMatch(/kind/);
+    expect(v({ output_key: { kind: "shot_named" } })).toMatch(/filename/);
+    expect(v({ output_key: { kind: "append_suffix", suffix: "" } })).toMatch(/suffix/);
+    expect(v({ output_key: { kind: "shot_named", filename: "_f" }, applied: "nope" })).toMatch(/not an array/);
+    expect(v({ output_key: { kind: "shot_named", filename: "_f" }, applied: [{ tag: "" }] })).toMatch(/missing tag/);
+    expect(v({ output_key: { kind: "shot_named", filename: "_f" }, applied: [{ tag: "t", when: { knob: "" } }] })).toMatch(/when/);
   });
 });

@@ -47,6 +47,15 @@ const MANIFEST: ModuleManifest = {
     only_faces:           { type: "bool",  default: true,   label: "faces only (leave background untouched)" },
   },
   ui: { section: "finish", icon: "wand", order: 10 },
+  // Declared artifact conventions (S6): the container names its output off the shot id, and its
+  // applied marker depends on the interpolate knob. The core's R2 recovery reads THIS, not our name.
+  finish_artifacts: {
+    output_key: { kind: "shot_named", filename: "_finished.mp4" },
+    applied: [
+      { when: { knob: "interpolate", equals: false }, tag: "noop:interpolate-off" },
+      { tag: "interpolate:{interpolation_factor|2}x" },
+    ],
+  },
 };
 
 function json(body: unknown, status = 200): Response {

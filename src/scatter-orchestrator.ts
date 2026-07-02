@@ -19,7 +19,7 @@ import {
 import { filmJobToPollView, filterScenesByShotIds, orderScenesByShotIds, mapRenderOverridesToModuleConfigs } from "./film-render-bridge";
 import { presignR2Get, presignR2Put } from "./r2-presign";
 import { resolveStagedAudioKey } from "./audio-stage";
-import { discoverModules, servingForHook } from "./modules/registry";
+import { defaultGpuDoorModule, discoverModules, servingForHook } from "./modules/registry";
 import { readBundleScenes } from "./bundle-storyboard";
 import { getProjectById } from "./storyboard-projects-db";
 import { buildDialogueLines } from "./dialogue-lines";
@@ -141,7 +141,8 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
   if (shards.length < 2) throw new Error("scatter requires >= 2 shards");
 
   const mapped = mapRenderOverridesToModuleConfigs(args.render_overrides, args.quality_tier, modules);
-  const motionBackend = args.motion_backend ?? mapped.motion_backend ?? "own-gpu";
+  const motionBackend = args.motion_backend ?? mapped.motion_backend ?? defaultGpuDoorModule(modules)?.name;
+  if (!motionBackend) throw new Error('no gpu-door motion.backend module (ui.locality "byo"/"local") is installed');
   const scatterId = scatterParentJobId(crypto.randomUUID());
   const stagedAudio = await resolveStagedAudioKey(env, args.audio_key);
 

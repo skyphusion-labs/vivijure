@@ -6,6 +6,9 @@
 // AUTH_MODE (worker var, wrangler.toml [vars]):
 //   "token"  -> Authorization: Bearer <token> checked against the STUDIO_API_TOKEN worker secret
 //               with a constant-time compare. deploy.sh mints the token and stores the secret.
+//               ALSO accepted (#445): named per-consumer tokens from the D1 api_tokens table
+//               (scripts/studio-consumer-token.sh mints/revokes), so a bot or satellite gets its
+//               own independently revocable credential instead of reusing the operator login.
 //   "access" -> the existing fail-closed Access JWT path (src/access-auth.ts), byte-for-byte.
 //   unset/"" -> legacy resolution, unchanged: ACCESS_TEAM_DOMAIN + ACCESS_AUD set -> verify the
 //               JWT; else ALLOW_UNAUTHENTICATED==="true" -> conscious dev-only opt-out; else DENY.
@@ -73,6 +76,34 @@ function presentedToken(request: Request): string | null {
   return null;
 }
 
+// SHA-256 hex of a string; the storage form of a named token (#445). The plaintext token never
+// touches D1 -- mint hashes it, the gate hashes the presented value and looks the hash up.
+export async function sha256Hex(s: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Named per-consumer tokens (#445): a D1 row per consumer (api_tokens, migration 0009), issued and
+// revoked independently of the operator login. Lookup is by hash equality on a random 256-bit
+// value, so index-lookup timing leaks nothing useful (there is no partial-match progression an
+// attacker can climb). Returns the consumer name on a live match, null otherwise. FAIL CLOSED for
+// this credential class: no DB binding or a D1 error just means no named token matches -- the
+// operator secret path is untouched either way.
+async function namedTokenConsumer(presented: string, env: Env): Promise<string | null> {
+  if (!env.DB) return null;
+  try {
+    const hash = await sha256Hex(presented);
+    const row = await env.DB.prepare(
+      "SELECT name FROM api_tokens WHERE token_hash = ?1 AND revoked_at IS NULL",
+    )
+      .bind(hash)
+      .first<{ name: string }>();
+    return row?.name ?? null;
+  } catch {
+    return null; // table missing (migration not applied) or D1 down -> named tokens deny
+  }
+}
+
 // Token-mode gate. FAIL CLOSED: no secret bound, no/empty/bad presented token -> 403. The reasons
 // mention "token" on purpose -- the frontend shim keys its paste-a-token prompt on that word, and
 // an operator reading the JSON error knows which knob to turn.
@@ -93,10 +124,17 @@ export async function verifyTokenRequest(request: Request, env: Env): Promise<Ac
     // is also the branch a cookie-only mutation lands in (the cookie transport is GET/HEAD-only).
     return { ok: false, status: 403, reason: "missing API token: send Authorization: Bearer <your studio API token>" };
   }
-  if (!(await constantTimeEqual(presented, secret))) {
-    return { ok: false, status: 403, reason: "bad API token" };
+  if (await constantTimeEqual(presented, secret)) {
+    return { ok: true, sub: "studio-api-token", email: null };
   }
-  return { ok: true, sub: "studio-api-token", email: null };
+  // Not the operator token: try the named per-consumer tokens (#445). Same transport rules
+  // (bearer any method, cookie GET/HEAD only) because both ride presentedToken above. The deny
+  // reason is IDENTICAL to the operator miss so a probe cannot tell which class it failed.
+  const consumer = await namedTokenConsumer(presented, env);
+  if (consumer !== null) {
+    return { ok: true, sub: `api-token:${consumer}`, email: null };
+  }
+  return { ok: false, status: 403, reason: "bad API token" };
 }
 
 // The single auth chokepoint routeRequest calls for every /api/* request.
