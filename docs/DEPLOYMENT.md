@@ -126,9 +126,10 @@ Scope it to **your account only** (Account Resources -> Include -> your account)
 | `Account > Workers Scripts > Edit` | Deploy the Studio Worker + every module worker (`wrangler deploy`). |
 | `Account > D1 > Edit` | Create the `vivijure-studio` database and apply schema migrations on deploy. |
 | `Account > Workers R2 Storage > Edit` | Create + write the two buckets: render outputs (`vivijure`) and the doc/RAG store (`skyphusion-llm`). |
-| `Account > AI Gateway > Read` | Resolve the AI Gateway the LLM features route through. |
+| `Account > AI Gateway > Edit` | Resolve the AI Gateway the LLM features route through, AND enable its **Authenticated Gateway** toggle at deploy (a Unified Billing requirement -- Read cannot flip it). |
 | `Account > Account Settings > Read` | `wrangler` reads account metadata at deploy time. |
 | `Account > Secrets Store > Edit` | Bind module secrets from the Cloudflare Secrets Store at deploy (the `[[secrets_store_secrets]]` blocks). Binding a store secret to a worker is a write-level association, so READ is NOT enough -- without Edit the deploy fails with `Secrets store binding authorization failed [code: 10021]`. |
+| `Account > API Tokens > Edit` (optional) | Lets `deploy.sh` auto-mint the Run-only `CF_AIG_TOKEN` (2d below) so the planner arms with zero extra pastes. Honest trade-off: this scope can mint further API tokens on the account; omit it if that bothers you and paste `CF_AIG_TOKEN` yourself instead. |
 
 > Why so specific: each line maps to a real deploy step below. If a module never touches D1, its
 > token never gets D1. This is the whole "least-privilege per function" idea -- you can hand the
@@ -168,8 +169,17 @@ The storyboard planner, cast-image prompts, dialogue/music generation, and cloud
 route LLM/AI calls through a **Cloudflare AI Gateway** (for caching, rate-limit, and one bill).
 
 - `GATEWAY_ID` -- the gateway slug. Create a gateway at **dash.cloudflare.com -> AI -> AI Gateway**.
-- `CF_AIG_TOKEN` -- an AI Gateway authentication token (only the `plan-enhance` module needs it);
-  create under the gateway's settings.
+- `CF_AIG_TOKEN` -- an AI Gateway authentication token: a Cloudflare API token with
+  **AI Gateway: Run** permission. **The core storyboard planner requires it** (every release
+  planning model bills through Unified Billing), and the `plan-enhance` module's Opus pass
+  uses it too. You can leave it blank in `deploy.env`: `deploy.sh` auto-mints a purpose-named
+  Run-only token when the deploy token carries **Account API Tokens: Edit** (see 2a); if it
+  cannot, the deploy still completes and the final banner prints the exact steps. To make one
+  by hand: dashboard -> AI Gateway -> your gateway -> **Settings** -> **Create authentication
+  token** (Run permission), then paste it into `deploy.env` and re-run `./deploy.sh`.
+  Unified Billing also requires the gateway's **Authenticated Gateway** toggle ON --
+  `deploy.sh` enables it via the API, or the banner tells you to flip it in the same
+  Settings page. Run tokens are account-scoped (they cannot be pinned to one gateway).
 
 > Why a gateway instead of a raw provider key: it gives you one place to see spend, cache repeat
 > prompts, and swap the underlying model without touching code. Anthropic/other model access is
@@ -378,7 +388,7 @@ config; everything else in the Studio is single-user and needs no email.
 - [ ] auth mode picked: `token` (default; SAVE the printed token) or `access` (Zero Trust team + AUD)
 - [ ] RunPod API key + a Serverless endpoint running `vivijure-backend` (its id)
 - [ ] R2 S3 access key/secret scoped to the render bucket
-- [ ] AI Gateway slug (`GATEWAY_ID`) (+ `CF_AIG_TOKEN` for plan-enhance)
+- [ ] AI Gateway slug (`GATEWAY_ID`) + `CF_AIG_TOKEN` (required by the storyboard planner; auto-minted or pasted, see 2d)
 - [ ] `wrangler d1 create` + both `r2 bucket create`s, ids in `wrangler.toml`
 - [ ] secrets set, migrations applied, **modules deployed before core**
 - [ ] (optional) CPU containers up + VPC services wired
