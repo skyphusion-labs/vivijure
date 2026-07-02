@@ -39,10 +39,16 @@ assets = { directory = "./public", binding = "ASSETS", html_handling = "none", r
 tail_consumers = [ { service = "vivijure-tail" } ]
 # <<< OPTIONAL: tail-consumer
 
-# F2: in-Worker CF Access JWT verification (defense-in-depth BEHIND the edge Access app).
-# When BOTH are set, /api/* requires a valid Access JWT (fail-closed); see src/access-auth.ts.
-# Not secrets -- public Zero-Trust identifiers (team hostname + the vivijure app AUD).
+# Auth for /api/* (#423, src/auth-gate.ts). AUTH_MODE picks the gate:
+#   "token"  -> built-in bearer token: /api/* requires Authorization: Bearer <token> checked
+#               against the STUDIO_API_TOKEN worker SECRET (deploy.sh mints + stores it; it is
+#               never a var). No Zero Trust product needed; leave the ACCESS_* vars empty.
+#   "access" -> in-Worker CF Access JWT verification (F2, defense-in-depth BEHIND an edge Access
+#               app). Requires ACCESS_TEAM_DOMAIN + ACCESS_AUD -- public Zero-Trust identifiers
+#               (team hostname + the vivijure app AUD), not secrets.
+# Fail closed: an unknown mode, or token mode without its secret, denies every /api/* request.
 [vars]
+AUTH_MODE = "${AUTH_MODE}"
 ACCESS_TEAM_DOMAIN = "${ACCESS_TEAM_DOMAIN}"
 ACCESS_AUD = "${ACCESS_AUD}"
 # Cloudflare Web Analytics token, deploy-injected into /welcome by the Worker (src/asset-response.ts).

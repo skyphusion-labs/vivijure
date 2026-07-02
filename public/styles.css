@@ -1120,3 +1120,27 @@ body.sw-open .sw-dock { transform: none; }
 .planner-backend-caps { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .planner-backend-caps li { margin: 0; }
 .planner-backend-ranges { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+/* ---- API token gate (#423, public/auth-token.js) -- an auth overlay, not a page ---- */
+.token-gate-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(13, 15, 20, 0.88); backdrop-filter: blur(6px);
+}
+.token-gate-panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 26px 28px; width: min(440px, calc(100vw - 40px));
+  display: flex; flex-direction: column; gap: 12px;
+}
+.token-gate-panel h2 { margin: 0; font-size: 17px; }
+.token-gate-panel p { margin: 0; color: var(--muted); font-size: 13.5px; }
+.token-gate-input {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  color: var(--ink); padding: 10px 12px; font: inherit; width: 100%;
+}
+.token-gate-input:focus { outline: none; border-color: var(--accent); }
+.token-gate-btn {
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  color: #0d0f14; border: none; border-radius: 8px; padding: 10px 12px;
+  font: inherit; font-weight: 700; cursor: pointer;
+}

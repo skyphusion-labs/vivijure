@@ -36,7 +36,7 @@ import {
   deleteCastArtifacts,
 } from "./cast-media";
 import { exportCastBundle, importCastBundle } from "./cast-bundle";
-import { gateApiRequest } from "./access-auth";
+import { gateApi } from "./auth-gate";
 import { isSpendRoute, enforceSpendLimit } from "./rate-limit";
 import { applyResponseSecurity } from "./asset-response";
 import { chatImage, type ChatImageArgs } from "./chat-image";
@@ -1262,11 +1262,12 @@ export default {
 async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return json({ ok: true, service: "vivijure-studio", phase: 1 });
-    // F2: fail-CLOSED Access verification for the whole data plane. /health (above) + static
-    // pages/assets (below) stay open; every /api/* request must carry a valid Access JWT (or the
-    // deployer must consciously opt out via ALLOW_UNAUTHENTICATED). See src/access-auth.ts.
+    // F2/#423: fail-CLOSED auth for the whole data plane. /health (above) + static pages/assets
+    // (below) stay open; every /api/* request must pass the AUTH_MODE gate -- the studio bearer
+    // token (token mode) or a valid Access JWT (access mode / legacy unset). The dev opt-out
+    // stays ALLOW_UNAUTHENTICATED, legacy path only. See src/auth-gate.ts.
     if (url.pathname.startsWith("/api/")) {
-      const gate = await gateApiRequest(request, env);
+      const gate = await gateApi(request, env);
       if (!gate.ok) return json({ error: gate.reason }, gate.status);
     }
     if (url.pathname === "/api/modules" && request.method === "GET") {

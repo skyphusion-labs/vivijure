@@ -156,6 +156,9 @@ jobs:
       # means ONLY these placeholders substitute -- any other ${...} in the file is left untouched.
       - name: Render core wrangler.toml
         env:
+          # #423: auth mode for the rendered config. OUR tag deploy stays Access-armed: the shell
+          # below defaults an unset variable to "access" so the F2 gate keeps its teeth.
+          AUTH_MODE: ${{ vars.AUTH_MODE }}
           ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
           ACCESS_AUD: ${{ secrets.ACCESS_AUD }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
@@ -177,12 +180,17 @@ jobs:
         run: |
           set -eu
           apk add --no-cache gettext >/dev/null
-          VARS='$ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
+          AUTH_MODE="${AUTH_MODE:-access}"; export AUTH_MODE
+          VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
           envsubst "$VARS" < wrangler.toml.example > wrangler.toml
           # fail-closed: no placeholder may survive (a missing secret would leave a literal ${...}).
           if grep -q '${' wrangler.toml; then echo "::error::unsubstituted placeholder in wrangler.toml"; grep -n '${' wrangler.toml; exit 1; fi
-          # F2 guard: the armed Access vars must be present + NON-EMPTY (a blank would unarm -> DENY 503).
-          grep -Eq 'ACCESS_AUD = ".+"' wrangler.toml && grep -Eq 'ACCESS_TEAM_DOMAIN = ".+"' wrangler.toml || { echo "::error::F2 Access vars empty/missing after render"; exit 1; }
+          # Auth guard (mode-aware since #423): AUTH_MODE must render non-empty, and access mode
+          # additionally needs the armed Access vars NON-EMPTY (a blank would unarm -> DENY 503).
+          grep -Eq 'AUTH_MODE = ".+"' wrangler.toml || { echo "::error::AUTH_MODE empty after render"; exit 1; }
+          if [ "$AUTH_MODE" = "access" ]; then
+            grep -Eq 'ACCESS_AUD = ".+"' wrangler.toml && grep -Eq 'ACCESS_TEAM_DOMAIN = ".+"' wrangler.toml || { echo "::error::F2 Access vars empty/missing after render"; exit 1; }
+          fi
           # Opt-in WfP: uncomment the [[dispatch_namespaces]] block ONLY when this account set the
           # ENABLE_WFP_DISPATCH variable to "1" (namespace already created out of band). The committed
           # wrangler.toml.example ships the block COMMENTED, so with the var unset (every community
