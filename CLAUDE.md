@@ -49,7 +49,7 @@ of these areas, update the matching doc.
 
 ```bash
 npm run typecheck   # tsc --noEmit && tsc -p tsconfig.scripts.json -- the CI gate; run before pushing
-npm test            # vitest run (1100+ tests)
+npm test            # vitest run (1200+ tests)
 npm run conformance # the module conformance suites (a module must pass these to be installable)
 npm run dev         # wrangler dev
 npm run deploy      # wrangler deploy
