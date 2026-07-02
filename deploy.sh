@@ -197,6 +197,16 @@ envsubst "$VARS" < .wrangler.stage.toml > wrangler.toml
 rm -f .wrangler.stage.toml
 # retarget the route: the template ships OUR production hostname; point it at yours.
 sed -i -E "s|^pattern = \"[^\"]+\"|pattern = \"$DEPLOY_HOSTNAME\"|" wrangler.toml
+# No domain? A *.workers.dev DEPLOY_HOSTNAME cannot be a custom-domain route (Cloudflare rejects
+# it) -- serve on the built-in workers.dev subdomain instead: flip workers_dev on and drop the
+# [[routes]] block entirely. Found as cold-run F1: this used to require hand-editing the template.
+case "$DEPLOY_HOSTNAME" in
+  *.workers.dev)
+    sed -i -E "s|^workers_dev = false|workers_dev = true|" wrangler.toml
+    sed -i "/^\[\[routes\]\]/,/^custom_domain = true/d" wrangler.toml
+    info "workers.dev target: workers_dev=true, custom-domain route dropped"
+    ;;
+esac
 # fail-closed: no leftover placeholder, AUTH_MODE rendered non-empty, and in access mode the
 # Access vars must be present + non-empty (empty would unarm the F2 backstop -> DENY-everything).
 if grep -q "\${" wrangler.toml; then grep -n "\${" wrangler.toml; die "unsubstituted placeholder left in wrangler.toml"; fi
