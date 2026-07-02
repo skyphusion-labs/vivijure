@@ -119,15 +119,19 @@ entirely in-Worker (`src/auth-gate.ts`):
 - `deploy.sh` mints a 256-bit random token (`openssl rand -hex 32`), stores it as the
   `STUDIO_API_TOKEN` **worker secret** (never a var, never a tracked file), and prints it ONCE at
   the end of the deploy.
-- Every `/api/*` request must present the token: `Authorization: Bearer <token>` (canonical), or
-  the same token in the `vivijure_token` cookie. The cookie transport exists because the studio
-  loads artifacts through media elements (`img`/`video`/`audio` `src` on `/api/artifact/*`, the
-  #416 Range paths) and a media element cannot send a header. The frontend shim
-  (`public/auth-token.js`, loaded first on every studio page) adds the bearer header to every
-  same-origin `/api/*` fetch and mirrors the same pasted token into the cookie
-  (`Secure; SameSite=Strict; Path=/api/`); `SameSite=Strict` stops cross-site auto-send. One
-  credential, two transports. When a bearer header IS present it is authoritative: a bad header
-  denies even if a good cookie rides along.
+- Every `/api/*` request must present the token. `Authorization: Bearer <token>` is canonical
+  and authenticates EVERY method. The same token in the `vivijure_token` cookie authenticates
+  **GET/HEAD only**: the cookie transport exists because the studio loads artifacts through media
+  elements (`img`/`video`/`audio` `src` on `/api/artifact/*`, the #416 Range paths) and a media
+  element cannot send a header -- and media elements only ever issue GETs, so read-only cookie
+  authority costs zero call sites while making the cookie useless for anything state-changing
+  even in a SameSite-bypass scenario. A cookie-only mutation is answered `403` (deliberately not
+  `405`: the method is allowed, the CREDENTIAL is insufficient) with a reason pointing at the
+  bearer header. The frontend shim (`public/auth-token.js`, loaded first on every studio page)
+  adds the bearer header to every same-origin `/api/*` fetch and mirrors the same pasted token
+  into the cookie (`Secure; SameSite=Strict; Path=/api/`); `SameSite=Strict` stops cross-site
+  auto-send. One credential; the second transport is read-only. When a bearer header IS present
+  it is authoritative: a bad header denies even if a good cookie rides along.
 - The compare is CONSTANT-TIME: both sides are SHA-256 digested and the two fixed-length digests
   are XOR-folded over all 32 bytes, so neither the presented token's length nor the position of
   the first mismatching byte can modulate the comparison time.
@@ -317,7 +321,9 @@ them (the `/welcome` release-purge flow depends on that edge cache existing, #40
       caller carries an Access JWT (service token, not IP bypass), or it will be denied.
 - [ ] Token-mode surface change -> `STUDIO_API_TOKEN` stays a worker SECRET (never a var or a
       tracked file); a new frontend API caller inherits the bearer header from the auth-token.js
-      fetch shim automatically, and ONLY media-element `src` URLs may rely on the cookie transport.
+      fetch shim automatically. ONLY media-element `src` URLs may rely on the cookie transport,
+      which authenticates GET/HEAD alone -- a new mutating route needs no thought here, the cookie
+      can never authorize it.
 - [ ] New response class / route -> it flows through `applyResponseSecurity`; confirm it lands in
       the right header class (page vs locked) per section 8. CF managed-transform header layers stay
       OFF (the Worker is the single source of truth).

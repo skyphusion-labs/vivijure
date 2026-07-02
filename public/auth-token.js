@@ -6,7 +6,8 @@
 //      Authorization: Bearer <token> from localStorage;
 //   2. mirrors the token into a `vivijure_token` cookie (Secure; SameSite=Strict; Path=/api/) so
 //      media elements (img/video/audio src on /api/artifact/*, which cannot send headers) keep
-//      working with #416 Range streaming intact;
+//      working with #416 Range streaming intact -- the worker honors the cookie for GET/HEAD
+//      ONLY; every mutation needs the bearer header this shim attaches to fetch calls;
 //   3. when the API answers 403 with a token-shaped error, shows a minimal paste-once prompt,
 //      stores the token, and reloads.
 // On an Access-mode deploy no token is ever stored and the shim is inert (Access rides the CF

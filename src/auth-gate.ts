@@ -16,13 +16,17 @@
 // ALLOW_UNAUTHENTICATED escape hatch does NOT apply once a mode is explicitly selected -- it stays
 // scoped to the legacy unconfigured path exactly as before.
 //
-// Token transport: the Authorization: Bearer header is canonical. Token mode ALSO accepts the
-// same token in a `vivijure_token` cookie, because the studio loads artifacts through media
-// elements (img.src / video.src / audio.src on /api/artifact/*, the #416 Range paths) and a media
-// element cannot attach a header. The frontend token shim (public/auth-token.js) sets the cookie
-// (Secure; SameSite=Strict; Path=/api/) alongside localStorage. Same secret, same constant-time
-// compare; SameSite=Strict stops cross-site auto-send. This is a transport variant of the one
-// token, not a second credential.
+// Token transport: the Authorization: Bearer header is canonical and authenticates EVERY method.
+// Token mode ALSO accepts the same token in a `vivijure_token` cookie -- but for GET/HEAD ONLY.
+// The cookie exists because the studio loads artifacts through media elements (img.src /
+// video.src / audio.src on /api/artifact/*, the #416 Range paths) and a media element cannot
+// attach a header; media elements only ever issue GETs, so scoping the cookie's authority to
+// safe methods costs zero call sites while making the cookie useless for anything state-changing
+// even in a SameSite-bypass scenario (defense in depth). Every mutation (POST/PUT/PATCH/DELETE)
+// requires the explicit bearer header, which all fetch() call sites attach via the shim. The
+// frontend token shim (public/auth-token.js) sets the cookie (Secure; SameSite=Strict;
+// Path=/api/) alongside localStorage. Same secret, same constant-time compare; SameSite=Strict
+// stops cross-site auto-send. One credential; the second transport is read-only.
 
 import type { Env } from "./env";
 import { gateApiRequest, type AccessDecision, type VerifyOpts } from "./access-auth";
@@ -46,13 +50,17 @@ export async function constantTimeEqual(a: string, b: string): Promise<boolean> 
   return diff === 0;
 }
 
-// Pull the presented token off the request: Authorization: Bearer (canonical) first, then the
-// vivijure_token cookie (media-element transport, see the header comment). Returns null when
-// neither carries one.
+// Pull the presented token off the request: Authorization: Bearer (canonical, any method) first,
+// then the vivijure_token cookie -- honored for GET/HEAD ONLY (media-element transport, see the
+// header comment). A cookie on a mutating method is IGNORED, so the request reads as
+// unauthenticated and denies with the bearer-required reason. Returns null when nothing usable
+// carries a token.
 function presentedToken(request: Request): string | null {
   const authz = (request.headers.get("authorization") || "").trim();
   const m = /^Bearer\s+(\S+)$/i.exec(authz);
   if (m) return m[1];
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD") return null; // cookie authority is read-only
   const cookie = request.headers.get("cookie") || "";
   for (const part of cookie.split(";")) {
     const eq = part.indexOf("=");
@@ -81,6 +89,8 @@ export async function verifyTokenRequest(request: Request, env: Env): Promise<Ac
   }
   const presented = presentedToken(request);
   if (presented === null) {
+    // 403 (not 405) by design: the method is fine, the CREDENTIAL is missing/insufficient. This
+    // is also the branch a cookie-only mutation lands in (the cookie transport is GET/HEAD-only).
     return { ok: false, status: 403, reason: "missing API token: send Authorization: Bearer <your studio API token>" };
   }
   if (!(await constantTimeEqual(presented, secret))) {

@@ -127,9 +127,36 @@ describe("verifyTokenRequest -- fail-closed bearer token gate", () => {
     expect((await verifyTokenRequest(req({ authorization: `BEARER ${SECRET}` }), env)).ok).toBe(true);
   });
 
-  it("accepts the token via the vivijure_token cookie (media-element transport)", async () => {
+  it("accepts the token via the vivijure_token cookie on GET (media-element transport)", async () => {
     const d = await verifyTokenRequest(req({ cookie: `other=1; ${TOKEN_COOKIE}=${SECRET}; more=2` }), env);
     expect(d.ok).toBe(true);
+  });
+
+  it("accepts the cookie on HEAD too (safe method)", async () => {
+    const r = new Request("https://studio/api/artifact/renders/x.mp4", {
+      method: "HEAD",
+      headers: { cookie: `${TOKEN_COOKIE}=${SECRET}` },
+    });
+    expect((await verifyTokenRequest(r, env)).ok).toBe(true);
+  });
+
+  it("REJECTS a cookie-only mutation: the cookie transport is GET/HEAD-only (403, documented -- the credential is insufficient, not the method)", async () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      const r = new Request("https://studio/api/cast", {
+        method,
+        headers: { cookie: `${TOKEN_COOKIE}=${SECRET}` },
+      });
+      const d = await verifyTokenRequest(r, env);
+      expect(d).toMatchObject({ ok: false, status: 403, reason: expect.stringMatching(/Bearer/) });
+    }
+  });
+
+  it("a mutation WITH the bearer header still authenticates (header covers every method)", async () => {
+    const r = new Request("https://studio/api/cast", {
+      method: "POST",
+      headers: { authorization: `Bearer ${SECRET}` },
+    });
+    expect((await verifyTokenRequest(r, env)).ok).toBe(true);
   });
 
   it("header wins over cookie: a BAD bearer denies even with a good cookie present", async () => {
