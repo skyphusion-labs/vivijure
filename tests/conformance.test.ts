@@ -154,6 +154,22 @@ describe("conformance: hook output payload", () => {
   it("rejects a master output missing applied", () => {
     expect(checkHookOutput("master", { audio_key: "audio/bed.wav" }).pass).toBe(false);
   });
+  it("accepts a well-formed score output, with and without the (S4) degraded field", () => {
+    expect(checkHookOutput("score", { film_key: "f.mp4", applied: ["music:minimax"] }).pass).toBe(true);
+    expect(checkHookOutput("score", { film_key: "f.mp4", applied: [], degraded: "tts down, bed only" }).pass).toBe(true);
+  });
+  it("rejects a score output whose degraded is present but not a string", () => {
+    expect(checkHookOutput("score", { film_key: "f.mp4", applied: [], degraded: 7 }).pass).toBe(false);
+  });
+  it("accepts a film.finish output with only film_key (applied/degraded stay optional by decision)", () => {
+    expect(checkHookOutput("film.finish", { film_key: "f.mp4" }).pass).toBe(true);
+    expect(checkHookOutput("film.finish", { film_key: "f.mp4", applied: ["film-titles"], degraded: "" }).pass).toBe(true);
+  });
+  it("rejects a film.finish output whose PRESENT applied/degraded break their types (S4: no unchecked flow into job state)", () => {
+    expect(checkHookOutput("film.finish", { film_key: "f.mp4", applied: "film-titles" }).pass).toBe(false);
+    expect(checkHookOutput("film.finish", { film_key: "f.mp4", applied: [42] }).pass).toBe(false);
+    expect(checkHookOutput("film.finish", { film_key: "f.mp4", degraded: { reason: "x" } }).pass).toBe(false);
+  });
   it("rejects a non-object output", () => {
     expect(checkHookOutput("finish", null).pass).toBe(false);
   });

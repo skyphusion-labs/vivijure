@@ -149,6 +149,7 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
   score: (o) => {
     if (!isStr(o.film_key)) return "score output needs a string film_key";
     if (!isStrArr(o.applied)) return "score output needs an applied string[]";
+    if (o.degraded !== undefined && !isStr(o.degraded)) return "score degraded, when present, must be a string (the chain degrade reason)";
     return null;
   },
   dialogue: (o) => {
@@ -193,6 +194,11 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
   },
   "film.finish": (o) => {
     if (!isStr(o.film_key)) return "film.finish output needs a string film_key";
+    // applied/degraded stay OPTIONAL (vendored-contract back-compat; the core defaults `applied ?? []`)
+    // but a present value must honor the type -- a malformed applied would otherwise flow into job
+    // state unchecked (film-orchestrator records it verbatim).
+    if (o.applied !== undefined && !isStrArr(o.applied)) return "film.finish applied, when present, must be a string[]";
+    if (o.degraded !== undefined && !isStr(o.degraded)) return "film.finish degraded, when present, must be a string (the uncarded reason)";
     return null;
   },
 };
