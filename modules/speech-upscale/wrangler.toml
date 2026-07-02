@@ -14,7 +14,7 @@ workers_dev = false
 [observability]
 enabled = true
 
-# Secrets, set AFTER deploy (never committed). RUNPOD_ENDPOINT_ID = the vivijure-audio-upscale
-# endpoint (sj0btgpjdtswa7):
+# Secrets, set AFTER deploy (never committed). RUNPOD_ENDPOINT_ID = your vivijure-audio-upscale
+# endpoint id (from the RunPod console, e.g. abc123def456gh):
 #   ! npx wrangler secret put RUNPOD_API_KEY -c modules/speech-upscale/wrangler.toml
 #   ! npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/speech-upscale/wrangler.toml

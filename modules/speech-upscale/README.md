@@ -58,5 +58,5 @@ honest reason. The only hard `ok:false` is malformed input or a bad poll token.
 ## Deploy
 
 Service `vivijure-module-speech-upscale`, bound into the core as `MODULE_SPEECH_UPSCALE`. Secrets
-(set after deploy): `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID` (= the vivijure-audio-upscale endpoint
-`sj0btgpjdtswa7`). See `wrangler.toml`.
+(set after deploy): `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID` (= your vivijure-audio-upscale
+endpoint id from the RunPod console). See `wrangler.toml`.
