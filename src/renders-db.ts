@@ -504,6 +504,64 @@ export async function claimRenderNotify(
   return row ?? null;
 }
 
+// S4 (migration 0007): film-advance lease. advanceFilmJob does an unlocked read-modify-write on
+// the R2 film-job doc and is driven concurrently by the 1-minute cron sweep AND every client
+// status poll; two drivers in the same tick can each submit the next phase's external work (clip
+// start, dialogue batch, per-shot finish/speech/master steps, mux, notify) -- duplicated GPU
+// spend -- and clobber each other's doc writes (a lost poll token orphans a RunPod job). Same
+// conditional-UPDATE discipline as claimFinish: one winner per tick, checked via meta.changes.
+// The lease value (its expiry, unix ms) doubles as the holder's token, so a release can never
+// clear a successor's lease. Expiry makes a crashed winner's claim re-grantable instead of
+// wedging the job: the first driver past the expiry wins it fresh (the sweep re-drives every
+// minute, so the worst-case stall after a crash is the TTL).
+
+// Must outlast the longest single advance tick (module invokes / presigns / the video-finish
+// concat, each bounded by its own transport timeout + retry cap). A driver arriving after expiry
+// while the old winner is somehow still mid-tick degrades to today's unguarded behavior.
+export const FILM_ADVANCE_LEASE_TTL_SECONDS = 300;
+
+export interface FilmAdvanceClaim {
+  won: boolean;
+  // The lease token (its expiry, unix ms) to release after the tick. Undefined on a win with NO
+  // renders row (a legacy/untracked film advances unguarded: there is nothing to claim against,
+  // and losing forever to a row that does not exist would deadlock the job).
+  lease?: number;
+}
+
+export async function claimFilmAdvance(
+  env: Env,
+  filmId: string,
+  now: number = Date.now(),
+): Promise<FilmAdvanceClaim> {
+  const lease = now + FILM_ADVANCE_LEASE_TTL_SECONDS * 1000;
+  const res = await withD1Retry(() =>
+    env.DB.prepare(
+      `UPDATE renders SET advance_lease = ?
+     WHERE job_id = ? AND (advance_lease IS NULL OR advance_lease < ?)`,
+    )
+      .bind(lease, filmId, now)
+      .run(),
+  );
+  if ((res.meta?.changes ?? 0) === 1) return { won: true, lease };
+  // changes=0 is either "lease held" (lose) or "no renders row at all" (win unguarded).
+  const row = await withD1Retry(() =>
+    env.DB.prepare(`SELECT 1 AS one FROM renders WHERE job_id = ?`).bind(filmId).first(),
+  );
+  return row ? { won: false } : { won: true };
+}
+
+/** Release only OUR lease (matched by value); a successor who claimed after our expiry keeps its
+ *  own. A failed release is harmless -- the lease expires on its own. */
+export async function releaseFilmAdvance(env: Env, filmId: string, lease: number): Promise<void> {
+  await withD1Retry(() =>
+    env.DB.prepare(
+      `UPDATE renders SET advance_lease = NULL WHERE job_id = ? AND advance_lease = ?`,
+    )
+      .bind(filmId, lease)
+      .run(),
+  );
+}
+
 // v0.139.0: jobs to resolve in the background (the cron sweep) so a fire-and-
 // forget API render still reaches terminal + emails its owner without a client
 // polling. Only non-terminal rows recent enough to still be live on RunPod;

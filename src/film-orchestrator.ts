@@ -22,6 +22,7 @@ import { buildCaptionCues } from "./captions";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { coerceShotId } from "./storyboard-validate";
 import { getCastById, markLoraReady } from "./cast-db";
+import { claimFilmAdvance, releaseFilmAdvance, type FilmAdvanceClaim } from "./renders-db";
 import { withD1Retry } from "./d1-retry";
 import { deriveLoraDestKey } from "./lora-bundle";
 
@@ -1901,9 +1902,64 @@ async function recoverStalledPhase(env: Env, job: FilmJob, now: number = Date.no
   return false;
 }
 
+/** Read the film + clip job docs without advancing anything: what a driver that LOST the advance
+ *  lease returns (the winner's state propagates via the doc; the loser just reports it). */
+async function readFilmJobReadOnly(env: Env, filmId: string): Promise<{ job: FilmJob; clipJob: ClipJob | null } | null> {
+  const obj = await env.R2_RENDERS.get(filmKey(filmId));
+  if (!obj) return null;
+  const job = JSON.parse(await obj.text()) as FilmJob;
+  let clipJob: ClipJob | null = null;
+  if (job.clip_job_id) {
+    const cj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
+    if (cj) clipJob = JSON.parse(await cj.text()) as ClipJob;
+  }
+  return { job, clipJob };
+}
+
+/** Claim the film-advance lease, failing OPEN: the lease is a protective serializer, not a
+ *  correctness gate on the doc contents, so a D1 blip must not stall every render (the sweep is
+ *  the only driver for fire-and-forget jobs). On a claim error the tick advances unguarded --
+ *  exactly the pre-lease behavior -- and says so. */
+async function claimAdvanceOrFailOpen(env: Env, filmId: string): Promise<FilmAdvanceClaim> {
+  if (!(env as { DB?: unknown }).DB) return { won: true }; // no D1 bound (unit-test fakes): nothing to claim against
+  try {
+    return await claimFilmAdvance(env, filmId);
+  } catch (e) {
+    console.warn(`film ${filmId}: advance lease unavailable (${(e as Error).message}); advancing unguarded`);
+    return { won: true };
+  }
+}
+
 /** Advance a film job across its two phases. Returns the job + the underlying clip job (for the
- *  summary), or null if no such film job exists. */
+ *  summary), or null if no such film job exists.
+ *
+ *  ONE DRIVER PER TICK (S4): this function is driven concurrently by the 1-minute cron sweep AND
+ *  every client status poll, and its body is an unlocked read-modify-write on the R2 job doc with
+ *  submit-bearing legs (clip start, dialogue batch, per-shot finish/speech/master steps, mux,
+ *  notify). Two concurrent drivers could each observe phase N incomplete and BOTH submit phase
+ *  N+1's external work -- duplicated GPU spend -- and clobber each other's doc writes (a lost
+ *  poll token orphans a RunPod job). So the whole tick runs under a D1 lease (claimFilmAdvance,
+ *  the claimFinish conditional-UPDATE pattern): the loser skips quietly and reports the doc
+ *  read-only; the lease is released after the tick and expires on its own if the winner crashed,
+ *  so a genuine retry is never deadlocked. */
 export async function advanceFilmJob(env: Env, filmId: string): Promise<{ job: FilmJob; clipJob: ClipJob | null } | null> {
+  const claim = await claimAdvanceOrFailOpen(env, filmId);
+  if (!claim.won) return readFilmJobReadOnly(env, filmId);
+  try {
+    return await advanceFilmJobLocked(env, filmId);
+  } finally {
+    if (claim.lease !== undefined) {
+      try {
+        await releaseFilmAdvance(env, filmId, claim.lease);
+      } catch (e) {
+        console.warn(`film ${filmId}: advance lease release failed (${(e as Error).message}); it expires on its own`);
+      }
+    }
+  }
+}
+
+/** The advance tick body; the caller holds (or fail-opened past) the advance lease. */
+async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: FilmJob; clipJob: ClipJob | null } | null> {
   const obj = await env.R2_RENDERS.get(filmKey(filmId));
   if (!obj) return null;
   const job = JSON.parse(await obj.text()) as FilmJob;
