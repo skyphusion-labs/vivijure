@@ -101,7 +101,11 @@ new_sqlite_classes = ["VideoFinishContainer"]
 
 [[migrations]]
 tag = "v2-drop-cpu-containers"
-deleted_classes = ["VideoFinishContainer", "ImagePrepContainer", "AudioBeatSyncContainer"]
+# A migration chain may only delete classes THIS config history created. The v1 migration above
+# declares only VideoFinishContainer, so on a fresh account the other two classes never existed and
+# deleting them hard-fails the deploy (API code 10074). Prod created all three in its real history;
+# an outsider deploying from this example does not.
+deleted_classes = ["VideoFinishContainer"]
 
 # >>> OPTIONAL: finish-fleet-vpc -- the 4 Workers-VPC CPU containers (video-finish / image-prep / audio-beat-sync / audio-mix) on your own box
 #     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
