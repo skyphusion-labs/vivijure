@@ -23,3 +23,6 @@ __pycache__/
 # generates (rendered configs, logs, seeds) is disposable local state.
 /.dev-modbound/*
 !/.dev-modbound/dev-modbound.sh
+
+# Playwright MCP debug artifacts
+.playwright-mcp/
