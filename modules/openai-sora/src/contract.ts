@@ -1,7 +1,7 @@
-// Vendored subset of the Vivijure module contract (vivijure-module/1) for the openai-sora module.
+// Vendored subset of the Vivijure module contract (vivijure-module/2) for the openai-sora module.
 // Matches src/modules/types.ts for the shapes used here. Dependency-free.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "motion.backend" | "finish" | "score" | "plan.enhance";
 
@@ -29,7 +29,6 @@ export interface ModuleManifest {
 export interface InvokeContext {
   project: string;
   job_id: string;
-  user_email?: string;
 }
 
 export interface InvokeRequest<I = unknown> {
@@ -54,7 +53,7 @@ export type PollResponse<O = unknown> =
   | { ok: true; output: O }
   | { ok: false; error: string };
 
-// motion.backend payloads (vivijure-module/1). keyframe_url is the presigned, fetchable URL of the
+// motion.backend payloads (vivijure-module/2). keyframe_url is the presigned, fetchable URL of the
 // start keyframe (the core presigns the private R2 object so a cloud backend can pull it).
 export interface MotionBackendInput {
   shot_id: string;

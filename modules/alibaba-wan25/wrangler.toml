@@ -1,4 +1,4 @@
-# alibaba-wan25 module worker (vivijure-module/1): Alibaba Wan 2.5 I2V on RunPod, a motion.backend
+# alibaba-wan25 module worker (vivijure-module/2): Alibaba Wan 2.5 I2V on RunPod, a motion.backend
 # module (#187). Bound into the core as MODULE_ALIBABA_WAN25; the registry discovers it from
 # GET /module.json and the studio renders the motion.backend stage from it.
 #

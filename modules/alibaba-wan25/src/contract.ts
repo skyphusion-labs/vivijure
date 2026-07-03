@@ -1,7 +1,7 @@
-// Vendored subset of the Vivijure module contract (vivijure-module/1) for the alibaba-wan25 module.
+// Vendored subset of the Vivijure module contract (vivijure-module/2) for the alibaba-wan25 module.
 // Matches src/modules/types.ts for the shapes used here. Dependency-free.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "motion.backend" | "finish" | "score" | "plan.enhance";
 
@@ -29,7 +29,6 @@ export interface ModuleManifest {
 export interface InvokeContext {
   project: string;
   job_id: string;
-  user_email?: string;
 }
 
 export interface InvokeRequest<I = unknown> {

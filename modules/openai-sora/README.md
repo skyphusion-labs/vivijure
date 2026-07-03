@@ -1,6 +1,6 @@
 # openai-sora
 
-A **`motion.backend`** module (vivijure-module/1): the **OpenAI Sora 2**
+A **`motion.backend`** module (vivijure-module/2): the **OpenAI Sora 2**
 image-to-video backend, run on RunPod (`sora-2-i2v`). It turns one shot's start keyframe into a
 clip, with shot length clamped to **4--10 seconds**. The simplest of the set: **no config knobs**
 and no provider audio param, so the core's score/mux chain owns audio.
