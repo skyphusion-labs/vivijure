@@ -243,9 +243,11 @@ echo "<your-account-id>"            | npx wrangler secret put CLOUDFLARE_ACCOUNT
 # R2_S3_SECRET_ACCESS_KEY, GATEWAY_ID and CF_AIG_TOKEN are NO LONGER wrangler-secret-put -- they bind
 # declaratively from the Cloudflare Secrets Store ([[secrets_store_secrets]] in wrangler.toml). Seed them
 # ONCE in the store (see "Module secrets via the Secrets Store" below); every deploy re-binds them.
-# R2_S3_ENDPOINT + R2_S3_BUCKET are identifiers, not secrets -- kept as deploy-provided values here:
-echo "https://<account-id>.r2.cloudflarestorage.com" | npx wrangler secret put R2_S3_ENDPOINT
-echo "vivijure"                     | npx wrangler secret put R2_S3_BUCKET
+# R2_S3_ENDPOINT + R2_S3_BUCKET are identifiers, not secrets, and are NO LONGER wrangler-secret-put.
+# They render into wrangler.toml [vars] automatically at deploy (ci.yml / deploy.sh) from
+# CLOUDFLARE_ACCOUNT_ID: endpoint = https://<account-id>.r2.cloudflarestorage.com, bucket defaults
+# to `vivijure` (the R2_RENDERS bucket). Override the bucket with the optional R2_S3_BUCKET repo
+# variable (CI) or env var (deploy.sh). Nothing to set here.
 
 # Token auth mode (AUTH_MODE = "token" in wrangler.toml [vars]): mint the studio API token.
 # SAVE the printed value -- it is your only login; the UI asks for it on first load.

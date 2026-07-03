@@ -55,6 +55,13 @@ ACCESS_AUD = "${ACCESS_AUD}"
 # PUBLIC, not a secret -- but DEFAULT EMPTY: a self-hosted deploy that leaves it unset ships NO beacon,
 # so /welcome visitors phone home to NO ONE. Set it ONLY on your own deploy to keep your own analytics.
 WEB_ANALYTICS_TOKEN = "${WEB_ANALYTICS_TOKEN}"
+# R2 S3-API presign identifiers (src/r2-presign.ts). NOT secrets: R2_S3_ENDPOINT is the public
+# account-scoped R2 S3 host (https://<account-id>.r2.cloudflarestorage.com), R2_S3_BUCKET is the
+# same `vivijure` bucket bound as R2_RENDERS below. Both are deploy-injected (ci.yml / deploy.sh)
+# from CLOUDFLARE_ACCOUNT_ID -- the same value wrangler already uses -- so neither needs a Secrets
+# Store entry (#238 follow-up; they are identifiers, not secrets).
+R2_S3_ENDPOINT = "${R2_S3_ENDPOINT}"
+R2_S3_BUCKET = "${R2_S3_BUCKET}"
 # S4 spend-posture knobs (src/rate-limit.ts). Both OFF unless set:
 #   SPEND_LIMIT_FAIL_CLOSED = "true"  -- a broken/unbound spend limiter (or a failing daily-ceiling
 #     check) DENIES spend routes with 503 instead of allowing. Default (unset) keeps the F3 fail-open
@@ -186,14 +193,10 @@ store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
 secret_name = "R2_S3_SECRET_ACCESS_KEY"
 
 # --- Non-secret / operator-provided values that stay OUT of the Secrets Store:
-# ---   R2_S3_ENDPOINT + R2_S3_BUCKET : identifiers (URL + bucket), deploy-provided. Promoting them
-# ---     to [vars] is a deferred follow-up (they are not secrets; kept as-is here to avoid coupling
-# ---     this migration to new CI variable provisioning).
+# ---   R2_S3_ENDPOINT + R2_S3_BUCKET : identifiers (URL + bucket name), now rendered into [vars]
+# ---     above from CLOUDFLARE_ACCOUNT_ID at deploy (#238 follow-up) -- NOT wrangler secrets.
 # ---   STUDIO_API_TOKEN : operator login, deploy-minted worker secret (openssl rand | wrangler secret put).
 # ---   XAI_API_KEY / OPENAI_API_KEY : optional BYOK; leave as `wrangler secret put` when used.
-# [vars]
-# R2_S3_ENDPOINT = "https://<account>.r2.cloudflarestorage.com"
-# R2_S3_BUCKET = "vivijure"
 
 # --- Render-complete notification = the `notify` hook + the notify-email module (MODULE_NOTIFY_EMAIL
 # --- below), NOT a core binding. Notification is multi-backend (email / webhook / ...), so it's a
