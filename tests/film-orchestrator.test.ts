@@ -1154,7 +1154,7 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
   const FILM_TITLES_MANIFEST = {
     name: "film-titles",
     version: "0.1.0",
-    api: "vivijure-module/1",
+    api: "vivijure-module/2",
     hooks: ["film.finish"],
     provides: [{ id: "film-titles", label: "Title + credit cards" }],
     config_schema: {},
@@ -1287,11 +1287,11 @@ describe("advanceFilmJob dialogue phase injects audio_key into finish (talking c
         list: async () => ({ objects: [] }),
       },
       MODULE_DIALOGUE: moduleFetcher(
-        { name: "dialogue-gen", version: "0.1.0", api: "vivijure-module/1", hooks: ["dialogue"], ui: { order: 10 } },
+        { name: "dialogue-gen", version: "0.1.0", api: "vivijure-module/2", hooks: ["dialogue"], ui: { order: 10 } },
         { poll: () => ({ ok: true, output: { project: "p", audio: [{ shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01.wav", voice_id: "orion" }], applied: ["dialogue:@cf/deepgram/aura-1", "lines:1"] } }) },
       ),
       MODULE_LIPSYNC: moduleFetcher(
-        { name: "finish-lipsync", version: "0.1.0", api: "vivijure-module/1", hooks: ["finish"], ui: { section: "finish", order: 15 } },
+        { name: "finish-lipsync", version: "0.1.0", api: "vivijure-module/2", hooks: ["finish"], ui: { section: "finish", order: 15 } },
         { invoke: (body) => { finishInputs.push((body as { input: unknown }).input); return { ok: true, output: { shot_id: "shot_01", clip_key: "renders/p/clips/shot_01_ls.mp4", out_fps: 16, frames: 48, applied: ["lipsync:v15"] } }; } },
       ),
     } as unknown as Env;
@@ -1543,15 +1543,15 @@ describe("advanceFilmJob speech phase: dialogue -> speech (clean audio) -> finis
         list: async () => ({ objects: [] }),
       },
       MODULE_DIALOGUE: moduleFetcher(
-        { name: "dialogue-gen", version: "0.1.0", api: "vivijure-module/1", hooks: ["dialogue"], ui: { order: 10 } },
+        { name: "dialogue-gen", version: "0.1.0", api: "vivijure-module/2", hooks: ["dialogue"], ui: { order: 10 } },
         { poll: () => ({ ok: true, output: { project: "p", audio: [{ shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01.wav", voice_id: "orion" }], applied: ["dialogue:aura-1"] } }) },
       ),
       MODULE_SPEECH_UPSCALE: moduleFetcher(
-        { name: "speech-upscale", version: "0.1.0", api: "vivijure-module/1", hooks: ["speech"], config_schema: { enable: { type: "bool", default: false } }, ui: { section: "speech", order: 10 } },
+        { name: "speech-upscale", version: "0.1.0", api: "vivijure-module/2", hooks: ["speech"], config_schema: { enable: { type: "bool", default: false } }, ui: { section: "speech", order: 10 } },
         { invoke: (body) => { speechInputs.push((body as { input: unknown }).input); return { ok: true, output: { shot_id: "shot_01", audio_key: "renders/p/dialogue/shot_01_enh.wav", applied: ["speech-upscale:resemble-enhance"] } }; } },
       ),
       MODULE_LIPSYNC: moduleFetcher(
-        { name: "finish-lipsync", version: "0.1.0", api: "vivijure-module/1", hooks: ["finish"], ui: { section: "finish", order: 15 } },
+        { name: "finish-lipsync", version: "0.1.0", api: "vivijure-module/2", hooks: ["finish"], ui: { section: "finish", order: 15 } },
         { invoke: (body) => { finishInputs.push((body as { input: unknown }).input); return { ok: true, output: { shot_id: "shot_01", clip_key: "renders/p/clips/shot_01_ls.mp4", out_fps: 16, frames: 48, applied: ["lipsync:v15"] } }; } },
       ),
     } as unknown as Env;
@@ -1598,7 +1598,7 @@ describe("advanceFilmJob film.finish chain: step 2 reads step 1's OUTPUT, not th
     // Each fake film.finish module returns the key it was told to write to (its `output_key`), exactly
     // as a real module does after writing the carded film there.
     const ffModule = (name: string, order: number, sink: FFInput[], tag: string) => moduleFetcher(
-      { name, version: "0.1.0", api: "vivijure-module/1", hooks: ["film.finish"], ui: { section: "film.finish", order } },
+      { name, version: "0.1.0", api: "vivijure-module/2", hooks: ["film.finish"], ui: { section: "film.finish", order } },
       { invoke: (body) => { const inp = (body as { input: FFInput }).input; sink.push(inp); return { ok: true, output: { film_key: inp.output_key, applied: [tag] } }; } },
     );
     const env = {

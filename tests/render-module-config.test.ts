@@ -11,7 +11,7 @@ import type { RegisteredModule } from "../src/modules/types";
 const keyframeMod = {
   name: "keyframe",
   version: "0.1.0",
-  api: "vivijure-module/1" as const,
+  api: "vivijure-module/2" as const,
   binding: "MODULE_KEYFRAME",
   hooks: ["keyframe" as const],
   config_schema: {
@@ -25,7 +25,7 @@ const keyframeMod = {
 const cloudKeyframeMod = {
   name: "cloud-keyframe",
   version: "0.1.0",
-  api: "vivijure-module/1" as const,
+  api: "vivijure-module/2" as const,
   binding: "MODULE_CLOUD_KEYFRAME",
   hooks: ["keyframe" as const],
   config_schema: {
@@ -38,7 +38,7 @@ const cloudKeyframeMod = {
 const ownGpuMod = {
   name: "own-gpu",
   version: "0.1.0",
-  api: "vivijure-module/1" as const,
+  api: "vivijure-module/2" as const,
   binding: "MODULE_OWN_GPU",
   hooks: ["motion.backend" as const],
   config_schema: {
@@ -50,7 +50,7 @@ const ownGpuMod = {
 const speechMod = {
   name: "speech-upscale",
   version: "0.1.0",
-  api: "vivijure-module/1" as const,
+  api: "vivijure-module/2" as const,
   binding: "MODULE_SPEECH_UPSCALE",
   hooks: ["speech" as const],
   config_schema: {
@@ -62,7 +62,7 @@ const speechMod = {
 const subtitleMod = {
   name: "subtitle",
   version: "0.1.0",
-  api: "vivijure-module/1" as const,
+  api: "vivijure-module/2" as const,
   binding: "MODULE_SUBTITLE",
   hooks: ["film.finish" as const],
   config_schema: {
@@ -75,7 +75,7 @@ const subtitleMod = {
 const audioMasterMod = {
   name: "audio-master",
   version: "0.1.0",
-  api: "vivijure-module/1" as const,
+  api: "vivijure-module/2" as const,
   binding: "MODULE_AUDIO_MASTER",
   hooks: ["master" as const],
   config_schema: {

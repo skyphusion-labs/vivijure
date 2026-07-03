@@ -48,8 +48,8 @@ describe("validateManifest", () => {
   it("rejects a wrong api version", () => {
     expect(validateManifest(manifest({ api: "vivijure-module/99" }))).toContain("unsupported api");
   });
-  it("accepts BOTH supported versions (host-accepts-both: /2 current, /1 transitional)", () => {
-    expect(validateManifest(manifest({ api: "vivijure-module/1" }))).toMatchObject({ name: "finish-rife" });
+  it("rejects the retired /1 epoch (window closed by #294; /2 only)", () => {
+    expect(validateManifest(manifest({ api: "vivijure-module/1" }))).toContain("unsupported api");
     expect(validateManifest(manifest({ api: "vivijure-module/2" }))).toMatchObject({ name: "finish-rife" });
   });
   it("rejects unknown hooks", () => {
