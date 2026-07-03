@@ -39,18 +39,22 @@ job envelope and writes artifacts straight to R2 via boto3 S3, so it never cross
 boundary. (A legacy production-IP bypass for "internal callers" is being removed in the F2 cutover;
 the GPU backend never needed it on this path, and Slate uses a service token instead.)
 
-The single-operator assumption is sound ONLY while the active auth gate covers the entire `/api/*`
-surface -- the in-worker token gate in production (section 1b), or, in access mode, the Access app.
-In access mode the worker ALSO adds an in-code backstop (section 1a, F2) that verifies the Access
+The auth gate is the front door: it must cover the entire `/api/*` surface -- the in-worker token
+gate in production (section 1b), or, in access mode, the Access app. But the studio does not rest on
+the gate ALONE. Behind it, every externally-addressable resource id is an unguessable capability
+(section 1c, F13), so even a single hostname that somehow lost its gate could not be walked by
+counting ids. Gate plus unguessable capability is the layered posture; keep the gate over `/api/*`
+all the same. In access mode the worker ALSO adds an in-code backstop (section 1a, F2) that verifies the Access
 JWT itself -- checking the signature + `aud`, NOT an email claim, so a service-token caller (Slate)
 passes while an unauthenticated caller is denied. If you add a new public hostname or route, confirm
 the active gate still covers it.
 
 ### Consequence for `/api/artifact/<key>`
-Artifacts are served by R2 key with no per-row ownership check. This is safe **only** because the
+Artifacts are served by R2 key with no per-row ownership check. This is safe because the
 whole worker is auth-gated (the token gate in production, section 1b; or Access in access mode) and
-single-tenant: there is exactly one operator, so "serving by key" cannot cross an ownership boundary
-(there is none). This property depends entirely on the active gate covering `/api/*` (section 1).
+single-user: there is exactly one operator, so "serving by key" cannot cross an ownership boundary
+(there is none). The gate covering `/api/*` (section 1) is the front door, and the F4 bound below
+keeps the serve from becoming an arbitrary-object read even if that gate ever failed.
 
 **Hardening (F4).** The serve is nonetheless bounded so it cannot become an arbitrary-object read or a
 stored-XSS vector even if section 1 ever fails: the key must pass `isSafeRelKey` (no traversal /
@@ -59,8 +63,9 @@ else `404`; and every response carries `X-Content-Type-Options: nosniff`. The up
 (`/api/upload`, `/api/storyboard/character-ref`, `/api/storyboard/audio-upload`) reject any
 content-type outside their allowlist (no `"bin"` fallback), so a scriptable type (`text/html`,
 `image/svg+xml`) can never be stored and later served back into the operator's authenticated origin.
-True cross-tenant isolation still needs an ownership model (the F13 IDOR follow-up); F4 makes these
-two endpoints safe-by-default for a downstream deployer in the meantime.
+Cross-user data isolation is deliberately NOT built: this is a single-user studio (section 1c), so
+there is one operator and no ownership boundary to model. F4 bounds these two endpoints as
+defense-in-depth on top of the gate.
 
 **Byte-range media serving (#416).** `GET` / `HEAD /api/artifact/<key>` supports HTTP range
 requests (RFC 7233) so a browser can stream and seek a rendered film -- Safari/iOS refuse to play
@@ -73,20 +78,33 @@ and `nosniff` apply identically on every path; the object size is resolved via `
 up front so an out-of-bounds range is answered `416` rather than mistaken for a missing object
 (an R2 `get()` with a bad range returns null, indistinguishable from not-found).
 
-### Downstream deployer requirement (F13)
-The single-operator model is **load-bearing**, and this code is public. There is NO ownership
-column or per-identity check anywhere (the identity strip #292 removed tenancy by design): every
-`:id` route -- `/api/cast/:id` (get/patch/delete/**export**), `/api/storyboard/projects/:id`,
-`/api/storyboard/renders/:id`, `/api/render/film/:id` -- trusts the caller. Ids are sequential
-integers, so they are trivially enumerable, and `GET /api/cast/export/:id` exfiltrates a whole
-character bundle (portrait + LoRA + bible) by id. A downstream operator who deploys this
-**multi-tenant, or on a hostname with no authenticating gate at all, is handed a horizontal IDOR**
-across all casts/projects/renders/films.
+### 1c. Resource ids are unguessable capabilities (F13)
+The three externally-addressable resource tables (`cast_members`, `storyboard_projects`, `renders`)
+expose a `public_id` -- a UUID v4, 122 bits of entropy (`src/public-id.ts`, migration 0010) -- as
+the ONLY id that leaves the core over the API. The internal `INTEGER PRIMARY KEY` never crosses the
+boundary; it stays the join/FK key inside D1. Every RESOURCE `:id` route -- `/api/cast/:id`
+(get/patch/delete/**export**), `/api/storyboard/projects/:id`, `/api/storyboard/renders/:id` -- and
+every request BODY that names a resource (e.g. the planner's cast slots) accepts ONLY the public_id
+and resolves it to a row. (`/api/render/film/:id` is keyed by the film JOB UUID `film-<uuid>`, which
+was already opaque before S9 and is untouched by this change: it is the same capability model
+(section 2), a different id class, not a resource public_id.) A bare sequential integer is not a valid
+public id, so it is rejected at the shape gate (`isPublicId`) and again at the lookup (no row carries
+it): the request `404`s. The enumeration walk -- count 1, 2, 3, or `GET /api/cast/export/:id` to pull
+a whole character bundle by guessing its id -- is therefore DEAD, at the shape level and at the
+lookup. (This covers browser-addressable resources; the core-to-module hop still passes the internal
+`cast_id` int, which never reaches a browser -- see the module contract, `src/modules/types.ts`.)
 
-This is intentional (anti-SaaS; we are NOT building a multi-tenant authz layer). The requirement
-is therefore a HARD deploy rule, not a code feature: **run this single-operator, behind an
-authenticating proxy on EVERY hostname, never on an unauthenticated route.** Arm the F2 backstop
-(below) so the reference Worker also fails closed in code, not by documentation alone.
+This is the SAME capability model as job ids (section 2): possession of an unguessable id IS the
+authorization, and there is no id to guess. It is defense-in-depth BEHIND the auth gate (section 1),
+not a replacement for it -- keep `/api/*` gated regardless.
+
+Note what this is NOT: it is not an ownership model, and it deliberately builds no multi-tenancy.
+This is a single-user studio -- one operator, one token set, all data is yours -- so there is no
+boundary between casts, projects, or renders to cross in the first place. Raising id entropy does not
+add per-user isolation (that is not a goal here); it makes the single-user capability bulletproof, so
+a leaked hostname with the gate somehow off still cannot be enumerated. If a deployment ever needs
+real per-caller data isolation, that is not this product: put Cloudflare Access in front
+(`AUTH_MODE = "access"`) and add an owner column; the studio does not model it.
 
 ## 1a. In-Worker Access verification backstop (F2)
 
@@ -151,6 +169,13 @@ entirely in-Worker (`src/auth-gate.ts`):
   unknown `AUTH_MODE` value denies everything; `AUTH_MODE` unset keeps the exact pre-#423
   resolution (Access vars set -> verify the JWT; else deny unless the dev-only
   `ALLOW_UNAUTHENTICATED` opt-out), so an existing deploy is untouched by this feature.
+- **The deploy proves the gate (W3/W4).** After every deploy, `deploy.sh` curls the live worker with
+  NO bearer and REQUIRES a `403`; anything else fails the deploy LOUDLY (it retries ~60s for edge
+  propagation, then aborts), so a novice cannot ship an open studio without seeing red -- the
+  tag-deploy CI lane runs the same check. And the one way to open the API on purpose,
+  `ALLOW_UNAUTHENTICATED = "true"`, is unmissable: `deploy.sh` prints a banner, and the worker emits a
+  structured `auth.allow_unauthenticated` tail event on the allow path, so an accidentally-open deploy
+  is visible in the logs.
 - The browser keeps the token in `localStorage`, pasted once into the studio's token prompt. It is
   the operator's single capability for the whole studio: treat it like a password. Rotate it any
   time with `openssl rand -hex 32 | npx wrangler secret put STUDIO_API_TOKEN` and re-paste.
@@ -182,7 +207,8 @@ bearer (the operator secret OR any named token) reaches the ENTIRE API identical
 authenticates the token and records its name in observability (`api-token:<name>`), but no handler
 scopes any project, cast member, or render by the caller's identity. There is no owner column and no
 per-consumer data boundary (this is the same single-operator capability model as section 2: all data
-belongs to the one operator, and job ids are the only per-object capability). So a named token can
+belongs to the one operator, and the per-object capabilities are the unguessable ids: job ids and
+the resource public_ids from section 1c). So a named token can
 read, write, and delete every other consumer's projects, cast, and renders. Issue one to bound
 ROTATION and attribution blast radius (a leak burns one consumer, a revoke touches one consumer),
 never to isolate data between callers. If you need real per-caller data isolation, that is not token
@@ -218,7 +244,10 @@ Every job id the worker mints comes from `crypto.randomUUID()` (122 bits of entr
 An attacker cannot enumerate or guess a 122-bit id, so possession is a real capability. Combined
 with section 1 (the whole surface is auth-gated to the single operator), there is no privilege
 boundary BETWEEN jobs to cross: all jobs belong to the one operator. Scoping job-to-job would
-enforce a boundary that does not exist in a single-operator studio.
+enforce a boundary that does not exist in a single-operator studio. The cast, project, and render
+resource ids follow this identical model (section 1c, F13): each externally-addressable id is a
+`crypto.randomUUID()` public id, so possession is the capability and a sequential-integer probe
+matches nothing.
 
 ### `isValidJobId` is a format gate, not an entropy source
 `isValidJobId` (`/^[A-Za-z0-9_-]{1,128}$/`) validates the SHAPE of an inbound, RunPod-issued id so a
@@ -394,8 +423,9 @@ them (the `/welcome` release-purge flow depends on that edge cache existing, #40
 - [ ] New hostname or route -> confirm the active auth gate still covers it (in production the
       in-worker token gate; in access mode the Cloudflare Access app). `/api/*` must stay gated;
       only `/welcome` and `/health` are public.
-- [ ] New job-keyed route -> the id must be `crypto.randomUUID()`-minted; never accept a
-      caller-chosen low-entropy id as a capability.
+- [ ] New job-keyed OR resource-`:id` route -> the id must be an unguessable `crypto.randomUUID()`
+      capability (a job id, or a resource `public_id` per section 1c); never expose or accept a
+      sequential integer or other low-entropy id as a capability.
 - [ ] New module field -> internal/secret values stay off the `GET /api/modules` projection.
 - [ ] New R2/key consumer -> mint a per-function, least-privilege token (Object R/W, single bucket);
       do not reuse a broader token.
@@ -420,6 +450,9 @@ them (the `/welcome` release-purge flow depends on that edge cache existing, #40
 ## References
 
 - #4 / #292 -- identity strip: no tenant model by design (this is why Access is the boundary).
+- #487 (S9 F13) -- resource ids are opaque UUID `public_id`s (section 1c); the internal integer PK never leaves the core.
+- #488 (S9 F7) -- spend limiter fails CLOSED by default (section 6); `SPEND_LIMIT_FAIL_CLOSED="false"` is the opt-out.
+- #485 / #486 (S9 W3/W4) -- post-deploy no-bearer-403 self-check + loud `ALLOW_UNAUTHENTICATED` signalling (section 1b).
 - #10 -- jobId capability model: entropy + scoping (documented here).
 - #6 -- R2 key / presign input-boundary safety.
 - #18 -- presign credential blast radius + `/api/modules` disclosure posture.
