@@ -22,6 +22,9 @@ import { getCastById, addRefs, type CastRefImage } from "./cast-db";
 export interface CastRefsJob {
   job_id: string;
   cast_id: number;
+  // The cast member's opaque public id, exposed to the client in the summary (cast_id stays the
+  // internal int: it keys the R2 job doc + is the cast.image module-contract field). S9 (F13).
+  cast_public_id: string;
   module_name: string | null;
   binding: string | null;
   phase: "generating" | "done" | "failed";
@@ -59,7 +62,7 @@ export function selectSeedKeys(
 
 export interface CastRefsSummary {
   job_id: string;
-  cast_id: number;
+  cast_id: string;  // the cast's opaque public id (never the internal integer PK)
   phase: CastRefsJob["phase"];
   module?: string;
   registered: number;
@@ -71,7 +74,7 @@ export interface CastRefsSummary {
 export function summarizeCastRefs(job: CastRefsJob): CastRefsSummary {
   return {
     job_id: job.job_id,
-    cast_id: job.cast_id,
+    cast_id: job.cast_public_id,
     phase: job.phase,
     module: job.module_name ?? undefined,
     registered: job.registered,
@@ -118,6 +121,7 @@ export async function startCastRefsJob(
   const job: CastRefsJob = {
     job_id: "refs-" + crypto.randomUUID(),
     cast_id: args.castId,
+    cast_public_id: cast.public_id,
     module_name: null,
     binding: null,
     phase: "generating",

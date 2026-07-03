@@ -8,9 +8,13 @@
 // bounded at 200 attempts.
 
 import type { Env } from "./env";
+import { newPublicId } from "./public-id";
 
 export interface StoryboardProject {
+  // Internal autoincrement PK -- join/FK key; NEVER leaves the core (the API exposes public_id).
   id: number;
+  // Unguessable public id (UUID v4); the ONLY id the API accepts on a :id route and returns as `id`.
+  public_id: string;
   slug: string;
   name: string;
   prefs: Record<string, unknown>;
@@ -21,6 +25,7 @@ export interface StoryboardProject {
 
 interface ProjectRow {
   id: number;
+  public_id: string;
   slug: string;
   name: string;
   prefs_json: string;
@@ -41,6 +46,7 @@ function parseJson<T>(raw: string | null, fallback: T): T {
 function rowToProject(row: ProjectRow): StoryboardProject {
   return {
     id: row.id,
+    public_id: row.public_id,
     slug: row.slug,
     name: row.name,
     prefs: parseJson<Record<string, unknown>>(row.prefs_json, {}),
@@ -50,6 +56,16 @@ function rowToProject(row: ProjectRow): StoryboardProject {
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+// The client-facing project shape: `id` is the opaque public id; the internal integer PK is dropped
+// so a sequential id never leaves the core (S9 F13). Every API site that returns a project maps
+// through toPublicProject.
+export type PublicStoryboardProject = Omit<StoryboardProject, "id" | "public_id"> & { id: string };
+
+export function toPublicProject(row: StoryboardProject): PublicStoryboardProject {
+  const { id: _internalId, public_id, ...rest } = row;
+  return { ...rest, id: public_id };
 }
 
 // URL-safe slug from a display name. Empty / all-punctuation falls
@@ -87,7 +103,7 @@ const PROJECT_LIST_LIMIT = 500;
 
 export async function listProjects(env: Env): Promise<StoryboardProject[]> {
   const result = await env.DB.prepare(
-    `SELECT id, slug, name, prefs_json, last_storyboard_json,
+    `SELECT id, public_id, slug, name, prefs_json, last_storyboard_json,
             created_at, updated_at
        FROM storyboard_projects
       ORDER BY created_at DESC
@@ -98,9 +114,20 @@ export async function listProjects(env: Env): Promise<StoryboardProject[]> {
   return (result.results || []).map(rowToProject);
 }
 
+// Resolve an opaque public id to the internal integer PK (the :id route + ?project_id boundary).
+// Null when no project carries that public_id -- a bare integer matches nothing, so callers 404.
+export async function getProjectIdByPublicId(env: Env, publicId: string): Promise<number | null> {
+  const row = await env.DB.prepare(
+    `SELECT id FROM storyboard_projects WHERE public_id = ? LIMIT 1`,
+  )
+    .bind(publicId)
+    .first<{ id: number }>();
+  return row ? Number(row.id) : null;
+}
+
 export async function getProjectById(env: Env, id: number): Promise<StoryboardProject | null> {
   const row = await env.DB.prepare(
-    `SELECT id, slug, name, prefs_json, last_storyboard_json,
+    `SELECT id, public_id, slug, name, prefs_json, last_storyboard_json,
             created_at, updated_at
        FROM storyboard_projects
       WHERE id = ?
@@ -119,12 +146,12 @@ export async function createProject(
   const slug = await allocateProjectSlug(env, baseSlug);
   const prefsJson = JSON.stringify(input.prefs ?? {});
   const row = await env.DB.prepare(
-    `INSERT INTO storyboard_projects (slug, name, prefs_json)
-     VALUES (?, ?, ?)
-     RETURNING id, slug, name, prefs_json, last_storyboard_json,
+    `INSERT INTO storyboard_projects (public_id, slug, name, prefs_json)
+     VALUES (?, ?, ?, ?)
+     RETURNING id, public_id, slug, name, prefs_json, last_storyboard_json,
                created_at, updated_at`
   )
-    .bind(slug, input.name, prefsJson)
+    .bind(newPublicId(), slug, input.name, prefsJson)
     .first<ProjectRow>();
   if (!row) throw new Error("createProject: INSERT...RETURNING produced no row");
   return rowToProject(row);
@@ -153,7 +180,7 @@ export async function updateProjectMeta(
   const row = await env.DB.prepare(
     `UPDATE storyboard_projects SET ${fields.join(", ")}
       WHERE id = ?
-     RETURNING id, slug, name, prefs_json, last_storyboard_json,
+     RETURNING id, public_id, slug, name, prefs_json, last_storyboard_json,
                created_at, updated_at`
   )
     .bind(...values)
@@ -171,7 +198,7 @@ export async function setLastStoryboard(
     `UPDATE storyboard_projects
         SET last_storyboard_json = ?, updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, slug, name, prefs_json, last_storyboard_json,
+     RETURNING id, public_id, slug, name, prefs_json, last_storyboard_json,
                created_at, updated_at`
   )
     .bind(sbJson, id)

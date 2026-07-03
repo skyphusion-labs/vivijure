@@ -13,6 +13,7 @@ const ref = (key: string): { key: string; mime: string } => ({ key, mime: "image
 
 const castFixture = (over: Partial<CastMember> = {}): CastMember => ({
   id: 9,
+  public_id: "6b1f0a3c-9d2e-4a7b-8c1d-2e3f4a5b6c7d",
   slug: "wren-matrix-test-2",
   name: "Wren",
   bible: null,
@@ -83,7 +84,7 @@ describe("DELETE /api/cast/:id reclaims R2 (issue #298)", () => {
   it("issues R2 deletes for the deleted row's artifacts, then 200s", async () => {
     // getCastById -> rowToCast parses the *_json columns, so the fake returns the RAW row shape.
     const rawRow = {
-      id: 9, slug: "wren-matrix-test-2", name: "Wren", bible: null,
+      id: 9, public_id: "6b1f0a3c-9d2e-4a7b-8c1d-2e3f4a5b6c7d", slug: "wren-matrix-test-2", name: "Wren", bible: null,
       portrait_key: "cast/9/portrait.png", portrait_mime: "image/png",
       ref_keys_json: JSON.stringify([ref("cast/9/refs/r1.png"), ref("cast/9/refs/r2.png")]),
       source_keys_json: JSON.stringify([ref("cast/9/sources/s1.png")]),
@@ -115,12 +116,12 @@ describe("DELETE /api/cast/:id reclaims R2 (issue #298)", () => {
     } as unknown as Env;
 
     const res = await worker.fetch(
-      new Request("https://studio.example/api/cast/9", { method: "DELETE" }),
+      new Request("https://studio.example/api/cast/6b1f0a3c-9d2e-4a7b-8c1d-2e3f4a5b6c7d", { method: "DELETE" }),
       env,
       ctx,
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, deleted: 9 });
+    expect(await res.json()).toEqual({ ok: true, deleted: "6b1f0a3c-9d2e-4a7b-8c1d-2e3f4a5b6c7d" });
     expect(deleted).toEqual([
       "cast/9/portrait.png",
       "cast/9/refs/r1.png",

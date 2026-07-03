@@ -3,6 +3,7 @@
 import type { Env } from "./env";
 import {
   getCastById,
+  toPublicCast,
   markLoraFailed,
   markLoraReady,
   setLoraJob,
@@ -220,7 +221,7 @@ export async function handleCastTrainLora(
     statusRaw: submit.view.statusRaw,
     bundleKey: bundleResult.bundleKey,
     loraDestKey,
-    cast: updated || cast,
+    cast: toPublicCast(updated || cast),
   });
 }
 
@@ -231,7 +232,7 @@ export async function handleCastLoraStatus(
   const cast = await getCastById(env, id);
   if (!cast) return json({ error: "cast not found" }, 404);
   if (!cast.lora_job_id) {
-    return json({ cast, view: null });
+    return json({ cast: toPublicCast(cast), view: null });
   }
 
   const ageSeconds = trainingAgeSeconds(cast, Date.now());
@@ -252,17 +253,17 @@ export async function handleCastLoraStatus(
           cast.id,
           "GPU job completed but envelope did not include lora_key",
         );
-        return json({ cast: updated || cast, view });
+        return json({ cast: toPublicCast(updated || cast), view });
       }
       const updated = await markLoraReady(env, cast.id, loraKey);
-      return json({ cast: updated || cast, view });
+      return json({ cast: toPublicCast(updated || cast), view });
     }
     if (view.status === "FAILED" || view.status === "TIMED_OUT" || view.status === "CANCELLED") {
       const msg = view.error || `training ${view.status.toLowerCase()}`;
       const updated = await markLoraFailed(env, cast.id, msg);
-      return json({ cast: updated || cast, view });
+      return json({ cast: toPublicCast(updated || cast), view });
     }
-    return json({ cast, view });
+    return json({ cast: toPublicCast(cast), view });
   }
 
   // poll failed (404 / transport): reconcile a wedged `training` row (#295) before surfacing the
@@ -272,10 +273,10 @@ export async function handleCastLoraStatus(
     const decision = decideStuckTraining(poll, ageSeconds);
     if (decision.reconcile) {
       const updated = await markLoraFailed(env, cast.id, decision.reason as string);
-      return json({ cast: updated || cast, view: null, reconciled: true });
+      return json({ cast: toPublicCast(updated || cast), view: null, reconciled: true });
     }
   }
-  return json({ error: poll.error, cast }, 502);
+  return json({ error: poll.error, cast: toPublicCast(cast) }, 502);
 }
 
 function json(body: unknown, status = 200): Response {

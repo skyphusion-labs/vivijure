@@ -16,13 +16,15 @@ import { normalizeHybridBackends } from "./storyboard-validate";
 import { startCastRefsJob, advanceCastRefsJob, summarizeCastRefs } from "./cast-image-orchestrator";
 import type { PlanEnhanceInput, PlanEnhanceOutput, PlanEnhanceStoryboard } from "./modules/types";
 import type { Env } from "./env";
+import { isPublicId } from "./public-id";
 
 import {
   listProjects, getProjectById, createProject, updateProjectMeta, setLastStoryboard, deleteProject,
+  getProjectIdByPublicId, toPublicProject,
 } from "./storyboard-projects-db";
 import {
   listCast, getCastById, createCast, updateCast, deleteCast,
-  clearPortrait,
+  clearPortrait, getCastIdByPublicId, toPublicCast,
 } from "./cast-db";
 import { handleCastLoraStatus, handleCastTrainLora } from "./cast-lora-train";
 import { isValidVoiceId, VOICE_IDS, VOICE_CATALOG } from "./voices";
@@ -45,8 +47,8 @@ import { isSafeBundleKey, isSafeRelKey, parseByteRange } from "./shared";
 import {
   insertRender, updateRenderFromView, getRenderByIdForUser, listRendersForUser, listUserTags,
   setRenderLabel, setRenderLockedShots, setRenderFolder, setRenderTags, deleteRenderRow,
-  normalizeProjectIdInput, normalizeLockedShots, normalizeFolderPath, normalizeTags,
-  setCloudAnimateProgress, setHybridProgress,
+  normalizeLockedShots, normalizeFolderPath, normalizeTags,
+  setCloudAnimateProgress, setHybridProgress, getRenderIdByPublicId, toPublicRenderRow,
   type NewRenderRow,
 } from "./renders-db";
 import { stageBundleInjectedKeyframes } from "./bundle-keyframes";
@@ -96,11 +98,31 @@ class HttpError extends Error {
 }
 const badRequest = (m: string) => new HttpError(400, m);
 const notFound = (m = "not found") => new HttpError(404, m);
-const idParam = (raw: string): number => {
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n <= 0) throw badRequest("invalid id");
-  return n;
-};
+// S9 (F13): the :id route param is an opaque public id (UUID v4), NEVER a sequential integer.
+// Each resolver maps the public id to the internal integer PK the db layer keys on, or 404s. A bare
+// integer is not a public id (isPublicId is false), so it never resolves -- enumeration is dead at
+// the shape gate, and again at the unique-index lookup. The int PK never crosses the API boundary.
+async function resolveCastId(env: Env, raw: string): Promise<number> {
+  const id = isPublicId(raw) ? await getCastIdByPublicId(env, raw) : null;
+  if (id === null) throw notFound("cast member");
+  return id;
+}
+async function resolveProjectId(env: Env, raw: string): Promise<number> {
+  const id = isPublicId(raw) ? await getProjectIdByPublicId(env, raw) : null;
+  if (id === null) throw notFound("project");
+  return id;
+}
+async function resolveRenderId(env: Env, raw: string): Promise<number> {
+  const id = isPublicId(raw) ? await getRenderIdByPublicId(env, raw) : null;
+  if (id === null) throw notFound("render");
+  return id;
+}
+// A client-supplied project REFERENCE (?project_id filter, submit body projectId): an opaque public
+// id resolved to the internal int, or null when absent/unknown. Null means "no project" (the render
+// list + submit paths treat it as an unfiltered / project-less submit), so this never throws.
+async function resolveProjectRef(env: Env, raw: unknown): Promise<number | null> {
+  return isPublicId(raw) ? await getProjectIdByPublicId(env, raw) : null;
+}
 async function readBody<T>(req: Request): Promise<T> {
   try { return (await req.json()) as T; } catch { throw badRequest("invalid JSON body"); }
 }
@@ -131,54 +153,54 @@ function match(routes: Route[], method: string, pathname: string) {
 // --- projects ------------------------------------------------------------
 // Responses are wrapped by resource name ({projects}/{project}) -- the frontend reads data.projects
 // / data.project. (Migration regression: these used to return bare rows, which crashed create.)
-const hListProjects: Handler = async (req, env) => json({ projects: await listProjects(env) });
+const hListProjects: Handler = async (req, env) => json({ projects: (await listProjects(env)).map(toPublicProject) });
 const hCreateProject: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; prefs?: Record<string, unknown> }>(req);
   if (!b.name) throw badRequest("name required");
-  return json({ project: await createProject(env, { name: b.name, prefs: b.prefs }) }, 201);
+  return json({ project: toPublicProject(await createProject(env, { name: b.name, prefs: b.prefs })) }, 201);
 };
 const hGetProject: Handler = async (req, env, _c, p) => {
-  const row = await getProjectById(env, idParam(p.id));
+  const row = await getProjectById(env, await resolveProjectId(env, p.id));
   if (!row) throw notFound("project");
-  return json({ project: row });
+  return json({ project: toPublicProject(row) });
 };
 const hPatchProject: Handler = async (req, env, _c, p) => {
-  const id = idParam(p.id);
+  const id = await resolveProjectId(env, p.id);
   const b = await readBody<{ name?: string; prefs?: Record<string, unknown>; storyboard?: unknown }>(req);
   const row = b.storyboard !== undefined
     ? await setLastStoryboard(env, id, b.storyboard)
     : await updateProjectMeta(env, id, { name: b.name, prefs: b.prefs });
   if (!row) throw notFound("project");
-  return json({ project: row });
+  return json({ project: toPublicProject(row) });
 };
 const hDeleteProject: Handler = async (req, env, _c, p) => {
-  const row = await deleteProject(env, idParam(p.id));
+  const row = await deleteProject(env, await resolveProjectId(env, p.id));
   if (!row) throw notFound("project");
-  return json({ ok: true, deleted: row.id });
+  return json({ ok: true, deleted: row.public_id });
 };
 const hSaveProjectStoryboard: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ storyboard?: unknown }>(req);
   if (b.storyboard === undefined) throw badRequest("storyboard required");
-  const row = await setLastStoryboard(env, idParam(p.id), b.storyboard);
+  const row = await setLastStoryboard(env, await resolveProjectId(env, p.id), b.storyboard);
   if (!row) throw notFound("project");
-  return json({ project: row });
+  return json({ project: toPublicProject(row) });
 };
 
 // --- cast ----------------------------------------------------------------
 // Wrapped by resource name ({cast}) -- the frontend reads data.cast (array for list, object for item).
-const hListCast: Handler = async (_req, env) => json({ cast: await listCast(env) });
+const hListCast: Handler = async (_req, env) => json({ cast: (await listCast(env)).map(toPublicCast) });
 // The dialogue voice catalog (aura-1 speakers). Static; the cast voice picker renders from it so the
 // list of voices has one source of truth (src/voices.ts), not a hardcoded copy in the frontend.
 const hListVoices: Handler = async () => json({ voices: VOICE_CATALOG });
 const hCreateCast: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; bible?: string | null }>(req);
   if (!b.name) throw badRequest("name required");
-  return json({ cast: await createCast(env, { name: b.name, bible: b.bible }) }, 201);
+  return json({ cast: toPublicCast(await createCast(env, { name: b.name, bible: b.bible })) }, 201);
 };
 const hGetCast: Handler = async (req, env, _c, p) => {
-  const row = await getCastById(env, idParam(p.id));
+  const row = await getCastById(env, await resolveCastId(env, p.id));
   if (!row) throw notFound("cast member");
-  return json({ cast: row });
+  return json({ cast: toPublicCast(row) });
 };
 const hPatchCast: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ name?: string; bible?: string | null; voice_id?: string | null }>(req);
@@ -193,53 +215,53 @@ const hPatchCast: Handler = async (req, env, _c, p) => {
     else if (isValidVoiceId(b.voice_id)) patch.voice_id = b.voice_id;
     else throw badRequest(`voice_id must be one of: ${VOICE_IDS.join(", ")}`);
   }
-  const row = await updateCast(env, idParam(p.id), patch);
+  const row = await updateCast(env, await resolveCastId(env, p.id), patch);
   if (!row) throw notFound("cast member");
-  return json({ cast: row });
+  return json({ cast: toPublicCast(row) });
 };
 const hDeleteCast: Handler = async (req, env, _c, p) => {
-  const row = await deleteCast(env, idParam(p.id));
+  const row = await deleteCast(env, await resolveCastId(env, p.id));
   if (!row) throw notFound("cast member");
   // Issue #298: deleteCast returns the row (with its keys) precisely so the caller reclaims R2.
   // Best-effort, so a missing/transient-failing artifact never blocks the delete response.
   await deleteCastArtifacts(env, row);
-  return json({ ok: true, deleted: row.id });
+  return json({ ok: true, deleted: row.public_id });
 };
 // portrait / ref / source: binary upload, staged {key,mime}, or {from_chat_artifact} copy.
 const hSetPortrait: Handler = async (req, env, _c, p) =>
-  handleCastPortraitUpload(req, env, idParam(p.id));
+  handleCastPortraitUpload(req, env, await resolveCastId(env, p.id));
 const hClearPortrait: Handler = async (_req, env, _c, p) => {
-  const id = idParam(p.id);
+  const id = await resolveCastId(env, p.id);
   const cur = await getCastById(env, id);
   if (!cur) throw notFound("cast member");
   if (cur.portrait_key) {
     try { await env.R2_RENDERS.delete(cur.portrait_key); } catch { /* ignore */ }
   }
   const row = await clearPortrait(env, id);
-  return json({ cast: row });
+  return json({ cast: row ? toPublicCast(row) : null });
 };
 const hAddRef: Handler = async (req, env, _c, p) =>
-  handleCastRefAdd(req, env, idParam(p.id));
+  handleCastRefAdd(req, env, await resolveCastId(env, p.id));
 const hRemoveRef: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string }>(req).catch(() => ({} as { key?: string }));
   const key = b.key || p.refKey;
   if (!key) throw badRequest("key required");
-  return handleCastRefRemove(env, idParam(p.id), key);
+  return handleCastRefRemove(env, await resolveCastId(env, p.id), key);
 };
 const hAddSource: Handler = async (req, env, _c, p) =>
-  handleCastSourceAdd(req, env, idParam(p.id));
+  handleCastSourceAdd(req, env, await resolveCastId(env, p.id));
 const hRemoveSource: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ key?: string }>(req).catch(() => ({} as { key?: string }));
   const key = b.key || p.sourceKey;
   if (!key) throw badRequest("key required");
-  return handleCastSourceRemove(env, idParam(p.id), key);
+  return handleCastSourceRemove(env, await resolveCastId(env, p.id), key);
 };
 
 // cast.image: generate a cast member's LoRA training reference set via the installed cast.image
 // module (FLUX 2 / Nano Banana), then register the generated images onto the member. Async run/poll
 // across requests (a 10-image set can't finish in one request) -- POST starts it, GET advances it.
 const hGenerateCastRefs: Handler = async (req, env, _c, p) => {
-  const id = idParam(p.id);
+  const id = await resolveCastId(env, p.id);
   const b = await readBody<{ config?: Record<string, unknown>; art_style?: string; source_keys?: string[]; choice?: string }>(req);
   const job = await startCastRefsJob(env, {
     castId: id, config: b.config, artStyle: b.art_style, sourceKeys: b.source_keys, choice: b.choice,
@@ -248,7 +270,7 @@ const hGenerateCastRefs: Handler = async (req, env, _c, p) => {
   return json({ ok: true, ...summarizeCastRefs(job) }, 201);
 };
 const hPollCastRefs: Handler = async (_req, env, _c, p) => {
-  const id = idParam(p.id);
+  const id = await resolveCastId(env, p.id);
   const job = await advanceCastRefsJob(env, id, p.jobId);
   if (!job) throw notFound("cast refs job");
   return json({ ok: true, ...summarizeCastRefs(job) });
@@ -259,7 +281,7 @@ const hPollCastRefs: Handler = async (_req, env, _c, p) => {
 // side-effect-free (GET is canonical so the UI can use a plain download link; POST is also
 // accepted to match the issue's speced verb). Import re-keys every asset into THIS instance and
 // allocates a fresh local id.
-const hExportCast: Handler = async (_req, env, _c, p) => exportCastBundle(env, idParam(p.id));
+const hExportCast: Handler = async (_req, env, _c, p) => exportCastBundle(env, await resolveCastId(env, p.id));
 const hImportCast: Handler = async (req, env) => {
   const buf = new Uint8Array(await req.arrayBuffer());
   return importCastBundle(env, buf);
@@ -397,15 +419,16 @@ const hServeArtifact: Handler = async (req, env, _c, p) => {
 // --- renders (library / metadata) ----------------------------------------
 const hListRenders: Handler = async (req, env) => {
   const url = new URL(req.url);
-  const projectId = normalizeProjectIdInput(url.searchParams.get("project_id"));
+  // ?project_id is now the opaque project public id; resolve to the internal int (null = unfiltered).
+  const projectId = await resolveProjectRef(env, url.searchParams.get("project_id"));
   const limitRaw = Number(url.searchParams.get("limit"));
   const limit = Number.isFinite(limitRaw) ? limitRaw : 100;
   const renders = await listRendersForUser(env, limit, projectId);
-  return json({ renders });
+  return json({ renders: renders.map(toPublicRenderRow) });
 };
 const hListTags: Handler = async (_req, env) => json({ tags: await listUserTags(env) });
 const hPatchRender: Handler = async (req, env, _c, p) => {
-  const id = idParam(p.id);
+  const id = await resolveRenderId(env, p.id);
   const b = await readBody<{ label?: string | null; lockedShots?: unknown; folderPath?: unknown; tags?: unknown }>(req);
   let ok = false;
   if ("label" in b) ok = (await setRenderLabel(env, id, b.label ?? null)) || ok;
@@ -413,16 +436,17 @@ const hPatchRender: Handler = async (req, env, _c, p) => {
   if ("folderPath" in b) ok = (await setRenderFolder(env, id, normalizeFolderPath(b.folderPath))) || ok;
   if ("tags" in b) ok = (await setRenderTags(env, id, normalizeTags(b.tags))) || ok;
   if (!ok) throw notFound("render");
-  return json(await getRenderByIdForUser(env, id));
+  const updated = await getRenderByIdForUser(env, id);
+  return json(updated ? toPublicRenderRow(updated) : null);
 };
 const hDeleteRender: Handler = async (_req, env, _c, p) => {
-  if (!(await deleteRenderRow(env, idParam(p.id)))) throw notFound("render");
+  if (!(await deleteRenderRow(env, await resolveRenderId(env, p.id)))) throw notFound("render");
   return json({ ok: true });
 };
 const hAddRenderAudio: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ audioKey?: string }>(req);
   if (!b.audioKey?.trim()) throw badRequest("audioKey required");
-  const r = await muxAudioOntoRender(env, idParam(p.id), b.audioKey.trim());
+  const r = await muxAudioOntoRender(env, await resolveRenderId(env, p.id), b.audioKey.trim());
   if (!r.ok) return json({ error: r.error }, 422);
   return json({ ok: true, output_key: r.output_key });
 };
@@ -440,7 +464,7 @@ const hAddRenderNarration: Handler = async (req, env, _c, p) => {
   for (let i = 0; i < 40; i++) {
     const polled = await pollScoreBedGenerate(env, started.id, started.module);
     if (polled.status === "done" && polled.output_artifact?.key) {
-      const muxed = await muxAudioOntoRender(env, idParam(p.id), polled.output_artifact.key);
+      const muxed = await muxAudioOntoRender(env, await resolveRenderId(env, p.id), polled.output_artifact.key);
       if (!muxed.ok) return json({ error: muxed.error }, 422);
       return json({ ok: true, output_key: muxed.output_key, module: started.module, label: started.label });
     }
@@ -470,7 +494,7 @@ const hFinalizePreview: Handler = async (req, env, _c, p) => {
   } catch { /* empty body ok */ }
   // No motionBackend: animateFromPreview ignores it for "finalized" mode and resolves the gpu
   // door from the registry by locality (the old hardcoded "own-gpu" here was dead config).
-  return animatePreviewHandler(env, idParam(p.id), {
+  return animatePreviewHandler(env, await resolveRenderId(env, p.id), {
     deriveMode: "finalized",
     audioKey,
   });
@@ -478,7 +502,7 @@ const hFinalizePreview: Handler = async (req, env, _c, p) => {
 
 const hAnimateCloud: Handler = async (req, env, _c, p) => {
   const b = await readBody<{ model?: string; perShot?: Record<string, string>; audioKey?: string }>(req);
-  return animatePreviewHandler(env, idParam(p.id), {
+  return animatePreviewHandler(env, await resolveRenderId(env, p.id), {
     deriveMode: "cloud-finalized",
     motionBackend: b.model,
     perShotModels: b.perShot,
@@ -497,7 +521,7 @@ const hAnimateHybrid: Handler = async (req, env, _c, p) => {
   const allowed = new Set(cloudMotionModules(modules).map((m) => m.name));
   const normalized = normalizeHybridBackends(b.backends, allowed);
   if (normalized.errors.length) throw badRequest(normalized.errors.join("; "));
-  return animatePreviewHandler(env, idParam(p.id), {
+  return animatePreviewHandler(env, await resolveRenderId(env, p.id), {
     deriveMode: "cloud-finalized",
     hybridBackends: normalized.backends,
     defaultBackend: b.defaultBackend === "cloud" ? "cloud" : "gpu",
@@ -577,7 +601,7 @@ const hSubmitRender: Handler = async (req, env) => {
     renderOverrides: b.renderOverrides,
     status: view.status,
     mode: b.keyframesOnly ? "keyframes-only" : "full",
-    projectId: normalizeProjectIdInput(b.projectId),
+    projectId: await resolveProjectRef(env, b.projectId),
   };
   await insertRender(env, row);
   return json(view, 201);
@@ -646,12 +670,12 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
     renderOverrides: b.renderOverrides,
     status: view.status,
     mode: "finalized",
-    projectId: normalizeProjectIdInput(b.projectId),
+    projectId: await resolveProjectRef(env, b.projectId),
   });
   return json(view, 201);
 };
 const hRegenShot: Handler = async (req, env, _c, p) => {
-  const renderId = idParam(p.id);
+  const renderId = await resolveRenderId(env, p.id);
   const b = await readBody<{ shotId?: string }>(req);
   const shotId = typeof b.shotId === "string" ? b.shotId.trim() : "";
   if (!shotId) throw badRequest("shotId required");
@@ -766,7 +790,7 @@ const hScatterRender: Handler = async (req, env) => {
       motion_backend: b.motion_backend,
       audio_key: b.audioKey,
       film_titles: b.film_titles,
-        project_id: normalizeProjectIdInput(b.projectId),
+        project_id: await resolveProjectRef(env, b.projectId),
     });
     const view = scatterJobToPollView(job);
     return json({ ok: true, jobId: view.jobId, status: view.status }, 201);
@@ -776,9 +800,9 @@ const hScatterRender: Handler = async (req, env) => {
   }
 };
 const hTrainCastLora: Handler = async (req, env, _c, p) =>
-  handleCastTrainLora(req, env, idParam(p.id));
+  handleCastTrainLora(req, env, await resolveCastId(env, p.id));
 const hCastLoraStatus: Handler = async (_req, env, _c, p) =>
-  handleCastLoraStatus(env, idParam(p.id));
+  handleCastLoraStatus(env, await resolveCastId(env, p.id));
 const hAdoptRender: Handler = async (req, env) =>
   handleAdoptRender(req, env);
 

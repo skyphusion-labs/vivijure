@@ -32,20 +32,20 @@ describe("cast-image orchestrator pure logic", () => {
 
   it("summarizeCastRefs maps the job to the caller-facing view", () => {
     const job: CastRefsJob = {
-      job_id: "refs-1", cast_id: 7,
+      job_id: "refs-1", cast_id: 7, cast_public_id: "a7000000-0000-4000-8000-000000000007",
       module_name: "cast-image", binding: "MODULE_CAST_IMAGE", phase: "done",
       images: [{ key: "cast-gen/7/ref_01.png", mime: "image/png" }],
       applied: ["model:flux-2-klein-9b", "generated:1"], registered: 1, created_at: 0,
     };
     expect(summarizeCastRefs(job)).toEqual({
-      job_id: "refs-1", cast_id: 7, phase: "done", module: "cast-image",
+      job_id: "refs-1", cast_id: "a7000000-0000-4000-8000-000000000007", phase: "done", module: "cast-image",
       registered: 1, images: [{ key: "cast-gen/7/ref_01.png", mime: "image/png" }], error: undefined,
     });
   });
 
   it("summarizeCastRefs carries an error + omits an unset module", () => {
     const job: CastRefsJob = {
-      job_id: "refs-2", cast_id: 9,
+      job_id: "refs-2", cast_id: 9, cast_public_id: "a9000000-0000-4000-8000-000000000009",
       module_name: null, binding: null, phase: "failed",
       images: [], applied: [], registered: 0, error: "no cast.image module installed", created_at: 0,
     };
