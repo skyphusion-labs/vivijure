@@ -44,9 +44,9 @@ export interface Env {
 
   // AI Gateway (LLM storyboard planning + image chat + cloud-animate scoring prompts).
   AI: Ai;
-  GATEWAY_ID: string;
+  GATEWAY_ID: SecretsStoreSecret | string;
   // Planner LLM auth: authenticated AI Gateway token + xAI BYOK (secrets, optional).
-  CF_AIG_TOKEN?: string;
+  CF_AIG_TOKEN?: SecretsStoreSecret | string;
   XAI_API_KEY?: string;
 
   // Storage. R2_RENDERS = the `vivijure` bucket (bundles, keyframes, clips, MP4s, project state).
@@ -58,14 +58,14 @@ export interface Env {
   // R2 S3-compatible creds for SigV4 presigning (r2-presign.ts): the CPU containers have no R2
   // binding, so the Worker presigns short-lived GET/PUT URLs. ACCESS/SECRET are secrets; ENDPOINT +
   // BUCKET are vars. Optional so a presign-free deploy still typechecks.
-  R2_S3_ACCESS_KEY_ID?: string;
-  R2_S3_SECRET_ACCESS_KEY?: string;
+  R2_S3_ACCESS_KEY_ID?: SecretsStoreSecret | string;
+  R2_S3_SECRET_ACCESS_KEY?: SecretsStoreSecret | string;
   R2_S3_ENDPOINT?: string;
   R2_S3_BUCKET?: string;
 
   // RunPod serverless render endpoint (runpod-submit.ts). Secrets.
-  RUNPOD_API_KEY: string;
-  RUNPOD_ENDPOINT_ID: string;
+  RUNPOD_API_KEY: SecretsStoreSecret | string;
+  RUNPOD_ENDPOINT_ID: SecretsStoreSecret | string;
 
   // CPU container Durable Objects (off-GPU beat-sync, portrait prep, ffmpeg finish).
   VIDEO_FINISH_VPC: Fetcher; // Workers VPC -> always-on fleet video-finish (issue #83)

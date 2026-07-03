@@ -17,6 +17,7 @@
 // envelope { id, status, output?, error?, executionTime?, delayTime? }.
 
 import type { Env } from "./env";
+import { secretValue } from "./secret-store";
 
 // Quality tier normalizer / validator (v0.156.3). The render tiers are keyframe (a
 // separate keyframesOnly flag) plus three real generation tiers the pod's `for_tier`
@@ -470,11 +471,12 @@ export async function runpodRequest(
   spec: RunpodRequestSpec,
   opts: RunpodTransportOpts = {},
 ): Promise<RunpodResult> {
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) {
+  const apiKey = await secretValue(env.RUNPOD_API_KEY);
+  if (!apiKey) {
     return {
       ok: false,
       error:
-        "RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID must be set on the Worker (npx wrangler secret put ...)",
+        "RUNPOD_API_KEY must be set on the Worker (Secrets Store binding or npx wrangler secret put)",
     };
   }
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -485,7 +487,7 @@ export async function runpodRequest(
   const timeoutMs = opts.timeoutMs ?? RUNPOD_TIMEOUT_MS;
 
   const headers: Record<string, string> = {
-    authorization: `Bearer ${env.RUNPOD_API_KEY}`,
+    authorization: `Bearer ${apiKey}`,
   };
   if (spec.body !== undefined) headers["content-type"] = "application/json";
 
@@ -556,20 +558,31 @@ export async function runpodRequest(
   return { ok: false, error: lastTransientError, status: lastTransientStatus };
 }
 
+// A missing RUNPOD_ENDPOINT_ID is a fail-closed config error, surfaced in the SAME { ok:false }
+// shape as the transport RUNPOD_API_KEY guard so a route translates one contract. #238.
+function runpodMissingEndpoint(): RunpodResult {
+  return {
+    ok: false,
+    error: "RUNPOD_ENDPOINT_ID must be set on the Worker (Secrets Store binding or npx wrangler secret put)",
+  };
+}
+
 // Submit a job to the vivijure-serverless RunPod endpoint. Returns the
 // normalized view or a transport error. Does not throw on HTTP 4xx / 5xx; the
 // caller decides how to translate to a Worker response. Optional opts inject a
 // mock transport in tests.
-export function submitRenderJob(
+export async function submitRenderJob(
   env: Env,
   args: RenderSubmitArgs,
   opts?: RunpodTransportOpts,
 ): Promise<RunpodResult> {
+  const endpointId = await secretValue(env.RUNPOD_ENDPOINT_ID);
+  if (!endpointId) return runpodMissingEndpoint();
   return runpodRequest(
     env,
     {
       method: "POST",
-      url: buildSubmitUrl(env.RUNPOD_ENDPOINT_ID),
+      url: buildSubmitUrl(endpointId),
       body: JSON.stringify(buildSubmitPayload(args)),
       label: "submit",
     },
@@ -578,16 +591,18 @@ export function submitRenderJob(
 }
 
 // v0.42.0: submit a finalize job. Same transport contract as submitRenderJob.
-export function submitFinalizeJob(
+export async function submitFinalizeJob(
   env: Env,
   args: FinalizeArgs,
   opts?: RunpodTransportOpts,
 ): Promise<RunpodResult> {
+  const endpointId = await secretValue(env.RUNPOD_ENDPOINT_ID);
+  if (!endpointId) return runpodMissingEndpoint();
   return runpodRequest(
     env,
     {
       method: "POST",
-      url: buildSubmitUrl(env.RUNPOD_ENDPOINT_ID),
+      url: buildSubmitUrl(endpointId),
       body: JSON.stringify(buildFinalizePayload(args)),
       label: "finalize submit",
     },
@@ -597,16 +612,18 @@ export function submitFinalizeJob(
 
 // v0.41.0: submit a per-shot regen job. Hits the same /v2/<endpointId>/run;
 // the GPU side dispatches by action.
-export function submitRegenShotJob(
+export async function submitRegenShotJob(
   env: Env,
   args: RegenShotArgs,
   opts?: RunpodTransportOpts,
 ): Promise<RunpodResult> {
+  const endpointId = await secretValue(env.RUNPOD_ENDPOINT_ID);
+  if (!endpointId) return runpodMissingEndpoint();
   return runpodRequest(
     env,
     {
       method: "POST",
-      url: buildSubmitUrl(env.RUNPOD_ENDPOINT_ID),
+      url: buildSubmitUrl(endpointId),
       body: JSON.stringify(buildRegenShotPayload(args)),
       label: "regen submit",
     },
@@ -616,16 +633,18 @@ export function submitRegenShotJob(
 
 // v0.57.0: submit a standalone LoRA training job. Differs only in the payload
 // builder.
-export function submitTrainLoraJob(
+export async function submitTrainLoraJob(
   env: Env,
   args: TrainLoraArgs,
   opts?: RunpodTransportOpts,
 ): Promise<RunpodResult> {
+  const endpointId = await secretValue(env.RUNPOD_ENDPOINT_ID);
+  if (!endpointId) return runpodMissingEndpoint();
   return runpodRequest(
     env,
     {
       method: "POST",
-      url: buildSubmitUrl(env.RUNPOD_ENDPOINT_ID),
+      url: buildSubmitUrl(endpointId),
       body: JSON.stringify(buildTrainLoraPayload(args)),
       label: "train-lora submit",
     },
@@ -637,16 +656,18 @@ export function submitTrainLoraJob(
 // expose it under our DELETE /api/storyboard/render/<jobId> route. Calling
 // cancel on a job that is already terminal (or never existed) returns RunPod's
 // error envelope, which we surface verbatim.
-export function cancelRenderJob(
+export async function cancelRenderJob(
   env: Env,
   jobId: string,
   opts?: RunpodTransportOpts,
 ): Promise<RunpodResult> {
+  const endpointId = await secretValue(env.RUNPOD_ENDPOINT_ID);
+  if (!endpointId) return runpodMissingEndpoint();
   return runpodRequest(
     env,
     {
       method: "POST",
-      url: buildCancelUrl(env.RUNPOD_ENDPOINT_ID, jobId),
+      url: buildCancelUrl(endpointId, jobId),
       label: "cancel",
     },
     opts,
@@ -654,16 +675,18 @@ export function cancelRenderJob(
 }
 
 // Poll one job's status.
-export function pollRenderJob(
+export async function pollRenderJob(
   env: Env,
   jobId: string,
   opts?: RunpodTransportOpts,
 ): Promise<RunpodResult> {
+  const endpointId = await secretValue(env.RUNPOD_ENDPOINT_ID);
+  if (!endpointId) return runpodMissingEndpoint();
   return runpodRequest(
     env,
     {
       method: "GET",
-      url: buildStatusUrl(env.RUNPOD_ENDPOINT_ID, jobId),
+      url: buildStatusUrl(endpointId, jobId),
       label: "poll",
     },
     opts,

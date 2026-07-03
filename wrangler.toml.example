@@ -70,8 +70,9 @@ enabled = true
 [triggers]
 crons = ["*/1 * * * *"]
 
-# AI Gateway (LLM storyboard planning + cloud-animate scoring). GATEWAY_ID is a SECRET, not a var:
-#   echo "<gateway-slug>" | npx wrangler secret put GATEWAY_ID
+# AI Gateway (LLM storyboard planning + cloud-animate scoring). GATEWAY_ID + CF_AIG_TOKEN are
+# Cloudflare Secrets Store secrets (see the [[secrets_store_secrets]] blocks below), seeded once by
+# the operator; their values never touch CI/GitHub.
 [ai]
 binding = "AI"
 
@@ -148,9 +149,48 @@ service_id = "${VPC_AUDIO_MIX_ID}"
 remote = true
 # <<< OPTIONAL: finish-fleet-vpc
 
-# --- Secrets (npx wrangler secret put <NAME>): RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID,
-# --- R2_S3_ACCESS_KEY_ID, R2_S3_SECRET_ACCESS_KEY, GATEWAY_ID.
-# --- Presign vars (uncomment + fill on provision):
+# --- Credential secrets via the Cloudflare Secrets Store (#238). Seeded ONCE by the operator
+# --- (npx wrangler secrets-store secret create <STORE_ID> --name <NAME> ...); values never touch
+# --- CI/GitHub. store_id is filled from the SECRETS_STORE_ID repo variable at deploy (ci.yml),
+# --- exactly like the module workers. See docs/DEPLOYMENT.md.
+# --- NOTE: binding RUNPOD_ENDPOINT_ID reads store secret BACKEND_RUNPOD_ENDPOINT_ID (#237 naming);
+# --- the core CF_AIG_TOKEN is its OWN store secret, distinct from the module PLAN_ENHANCE_CF_AIG_TOKEN.
+[[secrets_store_secrets]]
+binding = "RUNPOD_API_KEY"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "RUNPOD_API_KEY"
+
+[[secrets_store_secrets]]
+binding = "RUNPOD_ENDPOINT_ID"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "BACKEND_RUNPOD_ENDPOINT_ID"
+
+[[secrets_store_secrets]]
+binding = "GATEWAY_ID"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "GATEWAY_ID"
+
+[[secrets_store_secrets]]
+binding = "CF_AIG_TOKEN"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "CF_AIG_TOKEN"
+
+[[secrets_store_secrets]]
+binding = "R2_S3_ACCESS_KEY_ID"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "R2_S3_ACCESS_KEY_ID"
+
+[[secrets_store_secrets]]
+binding = "R2_S3_SECRET_ACCESS_KEY"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "R2_S3_SECRET_ACCESS_KEY"
+
+# --- Non-secret / operator-provided values that stay OUT of the Secrets Store:
+# ---   R2_S3_ENDPOINT + R2_S3_BUCKET : identifiers (URL + bucket), deploy-provided. Promoting them
+# ---     to [vars] is a deferred follow-up (they are not secrets; kept as-is here to avoid coupling
+# ---     this migration to new CI variable provisioning).
+# ---   STUDIO_API_TOKEN : operator login, deploy-minted worker secret (openssl rand | wrangler secret put).
+# ---   XAI_API_KEY / OPENAI_API_KEY : optional BYOK; leave as `wrangler secret put` when used.
 # [vars]
 # R2_S3_ENDPOINT = "https://<account>.r2.cloudflarestorage.com"
 # R2_S3_BUCKET = "vivijure"

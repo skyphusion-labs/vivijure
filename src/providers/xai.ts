@@ -20,6 +20,7 @@
 import type { Env } from "../env";
 import type { ModelEntry } from "../models";
 import type { ProviderStreamEvent } from "../parsers/types";
+import { secretValue } from "../secret-store";
 import { extractSSEDataPayloads } from "../parsers/sse-framer";
 import { interpretXaiSSEFrame } from "../parsers/xai-sse";
 
@@ -36,7 +37,7 @@ async function prepareXaiRequest(
 ): Promise<{ url: string; headers: Record<string, string>; body: string }> {
   const baseUrl = await (env.AI as unknown as {
     gateway: (id: string) => { getUrl: (provider: string) => Promise<string> };
-  }).gateway(env.GATEWAY_ID).getUrl("grok");
+  }).gateway(await secretValue(env.GATEWAY_ID)).getUrl("grok");
 
   // Strip "xai/" prefix; xAI's API expects just the model name (e.g. "grok-4.3").
   const modelName = model.id.replace(/^xai\//, "");
@@ -57,7 +58,8 @@ async function prepareXaiRequest(
     "content-type": "application/json",
   };
   if (env.XAI_API_KEY) headers["Authorization"] = `Bearer ${env.XAI_API_KEY}`;
-  if (env.CF_AIG_TOKEN) headers["cf-aig-authorization"] = `Bearer ${env.CF_AIG_TOKEN}`;
+  const aigToken = await secretValue(env.CF_AIG_TOKEN);
+  if (aigToken) headers["cf-aig-authorization"] = `Bearer ${aigToken}`;
 
   return {
     url: `${baseUrl}/v1/chat/completions`,

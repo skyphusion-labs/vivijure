@@ -239,13 +239,13 @@ npx wrangler r2 bucket create skyphusion-llm     # document / RAG store -- the R
 
 # 3b. Set the runtime secrets (prompts for each value)
 echo "<your-account-id>"            | npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
-echo "<runpod-api-key>"             | npx wrangler secret put RUNPOD_API_KEY
-echo "<runpod-endpoint-id>"         | npx wrangler secret put RUNPOD_ENDPOINT_ID
-echo "<r2-s3-access-key-id>"        | npx wrangler secret put R2_S3_ACCESS_KEY_ID
-echo "<r2-s3-secret-access-key>"    | npx wrangler secret put R2_S3_SECRET_ACCESS_KEY
+# #238: RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID (store name BACKEND_RUNPOD_ENDPOINT_ID), R2_S3_ACCESS_KEY_ID,
+# R2_S3_SECRET_ACCESS_KEY, GATEWAY_ID and CF_AIG_TOKEN are NO LONGER wrangler-secret-put -- they bind
+# declaratively from the Cloudflare Secrets Store ([[secrets_store_secrets]] in wrangler.toml). Seed them
+# ONCE in the store (see "Module secrets via the Secrets Store" below); every deploy re-binds them.
+# R2_S3_ENDPOINT + R2_S3_BUCKET are identifiers, not secrets -- kept as deploy-provided values here:
 echo "https://<account-id>.r2.cloudflarestorage.com" | npx wrangler secret put R2_S3_ENDPOINT
 echo "vivijure"                     | npx wrangler secret put R2_S3_BUCKET
-echo "<ai-gateway-slug>"            | npx wrangler secret put GATEWAY_ID
 
 # Token auth mode (AUTH_MODE = "token" in wrangler.toml [vars]): mint the studio API token.
 # SAVE the printed value -- it is your only login; the UI asks for it on first load.
@@ -334,6 +334,9 @@ grep -rl REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID modules/*/wrangler.toml \
 S=<your-store-id>
 npx wrangler secrets-store secret create $S --name RUNPOD_API_KEY                 --scopes workers --remote
 npx wrangler secrets-store secret create $S --name GATEWAY_ID                     --scopes workers --remote
+npx wrangler secrets-store secret create $S --name CF_AIG_TOKEN                   --scopes workers --remote  # core AI Gateway auth (#238; distinct from PLAN_ENHANCE_CF_AIG_TOKEN)
+npx wrangler secrets-store secret create $S --name R2_S3_ACCESS_KEY_ID            --scopes workers --remote  # core R2 SigV4 presign (#238)
+npx wrangler secrets-store secret create $S --name R2_S3_SECRET_ACCESS_KEY        --scopes workers --remote  # core R2 SigV4 presign (#238)
 npx wrangler secrets-store secret create $S --name PLAN_ENHANCE_CF_AIG_TOKEN      --scopes workers --remote
 npx wrangler secrets-store secret create $S --name BACKEND_RUNPOD_ENDPOINT_ID       --scopes workers --remote
 npx wrangler secrets-store secret create $S --name VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID --scopes workers --remote

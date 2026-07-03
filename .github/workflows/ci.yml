@@ -183,6 +183,8 @@ jobs:
           # keeps the [[dispatch_namespaces]] block COMMENTED and deploys on the free plan with zero WfP
           # dependency -- the free-self-host promise. See docs/deploy-runbook.md "Phase 3".
           ENABLE_WFP_DISPATCH: ${{ vars.ENABLE_WFP_DISPATCH }}
+          # #238: fills the core [[secrets_store_secrets]] store_id placeholders (same repo var as modules).
+          SECRETS_STORE_ID: ${{ vars.SECRETS_STORE_ID }}
         run: |
           set -eu
           apk add --no-cache gettext >/dev/null
@@ -214,6 +216,12 @@ jobs:
               || { echo "::error::ENABLE_WFP_DISPATCH=1 but dispatch block did not uncomment (example drifted)"; exit 1; }
             echo "WfP dispatch ENABLED for this deploy (MODULE_DISPATCH -> vivijure-modules)."
           fi
+          # #238: fill the Secrets Store id for the core [[secrets_store_secrets]] bindings from the
+          # SECRETS_STORE_ID repo variable (mirrors the module deploy loop), then fail CLOSED if any
+          # placeholder survived -- a core deployed with an unfilled store binding is a self-inflicted outage.
+          if [ -z "${SECRETS_STORE_ID:-}" ]; then echo "::error::SECRETS_STORE_ID repo variable is unset -- refusing to deploy the core with unfilled store_id bindings"; exit 1; fi
+          sed -i "s/REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID/${SECRETS_STORE_ID}/g" wrangler.toml
+          if grep -q "REPLACE_WITH_" wrangler.toml; then echo "::error::core store_id placeholder survived in wrangler.toml"; exit 1; fi
           echo "Rendered wrangler.toml from wrangler.toml.example ($(wc -l < wrangler.toml) lines, F2 vars present)."
 
       # Apply D1 schema migrations AFTER the wrangler.toml render above (wrangler needs that config

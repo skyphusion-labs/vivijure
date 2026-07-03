@@ -15,12 +15,13 @@
 // log ID for that specific call.
 
 import type { Env } from "./env";
+import { secretValue } from "./secret-store";
 
 type RunOpts = { gateway: { id: string }; returnRawResponse?: boolean };
 type RunFn = (model: string, params: unknown, opts?: RunOpts) => Promise<unknown>;
 
-export function aiRun(env: Env, model: string, params: unknown, returnRaw = false): Promise<unknown> {
-  const opts: RunOpts = { gateway: { id: env.GATEWAY_ID } };
+export async function aiRun(env: Env, model: string, params: unknown, returnRaw = false): Promise<unknown> {
+  const opts: RunOpts = { gateway: { id: await secretValue(env.GATEWAY_ID) } };
   if (returnRaw) opts.returnRawResponse = true;
   return (env.AI as unknown as { run: RunFn }).run(model, params, opts);
 }
