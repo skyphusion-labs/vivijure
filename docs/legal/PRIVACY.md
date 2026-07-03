@@ -5,7 +5,7 @@
 > advice and reading it does not create an attorney-client relationship. If you are unsure how it
 > applies to you, or you run your own instance, talk to a licensed attorney.
 
-**Effective date:** 2026-06-26
+**Effective date:** 2026-07-03
 
 ---
 
@@ -23,7 +23,7 @@ Vivijure service that we operate for you, so there is nothing for us to collect.
   We maintain the software; we do not operate it for the public.
 - **The only Vivijure instance Skyphusion Labs runs is Conrad's own private instance at
   `vivijure.skyphusion.org`.** It is gated, used by Conrad and the crew (plus the Slate Discord bot
-  via an access service token), and is not a service anyone signs up for. It processes Conrad's own
+  via its own named API token), and is not a service anyone signs up for. It processes Conrad's own
   creative content, not data collected from outside users.
 
 If you want a privacy policy for your Vivijure instance, you write it, because you are the operator
@@ -60,15 +60,17 @@ what Conrad's own private instance does, as a worked, honest example.
 This matters, so we state it plainly: Vivijure is **single-operator by design**. The code has no
 account system, no per-user identity column, and no multi-tenant model. An earlier identity/tenancy
 field was deliberately removed from the database so the software cannot easily be turned into a
-data-harvesting SaaS. "Who are you" is answered exactly once, at the front door, by an access gate
-(Cloudflare Access). Everything behind that gate belongs to the one operator who runs the instance.
+data-harvesting SaaS. "Who are you" is answered exactly once, at the front door, by an API-token
+gate: the Worker itself checks a bearer token on every `/api/*` request. Everything behind that gate
+belongs to the one operator who runs the instance.
 
 What this means in practice, on any instance:
 
 - The studio does not build a profile of anyone. There is no per-user row to build one in.
 - Creative content (storyboards, prompts, cast images, models, films) is stored as the operator's
   content, scoped to the instance, not tagged to a per-user account.
-- Access control (who is allowed in) is handled at the edge by the operator's own access gate.
+- Access control (who is allowed in) is enforced by the instance's own auth gate, which on Conrad's
+  instance is a bearer-token check inside the Worker.
 
 Because there is no multi-tenant user model, the software has no mechanism to collect, aggregate, or
 sell end-user data, by design.
@@ -124,17 +126,34 @@ address, not a mailing list.
 
 ---
 
-## 4. Access and the front-door gate
+## 4. Authentication and the front-door gate
 
-To reach an instance you authenticate through the operator's access gate (Cloudflare Access on
-Conrad's instance). The gate verifies an identity the operator has allowed (an email/identity in the
-operator's policy, or, for the Slate Discord bot on Conrad's instance, a service token). The gate
-logs authentication events (who authenticated, when) as part of running that gate, on the operator's
-own Zero Trust organization. That is how the gate works; it is the minimum needed to keep an un-gated
-instance from becoming an open denial-of-wallet target.
+To reach the studio API on an instance you present that instance's **API token**. On Conrad's
+instance the gate runs in **token mode**: every `/api/*` request must carry a bearer token
+(`Authorization: Bearer <token>`), which the Worker itself checks (fail-closed, in constant time)
+before any data-plane code runs. Two kinds of token are accepted, and both are just secrets, not
+identities:
 
-The studio application behind the gate does not store identity in its own database (there is no
-per-user table). It trusts that the gate let the caller in.
+- **The operator token** (`STUDIO_API_TOKEN`), a random 256-bit secret minted at deploy time and held
+  as a Worker secret. It is never written to the database.
+- **Named per-consumer tokens** (for example, one for the Slate Discord bot, one per render
+  satellite), each a random token issued and revoked independently so a single credential can be
+  rotated without touching the others. Only a **name and a SHA-256 hash** of each token live in the
+  operator's D1 database (table `api_tokens`); the plaintext token is never stored. A request is
+  authenticated by hashing the presented token and matching that hash.
+
+That is the entire identity surface on the main API: a token name and a token hash. **No third-party
+identity provider is in the path, and no email, account, or IdP profile is processed** to reach the
+API, so the gate keeps no log of "who" authenticated beyond which named token (if any) matched. The
+studio application behind the gate stores no per-user identity (there is no per-user table); it trusts
+that the token check let the caller in.
+
+The software also ships an optional **Access mode**, in which an operator can instead put the API
+behind an external identity gate (Cloudflare Access) and have the Worker verify that gate's signed
+assertion. **Conrad's instance does not run this mode.** An operator who turns it on takes on whatever
+identity data their chosen identity provider processes (typically an email/identity and
+authentication-event logs), on their own Zero Trust organization; that is their configuration to
+document, not something the default token mode does.
 
 ---
 
@@ -144,10 +163,12 @@ Rendering is GPU work, and some of it necessarily happens on infrastructure the 
 the instance to. On a self-hosted instance these are the operator's OWN accounts with these
 providers, not ours. We list them so the path is transparent.
 
-- **Cloudflare** -- the platform Vivijure runs on: Workers (compute), D1 (database), R2 (file
-  storage), AI Gateway (routes AI calls), Access (the gate), Rate Limiting, and Cloudflare Web
-  Analytics on the public marketing page only (Section 6). Stored content lives in the operator's
-  Cloudflare D1/R2.
+- **Cloudflare** -- the platform Vivijure runs on: Workers (compute, including the API-token gate),
+  D1 (database, which also holds the named-token names and hashes from Section 4), R2 (file storage),
+  AI Gateway (routes AI calls), Rate Limiting, and Cloudflare Web Analytics on the public marketing
+  page only (Section 6). Stored content lives in the operator's Cloudflare D1/R2. (Cloudflare Access
+  is in this path only for an operator running the optional Access mode of Section 4; Conrad's
+  instance does not.)
 - **RunPod** -- the serverless GPU render backend. To render, the studio hands RunPod a job and
   RunPod pulls the render bundle (storyboard, prompts, cast images, models) from R2, does the GPU
   work (keyframes, image-to-video, model training), and writes the results back to R2. Creative
@@ -175,8 +196,12 @@ Labs is not in that path. None of these are advertising or data-broker relations
 ## 6. Cookies, analytics, and local storage (the honest version)
 
 - **The studio app uses no tracking cookies.** The only cookie in play on the gated app is the
-  authentication cookie set by the operator's access gate (Cloudflare Access) so the gate knows the
-  caller already authenticated. It is a functional security cookie, not a tracking cookie.
+  first-party **`vivijure_token`** cookie, which holds the same API token the caller already provided.
+  It exists so media elements (image/video/audio tags on artifact URLs, which cannot send an
+  `Authorization` header) can load; the Worker honors it for read-only GET/HEAD requests only, and it
+  is set `Secure; SameSite=Strict` and scoped to `/api/`. It is a functional security cookie, not a
+  tracking cookie, and it carries no identity beyond the token itself. (In the optional Access mode of
+  Section 4, the cookie in play is instead Cloudflare Access's own edge cookie.)
 - **The public marketing page (`/welcome`) uses Cloudflare Web Analytics**, which is cookieless,
   collects no personal data, and is not used for advertising or sold to anyone. It gives the operator
   basic aggregate page-view counts.
@@ -212,8 +237,9 @@ any other instance, contact whoever runs it.
 
 The security posture is documented in the repository (`docs/SECURITY.md`) and summarized here:
 
-- The entire studio API is behind the access gate and additionally verifies the access token inside
-  the Worker itself (a fail-closed backstop), so the data plane never depends on a single edge
+- The entire studio API is gated inside the Worker itself: every `/api/*` request is checked (a bearer
+  API token in token mode, or a verified Access assertion in the optional Access mode) before any
+  data-plane code runs, and the check fails closed, so the data plane never depends on a single edge
   setting.
 - Stored-file access is bounded by strict key validation; upload endpoints reject scriptable file
   types.
