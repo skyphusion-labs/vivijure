@@ -256,6 +256,46 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npm run deploy
 
+      # Post-deploy gate self-check (S9 W3): PROVE prod is fail-closed. Hit a real /api/* route with
+      # NO bearer and REQUIRE 403 -- the deny an unauthenticated caller must get (src/index.ts gates
+      # every /api/* before routing). The worker is already LIVE by this step, so this never rolls
+      # back a deploy; it turns an accidentally-OPEN studio into a RED CI run instead of a silent
+      # ship (the automatic version of the v0.12.0 live matrix). No new secrets: the hostname is the
+      # route pattern already in the rendered wrangler.toml. Edge propagation can lag, so a non-403
+      # is retried for ~60s. POSIX sh (BusyBox ash in node:22-alpine); no bash-isms.
+      - name: Post-deploy gate self-check
+        run: |
+          set -eu
+          command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null
+          # Derive the hostname from the rendered route pattern; strip a trailing /* if it is a path
+          # pattern. A workers.dev / route-less deploy has no pattern -- skip rather than false-alarm.
+          HOST="$(grep -oE 'pattern = "[^"]+"' wrangler.toml | head -1 | sed -E 's/^pattern = "([^"]+)"$/\1/' | sed -E 's#/\*?$##')"
+          if [ -z "${HOST:-}" ]; then
+            echo "::warning::no route pattern in wrangler.toml -- skipping post-deploy gate self-check (workers.dev / no custom domain?)"
+            exit 0
+          fi
+          URL="https://${HOST}/api/modules"
+          echo "Proving the gate: no-bearer GET ${URL} must return 403."
+          n=0
+          code="000"
+          while [ "$n" -lt 12 ]; do
+            # NO Authorization header on purpose: this is the unauthenticated caller the gate denies.
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$URL" 2>/dev/null || echo 000)"
+            if [ "$code" = "403" ]; then
+              echo "gate OK: ${URL} -> 403 (fail-closed confirmed)."
+              exit 0
+            fi
+            n=$((n + 1))
+            echo "not gated yet (HTTP ${code}); edge may still be propagating -- retry ${n}/12"
+            [ "$n" -lt 12 ] && sleep 5
+          done
+          if [ "$code" = "200" ]; then
+            echo "::error::DEPLOY GATE CHECK FAILED -- STUDIO MAY BE OPEN: no-bearer ${URL} returned 200 (the API served an unauthenticated caller). Expected 403. See docs/SECURITY.md."
+          else
+            echo "::error::post-deploy gate self-check failed: no-bearer ${URL} returned HTTP ${code} (expected 403). See docs/SECURITY.md."
+          fi
+          exit 1
+
       # Opt-in, self-host safe edge-cache purge. The core worker is already LIVE by this step, so a
       # failure here NEVER rolls back the deploy -- it just means /welcome may serve stale from the
       # edge until purged. Gated exactly like WEB_ANALYTICS_TOKEN / ENABLE_WFP_DISPATCH: a community
