@@ -1,4 +1,4 @@
-# cloud-keyframe module worker (vivijure-module/1): a GPUless `keyframe` producer. It turns a
+# cloud-keyframe module worker (vivijure-module/2): a GPUless `keyframe` producer. It turns a
 # project's storyboard into one start keyframe per shot via reference-conditioned CLOUD image
 # generation (FLUX-2 multiref / nano-banana-pro), conditioning on the cast portraits packed in the
 # bundle -- no GPU backend, no RunPod, no LoRA. Bound into the core as MODULE_CLOUD_KEYFRAME; the

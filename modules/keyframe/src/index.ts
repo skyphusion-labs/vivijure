@@ -1,4 +1,4 @@
-// keyframe: a `keyframe` module worker (vivijure-module/1). Drives the vivijure-backend GPU render
+// keyframe: a `keyframe` module worker (vivijure-module/2). Drives the vivijure-backend GPU render
 // endpoint on RunPod in its keyframes-only mode (action=preview) to turn a project's storyboard into
 // start keyframes -- the upstream stage the motion.backend orchestrator animates. Async like the
 // other GPU modules: GET /module.json, POST /invoke (submit -> poll token), POST /poll (check
@@ -82,7 +82,7 @@ async function runpodCreds(env: Env): Promise<{ apiKey: string; endpointId: stri
 // this module's quality_tier enum stays in lockstep with the core QUALITY_TIERS set.
 export const MANIFEST: ModuleManifest = {
   name: "keyframe",
-  version: "0.2.0",
+  version: "0.2.1",
   api: MODULE_API,
   hooks: ["keyframe"],
   provides: [{ id: "gpu-keyframe", label: "GPU Keyframe (SDXL on RunPod)" }],
