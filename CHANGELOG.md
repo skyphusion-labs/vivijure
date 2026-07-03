@@ -3,6 +3,38 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.13.0
+
+**S9 strict security hardening: the single-user studio becomes bulletproof-by-default without
+Cloudflare Access. Externally-addressable ids are now unguessable, the spend limiter and the deploy
+path fail CLOSED, and the docs lean into single-user. BEHAVIOR CHANGES (MINOR): a bare sequential
+`:id` no longer resolves, and a broken spend limiter now denies instead of allowing.**
+
+- **Opaque public ids on cast / projects / renders (F13, #487).** `storyboard_projects`,
+  `cast_members` and `renders` now expose a UUID-class `public_id` (122 bits) as their ONLY external
+  id; the internal INTEGER PK and every internal FK are unchanged. Every `:id` route resolves
+  `public_id` -> row, so a bare enumerable integer (`/api/cast/export/1`) now 404s instead of walking
+  the library. **Hard cut, no dual-accept window** (pre-announce, prod=dev). Migration `0010_public_ids`
+  adds the column and backfills existing rows with a per-row v4 UUID in pure SQL (additive; applied by
+  the deploy lane BEFORE the new worker goes live). New rows get `crypto.randomUUID()` on insert.
+- **UI consumes the opaque ids (F13 / #489).** The planner frontend routes, fetches and any
+  sort/lookup-by-id move off the numeric id onto `public_id`; vanilla JS, still projected from the
+  registry.
+- **Spend limiter fails CLOSED by default (F7, #488).** A broken or unbound rate/spend limiter now
+  DENIES (503) instead of allowing; `SPEND_LIMIT_FAIL_CLOSED="false"` is the documented opt-out. A
+  novice self-funding their own GPU has the money path fail closed like everything else.
+- **Post-deploy gate self-check (W3, #485).** `deploy.sh` and the tag-deploy CI lane now curl the live
+  worker with NO bearer on `/api/*` after deploy and REQUIRE 403; anything else fails LOUDLY (a 200 is
+  flagged "your studio may be OPEN"). Automates the v0.12.0 live-matrix proof so an open studio cannot
+  ship silently. Bounded ~60s retry absorbs edge-propagation lag; no new secrets.
+- **Loud ALLOW_UNAUTHENTICATED signalling (W4, #486).** `deploy.sh` prints an unmissable banner when
+  the auth opt-out is present in the rendered config or environment (honest that it is inert under a
+  set `AUTH_MODE`), and the in-Worker allow branch emits a structured `{"ev":"auth.allow_unauthenticated"}`
+  event so an accidentally-open deploy is queryable in the tail/Loki channel.
+- **Honest single-user framing (W5, #490).** `SECURITY.md` stops apologizing for missing
+  multi-tenancy and states the model plainly: one operator, one token set, all data is yours; a named
+  token is a rotation handle, not an isolation boundary. Updated to match the landed F13/F7 hardening.
+
 ## v0.12.1
 
 **The #238 Secrets Store migration completes on the core worker, the R2 S3 presign identifiers
