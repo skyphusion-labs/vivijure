@@ -1,9 +1,0 @@
-# pywrangler / uv build artifacts -- vendored SDK + local venv + lock, regenerated on dev/deploy.
-python_modules/
-.venv-workers/
-.wrangler/
-pylock.toml
-
-# Python bytecode
-__pycache__/
-*.pyc
