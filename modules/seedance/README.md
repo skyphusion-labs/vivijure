@@ -1,6 +1,6 @@
 # seedance
 
-A **`motion.backend`** module (vivijure-module/1): the **ByteDance Seedance V1.5 Pro**
+A **`motion.backend`** module (vivijure-module/2): the **ByteDance Seedance V1.5 Pro**
 image-to-video backend, run on RunPod (`seedance-v1-5-pro-i2v`). It turns one shot's start keyframe
 into a clip. It is the **first** reference motion backend and the most configurable of the set:
 selectable resolution (480p / 720p / 1080p), aspect ratio, a camera lock, and optional native audio.

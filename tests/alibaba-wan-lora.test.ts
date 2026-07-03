@@ -124,7 +124,7 @@ describe("alibaba-wan-lora pure logic", () => {
   });
 });
 
-describe("alibaba-wan-lora conformance (vivijure-module/1)", () => {
+describe("alibaba-wan-lora conformance (vivijure-module/2)", () => {
   it("manifest is a valid motion.backend module manifest", () => {
     const checks = checkManifest(MANIFEST);
     expect(allPass(checks), JSON.stringify(failures(checks))).toBe(true);
