@@ -192,6 +192,13 @@ describe("verifyTokenRequest -- fail-closed bearer token gate", () => {
     expect(d).toMatchObject({ ok: false, status: 403 });
   });
 
+  it("DENIES a cookie value that does not percent-decode (clean 403, no throw)", async () => {
+    for (const bad of ["%zz", "%", "%E0%A4%A"]) {
+      const d = await verifyTokenRequest(req({ cookie: `${TOKEN_COOKIE}=${bad}` }), env);
+      expect(d, bad).toMatchObject({ ok: false, status: 403 });
+    }
+  });
+
   it("FAIL CLOSED: no STUDIO_API_TOKEN secret bound -> 403 everything, even a would-be match", async () => {
     const bare = { AUTH_MODE: "token" } as any;
     const d = await verifyTokenRequest(bearer(SECRET), bare);
@@ -257,6 +264,11 @@ describe("worker.fetch in token mode -- the wiring the frontend shim depends on"
 
   it("/api/* with a WRONG bearer -> 403", async () => {
     const res = await worker.fetch(apiReq({ authorization: "Bearer nope" }), makeEnv(), ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it("/api/* with a malformed cookie value -> 403, not a 500", async () => {
+    const res = await worker.fetch(apiReq({ cookie: `${TOKEN_COOKIE}=%zz` }), makeEnv(), ctx);
     expect(res.status).toBe(403);
   });
 
