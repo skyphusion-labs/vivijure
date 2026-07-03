@@ -1,6 +1,6 @@
 # finish-lipsync
 
-A **`finish`**-chain module (vivijure-module/1). It rewrites a shot's mouth to match its dialogue audio
+A **`finish`**-chain module (vivijure-module/2). It rewrites a shot's mouth to match its dialogue audio
 with **MuseTalk** (v1.5), dispatched to the dedicated **vivijure-musetalk** RunPod endpoint (cu128,
 separate from vivijure-backend). This is the "talking characters" finish stage.
 

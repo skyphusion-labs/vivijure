@@ -1,4 +1,4 @@
-# finish-upscale module worker (vivijure-module/1): Real-ESRGAN 2x/4x spatial upscale on the dedicated
+# finish-upscale module worker (vivijure-module/2): Real-ESRGAN 2x/4x spatial upscale on the dedicated
 # vivijure-upscale RunPod endpoint (CUDA, separate from vivijure-backend). Bound into the core as
 # MODULE_UPSCALE; the registry discovers it from GET /module.json.
 #

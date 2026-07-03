@@ -1,4 +1,4 @@
-# finish-rife module worker (vivijure-module/1): RIFE frame interpolation + GFPGAN face restore,
+# finish-rife module worker (vivijure-module/2): RIFE frame interpolation + GFPGAN face restore,
 # running on the shared vivijure-backend RunPod endpoint as action="finish_clip".
 # Bound into the core as MODULE_FINISH_RIFE; the registry discovers it from GET /module.json.
 #

@@ -1,4 +1,4 @@
-// finish-upscale: a finish module worker (vivijure-module/1). Real-ESRGAN spatial upscale (2x/4x),
+// finish-upscale: a finish module worker (vivijure-module/2). Real-ESRGAN spatial upscale (2x/4x),
 // dispatched to the dedicated vivijure-upscale RunPod endpoint (CUDA; separate from vivijure-backend).
 //
 // ASYNC: GPU upscale runs frame-by-frame and exceeds a Worker request budget:
@@ -35,7 +35,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "finish-upscale",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["finish"],
   provides: [
