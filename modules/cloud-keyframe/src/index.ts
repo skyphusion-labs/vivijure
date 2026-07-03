@@ -1,4 +1,4 @@
-// cloud-keyframe: a `keyframe` module worker (vivijure-module/1), GPUless. It turns a project's
+// cloud-keyframe: a `keyframe` module worker (vivijure-module/2), GPUless. It turns a project's
 // storyboard into one START keyframe per shot via reference-conditioned CLOUD image generation -- no
 // GPU backend, no RunPod, NO LoRA. Character identity comes from the cast PORTRAITS packed in the
 // bundle (the same portraits a LoRA would have trained on), conditioned through FLUX-2 multiref or
@@ -80,14 +80,14 @@ interface R2Bucket {
 
 interface Env {
   AI: AiRun;              // AI binding: FLUX-2 run direct (gateway-bypassed); proxied models via the gateway
-  GATEWAY_ID?: string;    // AI Gateway slug (secret); needed only for the proxied / nano-banana path
+  GATEWAY_ID?: SecretsStoreSecret;    // AI Gateway slug (secret); needed only for the proxied / nano-banana path
   R2_RENDERS: R2Bucket;   // the shared `vivijure` bucket: bundle, staged refs, run state, keyframes
   IMAGES?: ImagesBinding; // Cloudflare Images: downscale refs to <=512px; normalize keyframes to WxH
 }
 
 export const MANIFEST: ModuleManifest = {
   name: "cloud-keyframe",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["keyframe"],
   provides: [{ id: "cloud-keyframe", label: "Cloud Keyframe (reference-conditioned, GPUless)" }],
@@ -114,6 +114,19 @@ const PER_POLL = 1;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
 }
 
 /** Downscale a portrait to fit within REF_MAX_DIM (long edge), preserving aspect, never upscaling.
@@ -162,7 +175,8 @@ async function submit(env: Env, req: InvokeRequest<KeyframeInput>): Promise<Invo
     return { ok: false, error: "cloud-keyframe: input needs project and bundle_key" };
   }
   const model = clampModel(req.config.model);
-  if (model.startsWith("google/") && !env.GATEWAY_ID) {
+  const gatewayId = await secretValue(env.GATEWAY_ID);
+  if (model.startsWith("google/") && !gatewayId) {
     return { ok: false, error: "cloud-keyframe: GATEWAY_ID not configured (required for the proxied model)" };
   }
   const width = clampDim(req.config.width, 1344);
@@ -258,6 +272,7 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<KeyframeO
   if (!obj) return { ok: false, error: "cloud-keyframe: run state not found (expired or bad token)" };
   const state = JSON.parse(await obj.text()) as CloudKeyframeState;
   if (state.shots.length === 0) return { ok: true, output: readOutput(state) };
+  const gatewayId = await secretValue(env.GATEWAY_ID);
 
   for (let n = 0; n < PER_POLL && state.shots.length > 0; n++) {
     const shot = state.shots[0];
@@ -276,7 +291,7 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<KeyframeO
 
     let gen: { bytes: ArrayBuffer; mime: string };
     try {
-      gen = await generateImage(env.AI, env.GATEWAY_ID, state.model, shot.prompt, refBlobs, state.width, state.height);
+      gen = await generateImage(env.AI, gatewayId, state.model, shot.prompt, refBlobs, state.width, state.height);
     } catch (e) {
       return { ok: false, error: "cloud-keyframe: shot " + shot.shot_id + " render failed: " + (e as Error).message };
     }

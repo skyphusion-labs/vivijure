@@ -1,6 +1,6 @@
 # minimax-hailuo
 
-A **`motion.backend`** module (vivijure-module/1): the **MiniMax Hailuo 2.3 Fast**
+A **`motion.backend`** module (vivijure-module/2): the **MiniMax Hailuo 2.3 Fast**
 image-to-video backend, run on RunPod (`minimax-hailuo-2-3-fast`). It turns one shot's start keyframe
 into a clip. As the **Fast** variant it favours speed: prompt expansion and fast mode both default
 **on**, and it accepts only the discrete durations **{6, 10} seconds** (anything <= 8 snaps to 6).

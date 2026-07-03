@@ -94,7 +94,7 @@ describe("finish-upscale: manifest conformance", () => {
   const MANIFEST = {
     name: "finish-upscale",
     version: "0.1.0",
-    api: "vivijure-module/1",
+    api: "vivijure-module/2",
     hooks: ["finish"],
     provides: [{ id: "upscale", label: "Upscale resolution (Real-ESRGAN)" }],
     config_schema: {

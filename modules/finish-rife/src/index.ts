@@ -1,4 +1,4 @@
-// finish-rife: a finish module worker (vivijure-module/1). RIFE frame interpolation + GFPGAN face
+// finish-rife: a finish module worker (vivijure-module/2). RIFE frame interpolation + GFPGAN face
 // restore, dispatched as action="finish_clip" to the shared vivijure-backend RunPod endpoint.
 //
 // ASYNC: GPU finishing takes 30s-3min, longer than a Worker request can hold:
@@ -32,7 +32,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "finish-rife",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["finish"],
   provides: [

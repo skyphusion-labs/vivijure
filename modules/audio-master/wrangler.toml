@@ -1,4 +1,4 @@
-# audio-master module worker (vivijure-module/1): film-level audio mastering -- music upscale (soxr 48k
+# audio-master module worker (vivijure-module/2): film-level audio mastering -- music upscale (soxr 48k
 # + air lift) + LUFS loudness normalization -- via the always-on audio-master CPU container on the fleet
 # over Workers VPC (CPU ffmpeg, no GPU; GPU money is for GPU work only). Bound into the core as
 # MODULE_AUDIO_MASTER; the registry discovers it from GET /module.json.

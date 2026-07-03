@@ -1,6 +1,6 @@
 # finish-upscale
 
-A **`finish`**-chain module (vivijure-module/1). It upscales a shot's resolution (2x/4x) with
+A **`finish`**-chain module (vivijure-module/2). It upscales a shot's resolution (2x/4x) with
 **Real-ESRGAN**, dispatched to the dedicated **vivijure-upscale** RunPod endpoint (CUDA, separate from
 vivijure-backend).
 

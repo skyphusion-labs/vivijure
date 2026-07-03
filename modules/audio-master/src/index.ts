@@ -1,4 +1,4 @@
-// audio-master: a `master` module worker (vivijure-module/1). Film-level audio mastering -- music
+// audio-master: a `master` module worker (vivijure-module/2). Film-level audio mastering -- music
 // upscale (VHQ soxr resample to 48k + gentle high-shelf air lift) + LUFS loudness normalization -- via
 // the always-on audio-master CPU container on the fleet over Workers VPC (AUDIO_MASTER_VPC).
 //
@@ -41,7 +41,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "audio-master",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["master"],
   provides: [
