@@ -236,7 +236,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const projPick = $("#planner-project-picker");
   if (projPick) projPick.addEventListener("change", () => {
     const v = projPick.value;
-    selectProject(v ? Number(v) : null);
+    // S9 (F13): the option value is the project's opaque public id (UUID
+    // string); pass it through verbatim, never Number()-coerce it.
+    selectProject(v || null);
   });
   const projNew = $("#planner-project-new");
   if (projNew) projNew.addEventListener("click", newProject);

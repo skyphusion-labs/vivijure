@@ -32,16 +32,20 @@
   // Each entry is { slot, castId, name }, sorted by slot for a stable warning.
   // Unknown cast ids (not in the catalog) are skipped: a deleted member is
   // reconciled out of the bindings elsewhere, so flagging it here would be noise.
+  //
+  // S9 (F13): a cast id is an opaque public id (UUID string), never a number.
+  // Keys and binding values are compared as verbatim strings -- no Number()
+  // coercion, which would map every UUID to NaN and silently empty the warning.
   function unreadyBoundLoraSlots(bindings, catalog) {
     const byId = new Map();
     for (const c of catalog || []) {
-      if (c && c.id != null) byId.set(Number(c.id), c);
+      if (c && c.id != null) byId.set(String(c.id), c);
     }
     const out = [];
     for (const slot of Object.keys(bindings || {})) {
       if (typeof slot !== "string" || slot.length === 0) continue;
-      const id = Number(bindings[slot]);
-      if (!Number.isInteger(id) || id <= 0) continue;
+      const id = bindings[slot];
+      if (typeof id !== "string" || id.length === 0) continue;
       const cast = byId.get(id);
       if (!cast) continue;
       if (!isCastLoraReady(cast)) {

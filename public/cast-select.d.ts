@@ -3,11 +3,12 @@
 // gate. Runtime stays plain vanilla JS.
 
 export interface CastListItem {
-  id: number;
+  // S9 (F13): opaque public id (UUID string), never a number.
+  id: string;
   [k: string]: unknown;
 }
 
 export function pickInitialCastId(
   cast: CastListItem[] | null | undefined,
-  lastViewedId: number | null | undefined,
-): number | null;
+  lastViewedId: string | null | undefined,
+): string | null;

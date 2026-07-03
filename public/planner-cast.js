@@ -61,12 +61,14 @@ function buildCastLoraSubmit() {
   // silently dropped and the GPU retrained it from scratch (the worse case
   // when no per-project state.tar.gz exists yet, e.g. a new project). Gating
   // server-side removes the dependency on cache freshness entirely.
+  // S9 (F13): a cast id is an opaque public id (UUID string); pass it through
+  // verbatim. Number() coercion would map every UUID to NaN and send an empty
+  // castLoras, and the render/scatter route now rejects a bare integer.
   const out = {};
   for (const [slot, raw] of Object.entries(planState.castBindings || {})) {
     if (typeof slot !== "string" || slot.length === 0) continue;
-    const id = Number(raw);
-    if (!Number.isInteger(id) || id <= 0) continue;
-    out[slot] = id;
+    if (typeof raw !== "string" || raw.length === 0) continue;
+    out[slot] = raw;
   }
   return out;
 }
@@ -210,9 +212,9 @@ function renderCast() {
         unbindSlot(slot);
         return;
       }
-      const id = Number(v);
-      if (!Number.isFinite(id)) return;
-      bindSlotToCast(slot, id);
+      // S9 (F13): the option value is the cast's opaque public id (UUID
+      // string); bind it verbatim, never Number()-coerce it.
+      bindSlotToCast(slot, v);
     });
     // v0.38.0: persist cast field changes so the brief + names + bibles
     // survive a tab close.
