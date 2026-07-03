@@ -232,6 +232,32 @@ if [ "$AUTH_MODE" = access ]; then
 fi
 info "rendered wrangler.toml ($(wc -l < wrangler.toml) lines), route -> $DEPLOY_HOSTNAME"
 
+# ---- ALLOW_UNAUTHENTICATED loudness (S9 W4) ---------------------------------------------------
+# (a) NO normal deploy.sh path sets ALLOW_UNAUTHENTICATED: it is not in the [vars] block of
+#     wrangler.toml.example, not in the envsubst VARS list, and never exported here, so a plain
+#     `./deploy.sh` can only ever render the fail-closed token/access gate. The ONLY way the flag
+#     reaches the worker is a deliberate operator hand-edit of wrangler.toml [vars] -- and even then
+#     it opens nothing unless AUTH_MODE is unset (src/auth-gate.ts scopes the hatch to the legacy
+#     path; token/access modes IGNORE it). This deploy always renders AUTH_MODE=$AUTH_MODE.
+# (b) If the flag IS present in the rendered config (or forced via the environment), SHOUT about it.
+#     An open-door opt-out must never be quiet, even when it is currently inert.
+UNAUTH_ON=""
+grep -Eq '^ALLOW_UNAUTHENTICATED[[:space:]]*=[[:space:]]*"true"' wrangler.toml && UNAUTH_ON=1
+[ "${ALLOW_UNAUTHENTICATED:-}" = "true" ] && UNAUTH_ON=1
+if [ -n "$UNAUTH_ON" ]; then
+  printf "\n"
+  printf "  #########################################################################\n"
+  printf "  ##  WARNING: ALLOW_UNAUTHENTICATED=true IS PRESENT IN THIS DEPLOY       ##\n"
+  printf "  #########################################################################\n"
+  printf "  This is the in-Worker auth OPT-OUT -- a DEV / own-reverse-proxy escape hatch ONLY.\n"
+  printf "  It opens /api/* to UNAUTHENTICATED callers when AUTH_MODE is unset; anyone who reaches\n"
+  printf "  the hostname could then read and delete your projects. This deploy renders\n"
+  printf "  AUTH_MODE=%s, which still gates /api/* (the flag is inert here), but it does NOT belong\n" "$AUTH_MODE"
+  printf "  in a normal deploy. Remove ALLOW_UNAUTHENTICATED from wrangler.toml unless you are\n"
+  printf "  consciously running an open dev studio behind your own auth. See docs/SECURITY.md.\n"
+  printf "  #########################################################################\n\n"
+fi
+
 # ---- 5. D1 migrations --------------------------------------------------------
 say "Step 5/8: apply D1 migrations"
 $WR d1 migrations apply vivijure-studio --remote
