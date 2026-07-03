@@ -223,7 +223,7 @@ describe("subtitle module invoke", () => {
     const res = await worker.fetch(new Request("https://module/module.json"), env);
     const manifest = (await res.json()) as { name: string; api: string; hooks: string[]; ui?: { order?: number } };
     expect(manifest.name).toBe("subtitle");
-    expect(manifest.api).toBe("vivijure-module/1");
+    expect(manifest.api).toBe("vivijure-module/2");
     expect(manifest.hooks).toEqual(["film.finish"]);
     expect(manifest.ui?.order).toBe(5); // before film-titles (10)
   });

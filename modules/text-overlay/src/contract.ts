@@ -1,7 +1,7 @@
-// Vendored from src/modules/types.ts (vivijure-module/1). Copy only what this module needs so it
+// Vendored from src/modules/types.ts (vivijure-module/2). Copy only what this module needs so it
 // stays independent of the core repo. Do not import from the core directly.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "motion.backend" | "finish" | "score" | "plan.enhance";
 
@@ -26,7 +26,7 @@ export interface ModuleManifest {
   ui?: ModuleUi;
 }
 
-export interface InvokeContext { project: string; job_id: string; user_email?: string; }
+export interface InvokeContext { project: string; job_id: string; }
 
 export interface InvokeRequest<I = unknown> {
   hook: HookName;
@@ -47,7 +47,7 @@ export type PollResponse<O = unknown> =
   | { ok: true; output: O }
   | { ok: false; error: string };
 
-/** What the core hands a finish module (vivijure-module/1, v1). Hints are optional -- the finish
+/** What the core hands a finish module (vivijure-module/2, v1). Hints are optional -- the finish
  *  backend probes the clip when absent. */
 export interface FinishInput {
   shot_id: string;

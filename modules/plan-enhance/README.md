@@ -1,6 +1,6 @@
 # plan-enhance
 
-A `plan.enhance`-hook module (vivijure-module/1). A **pre-production director pass**: it enriches a
+A `plan.enhance`-hook module (vivijure-module/2). A **pre-production director pass**: it enriches a
 storyboard's shot prompts with cinematic direction (camera, lighting, framing) using the latest Opus
 through Cloudflare AI Gateway (Unified Billing, keyless), before any frame is rendered.
 
