@@ -279,20 +279,23 @@ passes a rate limiter before dispatch (`src/rate-limit.ts`, the spend surface is
 auditable `SPEND_PATTERNS` list). Backend: the Cloudflare native Rate Limiting binding
 (`SPEND_RATE_LIMITER`), keyed by `CF-Connecting-IP`; over-limit returns `429` + `Retry-After`.
 
-Posture: **FAIL OPEN by default.** Rate limiting is availability-protective, not an auth gate -- if
-the limiter is unbound or `.limit()` throws, the request is ALLOWED (with a one-time warning) so a
-limiter blip never blocks a legitimate render. This is the deliberate OPPOSITE of the F2 auth
-backstop (section 1a), which fails closed. The binding is per-colo; a Durable Object token bucket
-is the documented upgrade if cross-colo (global) accuracy is ever needed.
+Posture: **FAIL CLOSED by default (S9 F7).** A healthy limiter does ordinary rate limiting: it allows
+within-limit requests and returns `429` + `Retry-After` on an over-limit one. But when the limiter
+itself is BROKEN -- `SPEND_RATE_LIMITER` unbound, or `.limit()`/the daily-ceiling check throws -- the
+request is DENIED `503`, not allowed. The money path fails closed like the F2 auth backstop
+(section 1a), because a novice self-funds the GPU balance and must never silently run unmetered on a
+misconfigured limiter. A healthy default deploy (the reference `wrangler.toml.example` binds
+`SPEND_RATE_LIMITER`) is unaffected: fail-closed bites only a broken limiter, never a working one.
+The binding is per-colo; a Durable Object token bucket is the documented upgrade if cross-colo
+(global) accuracy is ever needed.
 
-Two operator knobs harden this further (both `[vars]`, both off unless set):
+Two operator knobs (both `[vars]`):
 
-- `SPEND_LIMIT_FAIL_CLOSED = "true"` flips the posture: a broken/unbound limiter (or a failing
-  daily-ceiling check) DENIES spend routes with `503` instead of allowing. For operators who prefer
-  blocked renders over any window of unmetered spend.
-  Recommended for a self-hoster funding their own GPU balance: set it, so a limiter outage blocks
-  renders rather than allowing unmetered spend against your balance (this changes no default -- the
-  knob stays off unless you set it).
+- `SPEND_LIMIT_FAIL_CLOSED = "false"` opts OUT to the old fail-open posture: a broken/unbound limiter
+  (or a failing daily-ceiling check) ALLOWS the request (with a one-time warning) instead of denying,
+  so a limiter blip never blocks a render -- at the cost of a bounded unmetered window. Any other
+  value, including unset, keeps the fail-closed default. A self-hoster funding their own GPU balance
+  should leave it at the default (fail closed).
 - `SPEND_DAILY_CEILING = "<n>"` caps total spend-route submissions per UTC day, counted atomically
   in D1 (`spend_counter`, migration 0008). Over the ceiling returns `429` with `Retry-After` set to
   UTC midnight. The unit is submissions, not dollars: the studio cannot see GPU pricing, but every
