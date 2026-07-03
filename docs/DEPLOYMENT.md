@@ -303,6 +303,13 @@ store `secret_name` differs. Modules that share an endpoint share one secret (si
 | finish-upscale                 | `VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID`     | video upscale   |
 | finish-lipsync                 | `MUSETALK_RUNPOD_ENDPOINT_ID`          | MuseTalk        |
 
+The `plan-enhance` module binds two: the shared `GATEWAY_ID` slug, plus `CF_AIG_TOKEN` -- a
+Unified-Billing AI Gateway token scoped to THAT module (per-function key). To keep it independent of
+the core Worker's own `CF_AIG_TOKEN`, plan-enhance binds it from a module-scoped store secret named
+`PLAN_ENHANCE_CF_AIG_TOKEN` (the in-code binding stays `CF_AIG_TOKEN`; only the store `secret_name`
+differs, the same per-resource pattern as the `RUNPOD_ENDPOINT_ID` secrets above). With neither set,
+plan-enhance runs entirely on the free local Workers AI model.
+
 Seed the store ONCE, from a trusted box that already holds the values. The hidden prompt keeps the
 value out of shell history -- never pass `--value` on the command line:
 
@@ -327,6 +334,7 @@ grep -rl REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID modules/*/wrangler.toml \
 S=<your-store-id>
 npx wrangler secrets-store secret create $S --name RUNPOD_API_KEY                 --scopes workers --remote
 npx wrangler secrets-store secret create $S --name GATEWAY_ID                     --scopes workers --remote
+npx wrangler secrets-store secret create $S --name PLAN_ENHANCE_CF_AIG_TOKEN      --scopes workers --remote
 npx wrangler secrets-store secret create $S --name BACKEND_RUNPOD_ENDPOINT_ID       --scopes workers --remote
 npx wrangler secrets-store secret create $S --name VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID --scopes workers --remote
 npx wrangler secrets-store secret create $S --name MUSETALK_RUNPOD_ENDPOINT_ID      --scopes workers --remote
