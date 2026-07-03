@@ -1,6 +1,6 @@
 # text-overlay
 
-A `finish`-hook module (vivijure-module/1). It burns **titles, credits, lower-thirds, and subtitles**
+A `finish`-hook module (vivijure-module/2). It burns **titles, credits, lower-thirds, and subtitles**
 onto a rendered clip via the video-finish CPU container over Workers VPC (issue #190).
 
 ## Where it fits

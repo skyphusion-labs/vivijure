@@ -1,6 +1,6 @@
 # dialogue-gen
 
-A first-class **`dialogue`**-hook module (vivijure-module/1). It voices each speaking shot's line with
+A first-class **`dialogue`**-hook module (vivijure-module/2). It voices each speaking shot's line with
 **Deepgram Aura-1** (via Workers AI), in the cast member's assigned voice, and writes one WAV per shot
 to the shared render bucket.
 

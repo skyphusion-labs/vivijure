@@ -1,4 +1,4 @@
-// plan-enhance: the first Vivijure module worker (vivijure-module/1).
+// plan-enhance: the first Vivijure module worker (vivijure-module/2).
 //
 // Serves the two contract endpoints:
 //   GET  /module.json  -> the manifest (the core's registry discovers + indexes it)
@@ -33,7 +33,7 @@ type Env = ProviderEnv;
 
 const MANIFEST: ModuleManifest = {
   name: "plan-enhance",
-  version: "0.2.0",
+  version: "0.2.1",
   api: MODULE_API,
   hooks: ["plan.enhance"],
   provides: [{ id: "auto-direction", label: "Opus auto-direction" }],
