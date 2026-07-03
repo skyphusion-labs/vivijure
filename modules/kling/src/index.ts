@@ -1,4 +1,4 @@
-// kling: a motion.backend module worker (vivijure-module/1), Kuaishou Kling V2.1 I2V Pro on RunPod.
+// kling: a motion.backend module worker (vivijure-module/2), Kuaishou Kling V2.1 I2V Pro on RunPod.
 // Async (same shape as seedance): GET /module.json, POST /invoke (submit -> poll token), POST /poll
 // (check GET /status, finalize to R2 on completion). The second motion.backend backend -> the UI's
 // pick_one hook now has a real choice. Failures are DATA.
@@ -25,7 +25,7 @@ const OUT_FPS = 24;
 
 const MANIFEST: ModuleManifest = {
   name: "kling",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["motion.backend"],
   provides: [{ id: "i2v-cloud", label: "Kling V2.1 Pro (cloud i2v)" }],

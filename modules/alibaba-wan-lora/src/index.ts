@@ -1,4 +1,4 @@
-// alibaba-wan-lora: a motion.backend module worker (vivijure-module/1), Wan 2.2 I2V on the RunPod
+// alibaba-wan-lora: a motion.backend module worker (vivijure-module/2), Wan 2.2 I2V on the RunPod
 // PUBLIC managed endpoint `wan-2-2-t2v-720-lora` (pay-per-job, no endpoint to deploy). 720p i2v that
 // takes a START IMAGE (the keyframe) AND accepts CUSTOM operator LoRAs (high-noise + low-noise passes).
 // This is the alibaba-wan pattern + LoRA controls + the R2-fetch detail below.
@@ -50,7 +50,7 @@ const OUT_FPS = 24;
 
 const MANIFEST: ModuleManifest = {
   name: "alibaba-wan-lora",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["motion.backend"],
   provides: [{ id: "i2v-cloud-lora", label: "Wan 2.2 (cloud i2v + custom LoRA)" }],
