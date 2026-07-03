@@ -228,5 +228,6 @@ Tooling is [pywrangler](https://github.com/cloudflare/workers-py) (the Python Wo
 deps in `pyproject.toml` (bundled into `python_modules/` on deploy). `wrangler.toml` needs
 `main = "src/entry.py"` and `compatibility_flags = ["python_workers"]`. The same conformance harness
 applies -- a Python module passes `MODULE_URL=<url> npx vitest run tests/conformance.live.test.ts`
-exactly like a TS one. See [`modules/plan-enhance-py/`](../modules/plan-enhance-py) for a worked
-example (the Python sibling of the TS `plan-enhance`).
+exactly like a TS one. This on-ramp was proven end-to-end by the now-retired `plan-enhance-py`
+proof module (the deterministic Python sibling of the TS `plan-enhance`); see it in the git
+history if you need a full worked example.
