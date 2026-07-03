@@ -330,6 +330,50 @@ if [ "$AUTH_MODE" = token ]; then
   fi
 fi
 
+# ---- post-deploy gate self-check (S9 W3): PROVE the studio is fail-closed --------------------
+# A novice must never ship an OPEN studio without seeing red. We hit a real /api/* route with NO
+# bearer and REQUIRE 403 -- the deny the token/access gate returns for an unauthenticated caller
+# (src/index.ts gates EVERY /api/* before routing). Anything else fails the deploy LOUDLY. This is
+# the v0.12.0 live-matrix proof, now automatic on every deploy. deploy.sh only ever renders
+# AUTH_MODE=token|access (validated up top), and ALLOW_UNAUTHENTICATED has no effect in either
+# mode, so a no-bearer /api/* is ALWAYS expected to 403 here. Edge propagation can lag a few
+# seconds after deploy, so we retry a non-403 for ~60s before declaring failure; a clean 403 passes
+# immediately.
+gate_selfcheck() {
+  local url="https://$DEPLOY_HOSTNAME/api/modules" code="000" n=0 max=12
+  say "Post-deploy check: proving /api/* is gated (a no-bearer request must get 403)"
+  if ! command -v curl >/dev/null 2>&1; then
+    info "curl not found -- cannot auto-verify the gate. Verify by hand (must print 403):"
+    info "  curl -s -o /dev/null -w '%{http_code}' $url"
+    return 0
+  fi
+  while [ "$n" -lt "$max" ]; do
+    # NO Authorization header on purpose: this is the unauthenticated caller the gate must deny.
+    code="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "$url" 2>/dev/null || printf "000")"
+    [ "$code" = "403" ] && { info "gate OK: no-bearer $url -> 403 (fail-closed confirmed)"; return 0; }
+    n=$((n+1))
+    [ "$n" -lt "$max" ] && { info "  not gated yet (HTTP $code); edge may still be propagating -- retry $n/$max"; sleep 5; }
+  done
+  # Still not 403 after the budget. A 200 means the API answered an unauthenticated caller: OPEN.
+  printf "\n"
+  printf "  #########################################################################\n"
+  printf "  ##  DEPLOY GATE CHECK FAILED -- YOUR STUDIO MAY BE OPEN                 ##\n"
+  printf "  #########################################################################\n"
+  printf "  A no-bearer GET %s returned HTTP %s (expected 403).\n" "$url" "$code"
+  if [ "$code" = "200" ]; then
+    printf "  A 200 means the API served an UNAUTHENTICATED caller -- anyone can read and delete\n"
+    printf "  your projects. Do NOT use this studio until this returns 403.\n"
+  else
+    printf "  Could not confirm the fail-closed gate (last HTTP %s). Check the deploy output above\n" "$code"
+    printf "  and re-run; if it persists, the studio auth may be misconfigured.\n"
+  fi
+  printf "  Verify by hand (must print 403):  curl -s -o /dev/null -w '%%{http_code}' %s\n" "$url"
+  printf "  See docs/SECURITY.md.\n"
+  printf "  #########################################################################\n\n"
+  die "post-deploy gate self-check failed (HTTP $code from a no-bearer /api/* request)"
+}
+gate_selfcheck
+
 say "Done. Your studio is live at: https://$DEPLOY_HOSTNAME"
 if [ "$AUTH_MODE" = token ] && [ -n "$STUDIO_TOKEN_MINTED" ]; then
 cat <<MSG
