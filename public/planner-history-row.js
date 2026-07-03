@@ -175,11 +175,13 @@ function buildHistoryRow(r, childrenByParent) {
   }
 
   // v0.145.2: backlink to the keyframes preview this animation derives from.
-  if (typeof r.parent_id === "number") {
+  if (typeof r.parent_id === "string") {
     const back = document.createElement("button");
     back.type = "button";
     back.className = "planner-history-parentlink";
-    back.textContent = "↳ from keyframes #" + r.parent_id;
+    // S9 (F13): parent_id is an opaque public id (UUID string), not a short
+    // number, so it is not shown inline; the backlink jumps to the row.
+    back.textContent = "↳ from keyframes preview";
     back.title = "show the keyframes preview this animation was made from";
     back.addEventListener("click", (ev) => {
       ev.preventDefault();
@@ -192,7 +194,7 @@ function buildHistoryRow(r, childrenByParent) {
   // v0.145.2: on a keyframes preview, a count of its derived animations so the
   // user can see (and jump to) every GPU/cloud version made from these frames.
   const myChildren =
-    childrenByParent && typeof r.id === "number" ? childrenByParent.get(r.id) : null;
+    childrenByParent && typeof r.id === "string" ? childrenByParent.get(r.id) : null;
   if (Array.isArray(myChildren) && myChildren.length > 0) {
     const kids = document.createElement("span");
     kids.className = "planner-history-childlink";
@@ -204,9 +206,12 @@ function buildHistoryRow(r, childrenByParent) {
     kids.addEventListener("click", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      // Jump to the newest child (highest id) so the user lands on the most
-      // recent version; the rest are one scroll away.
-      const newest = myChildren.reduce((a, b) => (b.id > a.id ? b : a));
+      // Jump to the newest child so the user lands on the most recent version;
+      // the rest are one scroll away. S9 (F13): ids are opaque UUID strings and
+      // do NOT sort by creation, so order by submitted_at (the creation stamp),
+      // falling back to updated_at.
+      const stamp = (x) => (x && (x.submitted_at || x.updated_at)) || 0;
+      const newest = myChildren.reduce((a, b) => (stamp(b) > stamp(a) ? b : a));
       focusHistoryRow(newest.id);
     });
     meta.appendChild(kids);

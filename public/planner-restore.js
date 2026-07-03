@@ -195,7 +195,8 @@ function restorePlanResultPanel(saved) {
   if (planState.pendingMusicChatId) resumeMusicPolling();
   // v0.53.0: stash the active project id; the picker's options are
   // populated after loadProjects resolves, and we reselect there.
-  planState.activeProjectId = typeof saved.activeProjectId === "number"
+  // S9 (F13): activeProjectId is an opaque public id (UUID string).
+  planState.activeProjectId = typeof saved.activeProjectId === "string"
     ? saved.activeProjectId : null;
 }
 

@@ -133,8 +133,10 @@
     try {
       const raw = localStorage.getItem(LAST_VIEWED_LS);
       if (raw == null || raw === "") return null;
-      const n = parseInt(raw, 10);
-      return Number.isFinite(n) ? n : null;
+      // S9 (F13): a cast id is an opaque public id (UUID string); return it
+      // verbatim. parseInt() would truncate a UUID to a bogus leading-digit
+      // number (or NaN) and never match a real row.
+      return raw;
     } catch (_) {
       return null;
     }
@@ -1071,8 +1073,9 @@
   }
 
   function updateMultiSceneGate() {
-    const aId = $("#cast-multi-a") && Number($("#cast-multi-a").value);
-    const bId = $("#cast-multi-b") && Number($("#cast-multi-b").value);
+    // S9 (F13): the option value is a cast opaque public id (UUID string).
+    const aId = $("#cast-multi-a") && $("#cast-multi-a").value;
+    const bId = $("#cast-multi-b") && $("#cast-multi-b").value;
     const a = aId ? findCast(aId) : null;
     const b = bId ? findCast(bId) : null;
     const prompt = ($("#cast-multi-prompt") || {}).value || "";
@@ -1125,8 +1128,8 @@
 
   async function generateMultiScene() {
     if (multiScene.busy) return;
-    const aId = Number($("#cast-multi-a").value);
-    const bId = Number($("#cast-multi-b").value);
+    const aId = $("#cast-multi-a").value;
+    const bId = $("#cast-multi-b").value;
     const a = findCast(aId);
     const b = findCast(bId);
     const promptInput = $("#cast-multi-prompt").value.trim();
