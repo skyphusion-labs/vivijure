@@ -25,8 +25,24 @@ binding = "AI"
 [vars]
 ENHANCE_MODEL = "claude-opus-4-8"
 
-# --- Secrets (set per-module, NOT shared with the core, so a leak's blast radius is this module):
-# ---   echo "<gateway-slug>"  | npx wrangler secret put GATEWAY_ID    --config modules/plan-enhance/wrangler.toml
-# ---   echo "<aig-token>"      | npx wrangler secret put CF_AIG_TOKEN  --config modules/plan-enhance/wrangler.toml
-# --- CF_AIG_TOKEN is a Unified-Billing AI Gateway token scoped to THIS module. Without both secrets,
-# --- the module runs entirely on the free local Workers AI model (no Opus, still functional).
+# GATEWAY_ID + CF_AIG_TOKEN are bound from the account-level Cloudflare Secrets Store (see the
+# [[secrets_store_secrets]] blocks below); no `wrangler secret put` needed. Without both, the module
+# runs entirely on the free local Workers AI model (no Opus, still functional).
+#
+# GATEWAY_ID is the shared AI Gateway slug (same store secret the other modules bind). CF_AIG_TOKEN
+# is a Unified-Billing token scoped to THIS module (per-function key), so it binds from a
+# module-scoped store secret PLAN_ENHANCE_CF_AIG_TOKEN -- distinct from the core's own CF_AIG_TOKEN,
+# so a rotation of one never touches the other (the same per-resource pattern #237 used for
+# RUNPOD_ENDPOINT_ID). The binding name in code stays CF_AIG_TOKEN; only the store secret_name differs.
+# Seeded ONCE by the operator from the crew secret store; values never touch CI/GitHub. Set store_id
+# at cutover. See docs/DEPLOYMENT.md "Module secrets via the Secrets Store".
+# NEW store secret to seed: PLAN_ENHANCE_CF_AIG_TOKEN (GATEWAY_ID is already seeded).
+[[secrets_store_secrets]]
+binding = "GATEWAY_ID"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "GATEWAY_ID"
+
+[[secrets_store_secrets]]
+binding = "CF_AIG_TOKEN"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "PLAN_ENHANCE_CF_AIG_TOKEN"

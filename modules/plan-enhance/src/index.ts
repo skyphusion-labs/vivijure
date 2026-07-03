@@ -31,6 +31,31 @@ import {
 
 type Env = ProviderEnv;
 
+// The Worker's own binding surface. GATEWAY_ID + CF_AIG_TOKEN are bound from the account-level
+// Cloudflare Secrets Store (declarative config, durable across fresh-create), so the fetch handler
+// resolves them to plain strings and hands the pure model layer (provider.ts) an ordinary
+// ProviderEnv -- no Secrets Store type leaks into the unit-tested pure code. Both are OPTIONAL:
+// with neither, pickProvider degrades to the free Workers AI local model.
+interface WorkerEnv {
+  AI: ProviderEnv["AI"];
+  GATEWAY_ID?: SecretsStoreSecret;
+  CF_AIG_TOKEN?: SecretsStoreSecret;
+  ENHANCE_MODEL?: string;
+}
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
+
 const MANIFEST: ModuleManifest = {
   name: "plan-enhance",
   version: "0.2.1",
@@ -114,7 +139,7 @@ async function runEnhance(
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/module.json") {
@@ -133,7 +158,16 @@ export default {
         const bad: InvokeResponse = { ok: false, error: `unsupported hook ${String(req.hook)}` };
         return json(bad);
       }
-      return json(await runEnhance(env, req));
+      // Resolve the Secrets Store bindings to plain strings, then hand the pure model layer an
+      // ordinary ProviderEnv. secretValue -> "" for an unset/unreadable secret, so pickProvider
+      // degrades to the free local model exactly as before.
+      const provEnv: ProviderEnv = {
+        AI: env.AI,
+        GATEWAY_ID: await secretValue(env.GATEWAY_ID),
+        CF_AIG_TOKEN: await secretValue(env.CF_AIG_TOKEN),
+        ENHANCE_MODEL: env.ENHANCE_MODEL,
+      };
+      return json(await runEnhance(provEnv, req));
     }
 
     return json({ ok: false, error: "not found" }, 404);
