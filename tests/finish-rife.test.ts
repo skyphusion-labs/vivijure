@@ -120,7 +120,7 @@ describe("finish-rife: manifest conformance", () => {
   const MANIFEST = {
     name: "finish-rife",
     version: "0.1.0",
-    api: "vivijure-module/1",
+    api: "vivijure-module/2",
     hooks: ["finish"],
     provides: [
       { id: "interpolate", label: "Smooth motion (RIFE frame interpolation)" },
