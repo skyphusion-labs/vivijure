@@ -1,6 +1,6 @@
 # vidu-q3
 
-A **`motion.backend`** module (vivijure-module/1): the **Vidu Q3**
+A **`motion.backend`** module (vivijure-module/2): the **Vidu Q3**
 image-to-video backend, run on RunPod (`vidu-q3-i2v`). It turns one shot's start keyframe into a
 clip at **720p**, with shot length clamped to **3--10 seconds**. Distinctive trait: Vidu can emit
 both **native audio** and **background music**; here `generate_audio` and `bgm` both default **off**

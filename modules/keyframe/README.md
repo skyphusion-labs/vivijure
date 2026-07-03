@@ -1,6 +1,6 @@
 # keyframe
 
-A first-class **`keyframe`**-hook module (vivijure-module/1). It turns a project's storyboard into one
+A first-class **`keyframe`**-hook module (vivijure-module/2). It turns a project's storyboard into one
 **start keyframe per shot** with SDXL, dispatched to the **vivijure-backend** RunPod endpoint in its
 keyframes-only mode (`action=preview`).
 

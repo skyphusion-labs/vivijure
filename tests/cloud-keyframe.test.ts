@@ -245,7 +245,7 @@ describe("cloud-keyframe conformance (the contract is the law)", () => {
   it("declares exactly the keyframe hook, pick_one, GPUless provides", () => {
     expect(MANIFEST.hooks).toEqual(["keyframe"]);
     expect(MANIFEST.name).toBe("cloud-keyframe");
-    expect(MANIFEST.api).toBe("vivijure-module/1");
+    expect(MANIFEST.api).toBe("vivijure-module/2");
   });
 
   it("a well-formed KeyframeOutput passes checkHookOutput('keyframe')", () => {

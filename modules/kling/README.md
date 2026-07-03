@@ -1,6 +1,6 @@
 # kling
 
-A **`motion.backend`** module (vivijure-module/1): the **Kuaishou Kling V2.1 Pro**
+A **`motion.backend`** module (vivijure-module/2): the **Kuaishou Kling V2.1 Pro**
 image-to-video backend, run on RunPod (`kling-v2-1-i2v-pro`). It turns one shot's start keyframe
 into a clip. Distinctive trait: Kling accepts only a **discrete duration enum {5, 10} seconds** (not
 a continuous range), and exposes generation knobs other backends don't -- a guidance scale, a

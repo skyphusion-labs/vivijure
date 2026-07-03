@@ -1,4 +1,4 @@
-# minimax-hailuo module worker (vivijure-module/1): MiniMax Hailuo 2.3 Fast I2V on RunPod, a
+# minimax-hailuo module worker (vivijure-module/2): MiniMax Hailuo 2.3 Fast I2V on RunPod, a
 # motion.backend module (#171). Bound into the core as MODULE_MINIMAX_HAILUO; the registry discovers
 # it from GET /module.json and the studio renders the motion.backend stage from it.
 #

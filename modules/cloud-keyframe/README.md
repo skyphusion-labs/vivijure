@@ -1,6 +1,6 @@
 # cloud-keyframe
 
-A first-class **`keyframe`**-hook module (vivijure-module/1), **GPUless**. It turns a project's
+A first-class **`keyframe`**-hook module (vivijure-module/2), **GPUless**. It turns a project's
 storyboard into one **start keyframe per shot** via reference-conditioned **cloud image generation**
 (Cloudflare FLUX-2 multiref or `google/nano-banana-pro`) -- **no GPU backend, no RunPod, no LoRA**.
 
