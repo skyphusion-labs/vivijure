@@ -1,6 +1,6 @@
 # film-titles
 
-A `film.finish`-hook module (vivijure-module/1). It adds **opening title and end-credit cards to the
+A `film.finish`-hook module (vivijure-module/2). It adds **opening title and end-credit cards to the
 finished film** via the video-finish CPU container's `/film-titles` route over Workers VPC (issue
 #190).
 

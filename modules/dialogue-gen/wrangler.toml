@@ -1,4 +1,4 @@
-# dialogue-gen module worker (vivijure-module/1): Deepgram Aura-1 via Workers AI for the `dialogue`
+# dialogue-gen module worker (vivijure-module/2): Deepgram Aura-1 via Workers AI for the `dialogue`
 # hook. Voices each speaking shot's line in the cast member's assigned voice and writes one WAV per
 # shot to the shared render bucket; the core attaches each audio_key to the shot's FinishInput so
 # finish-lipsync can drive the mouth. Bound into the core as MODULE_DIALOGUE.

@@ -1,6 +1,6 @@
 # subtitle
 
-A `film.finish`-hook module (vivijure-module/1). It burns **time-synced dialogue captions** onto the
+A `film.finish`-hook module (vivijure-module/2). It burns **time-synced dialogue captions** onto the
 finished film (and/or emits a soft `.srt` sidecar) via the video-finish CPU container's `/subtitle`
 route over Workers VPC.
 
