@@ -1,6 +1,6 @@
 # alibaba-wan-lora
 
-A **`motion.backend`** module (vivijure-module/1): the **Alibaba Wan 2.2** image-to-video backend on
+A **`motion.backend`** module (vivijure-module/2): the **Alibaba Wan 2.2** image-to-video backend on
 the RunPod **PUBLIC managed endpoint** `wan-2-2-t2v-720-lora` (pay-per-job, no endpoint to deploy). It
 turns one shot's start keyframe into a clip at **720p**. Distinctive trait: the operator can bring
 **custom LoRAs** (a high-noise pass and a low-noise pass), each an `{ path, scale }` where `path` is a

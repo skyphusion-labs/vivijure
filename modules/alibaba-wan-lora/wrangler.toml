@@ -1,4 +1,4 @@
-# alibaba-wan-lora module worker (vivijure-module/1): Wan 2.2 I2V on the RunPod PUBLIC managed endpoint
+# alibaba-wan-lora module worker (vivijure-module/2): Wan 2.2 I2V on the RunPod PUBLIC managed endpoint
 # wan-2-2-t2v-720-lora, a motion.backend module with CUSTOM operator LoRAs. Bound into the core as
 # MODULE_ALIBABA_WAN_LORA; the registry discovers it from GET /module.json and the studio renders the
 # motion.backend stage from it.

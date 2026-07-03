@@ -1,4 +1,4 @@
-# seedance module worker (vivijure-module/1): ByteDance Seedance V1.5 Pro I2V on RunPod, the first
+# seedance module worker (vivijure-module/2): ByteDance Seedance V1.5 Pro I2V on RunPod, the first
 # motion.backend module. Bound into the core as MODULE_SEEDANCE; the registry discovers it from
 # GET /module.json and the studio renders the motion.backend stage from it.
 #

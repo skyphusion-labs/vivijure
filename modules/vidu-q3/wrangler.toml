@@ -1,4 +1,4 @@
-# vidu-q3 module worker (vivijure-module/1): Vidu Q3 I2V on RunPod, a motion.backend module
+# vidu-q3 module worker (vivijure-module/2): Vidu Q3 I2V on RunPod, a motion.backend module
 # (#174). Bound into the core as MODULE_VIDU_Q3; the registry discovers it from GET /module.json
 # and the studio renders the motion.backend stage from it.
 #
