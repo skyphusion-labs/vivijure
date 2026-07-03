@@ -8,18 +8,25 @@ The studio is **single-operator by design**. There is no tenant model, no per-us
 account system: the anti-SaaS identity strip (#292) deliberately removed the `user_email` /
 tenancy primitive so there is no seam to hang multi-tenancy on. "Who are you" is answered once, by
 the deploy's auth gate: the built-in studio API token (`AUTH_MODE = "token"`, section 1b, the
-quickstart default) or Cloudflare Access (`AUTH_MODE = "access"`, sections 1/1a, the recommended
-hardening for team/org deployments). Everything behind the gate belongs to the one operator.
+production posture on `vivijure.skyphusion.org` and the quickstart default) or Cloudflare Access
+(`AUTH_MODE = "access"`, sections 1/1a, the optional edge-identity hardening for team/org
+deployments). Everything behind the gate belongs to the one operator.
 
 ## 1. Access mode: the trust boundary is Cloudflare Access (at the edge)
 
-Sections 1 and 1a describe `AUTH_MODE = "access"` -- OUR production posture, and the recommended
-hardening for team/org deployments (SSO identity, device posture, audit logs, per-caller service
-tokens). A self-host quickstart runs token mode instead (section 1b) and needs NONE of this;
-Access is optional hardening there, not a deploy prerequisite (#423).
+> **Production runs token mode (section 1b), not access mode.** As of v0.12.0 the whole-hostname
+> Cloudflare Access app on `vivijure.skyphusion.org` was removed and `AUTH_MODE = "token"` is the
+> live production posture; the in-worker token gate is the front door. Sections 1 and 1a below
+> describe `AUTH_MODE = "access"` as the OPTIONAL edge-identity mode -- keep them as the reference
+> for anyone who chooses it, but read "production" in this document as the token gate.
 
-In access mode, authentication is enforced by the **Cloudflare Access** application in front of
-the worker, not by in-worker code. The Access app covers the whole production surface:
+Sections 1 and 1a describe `AUTH_MODE = "access"` -- the optional edge-identity hardening for
+team/org deployments (SSO identity, device posture, audit logs, per-caller service tokens). A
+self-host quickstart and Conrad's own production instance both run token mode instead (section 1b)
+and need NONE of this; Access is optional hardening, not a deploy prerequisite (#423).
+
+When access mode IS chosen, authentication is enforced by the **Cloudflare Access** application in
+front of the worker, not by in-worker code. The Access app covers the whole served surface:
 
 - `vivijure.skyphusion.org` (production UI + JSON API). The `*.workers.dev` host is disabled
   (`workers_dev = false`, #349), so the custom domain is the only served hostname.
@@ -32,16 +39,18 @@ job envelope and writes artifacts straight to R2 via boto3 S3, so it never cross
 boundary. (A legacy production-IP bypass for "internal callers" is being removed in the F2 cutover;
 the GPU backend never needed it on this path, and Slate uses a service token instead.)
 
-The single-operator assumption is sound ONLY while Access covers the entire `/api/*` surface. The
-worker ALSO adds an in-code backstop (section 1a, F2) that verifies the Access JWT itself -- checking
-the signature + `aud`, NOT an email claim, so a service-token caller (Slate) passes while an
-unauthenticated caller is denied. If you add a new public hostname or route, confirm Access still
-covers it.
+The single-operator assumption is sound ONLY while the active auth gate covers the entire `/api/*`
+surface -- the in-worker token gate in production (section 1b), or, in access mode, the Access app.
+In access mode the worker ALSO adds an in-code backstop (section 1a, F2) that verifies the Access
+JWT itself -- checking the signature + `aud`, NOT an email claim, so a service-token caller (Slate)
+passes while an unauthenticated caller is denied. If you add a new public hostname or route, confirm
+the active gate still covers it.
 
 ### Consequence for `/api/artifact/<key>`
 Artifacts are served by R2 key with no per-row ownership check. This is safe **only** because the
-whole worker is Access-gated and single-tenant: there is exactly one operator, so "serving by key"
-cannot cross an ownership boundary (there is none). This property depends entirely on section 1.
+whole worker is auth-gated (the token gate in production, section 1b; or Access in access mode) and
+single-tenant: there is exactly one operator, so "serving by key" cannot cross an ownership boundary
+(there is none). This property depends entirely on the active gate covering `/api/*` (section 1).
 
 **Hardening (F4).** The serve is nonetheless bounded so it cannot become an arbitrary-object read or a
 stored-XSS vector even if section 1 ever fails: the key must pass `isSafeRelKey` (no traversal /
@@ -71,8 +80,8 @@ column or per-identity check anywhere (the identity strip #292 removed tenancy b
 `/api/storyboard/renders/:id`, `/api/render/film/:id` -- trusts the caller. Ids are sequential
 integers, so they are trivially enumerable, and `GET /api/cast/export/:id` exfiltrates a whole
 character bundle (portrait + LoRA + bible) by id. A downstream operator who deploys this
-**multi-tenant, or on a hostname without an Access app, is handed a horizontal IDOR** across all
-casts/projects/renders/films.
+**multi-tenant, or on a hostname with no authenticating gate at all, is handed a horizontal IDOR**
+across all casts/projects/renders/films.
 
 This is intentional (anti-SaaS; we are NOT building a multi-tenant authz layer). The requirement
 is therefore a HARD deploy rule, not a code feature: **run this single-operator, behind an
@@ -207,7 +216,7 @@ Every job id the worker mints comes from `crypto.randomUUID()` (122 bits of entr
 - cast-refs jobs: `refs-<uuid>`
 
 An attacker cannot enumerate or guess a 122-bit id, so possession is a real capability. Combined
-with section 1 (the whole surface is Access-gated to the single operator), there is no privilege
+with section 1 (the whole surface is auth-gated to the single operator), there is no privilege
 boundary BETWEEN jobs to cross: all jobs belong to the one operator. Scoping job-to-job would
 enforce a boundary that does not exist in a single-operator studio.
 
@@ -220,8 +229,10 @@ not in this regex. Do not mistake loosening/tightening the regex for an entropy 
 ## 3. Intentionally public surfaces, and the `/api/modules` projection
 
 Only **`/welcome`** (the marketing landing page, `welcome.html`) and **`/health`** are reachable
-without authentication, by design; both are reviewed to leak nothing internal. In access mode the
-`/welcome` bypass is a separate path-scoped Access app, and it does NOT extend to `/api/*`.
+without authentication, by design; both are reviewed to leak nothing internal. On the production
+instance `/welcome` and `/health` each sit behind their own path-scoped Cloudflare Access app whose
+policy is a public bypass (everyone for `/welcome`, a production-IP allowlist for `/health`); those
+path-scoped apps are independent of `AUTH_MODE` and do NOT extend to `/api/*`.
 
 **`GET /api/modules`** -- the registry projection that the self-assembling UI renders from -- sits
 BEHIND the auth gate like every other `/api/*` route. Its payload is scrubbed as defense in depth:
@@ -377,8 +388,9 @@ them (the `/welcome` release-purge flow depends on that edge cache existing, #40
 
 ## Checklist when changing the surface
 
-- [ ] New hostname or route -> confirm the Cloudflare Access app still covers it (`/api/*` must stay
-      gated; only `/welcome` is public).
+- [ ] New hostname or route -> confirm the active auth gate still covers it (in production the
+      in-worker token gate; in access mode the Cloudflare Access app). `/api/*` must stay gated;
+      only `/welcome` and `/health` are public.
 - [ ] New job-keyed route -> the id must be `crypto.randomUUID()`-minted; never accept a
       caller-chosen low-entropy id as a capability.
 - [ ] New module field -> internal/secret values stay off the `GET /api/modules` projection.
