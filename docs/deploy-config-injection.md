@@ -106,18 +106,18 @@ gh secret list --repo skyphusion-labs/vivijure        # names only; values are n
 ```yaml
 - name: Render core wrangler.toml
   env:
-    AUTH_MODE:          ${{ vars.AUTH_MODE }}    # a VARIABLE, not a secret; unset -> defaulted below
+    AUTH_MODE:          ${{ vars.AUTH_MODE }}    # a VARIABLE, not a secret; unset -> render FAILS LOUD (see below)
     ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
     ACCESS_AUD:         ${{ secrets.ACCESS_AUD }}
     # ... the rest (D1 / VPC / rate-limit ids, WEB_ANALYTICS_TOKEN)
   run: |
     set -eu
     apk add --no-cache gettext >/dev/null          # node:22-alpine has no envsubst; gettext provides it
-    AUTH_MODE="${AUTH_MODE:-access}"; export AUTH_MODE   # OUR tag deploy stays Access-armed (#423)
+    if [ -z "${AUTH_MODE:-}" ]; then echo "::error::AUTH_MODE unset"; exit 1; fi; export AUTH_MODE   # fail loud, no default (#423): a silent 'access' default would mis-posture prod (Access app removed)
     VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
     envsubst "$VARS" < wrangler.toml.example > wrangler.toml
     grep -q '${' wrangler.toml && { echo "::error::unsubstituted placeholder"; exit 1; } || true
-    # mode-aware auth guard (#423): AUTH_MODE always non-empty; access mode also needs armed vars.
+    # mode-aware auth guard (#423): AUTH_MODE guaranteed non-empty by the fail-loud check above; access mode also needs armed vars.
     grep -Eq 'AUTH_MODE = ".+"' wrangler.toml || { echo "::error::AUTH_MODE empty"; exit 1; }
     if [ "$AUTH_MODE" = "access" ]; then
       grep -Eq 'ACCESS_AUD = ".+"' wrangler.toml && grep -Eq 'ACCESS_TEAM_DOMAIN = ".+"' wrangler.toml \

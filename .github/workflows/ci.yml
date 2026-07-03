@@ -156,8 +156,10 @@ jobs:
       # means ONLY these placeholders substitute -- any other ${...} in the file is left untouched.
       - name: Render core wrangler.toml
         env:
-          # #423: auth mode for the rendered config. OUR tag deploy stays Access-armed: the shell
-          # below defaults an unset variable to "access" so the F2 gate keeps its teeth.
+          # #423: auth mode for the rendered config. Prod runs token mode (the edge Access app was
+          # removed in the v0.12.0 flip). The render now FAILS LOUD if this var is unset (guard below)
+          # instead of defaulting -- an unset default would silently mis-posture prod (e.g. back to
+          # access mode with no Access app in front). Set vars.AUTH_MODE explicitly to token or access.
           AUTH_MODE: ${{ vars.AUTH_MODE }}
           ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
           ACCESS_AUD: ${{ secrets.ACCESS_AUD }}
@@ -187,7 +189,11 @@ jobs:
         run: |
           set -eu
           apk add --no-cache gettext >/dev/null
-          AUTH_MODE="${AUTH_MODE:-access}"; export AUTH_MODE
+          # Fail loud on an unset AUTH_MODE (do NOT default): a silent default mis-postures prod, and
+          # since the v0.12.0 flip removed the whole-hostname Access app, an accidental var deletion must
+          # break the render rather than quietly ship the wrong door. Mirrors deploy.sh (requires AUTH_MODE).
+          if [ -z "${AUTH_MODE:-}" ]; then echo "::error::AUTH_MODE repo variable is unset -- refusing to render (set vars.AUTH_MODE to token or access)"; exit 1; fi
+          export AUTH_MODE
           # #238 follow-up: render the R2 S3 presign identifiers into [vars] (they are NOT secrets).
           # The endpoint host is account-scoped; build it from CLOUDFLARE_ACCOUNT_ID (the same value
           # wrangler uses to deploy). Fail closed if that id is empty -- an empty account would render
