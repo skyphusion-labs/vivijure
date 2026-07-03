@@ -1,6 +1,6 @@
 # finish-rife
 
-A **`finish`**-chain module (vivijure-module/1). It smooths a shot's motion with **RIFE** frame
+A **`finish`**-chain module (vivijure-module/2). It smooths a shot's motion with **RIFE** frame
 interpolation and optionally relocks faces with **GFPGAN/CodeFormer**, dispatched as `finish_clip` to
 the shared **vivijure-backend** RunPod endpoint.
 
