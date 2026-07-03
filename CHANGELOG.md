@@ -3,6 +3,26 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.13.1
+
+**Same S9 hardening payload as v0.13.0, re-cut so it actually reaches production. The v0.13.0 tag
+deploy was blocked by an active Cloudflare Workflows API outage (`10001 internal_server` on the
+Workflows write path, ongoing since 2026-07-02), which fails `wrangler deploy` when it re-registers
+a module's Workflow trigger. No repo/code/config change; a Cloudflare-side incident.**
+
+- **dialogue-gen + music-gen held on their live versions (temporary).** These are the only two
+  modules that bind a Cloudflare Workflow. Both were UNCHANGED in S9 and their workers + workflows
+  are already live and healthy, so holding them back re-deploys nothing functional -- the
+  re-registration Cloudflare is rejecting is a no-op. They are excluded from the deploy loop until
+  the Cloudflare Workflows write path recovers. Tracked in #493 (revert = drop both from the CI
+  `EXCLUDE` and re-run the deploy once Cloudflare closes the incident).
+- **Everything else in v0.13.0 ships:** the core worker, D1 migration `0010` (opaque `public_id`
+  backfill), and the post-deploy gate self-check all deploy normally (the core binds no Workflow).
+
+The full S9 changeset is unchanged from the v0.13.0 entry below (opaque ids F13, spend fail-closed
+F7, deploy self-check W3, ALLOW_UNAUTHENTICATED loudness W4, single-user docs W5). v0.13.0 stays in
+history as the Cloudflare-blocked attempt.
+
 ## v0.13.0
 
 **S9 strict security hardening: the single-user studio becomes bulletproof-by-default without

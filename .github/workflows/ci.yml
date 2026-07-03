@@ -113,7 +113,11 @@ jobs:
           #                      [[services]]) and its LOCAL_BACKEND_URL/TOKEN Secrets Store secrets are
           #                      not seeded yet, so deploy fails (code 10182). Broke v0.7.6. Drop from
           #                      here once the homelab box is up: seed the secrets + add the core binding.
-          EXCLUDE="openai-sora alibaba-wan25 local-gpu"
+          # TEMP (CF outage): Cloudflare Workflows API 10001 internal_server since 2026-07-02,
+          # trigger re-registration U/S. dialogue-gen + music-gen each bind a Workflow; both were
+          # UNCHANGED in S9 and are already live/healthy, so excluding them holds nothing back.
+          # Re-include when the CF write path recovers -- tracking #493.
+          EXCLUDE="openai-sora alibaba-wan25 local-gpu dialogue-gen music-gen"
           deployed=0
           found=0
           for toml in modules/*/wrangler.toml; do
