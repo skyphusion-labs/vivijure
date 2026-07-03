@@ -1,6 +1,6 @@
 # google-veo
 
-A **`motion.backend`** module (vivijure-module/1): the **Google Veo 3.1 Fast**
+A **`motion.backend`** module (vivijure-module/2): the **Google Veo 3.1 Fast**
 image-to-video backend, run on RunPod (`google-veo3-1-fast-i2v`). It turns one shot's start keyframe
 into a clip at **720p**, with shot length clamped to **4--8 seconds**. Distinctive trait: Veo can
 emit **native audio**; here `generate_audio` defaults **off** so the core's score/mux chain owns

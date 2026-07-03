@@ -285,8 +285,9 @@ never touch CI or GitHub. See **Module secrets via the Secrets Store** below.
 
 ### Module secrets via the Secrets Store
 
-The GPU/finish modules need `RUNPOD_API_KEY` plus a per-module endpoint id bound to
-`RUNPOD_ENDPOINT_ID`; `dialogue-gen` needs `GATEWAY_ID`. Each module's `wrangler.toml` binds these
+Every RunPod-backed module needs `RUNPOD_API_KEY`, and the GPU/finish ones additionally a
+per-module endpoint id bound to `RUNPOD_ENDPOINT_ID`; the AI-Gateway modules (`dialogue-gen`,
+`cast-image`, `cloud-keyframe`, `music-gen`) need `GATEWAY_ID`. Each module's `wrangler.toml` binds these
 from an account-level Secrets Store via `[[secrets_store_secrets]]`, so the binding is declarative
 config that ships with every deploy -- no per-deploy `wrangler secret put`, and nothing to lose on a
 fresh-create.

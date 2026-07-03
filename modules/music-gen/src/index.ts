@@ -66,7 +66,7 @@ interface WorkflowBinding {
 
 interface Env {
   AI: AiRun;
-  GATEWAY_ID: string;
+  GATEWAY_ID: SecretsStoreSecret;
   R2_RENDERS: R2Bucket;
   SCORE_WORKFLOW: WorkflowBinding;
 }
@@ -118,6 +118,19 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
+
 async function writeState(env: Env, jobId: string, state: RunState): Promise<void> {
   await env.R2_RENDERS.put(stateKey(jobId), JSON.stringify(state), {
     httpMetadata: { contentType: "application/json" },
@@ -145,10 +158,11 @@ async function runGeneration(
 ): Promise<void> {
   const format = config.format ?? "mp3";
   const applied = appliedTags(format, config);
-  if (!env.GATEWAY_ID) throw new Error("GATEWAY_ID not configured");
+  const gatewayId = await secretValue(env.GATEWAY_ID);
+  if (!gatewayId) throw new Error("GATEWAY_ID not configured");
   const prompt = promptFromScoreInput(input, config);
   const params = buildMusicParams(prompt, config);
-  const result = await env.AI.run(MODEL, params, { gateway: { id: env.GATEWAY_ID } });
+  const result = await env.AI.run(MODEL, params, { gateway: { id: gatewayId } });
   const url = parseAudioUrl(result);
   if (!url) throw new Error("model completed but returned no audio URL");
   const aresp = await fetch(url);
@@ -200,7 +214,8 @@ async function submit(
   const input = req.input;
   const filmKey = typeof input?.film_key === "string" ? input.film_key.trim() : "";
   if (!filmKey) return { ok: false, error: "score: input.film_key required" };
-  if (!env.GATEWAY_ID) return { ok: false, error: "score: GATEWAY_ID not configured" };
+  const gatewayId = await secretValue(env.GATEWAY_ID);
+  if (!gatewayId) return { ok: false, error: "score: GATEWAY_ID not configured" };
 
   const config = normalizeConfig(req.config ?? {});
   const scoredInput = { ...input, film_key: filmKey };

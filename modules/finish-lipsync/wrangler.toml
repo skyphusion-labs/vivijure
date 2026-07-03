@@ -1,4 +1,4 @@
-# finish-lipsync module worker (vivijure-module/1): MuseTalk audio-driven lip-sync on the dedicated
+# finish-lipsync module worker (vivijure-module/2): MuseTalk audio-driven lip-sync on the dedicated
 # vivijure-musetalk RunPod endpoint (cu128, separate from vivijure-backend). Bound into the core as
 # MODULE_LIPSYNC; the registry discovers it from GET /module.json. Runs in the `finish` chain before
 # the upscaler (ui.order 15 < 20) so a lip-synced shot is then upscaled.

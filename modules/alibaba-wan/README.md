@@ -1,6 +1,6 @@
 # alibaba-wan
 
-A **`motion.backend`** module (vivijure-module/1): the **Alibaba Wan 2.6**
+A **`motion.backend`** module (vivijure-module/2): the **Alibaba Wan 2.6**
 image-to-video backend, run on RunPod (`wan-2-6-i2v`). It turns one shot's start keyframe into a
 clip at **720p**. Distinctive trait: Wan 2.6 accepts only a **discrete duration enum {5, 10, 15}
 seconds** (not a continuous range), and has no audio param -- the core's score/mux chain owns audio.
