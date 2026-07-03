@@ -3,6 +3,23 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.13.2
+
+**Re-includes `dialogue-gen` + `music-gen` in the module deploy loop now that the Cloudflare
+Workflows write path has recovered.** The v0.13.1 re-cut held these two modules (the only ones that
+bind a Cloudflare Workflow) on their live versions because `PUT /accounts/{id}/workflows/{name}` was
+returning `10001 workflows.api.error.internal_server` (Cloudflare Durable Objects incident in ENAM,
+CF support case 02220294, ongoing since 2026-07-02). Their workers stayed live/healthy throughout;
+only re-registration on a new tag was blocked, so there was zero functional loss.
+
+- **Cloudflare resolved the incident and closed case 02220294 (2026-07-03).** Verified
+  evidence-grade against the live API, not the status email: a throwaway single-`[[workflows]]`
+  probe worker deployed clean (the exact `PUT .../workflows/{name}` succeeded, no `10001`), then was
+  deleted. The write path is genuinely back.
+- **`dialogue-gen` + `music-gen` dropped from the CI `EXCLUDE` and the temp why-comment removed**
+  (#493 / #495), mirroring the plan-enhance un-exclude (#476). This tag re-deploys both through the
+  loop; no repo/code/config change to the modules themselves.
+
 ## v0.13.1
 
 **Same S9 hardening payload as v0.13.0, re-cut so it actually reaches production. The v0.13.0 tag
