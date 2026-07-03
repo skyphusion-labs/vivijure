@@ -40,7 +40,13 @@ import { isSafeBundleKey, BUNDLE_KEY_PREFIX } from "../src/shared";
 import type { Env } from "../src/env";
 
 const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
-const env = { ALLOW_UNAUTHENTICATED: "true", ASSETS: { fetch: async () => new Response("ASSET") } } as unknown as Env;
+const env = {
+  ALLOW_UNAUTHENTICATED: "true",
+  ASSETS: { fetch: async () => new Response("ASSET") },
+  // A healthy default deploy binds SPEND_RATE_LIMITER (wrangler.toml.example); model it so the
+  // fail-closed spend gate (S9 F7) passes and these tests exercise the render handlers, not the gate.
+  SPEND_RATE_LIMITER: { limit: async () => ({ success: true }) },
+} as unknown as Env;
 
 function post(path: string, body: unknown): Request {
   return new Request(`https://studio.example${path}`, {

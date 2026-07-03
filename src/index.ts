@@ -1311,10 +1311,11 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
     if (studioPage && (request.method === "GET" || request.method === "HEAD")) {
       return serveStudioAsset(env, request, url, studioPage);
     }
-    // F3 + S4: rate-limit the GPU/spend routes (denial-of-wallet) and enforce the optional daily
-    // submission ceiling. Default posture fails OPEN on a broken check; SPEND_LIMIT_FAIL_CLOSED
-    // flips that to a 503 deny. An explicit over-limit/over-ceiling verdict is a 429 with
-    // Retry-After. See src/rate-limit.ts.
+    // F3 + S4 + S9(F7): rate-limit the GPU/spend routes (denial-of-wallet) and enforce the optional
+    // daily submission ceiling. Default posture fails CLOSED on a BROKEN check (unbound/throwing
+    // limiter -> 503 deny); a healthy limiter is unaffected. SPEND_LIMIT_FAIL_CLOSED="false" opts
+    // back to fail-open. An explicit over-limit/over-ceiling verdict is a 429 with Retry-After.
+    // See src/rate-limit.ts.
     if (isSpendRoute(request.method, url.pathname)) {
       const rl = await enforceSpendLimit(request, env);
       if (!rl.ok) {

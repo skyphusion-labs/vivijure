@@ -62,13 +62,16 @@ WEB_ANALYTICS_TOKEN = "${WEB_ANALYTICS_TOKEN}"
 # Store entry (#238 follow-up; they are identifiers, not secrets).
 R2_S3_ENDPOINT = "${R2_S3_ENDPOINT}"
 R2_S3_BUCKET = "${R2_S3_BUCKET}"
-# S4 spend-posture knobs (src/rate-limit.ts). Both OFF unless set:
-#   SPEND_LIMIT_FAIL_CLOSED = "true"  -- a broken/unbound spend limiter (or a failing daily-ceiling
-#     check) DENIES spend routes with 503 instead of allowing. Default (unset) keeps the F3 fail-open
-#     posture: a limiter blip never blocks a legitimate render.
-#   SPEND_DAILY_CEILING = "25"        -- at most N spend-route submissions per UTC day (counted in
-#     D1, migration 0008). Over the ceiling returns 429 until UTC midnight. Submissions, not dollars.
-# SPEND_LIMIT_FAIL_CLOSED = "true"
+# S4/S9 spend-posture knobs (src/rate-limit.ts):
+#   SPEND_LIMIT_FAIL_CLOSED -- fail-CLOSED by DEFAULT (S9 F7): when the spend limiter is BROKEN
+#     (SPEND_RATE_LIMITER unbound, or .limit()/the daily-ceiling check throws) the spend routes are
+#     DENIED 503, not allowed -- the money path fails closed like the auth gate, so a novice never
+#     silently runs unmetered. A healthy limiter (bound below) is unaffected. Set to the literal
+#     "false" to opt back to fail-open (a limiter blip allows the render).
+#   SPEND_DAILY_CEILING = "25"        -- OFF unless set: at most N spend-route submissions per UTC day
+#     (counted in D1, migration 0008). Over the ceiling returns 429 until UTC midnight. Submissions,
+#     not dollars.
+# SPEND_LIMIT_FAIL_CLOSED = "false"
 # SPEND_DAILY_CEILING = "25"
 
 [observability]

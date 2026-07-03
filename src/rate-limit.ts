@@ -4,15 +4,18 @@
 // limit, a compromised or abused session can hammer them and burn the operator's balance (Conrad
 // self-funds). This caps the submission rate, and (S4) optionally the per-day submission total.
 //
-// Posture: FAIL OPEN by default. Rate limiting is availability-protective, NOT an auth gate -- a
-// limiter blip (binding unbound or `.limit()` throws) must never block a legitimate render. We
-// allow + warn in that case; the wallet exposure during a brief limiter outage is bounded. (This
-// is the deliberate OPPOSITE of the F2 auth backstop, which fails closed.)
+// Posture: FAIL CLOSED by default (S9 F7). A HEALTHY limiter allows within-limit requests and 429s
+// over-limit ones -- ordinary rate limiting. But when the limiter itself is BROKEN (binding unbound
+// or `.limit()` throws), the request is DENIED 503, not allowed: the money path fails closed like the
+// F2 auth backstop, because a novice self-funds the GPU and must never silently run unmetered on a
+// misconfigured limiter. A healthy default deploy (wrangler.toml.example binds SPEND_RATE_LIMITER) is
+// unaffected -- fail-closed bites only a broken limiter, never a working one.
 //
-// S4 adds two operator knobs, both off unless set:
-//   SPEND_LIMIT_FAIL_CLOSED="true" -- flip the posture: a broken/unbound limiter (or a failing
-//     daily-ceiling check) DENIES spend routes with 503 instead of allowing. For operators who
-//     would rather have renders block than spend unmetered.
+// Operator knobs:
+//   SPEND_LIMIT_FAIL_CLOSED="false" -- opt OUT to the old fail-open posture: a broken/unbound limiter
+//     (or a failing daily-ceiling check) ALLOWS + warns instead of denying, so a limiter blip never
+//     blocks a render (at the cost of a bounded unmetered window). Any other value, incl. unset,
+//     keeps the fail-closed default.
 //   SPEND_DAILY_CEILING="<n>" -- at most n spend-route submissions per UTC day, counted atomically
 //     in D1 (spend_counter, migration 0008). Submissions, not dollars: every spend route is one
 //     bounded GPU/paid-AI job, so a per-day cap is an honest ceiling the operator can size. Over
@@ -37,7 +40,8 @@ export interface SpendCounterDb {
 
 export interface SpendLimitEnv {
   SPEND_RATE_LIMITER?: RateLimitBinding;
-  // "true" flips the fail posture for BOTH checks: broken limiter / broken ceiling check => deny.
+  // Fail-CLOSED by default for BOTH checks (broken limiter / broken ceiling check => deny 503). Set
+  // to the literal "false" to opt back to fail-open (allow + warn on a broken check). See failClosed.
   SPEND_LIMIT_FAIL_CLOSED?: string;
   // Positive integer as a string; unset/0/garbage = ceiling off.
   SPEND_DAILY_CEILING?: string;
@@ -86,8 +90,13 @@ export function dailyCeiling(env: SpendLimitEnv): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+// Fail CLOSED by DEFAULT (S9 F7): a broken/unbound limiter (or a failing ceiling check) DENIES the
+// spend routes. The money path fails closed like the auth gate -- a novice self-funds the GPU and
+// must not silently run unmetered when the limiter is misconfigured. Only the literal "false" opts
+// back to fail-open. NOTE: this governs BROKEN-check handling only; a HEALTHY limiter allows
+// within-limit requests either way (fail-closed never denies a working default deploy).
 export function failClosed(env: SpendLimitEnv): boolean {
-  return env.SPEND_LIMIT_FAIL_CLOSED === "true";
+  return env.SPEND_LIMIT_FAIL_CLOSED !== "false";
 }
 
 /** Pure: UTC day key + seconds until the counter resets (UTC midnight), for Retry-After. */

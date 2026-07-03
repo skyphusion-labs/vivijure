@@ -83,19 +83,34 @@ describe("enforceSpendLimit -- denial-of-wallet guard", () => {
     expect(seen).toEqual(["global"]);
   });
 
-  it("FAILS OPEN (allows) when the limiter binding is unbound", async () => {
+  it("FAILS CLOSED by default (denies 503) when the limiter binding is unbound", async () => {
+    // S9 F7: no SPEND_LIMIT_FAIL_CLOSED flag set -> the default is fail-closed.
     const r = await enforceSpendLimit(req(), {});
-    expect(r.ok).toBe(true);
+    expect(r).toMatchObject({ ok: false, status: 503 });
   });
 
-  it("FAILS OPEN (allows + does not throw) when the limiter errors", async () => {
+  it("FAILS CLOSED by default (denies 503, does not throw) when the limiter errors", async () => {
     const limiter: RateLimitBinding = {
       limit: async () => {
         throw new Error("limiter down");
       },
     };
     const r = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: limiter });
+    expect(r).toMatchObject({ ok: false, status: 503 });
+  });
+
+  it("a HEALTHY limiter still allows under the fail-closed default (only a BROKEN check denies)", async () => {
+    const limiter: RateLimitBinding = { limit: async () => ({ success: true }) };
+    const r = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: limiter });
     expect(r.ok).toBe(true);
+  });
+
+  it("SPEND_LIMIT_FAIL_CLOSED=\"false\" opts back to fail-open (a broken limiter ALLOWS)", async () => {
+    const unbound = await enforceSpendLimit(req(), { SPEND_LIMIT_FAIL_CLOSED: "false" });
+    expect(unbound.ok).toBe(true);
+    const throwing: RateLimitBinding = { limit: async () => { throw new Error("limiter down"); } };
+    const errored = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: throwing, SPEND_LIMIT_FAIL_CLOSED: "false" });
+    expect(errored.ok).toBe(true);
   });
 });
 
@@ -122,11 +137,15 @@ describe("enforceSpendLimit -- SPEND_LIMIT_FAIL_CLOSED", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("anything but the literal \"true\" keeps the default fail-open posture", async () => {
-    for (const v of ["TRUE", "1", "yes", ""]) {
+  it("only the literal \"false\" opts out; anything else keeps the fail-closed default", async () => {
+    // An unbound limiter is a BROKEN check, so the fail-closed default denies it 503.
+    for (const v of ["true", "TRUE", "1", "yes", ""]) {
       const r = await enforceSpendLimit(req(), { SPEND_LIMIT_FAIL_CLOSED: v });
-      expect(r.ok).toBe(true);
+      expect(r).toMatchObject({ ok: false, status: 503 });
     }
+    // Only the exact string "false" flips back to fail-open.
+    const open = await enforceSpendLimit(req(), { SPEND_LIMIT_FAIL_CLOSED: "false" });
+    expect(open.ok).toBe(true);
   });
 });
 
@@ -207,27 +226,27 @@ describe("enforceSpendLimit -- SPEND_DAILY_CEILING", () => {
     expect(touched).toBe(false);
   });
 
-  it("ceiling set but DB unbound: fail-open allows, fail-closed denies 503", async () => {
-    const open = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5" }, NOW);
-    expect(open.ok).toBe(true);
-    const closed = await enforceSpendLimit(
+  it("ceiling set but DB unbound: fail-closed (default) denies 503; explicit \"false\" allows", async () => {
+    const closed = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5" }, NOW);
+    expect(closed).toMatchObject({ ok: false, status: 503 });
+    const open = await enforceSpendLimit(
       req(),
-      { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", SPEND_LIMIT_FAIL_CLOSED: "true" },
+      { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", SPEND_LIMIT_FAIL_CLOSED: "false" },
       NOW,
     );
-    expect(closed).toMatchObject({ ok: false, status: 503 });
+    expect(open.ok).toBe(true);
   });
 
-  it("a throwing D1: fail-open allows, fail-closed denies 503", async () => {
+  it("a throwing D1: fail-closed (default) denies 503; explicit \"false\" allows", async () => {
     const { db } = fakeCounterDb({ failWith: new Error("d1 down") });
-    const open = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", DB: db }, NOW);
-    expect(open.ok).toBe(true);
-    const closed = await enforceSpendLimit(
+    const closed = await enforceSpendLimit(req(), { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", DB: db }, NOW);
+    expect(closed).toMatchObject({ ok: false, status: 503 });
+    const open = await enforceSpendLimit(
       req(),
-      { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", SPEND_LIMIT_FAIL_CLOSED: "true", DB: db },
+      { SPEND_RATE_LIMITER: okLimiter, SPEND_DAILY_CEILING: "5", SPEND_LIMIT_FAIL_CLOSED: "false", DB: db },
       NOW,
     );
-    expect(closed).toMatchObject({ ok: false, status: 503 });
+    expect(open.ok).toBe(true);
   });
 
   it("an over-LIMIT verdict short-circuits before the ceiling counter (denied requests do not spend a slot before 429)", async () => {
