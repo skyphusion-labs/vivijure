@@ -1,4 +1,4 @@
-// cloud-keyframe: a `keyframe` module worker (vivijure-module/1), GPUless. It turns a project's
+// cloud-keyframe: a `keyframe` module worker (vivijure-module/2), GPUless. It turns a project's
 // storyboard into one START keyframe per shot via reference-conditioned CLOUD image generation -- no
 // GPU backend, no RunPod, NO LoRA. Character identity comes from the cast PORTRAITS packed in the
 // bundle (the same portraits a LoRA would have trained on), conditioned through FLUX-2 multiref or
@@ -87,7 +87,7 @@ interface Env {
 
 export const MANIFEST: ModuleManifest = {
   name: "cloud-keyframe",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["keyframe"],
   provides: [{ id: "cloud-keyframe", label: "Cloud Keyframe (reference-conditioned, GPUless)" }],
