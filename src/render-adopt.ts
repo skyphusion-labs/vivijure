@@ -3,6 +3,7 @@
 import type { Env } from "./env";
 import { insertRender, markFinishDone } from "./renders-db";
 import { coerceQualityTier, deriveProjectFromBundleKey } from "./runpod-submit";
+import { isSafeBundleKey } from "./shared";
 
 export async function handleAdoptRender(
   request: Request,
@@ -52,6 +53,11 @@ export async function handleAdoptRender(
   }
 
   const bundleKey = typeof body.bundleKey === "string" ? body.bundleKey : "";
+  // Optional field, but when present it lands in the renders row and can later be read back as a
+  // storage key (regen-shot): require the canonical bundle shape, like the submit handlers.
+  if (bundleKey && !isSafeBundleKey(bundleKey)) {
+    return json({ error: "bundleKey must be a plain relative key under bundles/" }, 400);
+  }
   const project =
     typeof body.project === "string" && body.project.trim().length > 0
       ? body.project.trim()

@@ -20,6 +20,18 @@ export function isSafeRelKey(key: unknown): key is string {
   return !key.split("/").includes("..");
 }
 
+/** The canonical bundle namespace: bundle-assembler writes bundles/<project>.tar.gz and every
+ *  render submit references a key under it. Kept as a constant so the boundary checks agree on
+ *  one spelling instead of a scattered literal. */
+export const BUNDLE_KEY_PREFIX = "bundles/";
+
+/** True when `key` is a well-formed bundle reference: a safe relative key (isSafeRelKey) under
+ *  the bundles/ namespace. Use at every request boundary that accepts a bundle key, mirroring
+ *  how the artifact serve route scopes its key to the known artifact prefixes. */
+export function isSafeBundleKey(key: unknown): key is string {
+  return isSafeRelKey(key) && key.startsWith(BUNDLE_KEY_PREFIX);
+}
+
 /** Defense-in-depth check for a key about to be SIGNED. Narrower than isSafeRelKey: it blocks only
  *  the shapes that can steer a signed request off its intended object -- empty/oversized, absolute
  *  ("/..."), a "://" scheme, a ".." traversal segment, or any non-printable / non-ASCII byte -- while

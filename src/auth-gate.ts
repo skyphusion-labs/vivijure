@@ -70,7 +70,14 @@ function presentedToken(request: Request): string | null {
     if (eq === -1) continue;
     if (part.slice(0, eq).trim() === TOKEN_COOKIE) {
       const v = part.slice(eq + 1).trim();
-      return v.length > 0 ? decodeURIComponent(v) : null;
+      if (v.length === 0) return null;
+      // A value that does not percent-decode is not a usable token: treat it as no token
+      // presented so the request lands in the normal deny path instead of throwing.
+      try {
+        return decodeURIComponent(v);
+      } catch {
+        return null;
+      }
     }
   }
   return null;

@@ -41,7 +41,7 @@ import { isSpendRoute, enforceSpendLimit } from "./rate-limit";
 import { applyResponseSecurity } from "./asset-response";
 import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
-import { isSafeRelKey, parseByteRange } from "./shared";
+import { isSafeBundleKey, isSafeRelKey, parseByteRange } from "./shared";
 import {
   insertRender, updateRenderFromView, getRenderByIdForUser, listRendersForUser, listUserTags,
   setRenderLabel, setRenderLockedShots, setRenderFolder, setRenderTags, deleteRenderRow,
@@ -517,6 +517,10 @@ const hSubmitRender: Handler = async (req, env) => {
     film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
+  // The key is caller-supplied and becomes a storage read downstream: require the canonical
+  // bundle shape (safe relative key under bundles/), the same way the artifact serve route
+  // scopes its key. Enforced once here, before the value is used anywhere.
+  if (!isSafeBundleKey(b.bundleKey)) throw badRequest("bundleKey must be a plain relative key under bundles/");
   const tier = coerceQualityTier(b.qualityTier) ?? "final";
   const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
 
@@ -585,6 +589,8 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
     motion_backend?: string;
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
+  // Same boundary check as hSubmitRender: canonical bundle shape before any use.
+  if (!isSafeBundleKey(b.bundleKey)) throw badRequest("bundleKey must be a plain relative key under bundles/");
   const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
   const tier = coerceQualityTier(b.qualityTier) ?? "final";
 
@@ -654,6 +660,9 @@ const hRegenShot: Handler = async (req, env, _c, p) => {
   if (!row) throw notFound("render");
   if (row.status !== "COMPLETED") throw badRequest("render must be COMPLETED");
   if (!row.bundle_key) throw badRequest("render has no bundle_key");
+  // The row value was written by our own submit paths (which now enforce the shape), but it is
+  // about to become a storage read: re-check on read as well, cheap belt-and-suspenders.
+  if (!isSafeBundleKey(row.bundle_key)) throw badRequest("render bundle_key is not a usable bundles/ key");
 
   const scenes = await readBundleScenes(env, row.bundle_key);
   const scene = scenes.find((s) => s.shot_id === shotId);
@@ -739,6 +748,8 @@ const hScatterRender: Handler = async (req, env) => {
     film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   }>(req);
   if (!b.bundleKey) throw badRequest("bundleKey required");
+  // Same boundary check as hSubmitRender: canonical bundle shape before any use.
+  if (!isSafeBundleKey(b.bundleKey)) throw badRequest("bundleKey must be a plain relative key under bundles/");
   if (!Array.isArray(b.shotIds) || b.shotIds.length < 2) throw badRequest("shotIds[] required (>= 2)");
   const shardCount = typeof b.shardCount === "number" ? b.shardCount : 2;
   const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
@@ -937,6 +948,8 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
 const hStartFilm: Handler = async (req, env) => {
   const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[]; cast_loras?: Record<string, number> }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
+  // Same boundary check as hSubmitRender: canonical bundle shape before any use.
+  if (!isSafeBundleKey(a.bundle_key)) throw badRequest("bundle_key must be a plain relative key under bundles/");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
 
   // Bundle-only voicing (#313): when the caller passed NO explicit dialogue_lines, derive them from the
