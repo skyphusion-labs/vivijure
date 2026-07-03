@@ -193,9 +193,10 @@ done
 say "Step 4/8: render wrangler.toml ($VIVIJURE_PROFILE profile)"
 command -v envsubst >/dev/null || die "envsubst not found -- install gettext (apt-get install gettext-base)"
 export AUTH_MODE ACCESS_TEAM_DOMAIN ACCESS_AUD D1_DATABASE_ID WEB_ANALYTICS_TOKEN SPEND_RATE_LIMITER_NS_ID
+export R2_S3_ENDPOINT R2_S3_BUCKET   # #238 follow-up: now rendered into [vars], not put as secrets
 export VPC_VIDEO_FINISH_ID="${VPC_VIDEO_FINISH_ID:-}" VPC_IMAGE_PREP_ID="${VPC_IMAGE_PREP_ID:-}" \
        VPC_AUDIO_BEAT_SYNC_ID="${VPC_AUDIO_BEAT_SYNC_ID:-}" VPC_AUDIO_MIX_ID="${VPC_AUDIO_MIX_ID:-}"
-VARS="\$AUTH_MODE \$ACCESS_TEAM_DOMAIN \$ACCESS_AUD \$D1_DATABASE_ID \$VPC_VIDEO_FINISH_ID \$VPC_IMAGE_PREP_ID \$VPC_AUDIO_BEAT_SYNC_ID \$VPC_AUDIO_MIX_ID \$SPEND_RATE_LIMITER_NS_ID \$WEB_ANALYTICS_TOKEN"
+VARS="\$AUTH_MODE \$ACCESS_TEAM_DOMAIN \$ACCESS_AUD \$D1_DATABASE_ID \$VPC_VIDEO_FINISH_ID \$VPC_IMAGE_PREP_ID \$VPC_AUDIO_BEAT_SYNC_ID \$VPC_AUDIO_MIX_ID \$SPEND_RATE_LIMITER_NS_ID \$WEB_ANALYTICS_TOKEN \$R2_S3_ENDPOINT \$R2_S3_BUCKET"
 
 if [ "$VIVIJURE_PROFILE" = minimal ]; then
   # drop each OPTIONAL block whole (markers + body): these need OUR fleet or a 2nd endpoint.
@@ -261,8 +262,7 @@ put_secret RUNPOD_API_KEY           "$RUNPOD_API_KEY"
 put_secret RUNPOD_ENDPOINT_ID       "$RUNPOD_ENDPOINT_ID"
 put_secret R2_S3_ACCESS_KEY_ID      "$R2_S3_ACCESS_KEY_ID"
 put_secret R2_S3_SECRET_ACCESS_KEY  "$R2_S3_SECRET_ACCESS_KEY"
-put_secret R2_S3_ENDPOINT           "$R2_S3_ENDPOINT"
-put_secret R2_S3_BUCKET             "$R2_S3_BUCKET"
+# R2_S3_ENDPOINT + R2_S3_BUCKET are NOT secrets -- they render into [vars] (see step 4). #238 follow-up.
 put_secret GATEWAY_ID               "$GATEWAY_ID"
 
 # ---- CF_AIG_TOKEN: pays the storyboard planner via Unified Billing (finding F16) -------------

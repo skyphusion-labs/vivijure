@@ -185,11 +185,23 @@ jobs:
           ENABLE_WFP_DISPATCH: ${{ vars.ENABLE_WFP_DISPATCH }}
           # #238: fills the core [[secrets_store_secrets]] store_id placeholders (same repo var as modules).
           SECRETS_STORE_ID: ${{ vars.SECRETS_STORE_ID }}
+          # #238 follow-up: the R2 S3 presign endpoint is account-scoped -- built from the same
+          # account id the deploy uses. R2_S3_BUCKET is an OPTIONAL repo-variable override; unset
+          # falls back to `vivijure` (the R2_RENDERS bucket_name) in the render shell below.
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_S3_BUCKET: ${{ vars.R2_S3_BUCKET }}
         run: |
           set -eu
           apk add --no-cache gettext >/dev/null
           AUTH_MODE="${AUTH_MODE:-access}"; export AUTH_MODE
-          VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
+          # #238 follow-up: render the R2 S3 presign identifiers into [vars] (they are NOT secrets).
+          # The endpoint host is account-scoped; build it from CLOUDFLARE_ACCOUNT_ID (the same value
+          # wrangler uses to deploy). Fail closed if that id is empty -- an empty account would render
+          # https://.r2.cloudflarestorage.com and silently break every presign.
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then echo "::error::CLOUDFLARE_ACCOUNT_ID unset -- cannot render R2_S3_ENDPOINT"; exit 1; fi
+          R2_S3_ENDPOINT="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"; export R2_S3_ENDPOINT
+          R2_S3_BUCKET="${R2_S3_BUCKET:-vivijure}"; export R2_S3_BUCKET
+          VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN $R2_S3_ENDPOINT $R2_S3_BUCKET'
           envsubst "$VARS" < wrangler.toml.example > wrangler.toml
           # fail-closed: no placeholder may survive (a missing secret would leave a literal ${...}).
           if grep -q '${' wrangler.toml; then echo "::error::unsubstituted placeholder in wrangler.toml"; grep -n '${' wrangler.toml; exit 1; fi
@@ -199,6 +211,10 @@ jobs:
           if [ "$AUTH_MODE" = "access" ]; then
             grep -Eq 'ACCESS_AUD = ".+"' wrangler.toml && grep -Eq 'ACCESS_TEAM_DOMAIN = ".+"' wrangler.toml || { echo "::error::F2 Access vars empty/missing after render"; exit 1; }
           fi
+          # #238 follow-up: the R2 S3 endpoint must render to a well-formed account host (an empty
+          # account id would leave https://.r2.cloudflarestorage.com and break every presign).
+          grep -Eq 'R2_S3_ENDPOINT = "https://[0-9a-f]+\.r2\.cloudflarestorage\.com"' wrangler.toml || { echo "::error::R2_S3_ENDPOINT malformed after render"; exit 1; }
+          grep -Eq 'R2_S3_BUCKET = ".+"' wrangler.toml || { echo "::error::R2_S3_BUCKET empty after render"; exit 1; }
           # Opt-in WfP: uncomment the [[dispatch_namespaces]] block ONLY when this account set the
           # ENABLE_WFP_DISPATCH variable to "1" (namespace already created out of band). The committed
           # wrangler.toml.example ships the block COMMENTED, so with the var unset (every community
