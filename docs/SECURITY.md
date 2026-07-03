@@ -167,6 +167,19 @@ handed out.
 - FAIL CLOSED: no D1 binding, an unapplied migration, or a D1 outage simply means no named token
   matches; the operator path is independent and unaffected.
 
+**Scope: full access, not data isolation.** A named token is a full-access credential that happens
+to be independently issuable and revocable -- it is NOT a scoped-down or read-only key. Every valid
+bearer (the operator secret OR any named token) reaches the ENTIRE API identically: the gate
+authenticates the token and records its name in observability (`api-token:<name>`), but no handler
+scopes any project, cast member, or render by the caller's identity. There is no owner column and no
+per-consumer data boundary (this is the same single-operator capability model as section 2: all data
+belongs to the one operator, and job ids are the only per-object capability). So a named token can
+read, write, and delete every other consumer's projects, cast, and renders. Issue one to bound
+ROTATION and attribution blast radius (a leak burns one consumer, a revoke touches one consumer),
+never to isolate data between callers. If you need real per-caller data isolation, that is not token
+mode -- put Cloudflare Access in front (`AUTH_MODE = "access"`) and add an owner column; token mode
+deliberately does not model it.
+
 Threat-model honesty: token mode authenticates POSSESSION of a bearer secret. Named tokens add
 per-caller issuance, revocation, and an identity string in logs -- but still no device posture and
 no human identity; that is what Cloudflare Access adds. A single operator on a personal deploy:
@@ -266,6 +279,9 @@ Two operator knobs harden this further (both `[vars]`, both off unless set):
 - `SPEND_LIMIT_FAIL_CLOSED = "true"` flips the posture: a broken/unbound limiter (or a failing
   daily-ceiling check) DENIES spend routes with `503` instead of allowing. For operators who prefer
   blocked renders over any window of unmetered spend.
+  Recommended for a self-hoster funding their own GPU balance: set it, so a limiter outage blocks
+  renders rather than allowing unmetered spend against your balance (this changes no default -- the
+  knob stays off unless you set it).
 - `SPEND_DAILY_CEILING = "<n>"` caps total spend-route submissions per UTC day, counted atomically
   in D1 (`spend_counter`, migration 0008). Over the ceiling returns `429` with `Retry-After` set to
   UTC midnight. The unit is submissions, not dollars: the studio cannot see GPU pricing, but every
@@ -287,6 +303,22 @@ never an unbounded buffer that could OOM/DoS the core Worker.
 > TEST. The core still trusts the output SHAPE a module returns. See the F5-output-validation issue
 > for the layering decision (the generic invoke/poll transport is payload-agnostic, so enforcement
 > belongs at the per-hook terminal-consumption seams, with a test-fixture sweep).
+
+## 7a. What installing a module grants it
+
+The size cap above protects the core FROM a module; the converse is the operator's trust decision.
+To do its job a module is handed, in its `/invoke` input, the presigned R2 GET/PUT URLs for the
+specific assets of the job it serves (e.g. a `finish` module gets a GET on the clip to process and a
+PUT for its output). So installing a module grants that third-party Worker: (a) READ of the source
+asset it processes for that job, and (b) WRITE of its own output object -- meaning a malicious or
+buggy module can exfiltrate the asset it is handed or poison its own output (ship a garbage or
+hostile clip). That blast radius is deliberately bounded: `InvokeContext` carries only
+`{project, job_id}` and NO secrets; every presigned URL is scoped to one specific key with a short
+TTL; a module NEVER chooses its own output key (all PUT keys are core-derived); and no long-lived
+credential ever crosses the wire. A module cannot reach another job's or another project's assets,
+read a secret, or escalate through the dispatch binding. Treat installing a module as granting it
+read-and-tamper over the render assets it processes -- install only module code you trust, and
+prefer first-party or provenance-checked modules for any hook on a sensitive render.
 
 ## 8. Response security headers (worker-owned, single source of truth)
 
