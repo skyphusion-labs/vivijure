@@ -113,13 +113,7 @@ jobs:
           #                      [[services]]) and its LOCAL_BACKEND_URL/TOKEN Secrets Store secrets are
           #                      not seeded yet, so deploy fails (code 10182). Broke v0.7.6. Drop from
           #                      here once the homelab box is up: seed the secrets + add the core binding.
-          #   plan-enhance    -- TEMPORARY (v0.12.0): its store secret PLAN_ENHANCE_CF_AIG_TOKEN is
-          #                      not seeded yet (per-function AIG token, lands in the #238 core seeding
-          #                      session). Deploying now would bind a broken Secrets Store secret. The
-          #                      currently-LIVE plan-enhance worker keeps running untouched (exclude
-          #                      skips redeploy, never deletes). UN-EXCLUDE in the #238 core-migration
-          #                      release once PLAN_ENHANCE_CF_AIG_TOKEN is seeded.
-          EXCLUDE="openai-sora alibaba-wan25 local-gpu plan-enhance"
+          EXCLUDE="openai-sora alibaba-wan25 local-gpu"
           deployed=0
           found=0
           for toml in modules/*/wrangler.toml; do
