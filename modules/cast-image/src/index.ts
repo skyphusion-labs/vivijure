@@ -41,7 +41,7 @@ interface R2Bucket {
 }
 interface Env {
   AI: AiRun;              // AI binding: FLUX 2 run direct (gateway-bypassed), proxied models via the gateway
-  GATEWAY_ID: string;     // AI Gateway slug (secret); needed for the proxied / nano-banana fallback path
+  GATEWAY_ID: SecretsStoreSecret;     // AI Gateway slug (secret); needed for the proxied / nano-banana fallback path
   R2_RENDERS: R2Bucket;   // the shared `vivijure` bucket: run state + generated refs land here
   IMAGES?: ImagesBinding; // Cloudflare Images: downscale refs to <=512px (FLUX-2's input cap; bounds nano-banana payloads)
 }
@@ -74,6 +74,19 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
+
 /** /invoke: validate, compose the prompt set, persist the run state to R2, return a stable poll
  *  pointer. No generation here -- /poll does the work, a few images at a time. */
 async function submit(env: Env, req: InvokeRequest<CastImageInput>): Promise<InvokeResponse<CastImageOutput>> {
@@ -103,18 +116,19 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<CastImage
   if (!obj) return { ok: false, error: "cast.image: run state not found (expired or bad token)" };
   const state = JSON.parse(await obj.text()) as CastImageState;
   if (state.prompts.length === 0) return { ok: true, output: readOutput(state) };
+  const gatewayId = await secretValue(env.GATEWAY_ID);
 
   for (let i = 0; i < PER_POLL && state.prompts.length > 0; i++) {
     const prompt = state.prompts[0];
     let img: { bytes: ArrayBuffer; mime: string };
     try {
-      img = await generateImage(env.AI, env.IMAGES, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
+      img = await generateImage(env.AI, env.IMAGES, gatewayId, state.model, prompt, state.ref_urls);
     } catch (e) {
       if (isFlaggedError((e as Error).message) && state.model !== FLAG_FALLBACK_MODEL) {
         state.model = FLAG_FALLBACK_MODEL;
         state.fallback_used = true;
         try {
-          img = await generateImage(env.AI, env.IMAGES, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
+          img = await generateImage(env.AI, env.IMAGES, gatewayId, state.model, prompt, state.ref_urls);
         } catch (e2) {
           return { ok: false, error: "cast.image: generation failed (post-fallback): " + (e2 as Error).message };
         }
