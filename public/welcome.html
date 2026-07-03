@@ -335,7 +335,7 @@
           </div>
           <figure class="diagram">
             <img src="https://assets.skyphusion.net/vivijure/diagrams/render-pipeline.svg"
-                 alt="The Vivijure render pipeline: a storyboard becomes SDXL keyframes, which fan into per-shot dialogue (TTS) and the motion backend (own-GPU Wan or a cloud i2v model); the clip runs an opt-in finish chain (RIFE interpolate, MuseTalk lip-sync, CUDA Real-ESRGAN upscale, text overlay); then the shots gather, assemble, and mux into the final film.mp4." />
+                 alt="The Vivijure render pipeline: a storyboard becomes keyframes, which fan into per-shot dialogue (TTS) and the motion backend (own-GPU Wan or a cloud i2v model); the clip runs an opt-in finish chain (RIFE interpolate, MuseTalk lip-sync, CUDA Real-ESRGAN upscale, text overlay); then the shots gather, assemble, and mux into the final film.mp4." />
             <figcaption>The render pipeline: keyframe to film, through the opt-in finish chain.</figcaption>
           </figure>
         </section>
@@ -416,7 +416,7 @@
               </tr>
               <tr>
                 <td><a href="https://github.com/skyphusion-labs/vivijure-backend">vivijure-backend</a></td>
-                <td class="role">GPU render backend (RunPod serverless); SDXL keyframes, image-to-video, finish, assemble. The cloud / your-own-RunPod door.</td>
+                <td class="role">GPU render backend (RunPod serverless); keyframes, image-to-video, finish, assemble. The cloud / your-own-RunPod door.</td>
               </tr>
               <tr>
                 <td><a href="https://github.com/skyphusion-labs/vivijure-local-12gb">vivijure-local-12gb</a></td>

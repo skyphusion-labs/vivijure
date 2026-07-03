@@ -1,4 +1,4 @@
-# plan-enhance module worker (vivijure-module/1).
+# plan-enhance module worker (vivijure-module/2).
 #
 # The first opt-in Vivijure module: an Opus director pass over a storyboard's shot prompts. Bound
 # into the core as the MODULE_PLANENHANCE service binding (see the core wrangler.toml); the registry

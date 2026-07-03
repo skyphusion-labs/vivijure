@@ -1,4 +1,4 @@
-# narration-gen module worker (vivijure-module/1): MiniMax Speech 02 HD on RunPod for the `score` hook.
+# narration-gen module worker (vivijure-module/2): MiniMax Speech 02 HD on RunPod for the `score` hook.
 # Uses the same async submit+poll RunPod transport as seedance/kling (NOT Workers AI), so a multi-minute
 # synth never blocks a request and survives a worker recycle (#155).
 # account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.

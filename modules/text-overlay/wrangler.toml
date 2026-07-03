@@ -1,4 +1,4 @@
-# text-overlay module worker (vivijure-module/1): ffmpeg drawtext via the always-on video-finish
+# text-overlay module worker (vivijure-module/2): ffmpeg drawtext via the always-on video-finish
 # CPU container (Workers VPC). A finish hook (#190) that burns titles, credits, lower-thirds, and
 # subtitles onto rendered clips. Bound as MODULE_TEXT_OVERLAY; the registry discovers it from
 # GET /module.json.

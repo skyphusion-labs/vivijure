@@ -1,4 +1,4 @@
-// speech-upscale: a `speech` module worker (vivijure-module/1). Dialogue SPEECH enhancement
+// speech-upscale: a `speech` module worker (vivijure-module/2). Dialogue SPEECH enhancement
 // (resemble-enhance: denoise + restore + bandwidth-extend), dispatched to the dedicated
 // vivijure-audio-upscale RunPod endpoint (CUDA). Pure audio: audio_key in -> enhanced audio_key out.
 //
@@ -41,7 +41,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "speech-upscale",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["speech"],
   provides: [

@@ -1,7 +1,7 @@
-// Vendored from src/modules/types.ts (vivijure-module/1). Copy only what this module needs so it
+// Vendored from src/modules/types.ts (vivijure-module/2). Copy only what this module needs so it
 // stays independent of the core repo. Do not import from the core directly.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "motion.backend" | "finish" | "score" | "plan.enhance" | "film.finish";
 
@@ -26,7 +26,7 @@ export interface ModuleManifest {
   ui?: ModuleUi;
 }
 
-export interface InvokeContext { project: string; job_id: string; user_email?: string; }
+export interface InvokeContext { project: string; job_id: string; }
 
 export interface InvokeRequest<I = unknown> {
   hook: HookName;
@@ -40,7 +40,7 @@ export type InvokeResponse<O = unknown> =
   | { ok: true; pending: true; poll: string }
   | { ok: false; error: string };
 
-// film.finish input (vivijure-module/1). The core hands the assembled+muxed film and PRESIGNED URLs
+// film.finish input (vivijure-module/2). The core hands the assembled+muxed film and PRESIGNED URLs
 // (the core owns the R2 S3 creds; the module stays credentialless and just forwards to the container).
 // title / credits are the film-specific TEXT; style/timing knobs live in the module config_schema.
 export interface FilmTitleSpec { text: string; subtitle?: string; }
