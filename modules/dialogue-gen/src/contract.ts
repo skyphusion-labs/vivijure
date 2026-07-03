@@ -1,7 +1,7 @@
-// Vendored subset of the Vivijure module contract (vivijure-module/1) for the dialogue-gen module.
+// Vendored subset of the Vivijure module contract (vivijure-module/2) for the dialogue-gen module.
 // Modules vendor this file; they never import the core. Keep it dependency-free.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "dialogue";
 
@@ -24,7 +24,7 @@ export interface ModuleManifest {
   ui?: ModuleUi;
 }
 
-export interface InvokeContext { project: string; job_id: string; user_email?: string; }
+export interface InvokeContext { project: string; job_id: string; }
 export interface InvokeRequest<I = unknown> {
   hook: HookName;
   input: I;

@@ -1,4 +1,4 @@
-// subtitle: a film.finish module worker (vivijure-module/1). Burns time-synced dialogue CAPTIONS onto
+// subtitle: a film.finish module worker (vivijure-module/2). Burns time-synced dialogue CAPTIONS onto
 // the assembled+muxed film (and/or emits a soft .srt sidecar), via the always-on video-finish CPU
 // container's /subtitle route over Workers VPC (VIDEO_FINISH_VPC).
 //
@@ -34,7 +34,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "subtitle",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["film.finish"],
   provides: [{ id: "subtitle", label: "Time-synced dialogue captions (burned-in + .srt)" }],

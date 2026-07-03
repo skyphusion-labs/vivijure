@@ -1,4 +1,4 @@
-# film-titles module worker (vivijure-module/1): opening title + end credit cards on the assembled
+# film-titles module worker (vivijure-module/2): opening title + end credit cards on the assembled
 # film, via the video-finish CPU container's /film-titles route (Workers VPC). A film.finish hook
 # (#190). Bound into the core as MODULE_FILM_TITLES; the registry discovers it from GET /module.json.
 #
