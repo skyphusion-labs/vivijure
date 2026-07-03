@@ -1,6 +1,6 @@
 # beat-sync
 
-A `score`-hook module (vivijure-module/1). It runs [librosa](https://librosa.org/) beat analysis on
+A `score`-hook module (vivijure-module/2). It runs [librosa](https://librosa.org/) beat analysis on
 an always-on container over Workers VPC (Hetzner fleet) and returns **shot timing aligned to the
 music bed**, so cuts land on the beat.
 

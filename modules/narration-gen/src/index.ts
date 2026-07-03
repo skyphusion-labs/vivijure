@@ -1,4 +1,4 @@
-// narration-gen: a `score` module worker (vivijure-module/1). Synthesizes narration via MiniMax
+// narration-gen: a `score` module worker (vivijure-module/2). Synthesizes narration via MiniMax
 // Speech 02 HD on RunPod's hosted endpoint, using the SAME async submit+poll transport as seedance/kling.
 //
 // ASYNC: a synth takes tens of seconds, longer than a Worker request can hold, so (NOT Workers AI /
@@ -53,7 +53,7 @@ const ENDPOINT = "https://api.runpod.ai/v2/" + MODEL;
 
 const MANIFEST: ModuleManifest = {
   name: "narration-gen",
-  version: "0.2.0",
+  version: "0.2.1",
   api: MODULE_API,
   hooks: ["score"],
   provides: [{ id: "minimax-speech", label: "MiniMax Speech 02 HD (RunPod)" }],

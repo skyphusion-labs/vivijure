@@ -72,7 +72,7 @@ describe("beat-analyze helpers", () => {
     const beat = {
       name: "beat-sync",
       version: "0.1.0",
-      api: "vivijure-module/1" as const,
+      api: "vivijure-module/2" as const,
       binding: "MODULE_BEAT_SYNC",
       hooks: ["score" as const],
       config_schema: { clip_seconds: { type: "float" as const, default: 8 } },
@@ -80,7 +80,7 @@ describe("beat-analyze helpers", () => {
     const music = {
       name: "music-gen",
       version: "0.1.0",
-      api: "vivijure-module/1" as const,
+      api: "vivijure-module/2" as const,
       binding: "MODULE_MUSIC_GEN",
       hooks: ["score" as const],
       config_schema: { prompt: { type: "string" as const, default: "" } },
