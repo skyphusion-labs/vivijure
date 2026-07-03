@@ -1,4 +1,4 @@
-# own-gpu module worker (vivijure-module/1): image-to-video on YOUR OWN GPU via the vivijure-backend
+# own-gpu module worker (vivijure-module/2): image-to-video on YOUR OWN GPU via the vivijure-backend
 # RunPod serverless endpoint (Wan2.2-I2V, the i2v_clip action). Bound into the core as MODULE_OWN_GPU;
 # the registry discovers it from GET /module.json and the studio renders the motion.backend stage.
 # This is the BYO-GPU default (ui.order 5, ahead of the cloud i2v modules) -- no rent, own keys.
