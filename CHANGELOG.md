@@ -3,6 +3,32 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.12.0
+
+**The module-api/1 deprecation window closes and the Secrets Store migration lands, and prod edge auth
+flips from Cloudflare Access to the built-in token gate. Config + release only; no behavior regressions.**
+
+- **module-api/1 deprecation window closed (#294).** The first-party modules are migrated
+  vivijure-module/1 -> /2 (batches #461-#466, plus #468 for the excluded sora/wan25), closing the #293
+  window. Conformance green per module.
+- **Secrets Store migration, module half (part of #238).** The non-looped module workers (#462) and the
+  plan-enhance module (#470) move their credentials from `wrangler secret put` to declarative
+  `[[secrets_store_secrets]]` bindings (GATEWAY_ID, CF_AIG_TOKEN, per-endpoint RunPod ids). Values are
+  seeded once in the crew Secrets Store and never touch CI/GitHub.
+- **Token-mode edge auth (prod flip).** The studio worker moves AUTH_MODE access -> token: the built-in
+  bearer gate (operator token + D1 named per-consumer tokens, #446) becomes the enforced door and the
+  Cloudflare Access application is removed from vivijure.skyphusion.org. Drops the Zero-Trust
+  prerequisite for self-host; the browser UI supplies the operator bearer via the existing token shim.
+- **plan-enhance store migration ships config-complete but deploy-deferred.** Its per-function token
+  PLAN_ENHANCE_CF_AIG_TOKEN is not seeded yet, so plan-enhance is temporarily in the CI EXCLUDE list; the
+  currently-live worker keeps running untouched and it un-excludes in the #238 core-migration release
+  once the token is seeded.
+- **plan-enhance-py proof module retired (#306 / #469).** The Python variant is deleted; the TS
+  plan-enhance module is the shipped path.
+- **planner + data hygiene (#467, #454/#459/#460, #457, #458/#406).** History-list diffability restored
+  and keyframe-stage labels genericized/registry-projected; renders-db raw-row shapes typed; the
+  speech-upscale RunPod endpoint id genericized in docs.
+
 ## v0.11.0
 
 **The structural-debt sprint: per-consumer API tokens, locality-driven classification, contract-carried
