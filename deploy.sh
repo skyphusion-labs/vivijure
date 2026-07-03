@@ -232,6 +232,32 @@ if [ "$AUTH_MODE" = access ]; then
 fi
 info "rendered wrangler.toml ($(wc -l < wrangler.toml) lines), route -> $DEPLOY_HOSTNAME"
 
+# ---- ALLOW_UNAUTHENTICATED loudness (S9 W4) ---------------------------------------------------
+# (a) NO normal deploy.sh path sets ALLOW_UNAUTHENTICATED: it is not in the [vars] block of
+#     wrangler.toml.example, not in the envsubst VARS list, and never exported here, so a plain
+#     `./deploy.sh` can only ever render the fail-closed token/access gate. The ONLY way the flag
+#     reaches the worker is a deliberate operator hand-edit of wrangler.toml [vars] -- and even then
+#     it opens nothing unless AUTH_MODE is unset (src/auth-gate.ts scopes the hatch to the legacy
+#     path; token/access modes IGNORE it). This deploy always renders AUTH_MODE=$AUTH_MODE.
+# (b) If the flag IS present in the rendered config (or forced via the environment), SHOUT about it.
+#     An open-door opt-out must never be quiet, even when it is currently inert.
+UNAUTH_ON=""
+grep -Eq '^ALLOW_UNAUTHENTICATED[[:space:]]*=[[:space:]]*"true"' wrangler.toml && UNAUTH_ON=1
+[ "${ALLOW_UNAUTHENTICATED:-}" = "true" ] && UNAUTH_ON=1
+if [ -n "$UNAUTH_ON" ]; then
+  printf "\n"
+  printf "  #########################################################################\n"
+  printf "  ##  WARNING: ALLOW_UNAUTHENTICATED=true IS PRESENT IN THIS DEPLOY       ##\n"
+  printf "  #########################################################################\n"
+  printf "  This is the in-Worker auth OPT-OUT -- a DEV / own-reverse-proxy escape hatch ONLY.\n"
+  printf "  It opens /api/* to UNAUTHENTICATED callers when AUTH_MODE is unset; anyone who reaches\n"
+  printf "  the hostname could then read and delete your projects. This deploy renders\n"
+  printf "  AUTH_MODE=%s, which still gates /api/* (the flag is inert here), but it does NOT belong\n" "$AUTH_MODE"
+  printf "  in a normal deploy. Remove ALLOW_UNAUTHENTICATED from wrangler.toml unless you are\n"
+  printf "  consciously running an open dev studio behind your own auth. See docs/SECURITY.md.\n"
+  printf "  #########################################################################\n\n"
+fi
+
 # ---- 5. D1 migrations --------------------------------------------------------
 say "Step 5/8: apply D1 migrations"
 $WR d1 migrations apply vivijure-studio --remote
@@ -329,6 +355,50 @@ if [ "$AUTH_MODE" = token ]; then
     STUDIO_TOKEN_MINTED=1
   fi
 fi
+
+# ---- post-deploy gate self-check (S9 W3): PROVE the studio is fail-closed --------------------
+# A novice must never ship an OPEN studio without seeing red. We hit a real /api/* route with NO
+# bearer and REQUIRE 403 -- the deny the token/access gate returns for an unauthenticated caller
+# (src/index.ts gates EVERY /api/* before routing). Anything else fails the deploy LOUDLY. This is
+# the v0.12.0 live-matrix proof, now automatic on every deploy. deploy.sh only ever renders
+# AUTH_MODE=token|access (validated up top), and ALLOW_UNAUTHENTICATED has no effect in either
+# mode, so a no-bearer /api/* is ALWAYS expected to 403 here. Edge propagation can lag a few
+# seconds after deploy, so we retry a non-403 for ~60s before declaring failure; a clean 403 passes
+# immediately.
+gate_selfcheck() {
+  local url="https://$DEPLOY_HOSTNAME/api/modules" code="000" n=0 max=12
+  say "Post-deploy check: proving /api/* is gated (a no-bearer request must get 403)"
+  if ! command -v curl >/dev/null 2>&1; then
+    info "curl not found -- cannot auto-verify the gate. Verify by hand (must print 403):"
+    info "  curl -s -o /dev/null -w '%{http_code}' $url"
+    return 0
+  fi
+  while [ "$n" -lt "$max" ]; do
+    # NO Authorization header on purpose: this is the unauthenticated caller the gate must deny.
+    code="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "$url" 2>/dev/null || printf "000")"
+    [ "$code" = "403" ] && { info "gate OK: no-bearer $url -> 403 (fail-closed confirmed)"; return 0; }
+    n=$((n+1))
+    [ "$n" -lt "$max" ] && { info "  not gated yet (HTTP $code); edge may still be propagating -- retry $n/$max"; sleep 5; }
+  done
+  # Still not 403 after the budget. A 200 means the API answered an unauthenticated caller: OPEN.
+  printf "\n"
+  printf "  #########################################################################\n"
+  printf "  ##  DEPLOY GATE CHECK FAILED -- YOUR STUDIO MAY BE OPEN                 ##\n"
+  printf "  #########################################################################\n"
+  printf "  A no-bearer GET %s returned HTTP %s (expected 403).\n" "$url" "$code"
+  if [ "$code" = "200" ]; then
+    printf "  A 200 means the API served an UNAUTHENTICATED caller -- anyone can read and delete\n"
+    printf "  your projects. Do NOT use this studio until this returns 403.\n"
+  else
+    printf "  Could not confirm the fail-closed gate (last HTTP %s). Check the deploy output above\n" "$code"
+    printf "  and re-run; if it persists, the studio auth may be misconfigured.\n"
+  fi
+  printf "  Verify by hand (must print 403):  curl -s -o /dev/null -w '%%{http_code}' %s\n" "$url"
+  printf "  See docs/SECURITY.md.\n"
+  printf "  #########################################################################\n\n"
+  die "post-deploy gate self-check failed (HTTP $code from a no-bearer /api/* request)"
+}
+gate_selfcheck
 
 say "Done. Your studio is live at: https://$DEPLOY_HOSTNAME"
 if [ "$AUTH_MODE" = token ] && [ -n "$STUDIO_TOKEN_MINTED" ]; then

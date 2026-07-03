@@ -225,6 +225,15 @@ export async function gateApiRequest(
   if ((env.ALLOW_UNAUTHENTICATED || "").trim() === "true") {
     if (!warnedOptOut) {
       warnedOptOut = true;
+      // Structured event for the tail/Loki channel (docs/observability.md): queryable as
+      // ev="auth.allow_unauthenticated" so an accidentally-OPEN deploy is VISIBLE in tail logs,
+      // not just buried in a prose warn line. Once per isolate (the warnedOptOut guard).
+      console.log(
+        JSON.stringify({
+          ev: "auth.allow_unauthenticated",
+          msg: "in-Worker auth verification DISABLED (ALLOW_UNAUTHENTICATED=true; edge gate / own proxy only)",
+        }),
+      );
       console.warn(
         "access: ALLOW_UNAUTHENTICATED=true -> in-Worker Access verification DISABLED (edge gate only). NOT for a public/multi-tenant deploy; arm ACCESS_TEAM_DOMAIN + ACCESS_AUD instead.",
       );
