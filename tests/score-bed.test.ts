@@ -21,7 +21,7 @@ describe("score-bed helpers", () => {
     const music = {
       name: "music-gen",
       version: "0.1.0",
-      api: "vivijure-module/1" as const,
+      api: "vivijure-module/2" as const,
       binding: "MODULE_MUSIC_GEN",
       hooks: ["score" as const],
       config_schema: { prompt: { type: "string" as const, default: "" } },
@@ -29,7 +29,7 @@ describe("score-bed helpers", () => {
     const narration = {
       name: "narration-gen",
       version: "0.1.0",
-      api: "vivijure-module/1" as const,
+      api: "vivijure-module/2" as const,
       binding: "MODULE_NARRATION_GEN",
       hooks: ["score" as const],
       config_schema: { text: { type: "string" as const, default: "" } },

@@ -1,0 +1,18 @@
+- generic [active] [ref=f3e1]:
+  - banner [ref=f3e2]:
+    - link "Vivijure studio" [ref=f3e3] [cursor=pointer]:
+      - /url: https://vivijure-studio.vivijure-coldrun.workers.dev/planner
+      - generic [ref=f3e4]: Vivijure
+    - generic [ref=f3e5]: connecting...
+    - button "Account and tools" [ref=f3e7] [cursor=pointer]:
+      - img [ref=f3e8]
+  - main [ref=f3e11]:
+    - generic [ref=f3e12]:
+      - heading "Module host" [level=1] [ref=f3e13]
+      - paragraph [ref=f3e14]: Each stage is served by installed modules. Bind a module worker and its settings appear here; bind none and the stage stays empty or falls back to the core default.
+    - generic [ref=f3e15]:
+      - region "Stages" [ref=f3e16]:
+        - heading "Stages" [level=2] [ref=f3e17]
+        - generic [ref=f3e18]: loading...
+      - complementary "Installed modules" [ref=f3e19]:
+        - heading "Installed modules" [level=2] [ref=f3e20]

@@ -26,7 +26,7 @@ describe("mapRenderOverridesToModuleConfigs", () => {
     {
       name: "keyframe",
       version: "0.1.0",
-      api: "vivijure-module/1" as const,
+      api: "vivijure-module/2" as const,
       binding: "MODULE_KEYFRAME",
       hooks: ["keyframe" as const],
       config_schema: {
@@ -41,7 +41,7 @@ describe("mapRenderOverridesToModuleConfigs", () => {
     {
       name: "own-gpu",
       version: "0.1.0",
-      api: "vivijure-module/1" as const,
+      api: "vivijure-module/2" as const,
       binding: "MODULE_OWN_GPU",
       hooks: ["motion.backend" as const],
       config_schema: {

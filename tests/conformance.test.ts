@@ -4,7 +4,7 @@ import { checkManifest, checkInvokeResponse, checkCancelResponse, checkHookOutpu
 const goodManifest = {
   name: "demo",
   version: "1.0.0",
-  api: "vivijure-module/1",
+  api: "vivijure-module/2",
   hooks: ["finish"],
   provides: [{ id: "x", label: "X" }],
   config_schema: {

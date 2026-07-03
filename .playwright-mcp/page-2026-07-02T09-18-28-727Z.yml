@@ -1,0 +1,105 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - link "Vivijure studio" [ref=e3] [cursor=pointer]:
+      - /url: http://127.0.0.1:8790/planner
+      - generic [ref=e4]: Vivijure
+    - button "Account & tools" [ref=e6] [cursor=pointer]:
+      - img [ref=e7]
+  - main [ref=e10]:
+    - region "Saved session" [ref=e11]:
+      - paragraph [ref=e12]: You have a saved planner session from 7/2/2026, 10:49:30 AM. Resume it, or start with a blank page.
+      - generic [ref=e13]:
+        - button "Resume saved session" [ref=e14] [cursor=pointer]
+        - button "Start fresh" [ref=e15] [cursor=pointer]
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - heading "Storyboard planner" [level=1] [ref=e19]
+        - paragraph [ref=e20]: Plan a film, assemble the training bundle, and submit a GPU render. One step at a time.
+      - button "New session" [ref=e21] [cursor=pointer]
+    - navigation "storyboard stages" [ref=e22]:
+      - button "1 Plan" [ref=e23] [cursor=pointer]:
+        - generic [ref=e24]: "1"
+        - generic [ref=e25]: Plan
+      - button "2 Cast & Bundle" [disabled] [ref=e26]:
+        - generic [ref=e27]: "2"
+        - generic [ref=e28]: Cast & Bundle
+      - button "3 Audio" [disabled] [ref=e29]:
+        - generic [ref=e30]: "3"
+        - generic [ref=e31]: Audio
+      - button "4 Render" [disabled] [ref=e32]:
+        - generic [ref=e33]: "4"
+        - generic [ref=e34]: Render
+      - button "5 History" [ref=e35] [cursor=pointer]:
+        - generic [ref=e36]: "5"
+        - generic [ref=e37]: History
+    - generic [ref=e38]:
+      - heading "project" [level=2] [ref=e40]
+      - generic [ref=e41]:
+        - generic [ref=e42]:
+          - generic [ref=e43]: active project
+          - combobox "active project" [ref=e44]:
+            - option "(no project, transient)" [selected]
+        - button "+ new project" [ref=e45] [cursor=pointer]
+        - button "save storyboard to project" [disabled] [ref=e46]
+        - button "delete project" [disabled] [ref=e47]
+    - generic [ref=e48]:
+      - heading "plan" [level=2] [ref=e49]
+      - generic [ref=e50]:
+        - generic [ref=e51]: model
+        - combobox "model" [ref=e52]:
+          - option "Claude Opus 4.8 (Anthropic)" [selected]
+          - option "Claude Opus 4.7 (Anthropic)"
+          - option "Claude Sonnet 4.6 (Anthropic)"
+      - generic [ref=e53]:
+        - generic [ref=e54]: brief
+        - textbox "brief" [ref=e55]:
+          - /placeholder: "describe the film: setting, mood, length, key beats, who should appear and when..."
+      - generic [ref=e56]:
+        - generic [ref=e57]:
+          - generic [ref=e58]: cast (slot A through D, optional, check to include)
+          - button "new / reset" [ref=e59] [cursor=pointer]
+        - generic [ref=e60]:
+          - generic [ref=e61]:
+            - generic [ref=e62]:
+              - checkbox "slot A" [ref=e63]
+              - text: slot A
+            - combobox "load a persisted cast member (manage at /cast)" [ref=e64]:
+              - option "inline (type here)" [selected]
+            - textbox "name (e.g. Elena)" [disabled] [ref=e65]
+            - 'textbox "bible: condensed appearance description" [disabled] [ref=e66]'
+          - generic [ref=e67]:
+            - generic [ref=e68]:
+              - checkbox "slot B" [ref=e69]
+              - text: slot B
+            - combobox "load a persisted cast member (manage at /cast)" [ref=e70]:
+              - option "inline (type here)" [selected]
+            - textbox "name (e.g. Elena)" [disabled] [ref=e71]
+            - 'textbox "bible: condensed appearance description" [disabled] [ref=e72]'
+          - generic [ref=e73]:
+            - generic [ref=e74]:
+              - checkbox "slot C" [ref=e75]
+              - text: slot C
+            - combobox "load a persisted cast member (manage at /cast)" [ref=e76]:
+              - option "inline (type here)" [selected]
+            - textbox "name (e.g. Elena)" [disabled] [ref=e77]
+            - 'textbox "bible: condensed appearance description" [disabled] [ref=e78]'
+          - generic [ref=e79]:
+            - generic [ref=e80]:
+              - checkbox "slot D" [ref=e81]
+              - text: slot D
+            - combobox "load a persisted cast member (manage at /cast)" [ref=e82]:
+              - option "inline (type here)" [selected]
+            - textbox "name (e.g. Elena)" [disabled] [ref=e83]
+            - 'textbox "bible: condensed appearance description" [disabled] [ref=e84]'
+      - button "plan" [ref=e86] [cursor=pointer]
+    - generic [ref=e87]:
+      - button "← back" [disabled] [ref=e88]
+      - button "next →" [disabled] [ref=e89]
+  - button "Screenwriter" [ref=e90] [cursor=pointer]:
+    - generic [ref=e91]: ✎
+    - generic [ref=e92]: Screenwriter
+  - complementary "Screenwriter's Assistant" [ref=e93]:
+    - generic [ref=e94]:
+      - heading "Screenwriter's Assistant" [level=2] [ref=e96]
+      - button "Close assistant" [ref=e97] [cursor=pointer]: ×
+    - paragraph [ref=e99]: Draft a storyboard first, then I can help you revise it scene by scene.

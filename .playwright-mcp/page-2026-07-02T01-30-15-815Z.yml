@@ -1,0 +1,23 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - link "Vivijure studio" [ref=e3] [cursor=pointer]:
+      - /url: https://vivijure-studio.vivijure-coldrun.workers.dev/planner
+      - generic [ref=e4]: Vivijure
+    - generic [ref=e5]: offline
+    - button "Account and tools" [ref=e7] [cursor=pointer]:
+      - img [ref=e8]
+  - main [ref=e11]:
+    - generic [ref=e12]:
+      - heading "Module host" [level=1] [ref=e13]
+      - paragraph [ref=e14]: Each stage is served by installed modules. Bind a module worker and its settings appear here; bind none and the stage stays empty or falls back to the core default.
+    - generic [ref=e15]:
+      - region "Stages" [ref=e16]:
+        - heading "Stages" [level=2] [ref=e17]
+        - generic [ref=e18]: "Could not reach the registry: /api/modules -> 403"
+      - complementary "Installed modules" [ref=e19]:
+        - heading "Installed modules" [level=2] [ref=e20]
+  - generic [ref=e22]:
+    - heading "Studio API token" [level=2] [ref=e23]
+    - paragraph [ref=e24]: This studio requires its API token (printed once at the end of deploy.sh). Paste it to continue; it is kept in this browser only.
+    - textbox "paste your token" [active] [ref=e25]
+    - button "Unlock studio" [ref=e26] [cursor=pointer]

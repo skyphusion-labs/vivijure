@@ -15,9 +15,10 @@ export const MODULE_API = "vivijure-module/2" as const;
 // first-party /1 modules keep loading while they migrate: they never read that field, so a /2 host
 // (which sends none) is functionally fine for them. A simultaneous 28-module cutover would be riskier.
 export type ModuleApi = "vivijure-module/1" | "vivijure-module/2";
-// A SET of currently-supported contract epochs (a deprecation window), not a brittle exact-match:
-// the host loads any module whose api is in the set, so /1 modules keep working while they migrate.
-export const SUPPORTED_MODULE_APIS: ReadonlySet<ModuleApi> = new Set(["vivijure-module/1", "vivijure-module/2"]);
+// A SET of currently-supported contract epochs, not a brittle exact-match. The /1 deprecation
+// window from #293 is CLOSED (#294): every first-party module is /2 and /1 manifests are rejected.
+// The ModuleApi union above keeps /1 nameable as a historical epoch; this Set is the policy.
+export const SUPPORTED_MODULE_APIS: ReadonlySet<ModuleApi> = new Set(["vivijure-module/2"]);
 
 /** The pipeline extension points. `pick one` hooks resolve to a single module; `chain` hooks run
  *  every installed module in `ui.order`, each consuming the previous output. */

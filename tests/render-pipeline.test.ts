@@ -5,7 +5,7 @@ import type { RegisteredModule } from "../src/modules/types";
 const mod = (over: Partial<RegisteredModule>): RegisteredModule => ({
   name: "m",
   version: "1.0.0",
-  api: "vivijure-module/1",
+  api: "vivijure-module/2",
   hooks: [],
   binding: "MODULE_M",
   ...over,
