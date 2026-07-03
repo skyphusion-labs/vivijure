@@ -1,4 +1,4 @@
-# speech-upscale module worker (vivijure-module/1): dialogue SPEECH enhancement (resemble-enhance) on
+# speech-upscale module worker (vivijure-module/2): dialogue SPEECH enhancement (resemble-enhance) on
 # the dedicated vivijure-audio-upscale RunPod endpoint (CUDA). Bound into the core as
 # MODULE_SPEECH_UPSCALE; the registry discovers it from GET /module.json.
 #

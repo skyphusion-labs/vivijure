@@ -1,6 +1,6 @@
 # speech-upscale
 
-A first-class **`speech`**-hook module (vivijure-module/1). It enhances one shot's **dialogue
+A first-class **`speech`**-hook module (vivijure-module/2). It enhances one shot's **dialogue
 audio** with [resemble-enhance](https://github.com/resemble-ai/resemble-enhance) (denoise + restore +
 bandwidth-extend), dispatched to the dedicated **vivijure-audio-upscale** RunPod endpoint (CUDA).
 

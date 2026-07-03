@@ -1,6 +1,6 @@
-// Vendored subset of the Vivijure module contract (vivijure-module/1) for the narration-gen module.
+// Vendored subset of the Vivijure module contract (vivijure-module/2) for the narration-gen module.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "score";
 
@@ -23,7 +23,7 @@ export interface ModuleManifest {
   ui?: ModuleUi;
 }
 
-export interface InvokeContext { project: string; job_id: string; user_email?: string; }
+export interface InvokeContext { project: string; job_id: string; }
 export interface InvokeRequest<I = unknown> {
   hook: HookName;
   input: I;
