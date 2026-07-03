@@ -9,6 +9,7 @@
 // behind CF Access; no per-user ownership stamp).
 import type { Env } from "./env";
 import type { RunpodJobView } from "./runpod-submit";
+import { secretValue } from "./secret-store";
 
 // Conventional R2 key for a job's log. The History UI derives the same key from
 // the row's job_id, so there is nothing to store in D1.
@@ -143,8 +144,9 @@ export async function writeCloudAnimateLog(
     // missing log id neither blocks the others nor drops the file; a failed lookup
     // just leaves gateway_log undefined and is logged rather than swallowed silently.
     let shots = input.shots;
-    if (gw && env.GATEWAY_ID) {
-      const gateway = gw(env.GATEWAY_ID);
+    const gatewayId = await secretValue(env.GATEWAY_ID);
+    if (gw && gatewayId) {
+      const gateway = gw(gatewayId);
       shots = await Promise.all(
         input.shots.map(async (s) => {
           if (!s.log_id) return { ...s };

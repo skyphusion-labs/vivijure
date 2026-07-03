@@ -21,6 +21,7 @@ import type { Env } from "../env";
 import type { ModelEntry } from "../models";
 import type { ProviderStreamEvent } from "../parsers/types";
 import { parseDataUrl } from "../utils";
+import { secretValue } from "../secret-store";
 import { extractSSEDataPayloads } from "../parsers/sse-framer";
 import { interpretAnthropicSSEFrame } from "../parsers/anthropic-sse";
 
@@ -92,7 +93,7 @@ async function prepareAnthropicRequest(
 
   const baseUrl = await (env.AI as unknown as {
     gateway: (id: string) => { getUrl: (provider: string) => Promise<string> };
-  }).gateway(env.GATEWAY_ID).getUrl("anthropic");
+  }).gateway(await secretValue(env.GATEWAY_ID)).getUrl("anthropic");
 
   // Strip the "anthropic/" prefix we use in our internal IDs; Anthropic's API
   // expects just the model name (e.g. "claude-opus-4-6").
@@ -113,12 +114,13 @@ async function prepareAnthropicRequest(
   if (opts.stream) headers["accept"] = "text/event-stream";
   // Unified Billing: keyless. Never send x-api-key (that would make the
   // gateway bill BYOK/pass-through); authorize with the gateway token only.
-  if (!env.CF_AIG_TOKEN) {
+  const aigToken = await secretValue(env.CF_AIG_TOKEN);
+  if (!aigToken) {
     throw new Error(
       "Anthropic runs on Cloudflare Unified Billing and requires CF_AIG_TOKEN; set it with `npx wrangler secret put CF_AIG_TOKEN`.",
     );
   }
-  headers["cf-aig-authorization"] = `Bearer ${env.CF_AIG_TOKEN}`;
+  headers["cf-aig-authorization"] = `Bearer ${aigToken}`;
 
   return {
     url: `${baseUrl}/v1/messages`,

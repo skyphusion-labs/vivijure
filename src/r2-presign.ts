@@ -12,6 +12,7 @@
 
 import type { Env } from "./env";
 import { isPresignSafeKey } from "./shared";
+import { secretValue } from "./secret-store";
 
 const ENC = new TextEncoder();
 
@@ -68,9 +69,9 @@ export interface R2PresignConfig {
   bucket: string;
 }
 
-function configFromEnv(env: Env): R2PresignConfig {
-  const accessKeyId = env.R2_S3_ACCESS_KEY_ID;
-  const secretAccessKey = env.R2_S3_SECRET_ACCESS_KEY;
+async function configFromEnv(env: Env): Promise<R2PresignConfig> {
+  const accessKeyId = await secretValue(env.R2_S3_ACCESS_KEY_ID);
+  const secretAccessKey = await secretValue(env.R2_S3_SECRET_ACCESS_KEY);
   const endpoint = env.R2_S3_ENDPOINT;
   const bucket = env.R2_S3_BUCKET;
   if (!accessKeyId || !secretAccessKey || !endpoint || !bucket) {
@@ -154,9 +155,9 @@ export async function presignR2WithConfig(
 export const FILM_DOWNLOAD_TTL_SECONDS = 6 * 60 * 60; // 6h
 
 export function presignR2Get(env: Env, key: string, expiresSeconds = 300): Promise<string> {
-  return presignR2WithConfig(configFromEnv(env), "GET", key, expiresSeconds);
+  return configFromEnv(env).then((cfg) => presignR2WithConfig(cfg, "GET", key, expiresSeconds));
 }
 
 export function presignR2Put(env: Env, key: string, expiresSeconds = 300): Promise<string> {
-  return presignR2WithConfig(configFromEnv(env), "PUT", key, expiresSeconds);
+  return configFromEnv(env).then((cfg) => presignR2WithConfig(cfg, "PUT", key, expiresSeconds));
 }
