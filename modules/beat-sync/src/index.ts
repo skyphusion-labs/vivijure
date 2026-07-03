@@ -1,4 +1,4 @@
-// beat-sync: a `score` module worker (vivijure-module/1). Runs librosa beat analysis on the
+// beat-sync: a `score` module worker (vivijure-module/2). Runs librosa beat analysis on the
 // always-on audio-beat-sync container over Workers VPC (Hetzner fleet; issue #83).
 //
 // SYNC: analysis completes in one invoke (no /poll). The core presigns the audio bed and passes
@@ -27,7 +27,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "beat-sync",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["score"],
   provides: [{ id: "librosa-beat-sync", label: "Beat sync (librosa, fleet VPC)" }],

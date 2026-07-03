@@ -1,4 +1,4 @@
-# music-gen module worker (vivijure-module/1): MiniMax Music 2.6 via Workers AI for the `score`
+# music-gen module worker (vivijure-module/2): MiniMax Music 2.6 via Workers AI for the `score`
 # hook (music / narration / beat-sync chain). Bound as MODULE_MUSIC_GEN.
 # account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
 
@@ -12,7 +12,8 @@ workers_dev = false
 enabled = true
 
 # Workers AI + AI Gateway (same pattern as cast-image proxied models).
-#   ! npx wrangler secret put GATEWAY_ID -c modules/music-gen/wrangler.toml
+#   GATEWAY_ID is now bound from the account-level Cloudflare Secrets Store
+#   (see the [[secrets_store_secrets]] block at the end of this file); no `wrangler secret put` needed.
 [ai]
 binding = "AI"
 
@@ -27,3 +28,12 @@ bucket_name = "vivijure"
 name = "music-gen-score"
 binding = "SCORE_WORKFLOW"
 class_name = "MusicGenWorkflow"
+
+# GATEWAY_ID (the AI Gateway slug) is bound from the account-level Cloudflare Secrets Store --
+# declarative config that every `wrangler deploy` re-establishes; seeded ONCE by the operator from the
+# crew secret store, never in CI/GitHub. Set store_id at cutover.
+# See docs/DEPLOYMENT.md "Module secrets via the Secrets Store".
+[[secrets_store_secrets]]
+binding = "GATEWAY_ID"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "GATEWAY_ID"

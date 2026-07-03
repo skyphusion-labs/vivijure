@@ -1,6 +1,6 @@
 # cast-image
 
-A first-class **`cast.image`**-hook module (vivijure-module/1). It generates a character's LoRA
+A first-class **`cast.image`**-hook module (vivijure-module/2). It generates a character's LoRA
 **training reference set** from a portrait + bible, via the studio's image models (FLUX 2 Klein / Nano
 Banana Pro) with a safety-flag fallback.
 

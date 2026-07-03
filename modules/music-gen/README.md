@@ -1,6 +1,6 @@
 # music-gen
 
-A `score`-hook module (vivijure-module/1). It generates a **music bed for the whole film** with
+A `score`-hook module (vivijure-module/2). It generates a **music bed for the whole film** with
 [MiniMax Music 2.6](https://www.minimax.io/) through Workers AI and the AI Gateway (Unified Billing,
 keyless), then writes the track to R2 for muxing onto the assembled film.
 

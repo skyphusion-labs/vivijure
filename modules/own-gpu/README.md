@@ -1,6 +1,6 @@
 # own-gpu
 
-A first-class **`motion.backend`**-hook module (vivijure-module/1). It animates each start keyframe into
+A first-class **`motion.backend`**-hook module (vivijure-module/2). It animates each start keyframe into
 a clip (image-to-video, Wan2.2-I2V) on **your own GPU** via the **vivijure-backend** RunPod endpoint
 (`i2v_clip` action).
 

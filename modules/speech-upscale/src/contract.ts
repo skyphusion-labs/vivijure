@@ -1,11 +1,11 @@
-// Vendored from src/modules/types.ts (vivijure-module/1). Copy only what this module needs so it
+// Vendored from src/modules/types.ts (vivijure-module/2). Copy only what this module needs so it
 // stays independent of the core repo. Do not import from the core directly.
 //
 // speech-upscale is a `speech`-hook module: it enhances ONE shot's dialogue audio (audio_key in ->
 // enhanced audio_key out). The speech chain runs between the dialogue (TTS) phase and the finish
 // phase, so finish-lipsync (MuseTalk) drives off the cleaned audio. Pure audio -- no clip, no video.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "motion.backend" | "dialogue" | "speech" | "finish" | "score" | "plan.enhance";
 
@@ -30,7 +30,7 @@ export interface ModuleManifest {
   ui?: ModuleUi;
 }
 
-export interface InvokeContext { project: string; job_id: string; user_email?: string; }
+export interface InvokeContext { project: string; job_id: string; }
 
 export interface InvokeRequest<I = unknown> {
   hook: HookName;

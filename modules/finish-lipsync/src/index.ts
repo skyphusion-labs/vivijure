@@ -1,4 +1,4 @@
-// finish-lipsync: a finish module worker (vivijure-module/1). MuseTalk audio-driven lip-sync,
+// finish-lipsync: a finish module worker (vivijure-module/2). MuseTalk audio-driven lip-sync,
 // dispatched to the dedicated vivijure-musetalk RunPod endpoint (cu128; separate from vivijure-backend).
 // Rewrites a shot's mouth to match its dialogue audio -- the "talking characters" finish stage.
 //
@@ -36,7 +36,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "finish-lipsync",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["finish"],
   provides: [
