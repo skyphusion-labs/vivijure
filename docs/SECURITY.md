@@ -82,10 +82,12 @@ up front so an out-of-bounds range is answered `416` rather than mistaken for a 
 The three externally-addressable resource tables (`cast_members`, `storyboard_projects`, `renders`)
 expose a `public_id` -- a UUID v4, 122 bits of entropy (`src/public-id.ts`, migration 0010) -- as
 the ONLY id that leaves the core over the API. The internal `INTEGER PRIMARY KEY` never crosses the
-boundary; it stays the join/FK key inside D1. Every `:id` route -- `/api/cast/:id`
-(get/patch/delete/**export**), `/api/storyboard/projects/:id`, `/api/storyboard/renders/:id`,
-`/api/render/film/:id` -- and every request BODY that names a resource (e.g. the planner's cast
-slots) accepts ONLY the public_id and resolves it to a row. A bare sequential integer is not a valid
+boundary; it stays the join/FK key inside D1. Every RESOURCE `:id` route -- `/api/cast/:id`
+(get/patch/delete/**export**), `/api/storyboard/projects/:id`, `/api/storyboard/renders/:id` -- and
+every request BODY that names a resource (e.g. the planner's cast slots) accepts ONLY the public_id
+and resolves it to a row. (`/api/render/film/:id` is keyed by the film JOB UUID `film-<uuid>`, which
+was already opaque before S9 and is untouched by this change: it is the same capability model
+(section 2), a different id class, not a resource public_id.) A bare sequential integer is not a valid
 public id, so it is rejected at the shape gate (`isPublicId`) and again at the lookup (no row carries
 it): the request `404`s. The enumeration walk -- count 1, 2, 3, or `GET /api/cast/export/:id` to pull
 a whole character bundle by guessing its id -- is therefore DEAD, at the shape level and at the
