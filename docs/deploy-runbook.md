@@ -178,7 +178,9 @@ Shipped as `modules/audio-master/` (service `vivijure-module-audio-master`, core
 loudness) on the always-on `audio-master` CPU container on the fleet over Workers VPC -- pure CPU
 ffmpeg, NEVER RunPod/GPU (GPU money is for GPU work only). The module worker is CREDENTIALLESS: it
 holds no R2 creds and no RunPod key, so there are NO secrets to set -- the core presigns the R2 URLs
-and the worker reaches the container over the `AUDIO_MASTER_VPC` binding.
+and the worker reaches the container over the `AUDIO_MASTER_VPC` binding. (NOTE, post-ship: the audio
+bed / master VPC binding shipped as `AUDIO_MIX_VPC` in the current `wrangler.toml`; this historical
+runbook keeps the older working name `AUDIO_MASTER_VPC` throughout -- read the two as the same binding.)
 
 Deploy the module worker (no secrets):
 

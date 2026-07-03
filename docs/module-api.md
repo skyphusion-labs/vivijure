@@ -1,6 +1,6 @@
 # Vivijure Module API
 
-> Status: **IMPLEMENTED** (`vivijure-module/2`; `/1` accepted transitionally). The contract the core and modules share. This
+> Status: **IMPLEMENTED** (`vivijure-module/2`; the `/1` window is closed, no longer accepted). The contract the core and modules share. This
 > document is the design spec; `src/modules/types.ts` is the canonical TypeScript shape.
 
 ## Why this exists
@@ -59,7 +59,7 @@ Served by the module at `GET /module.json`. The core reads it once to register t
 {
   "name": "finish-rife",                 // unique module id
   "version": "0.1.0",
-  "api": "vivijure-module/2",            // contract version this module targets (/1 still accepted)
+  "api": "vivijure-module/2",            // contract version this module targets (/1 is closed)
   "hooks": ["finish"],                   // which hooks it serves
   "provides": [                          // user-facing capabilities (one module may offer several)
     { "id": "interpolate", "label": "Smooth motion (frame interpolation)" },
@@ -268,12 +268,14 @@ That is the whole barrier to entry. One hook, one green suite.
 - **Phase 2 (done for production cutover):** `vivijure.skyphusion.org` points here; render + planner
   stripped from `skyphusion-llm-public`. Optional polish (render SSE stream, further core extraction)
   remains fair game.
-- **Phase 3 (backlog):** Workers for Platforms / dynamic dispatch so a module installs without
-  redeploying the core. The frontend is already a projection of the registry, so it needs no change.
+- **Phase 3 (done, v0.8.0):** Workers for Platforms / dynamic dispatch so a module installs without
+  redeploying the core (opt-in, paid; a standard self-host never needs it). The frontend is already a
+  projection of the registry, so it needed no change.
 
 ## Non-goals (v1)
 
 - No module-to-module calls. Modules talk only to the core, through hooks. (Keeps the graph a star,
   not a web.)
-- No dynamic install yet (Phase 3). v1 modules are bound at deploy.
+- Dynamic install shipped in Phase 3 (WfP dynamic dispatch, v0.8.0); it is opt-in and paid, and the
+  default self-host still binds modules at deploy.
 - Capabilities beyond the render spine belong in modules, not inlined in the core.

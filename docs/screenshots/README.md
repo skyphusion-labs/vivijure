@@ -1,7 +1,7 @@
 # Screenshots
 
 These images appear in the top-level README. Capture them against the live planner
-at vivijure.skyphusion.org (Cloudflare Access gated -- use Conrad's browser session).
+at vivijure.skyphusion.org (studio-token gated -- use Conrad's browser session with the token pasted).
 
 ## Needed files
 

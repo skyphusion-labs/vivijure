@@ -71,7 +71,7 @@ into `${NAME}` tokens. What is parameterized here, and why each is a value not s
 | `${D1_DATABASE_ID}` | the D1 database UUID |
 | `${VPC_VIDEO_FINISH_ID}` / `${VPC_IMAGE_PREP_ID}` / `${VPC_AUDIO_BEAT_SYNC_ID}` / `${VPC_AUDIO_MIX_ID}` | Workers-VPC service IDs |
 | `${SPEND_RATE_LIMITER_NS_ID}` | the rate-limit namespace id |
-| `${AUTH_MODE}` | the #423 auth-gate mode: `token` (the self-host default) or `access` (our prod posture) |
+| `${AUTH_MODE}` | the #423 auth-gate mode: `token` (the default, including our prod) or `access` (optional hardening) |
 | `${WEB_ANALYTICS_TOKEN}` | optional CF Web Analytics beacon token for `/welcome`; blank = no beacon ships |
 
 `account_id` is **not** in the file at all -- wrangler reads it from `CLOUDFLARE_ACCOUNT_ID` (already a
