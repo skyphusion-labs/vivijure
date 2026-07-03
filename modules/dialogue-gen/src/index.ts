@@ -1,4 +1,4 @@
-// dialogue-gen: a `dialogue` module worker (vivijure-module/1). Voices each speaking shot's line with
+// dialogue-gen: a `dialogue` module worker (vivijure-module/2). Voices each speaking shot's line with
 // Deepgram Aura-1 on Workers AI, in the cast member's assigned voice, and writes one WAV per shot to
 // R2. The core attaches each audio_key to that shot's FinishInput so finish-lipsync can drive the
 // mouth from it -- the "talking characters" pipeline's audio stage.
@@ -76,7 +76,7 @@ export interface WorkflowParams {
 
 const MANIFEST: ModuleManifest = {
   name: "dialogue-gen",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["dialogue"],
   provides: [{ id: "aura1", label: "Dialogue voices (Deepgram Aura-1)" }],

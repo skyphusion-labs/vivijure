@@ -1,4 +1,4 @@
-# subtitle module worker (vivijure-module/1): time-synced dialogue captions burned onto the assembled
+# subtitle module worker (vivijure-module/2): time-synced dialogue captions burned onto the assembled
 # film (and/or a soft .srt sidecar), via the video-finish CPU container's /subtitle route (Workers
 # VPC). A film.finish hook. Bound into the core as MODULE_SUBTITLE; the registry discovers it from
 # GET /module.json.

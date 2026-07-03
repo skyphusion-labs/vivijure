@@ -1,4 +1,4 @@
-// text-overlay: a finish module worker (vivijure-module/1). Burns text overlays (titles, credits,
+// text-overlay: a finish module worker (vivijure-module/2). Burns text overlays (titles, credits,
 // lower-thirds, subtitles) onto a rendered clip via ffmpeg drawtext, running in the always-on
 // video-finish CPU container over Workers VPC (VIDEO_FINISH_VPC).
 //
@@ -45,7 +45,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "text-overlay",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["finish"],
   provides: [{ id: "text-overlay", label: "Text overlay (titles / credits / subtitles)" }],
