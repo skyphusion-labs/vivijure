@@ -3,6 +3,26 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.12.1
+
+**The #238 Secrets Store migration completes on the core worker, the R2 S3 presign identifiers
+become `[vars]`, and plan-enhance rejoins the deploy loop. Config + deploy only; no behavior change.**
+
+- **Core Secrets Store migration deploys (#238 / #473).** The studio worker's `CF_AIG_TOKEN`,
+  `GATEWAY_ID`, `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID` (store `secret_name` `BACKEND_RUNPOD_ENDPOINT_ID`),
+  `R2_S3_ACCESS_KEY_ID` and `R2_S3_SECRET_ACCESS_KEY` move from `wrangler secret put` to declarative
+  `[[secrets_store_secrets]]` bindings; the tag deploy replaces the stale `secret_text` in place.
+  `STUDIO_API_TOKEN` stays an operator-minted worker secret. Values are seeded once in the crew
+  Secrets Store and never touch CI/GitHub.
+- **R2 S3 presign identifiers -> `[vars]` (#475).** `R2_S3_ENDPOINT` + `R2_S3_BUCKET` are identifiers,
+  not secrets, so they render into `wrangler.toml` `[vars]` at deploy from `CLOUDFLARE_ACCOUNT_ID`
+  (no wrangler secret, no new CI variable).
+- **plan-enhance un-excluded (#476).** Its `PLAN_ENHANCE_CF_AIG_TOKEN` store secret is now seeded, so
+  the module rejoins the CI module deploy loop.
+- **AUTH_MODE render fails loud when unset.** The core render no longer defaults an unset `AUTH_MODE`
+  to `access`; it errors instead (mirroring `deploy.sh`). Since the whole-hostname Access app was
+  removed, a silent `access` default would mis-posture prod. `vars.AUTH_MODE` must be set explicitly.
+
 ## v0.12.0
 
 **The module-api/1 deprecation window closes and the Secrets Store migration lands, and prod edge auth
