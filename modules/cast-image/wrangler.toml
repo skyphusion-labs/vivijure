@@ -1,4 +1,4 @@
-# cast-image module worker (vivijure-module/1): generates a character's LoRA TRAINING reference set
+# cast-image module worker (vivijure-module/2): generates a character's LoRA TRAINING reference set
 # from a portrait + bible via the studio image models (FLUX 2 Klein / Nano Banana Pro), with the
 # safety-flag fallback. A server-side lift of public/cast.js's generateTrainingSet -- swappable, and
 # no longer blocking the cast page. Bound into the core as MODULE_CAST_IMAGE; the registry discovers

@@ -1,7 +1,7 @@
-// Vendored subset of the Vivijure module contract (vivijure-module/1) for the cast-image module.
+// Vendored subset of the Vivijure module contract (vivijure-module/2) for the cast-image module.
 // Matches src/modules/types.ts for the shapes used here. Dependency-free.
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "cast.image" | "keyframe" | "motion.backend" | "finish" | "score" | "plan.enhance";
 
@@ -24,7 +24,7 @@ export interface ModuleManifest {
   ui?: ModuleUi;
 }
 
-export interface InvokeContext { project: string; job_id: string; user_email?: string; }
+export interface InvokeContext { project: string; job_id: string; }
 export interface InvokeRequest<I = unknown> {
   hook: HookName;
   input: I;
@@ -41,7 +41,7 @@ export type PollResponse<O = unknown> =
   | { ok: true; output: O }
   | { ok: false; error: string };
 
-// cast.image payloads (vivijure-module/1). portrait_url / source_urls are presigned, fetchable URLs
+// cast.image payloads (vivijure-module/2). portrait_url / source_urls are presigned, fetchable URLs
 // (the core presigns the private R2 objects so the image model can pull them).
 export interface CastImageInput {
   cast_id: number;
