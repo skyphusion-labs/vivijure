@@ -474,7 +474,7 @@ function renderHistoryList(rows, totalRows) {
   const childrenByParent = new Map();
   const all = Array.isArray(historyState.rows) ? historyState.rows : rows;
   for (const x of all) {
-    if (typeof x.parent_id !== "number") continue;
+    if (typeof x.parent_id !== "string") continue;
     const list2 = childrenByParent.get(x.parent_id);
     if (list2) list2.push(x);
     else childrenByParent.set(x.parent_id, [x]);
@@ -493,7 +493,7 @@ function renderHistoryList(rows, totalRows) {
   }
 
   for (const r of rows) {
-    if (typeof r.parent_id === "number" && scatterParentIds.has(r.parent_id)) {
+    if (typeof r.parent_id === "string" && scatterParentIds.has(r.parent_id)) {
       continue;
     }
     list.appendChild(buildHistoryRow(r, childrenByParent));
