@@ -16,7 +16,8 @@ enabled = true
 
 # Image generation: FLUX 2 runs direct on the binding (multipart multiref); proxied models use the
 # AI Gateway. Set GATEWAY_ID before exercising the nano-banana fallback:
-#   ! npx wrangler secret put GATEWAY_ID -c modules/cast-image/wrangler.toml
+#   GATEWAY_ID is now bound from the account-level Cloudflare Secrets Store
+#   (see the [[secrets_store_secrets]] block at the end of this file); no `wrangler secret put` needed.
 [ai]
 binding = "AI"
 
@@ -31,3 +32,12 @@ binding = "IMAGES"
 [[r2_buckets]]
 binding = "R2_RENDERS"
 bucket_name = "vivijure"
+
+# GATEWAY_ID (the AI Gateway slug) is bound from the account-level Cloudflare Secrets Store --
+# declarative config that every `wrangler deploy` re-establishes; seeded ONCE by the operator from the
+# crew secret store, never in CI/GitHub. Set store_id at cutover.
+# See docs/DEPLOYMENT.md "Module secrets via the Secrets Store".
+[[secrets_store_secrets]]
+binding = "GATEWAY_ID"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "GATEWAY_ID"

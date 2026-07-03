@@ -41,7 +41,7 @@ import {
 } from "./wan-lora";
 
 interface Env {
-  RUNPOD_API_KEY: string;
+  RUNPOD_API_KEY: SecretsStoreSecret;
   R2_RENDERS: { put(key: string, value: ArrayBuffer): Promise<unknown> };
 }
 
@@ -69,13 +69,26 @@ const MANIFEST: ModuleManifest = {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
-const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
+const auth = (apiKey: string) => ({ authorization: "Bearer " + apiKey });
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
 
 /** Is the endpoint still in its virgin cold start (no worker has ever come up)? Best-effort: any
  *  transport/HTTP failure reads as "not cold" so the #141 verdict still fires. */
-async function endpointStillCold(env: Env): Promise<boolean> {
+async function endpointStillCold(apiKey: string): Promise<boolean> {
   try {
-    const r = await fetch(ENDPOINT + "/health", { headers: auth(env) });
+    const r = await fetch(ENDPOINT + "/health", { headers: auth(apiKey) });
     if (!r.ok) return false;
     return workersStillCold(await r.json());
   } catch {
@@ -86,9 +99,9 @@ async function endpointStillCold(env: Env): Promise<boolean> {
 /** Best-effort cancel of a RunPod job we are about to fail: a hung-error job otherwise HOLDS the
  *  billed worker until someone cancels it by hand (F17 spend leak). Never throws; the honest
  *  failure below is the point, the cancel is damage control. */
-async function cancelRunpodJobBestEffort(env: Env, jobId: string): Promise<void> {
+async function cancelRunpodJobBestEffort(apiKey: string, jobId: string): Promise<void> {
   try {
-    await fetch(ENDPOINT + "/cancel/" + jobId, { method: "POST", headers: auth(env) });
+    await fetch(ENDPOINT + "/cancel/" + jobId, { method: "POST", headers: auth(apiKey) });
   } catch {
     /* best-effort */
   }
@@ -101,7 +114,8 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
   if (!input || !input.keyframe_url || !input.prompt || !input.shot_id) {
     return { ok: false, error: "motion.backend: input needs shot_id, keyframe_url, and prompt" };
   }
-  if (!env.RUNPOD_API_KEY) return { ok: false, error: "alibaba-wan-lora: RUNPOD_API_KEY not configured" };
+  const apiKey = await secretValue(env.RUNPOD_API_KEY);
+  if (!apiKey) return { ok: false, error: "alibaba-wan-lora: RUNPOD_API_KEY not configured" };
   // Non-silent duration snap (#279): the endpoint only accepts ALLOWED_DURATIONS, so record when a
   // requested per-shot duration is snapped -- the user's timing change must be observable, never silent.
   const requestedDuration = Math.round(Number(input.seconds) || 5);
@@ -115,7 +129,7 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
   try {
     const r = await fetch(ENDPOINT + "/run", {
       method: "POST",
-      headers: { ...auth(env), "content-type": "application/json" },
+      headers: { ...auth(apiKey), "content-type": "application/json" },
       body: JSON.stringify(buildWanLoraBody(input, req.config)),
     });
     if (!r.ok) return { ok: false, error: "alibaba-wan-lora /run -> " + r.status };
@@ -136,12 +150,13 @@ async function submit(env: Env, req: InvokeRequest<MotionBackendInput>): Promise
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBackendOutput>> {
   const st = decodePoll(body.poll);
   if (!st) return { ok: false, error: "alibaba-wan-lora: bad poll token" };
-  if (!env.RUNPOD_API_KEY) return { ok: false, error: "alibaba-wan-lora: RUNPOD_API_KEY not configured" };
+  const apiKey = await secretValue(env.RUNPOD_API_KEY);
+  if (!apiKey) return { ok: false, error: "alibaba-wan-lora: RUNPOD_API_KEY not configured" };
 
   let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    const resp = await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(env) });
+    const resp = await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(apiKey) });
     httpStatus = resp.status;
     s = (await resp.json()) as typeof s;
   } catch {
@@ -159,7 +174,7 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBac
       // polling up to the cold cap instead of false-failing the first-ever job.
       if (
         classifyGoneState(st.submittedAt, now, RUNPOD_COLD_GRACE_MS) === "gone-grace" &&
-        (await endpointStillCold(env))
+        (await endpointStillCold(apiKey))
       ) {
         return { ok: true, pending: true };
       }
@@ -174,7 +189,7 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<MotionBac
     // terminal error. Surface the REAL error (never "not found") and cancel to stop the spend.
     const backendErr = terminalErrorInOutput(s.output);
     if (backendErr) {
-      await cancelRunpodJobBestEffort(env, st.jobId);
+      await cancelRunpodJobBestEffort(apiKey, st.jobId);
       return { ok: false, error: "alibaba-wan-lora backend error (job " + st.jobId + ", status stuck " + String(s.status ?? "unknown") + ", cancel issued): " + backendErr };
     }
     return { ok: true, pending: true }; // IN_QUEUE / IN_PROGRESS
