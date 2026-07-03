@@ -22,9 +22,10 @@ keyframes, and lip-sync all run **through RunPod**, so one RunPod key covers the
 ## ⚠️ Security requirement (read first): SINGLE-OPERATOR, auth-gated
 
 Vivijure is a **single-operator** studio. It does **NO per-user authorization** -- every `:id`
-route trusts the caller, ids are sequential/enumerable, and `GET /api/cast/export/:id` returns a
-full character bundle (portrait + LoRA + bible) by id. Every deploy MUST therefore run an auth
-gate. The studio has one BUILT IN; pick the mode with the `AUTH_MODE` worker var:
+route trusts the caller, and `GET /api/cast/export/:id` returns a full character bundle (portrait +
+LoRA + bible) by id. Resource ids are unguessable UUIDs as of S9 (migration 0010, defense-in-depth
+against enumeration), but that HARDENS the gate, it does not replace it: any caller who holds an id
+still gets the whole bundle. Every deploy MUST therefore run an auth gate. The studio has one BUILT IN; pick the mode with the `AUTH_MODE` worker var:
 
 - **`token` (the quickstart default):** the Worker itself requires
   `Authorization: Bearer <token>` on every `/api/*` request, checked against the

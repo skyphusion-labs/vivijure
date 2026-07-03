@@ -17,6 +17,7 @@ import type { Env } from "./env";
 import type { RunpodJobView } from "./runpod-submit";
 import { writeRenderLog } from "./render-log";
 import { withD1Retry } from "./d1-retry";
+import { newPublicId } from "./public-id";
 
 // Surface a corrupted *_json column instead of swallowing it silently (issue #15).
 // The empty / NULL case is handled by a length guard BEFORE the parse, so this only
@@ -60,7 +61,10 @@ export interface KeyframeRef {
 // the DB column names so the UI does not double-normalize. output_json is
 // parsed back to a JS object (or null when the row has none).
 export interface RenderRow {
+  // Internal autoincrement PK -- join/FK key, used by orchestration; NEVER leaves the core.
   id: number;
+  // Unguessable public id (UUID v4); toPublicRenderRow exposes it as the client-facing `id`.
+  public_id: string;
   job_id: string;
   project: string;
   bundle_key: string;
@@ -102,6 +106,32 @@ export interface RenderRow {
   // The UI uses it to union a derived animation back onto its keyframes and
   // to group the several versions (GPU + per-model cloud) of one keyframes set.
   parent_id: number | null;
+  // S9 (F13): the public ids of the referenced project / parent render, resolved via LEFT JOIN, so
+  // the client never sees a sequential FK integer. NULL when the FK is NULL (or the referent is gone).
+  project_public_id: string | null;
+  parent_public_id: string | null;
+}
+
+// The client-facing render shape: every id is the opaque public id (never a sequential integer).
+// The internal int id / project_id / parent_id are dropped; the FKs are exposed as their referents'
+// public ids so the UI groups/filters entirely in the opaque id-space (S9 F13).
+export type PublicRenderRow = Omit<RenderRow, "id" | "project_id" | "parent_id" | "public_id" | "project_public_id" | "parent_public_id"> & {
+  id: string;
+  project_id: string | null;
+  parent_id: string | null;
+};
+
+export function toPublicRenderRow(row: RenderRow): PublicRenderRow {
+  const {
+    id: _internalId,
+    project_id: _internalProjectId,
+    parent_id: _internalParentId,
+    public_id,
+    project_public_id,
+    parent_public_id,
+    ...rest
+  } = row;
+  return { ...rest, id: public_id, project_id: project_public_id, parent_id: parent_public_id };
 }
 
 // The renders row as D1 hands it back: TEXT -> string, INTEGER -> number,
@@ -112,6 +142,7 @@ export interface RenderRow {
 // Column order mirrors RENDER_ROW_COLUMNS below; keep the two in sync.
 interface RawRenderRow {
   id: number;
+  public_id: string;
   job_id: string;
   project: string | null;
   bundle_key: string | null;
@@ -134,16 +165,27 @@ interface RawRenderRow {
   folder_path: string | null;
   tags_json: string | null;
   parent_id: number | null;
+  project_public_id: string | null;
+  parent_public_id: string | null;
 }
 
 // The one column list every full-row SELECT uses, so the SQL and RawRenderRow
 // cannot drift apart independently in two call sites.
 const RENDER_ROW_COLUMNS = `
-      id, job_id, project, bundle_key, quality_tier,
-      render_overrides, status, output_key, output_json AS output,
-      error, execution_time_ms, delay_time_ms,
-      submitted_at, updated_at, completed_at, label, keyframes_json, mode,
-      locked_shots_json, project_id, folder_path, tags_json, parent_id`;
+      r.id, r.public_id, r.job_id, r.project, r.bundle_key, r.quality_tier,
+      r.render_overrides, r.status, r.output_key, r.output_json AS output,
+      r.error, r.execution_time_ms, r.delay_time_ms,
+      r.submitted_at, r.updated_at, r.completed_at, r.label, r.keyframes_json, r.mode,
+      r.locked_shots_json, r.project_id, r.folder_path, r.tags_json, r.parent_id,
+      p.public_id AS project_public_id, pr.public_id AS parent_public_id`;
+
+// The FROM + LEFT JOINs that resolve the FK columns to their referents' public ids. Kept as one
+// constant so the two full-row read sites (getRenderByIdForUser / listRendersForUser) cannot drift.
+// LEFT JOIN so a NULL FK (or a since-deleted referent) yields a NULL public id, never a dropped row.
+const RENDER_ROW_FROM = `
+    FROM renders r
+    LEFT JOIN storyboard_projects p ON r.project_id = p.id
+    LEFT JOIN renders pr ON r.parent_id = pr.id`;
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
@@ -219,12 +261,13 @@ export function buildInsertRenderStmt(env: Env, row: NewRenderRow) {
     : null;
   return env.DB.prepare(
     `INSERT INTO renders (
-      job_id, project, bundle_key, quality_tier,
+      public_id, job_id, project, bundle_key, quality_tier,
       render_overrides, status, submitted_at, updated_at, mode,
       project_id, parent_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(job_id) DO NOTHING`,
   ).bind(
+    newPublicId(),
     row.jobId,
     row.project,
     row.bundleKey,
@@ -810,14 +853,23 @@ export async function setRenderAudioOutput(
   return ((res.meta as { changes?: number } | undefined)?.changes ?? 0) > 0;
 }
 
+// Resolve an opaque public id to the internal integer PK (the :id route boundary for renders).
+// Null when no render carries that public_id -- a bare sequential integer matches nothing, so the
+// route 404s. INDEX-backed (idx_renders_public_id) unique lookup, mirroring getRenderIdByJobId.
+export async function getRenderIdByPublicId(env: Env, publicId: string): Promise<number | null> {
+  const r = await env.DB.prepare(`SELECT id FROM renders WHERE public_id = ? LIMIT 1`)
+    .bind(publicId)
+    .first<{ id: number }>();
+  return r ? Number(r.id) : null;
+}
+
 export async function getRenderByIdForUser(
   env: Env,
   id: number,
 ): Promise<RenderRow | null> {
   const r = await env.DB.prepare(
-    `SELECT${RENDER_ROW_COLUMNS}
-    FROM renders
-    WHERE id = ?`,
+    `SELECT${RENDER_ROW_COLUMNS}${RENDER_ROW_FROM}
+    WHERE r.id = ?`,
   )
     .bind(id)
     .first<RawRenderRow>();
@@ -880,18 +932,17 @@ export async function listRendersForUser(
 ): Promise<RenderRow[]> {
   // Clamp limit so a runaway client cannot drain the DB binding.
   const cap = Math.min(Math.max(1, Math.floor(limit)), 200);
-  const baseSelect = `SELECT${RENDER_ROW_COLUMNS}
-    FROM renders`;
+  const baseSelect = `SELECT${RENDER_ROW_COLUMNS}${RENDER_ROW_FROM}`;
   const stmt = projectId !== null && projectId > 0
     ? env.DB.prepare(
         `${baseSelect}
-         WHERE project_id = ? OR project_id IS NULL
-         ORDER BY submitted_at DESC
+         WHERE r.project_id = ? OR r.project_id IS NULL
+         ORDER BY r.submitted_at DESC
          LIMIT ?`
       ).bind(projectId, cap)
     : env.DB.prepare(
         `${baseSelect}
-         ORDER BY submitted_at DESC
+         ORDER BY r.submitted_at DESC
          LIMIT ?`
       ).bind(cap);
   const result = await stmt.all<RawRenderRow>();
@@ -945,6 +996,7 @@ function normalizeRow(r: RawRenderRow): RenderRow {
 
   return {
     id: Number(r.id),
+    public_id: String(r.public_id),
     job_id: String(r.job_id),
     // D1 returns a SQL-NULL column as JS null, and String(null) === "null":
     // the literal "null" string is truthy and defeats every downstream falsy
@@ -1023,6 +1075,11 @@ function normalizeRow(r: RawRenderRow): RenderRow {
     // children to the keyframes-only preview render they derive from.
     parent_id:
       r.parent_id == null ? null : Number(r.parent_id),
+    // S9 (F13): FK public ids from the LEFT JOIN; NULL when the FK is NULL or the referent is gone.
+    project_public_id:
+      r.project_public_id == null ? null : String(r.project_public_id),
+    parent_public_id:
+      r.parent_public_id == null ? null : String(r.parent_public_id),
   };
 }
 

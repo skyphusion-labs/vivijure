@@ -10,6 +10,7 @@ import {
   removeSource,
 } from "./cast-db";
 import type { CastMember } from "./cast-db";
+import { toPublicCast } from "./cast-db";
 import { extFromMime } from "./utils";
 
 export const CAST_IMAGE_MIME_RE = /^image\/(png|jpe?g|webp)$/i;
@@ -87,13 +88,13 @@ export async function handleCastPortraitUpload(
           `cast/${id}/portrait`,
         );
         const row = await setPortrait(env, id, key, mime);
-        return json({ cast: row });
+        return json({ cast: row ? toPublicCast(row) : null });
       }
 
       if (!body.key || !body.mime) throw new HttpError(400, "key and mime required");
       const row = await setPortrait(env, id, body.key, body.mime);
       if (!row) throw new HttpError(404, "cast not found");
-      return json({ cast: row });
+      return json({ cast: row ? toPublicCast(row) : null });
     }
 
     if (!CAST_IMAGE_MIME_RE.test(contentType)) {
@@ -113,7 +114,7 @@ export async function handleCastPortraitUpload(
       httpMetadata: { contentType },
     });
     const row = await setPortrait(env, id, key, contentType);
-    return json({ cast: row });
+    return json({ cast: row ? toPublicCast(row) : null });
   });
 }
 
@@ -143,13 +144,13 @@ export async function handleCastRefAdd(
           `cast/${id}/refs/${crypto.randomUUID()}`,
         );
         const row = await addRef(env, id, { key, mime });
-        return json({ cast: row });
+        return json({ cast: row ? toPublicCast(row) : null });
       }
 
       if (!body.key || !body.mime) throw new HttpError(400, "key and mime required");
       const row = await addRef(env, id, { key: body.key, mime: body.mime });
       if (!row) throw new HttpError(404, "cast not found");
-      return json({ cast: row });
+      return json({ cast: row ? toPublicCast(row) : null });
     }
 
     if (!CAST_IMAGE_MIME_RE.test(contentType)) {
@@ -163,7 +164,7 @@ export async function handleCastRefAdd(
       httpMetadata: { contentType },
     });
     const row = await addRef(env, id, { key, mime: contentType });
-    return json({ cast: row });
+    return json({ cast: row ? toPublicCast(row) : null });
   });
 }
 
@@ -176,7 +177,7 @@ export async function handleCastRefRemove(
   if (!result.row) return json({ error: "cast not found" }, 404);
   if (!result.removedKey) return json({ error: "ref key not in this cast member's set" }, 404);
   try { await env.R2_RENDERS.delete(result.removedKey); } catch { /* ignore */ }
-  return json({ cast: result.row });
+  return json({ cast: result.row ? toPublicCast(result.row) : null });
 }
 
 export async function handleCastSourceAdd(
@@ -205,13 +206,13 @@ export async function handleCastSourceAdd(
           `cast/${id}/sources/${crypto.randomUUID()}`,
         );
         const row = await addSource(env, id, { key, mime });
-        return json({ cast: row });
+        return json({ cast: row ? toPublicCast(row) : null });
       }
 
       if (!body.key || !body.mime) throw new HttpError(400, "key and mime required");
       const row = await addSource(env, id, { key: body.key, mime: body.mime });
       if (!row) throw new HttpError(404, "cast not found");
-      return json({ cast: row });
+      return json({ cast: row ? toPublicCast(row) : null });
     }
 
     if (!CAST_IMAGE_MIME_RE.test(contentType)) {
@@ -225,7 +226,7 @@ export async function handleCastSourceAdd(
       httpMetadata: { contentType },
     });
     const row = await addSource(env, id, { key, mime: contentType });
-    return json({ cast: row });
+    return json({ cast: row ? toPublicCast(row) : null });
   });
 }
 
@@ -238,7 +239,7 @@ export async function handleCastSourceRemove(
   if (!result.row) return json({ error: "cast not found" }, 404);
   if (!result.removedKey) return json({ error: "source key not in this cast member's set" }, 404);
   try { await env.R2_RENDERS.delete(result.removedKey); } catch { /* ignore */ }
-  return json({ cast: result.row });
+  return json({ cast: result.row ? toPublicCast(result.row) : null });
 }
 
 // Issue #298: deleting a cast member must reclaim ALL of its R2 artifacts, not just the D1 row.

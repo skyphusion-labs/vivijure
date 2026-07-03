@@ -32,6 +32,7 @@ vi.mock("../src/cast-db", () => {
       const id = store.allocId();
       const c = {
         id,
+        public_id: `cast-pub-${id}`,
         slug: `${input.name.toLowerCase().replace(/\s+/g, "-")}-${id}`,
         name: input.name,
         bible: input.bible ?? null,
@@ -78,6 +79,10 @@ vi.mock("../src/cast-db", () => {
       const c = store.map.get(id);
       Object.assign(c, patch);
       return clone(c);
+    },
+    toPublicCast(row: any) {
+      const { id, public_id, ...rest } = row;
+      return { ...rest, id: public_id };
     },
   };
 });
@@ -218,8 +223,8 @@ describe("cast bundle export -> import round-trip", () => {
     const body = (await res.json()) as any;
     const imported = body.cast;
 
-    // fresh local id + slug, never the exporter's id
-    expect(imported.id).toBe(2);
+    // fresh local OPAQUE public id (never the exporter id, never a sequential int)
+    expect(imported.id).toBe("cast-pub-2");
     expect(imported.name).toBe("Nova the Pilot");
     expect(imported.bible).toContain("weary ace");
     expect(imported.voice_id).toBe("luna");

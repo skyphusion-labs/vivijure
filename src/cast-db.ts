@@ -7,6 +7,7 @@
 // (memory: vivijure-user-email-strip); slugs are globally unique.
 
 import type { Env } from "./env";
+import { newPublicId } from "./public-id";
 
 export interface CastRefImage {
   key: string;
@@ -16,7 +17,10 @@ export interface CastRefImage {
 export type LoraStatus = "idle" | "training" | "ready" | "failed";
 
 export interface CastMember {
+  // Internal autoincrement PK -- the join/FK key; NEVER leaves the core (the API exposes public_id).
   id: number;
+  // Unguessable public id (UUID v4); the ONLY id the API accepts on a :id route and returns as `id`.
+  public_id: string;
   slug: string;
   name: string;
   bible: string | null;
@@ -43,6 +47,7 @@ export interface CastMember {
 
 interface CastRow {
   id: number;
+  public_id: string;
   slug: string;
   name: string;
   bible: string | null;
@@ -87,6 +92,7 @@ function normalizeLoraStatus(raw: string | null): LoraStatus {
 function rowToCast(row: CastRow): CastMember {
   return {
     id: row.id,
+    public_id: row.public_id,
     slug: row.slug,
     name: row.name,
     bible: row.bible,
@@ -103,6 +109,16 @@ function rowToCast(row: CastRow): CastMember {
     lora_trained_at: row.lora_trained_at,
     voice_id: row.voice_id,
   };
+}
+
+// The client-facing cast shape: `id` is the opaque public id; the internal integer PK is dropped
+// so a sequential id never leaves the core (S9 F13). Every API site that returns a cast member maps
+// through toPublicCast, so the frontend addresses cast members only by their unguessable public id.
+export type PublicCastMember = Omit<CastMember, "id" | "public_id"> & { id: string };
+
+export function toPublicCast(row: CastMember): PublicCastMember {
+  const { id: _internalId, public_id, ...rest } = row;
+  return { ...rest, id: public_id };
 }
 
 // URL-safe slug from a display name. Mirrors the projects-side slugify
@@ -142,7 +158,7 @@ const CAST_LIST_LIMIT = 500;
 
 export async function listCast(env: Env): Promise<CastMember[]> {
   const result = await env.DB.prepare(
-    `SELECT id, slug, name, bible, portrait_key, portrait_mime,
+    `SELECT id, public_id, slug, name, bible, portrait_key, portrait_mime,
             ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
        FROM cast_members
@@ -154,9 +170,21 @@ export async function listCast(env: Env): Promise<CastMember[]> {
   return (result.results || []).map(rowToCast);
 }
 
+// Resolve an opaque public id to the internal integer PK (the :id route boundary). Returns null
+// when no cast member carries that public_id -- a bare sequential integer matches nothing, so the
+// route 404s and enumeration is dead. INDEX-backed (idx_cast_public_id) unique lookup.
+export async function getCastIdByPublicId(env: Env, publicId: string): Promise<number | null> {
+  const row = await env.DB.prepare(
+    `SELECT id FROM cast_members WHERE public_id = ? LIMIT 1`,
+  )
+    .bind(publicId)
+    .first<{ id: number }>();
+  return row ? Number(row.id) : null;
+}
+
 export async function getCastById(env: Env, id: number): Promise<CastMember | null> {
   const row = await env.DB.prepare(
-    `SELECT id, slug, name, bible, portrait_key, portrait_mime,
+    `SELECT id, public_id, slug, name, bible, portrait_key, portrait_mime,
             ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id
        FROM cast_members
@@ -176,13 +204,13 @@ export async function createCast(
   const slug = await allocateCastSlug(env, baseSlug);
   // Slugs are globally unique (idx_cast_slug) -- single operator, no per-user namespace.
   const result = await env.DB.prepare(
-    `INSERT INTO cast_members (slug, name, bible)
-     VALUES (?, ?, ?)
-     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
+    `INSERT INTO cast_members (public_id, slug, name, bible)
+     VALUES (?, ?, ?, ?)
+     RETURNING id, public_id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
-    .bind(slug, input.name, input.bible ?? null)
+    .bind(newPublicId(), slug, input.name, input.bible ?? null)
     .first<CastRow>();
   if (!result) throw new Error("createCast: INSERT...RETURNING produced no row");
   return rowToCast(result);
@@ -215,7 +243,7 @@ export async function updateCast(
   const result = await env.DB.prepare(
     `UPDATE cast_members SET ${fields.join(", ")}
       WHERE id = ?
-     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, public_id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -248,7 +276,7 @@ export async function setPortrait(
     `UPDATE cast_members
         SET portrait_key = ?, portrait_mime = ?, updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, public_id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -262,7 +290,7 @@ export async function clearPortrait(env: Env, id: number): Promise<CastMember | 
     `UPDATE cast_members
         SET portrait_key = NULL, portrait_mime = NULL, updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, public_id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
             lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -273,7 +301,7 @@ export async function clearPortrait(env: Env, id: number): Promise<CastMember | 
 
 // Full cast row column list returned by the CAS array-mutation helper (matches getCastById).
 const CAST_ROW_COLUMNS =
-  `id, slug, name, bible, portrait_key, portrait_mime,
+  `id, public_id, slug, name, bible, portrait_key, portrait_mime,
    ref_keys_json, source_keys_json, created_at, updated_at,
    lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`;
 
@@ -424,7 +452,7 @@ export async function setLoraJob(
             lora_error = NULL,
             updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, public_id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
                lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -447,7 +475,7 @@ export async function markLoraReady(
             lora_error = NULL,
             updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, public_id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
                lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )
@@ -468,7 +496,7 @@ export async function markLoraFailed(
             lora_job_id = NULL,
             updated_at = datetime('now')
       WHERE id = ?
-     RETURNING id, slug, name, bible, portrait_key, portrait_mime,
+     RETURNING id, public_id, slug, name, bible, portrait_key, portrait_mime,
                ref_keys_json, source_keys_json, created_at, updated_at,
                lora_key, lora_status, lora_job_id, lora_error, lora_trained_at, voice_id`
   )

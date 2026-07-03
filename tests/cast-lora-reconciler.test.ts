@@ -54,7 +54,7 @@ function fakeEnv(row: Record<string, unknown>) {
 
 function trainingRow(updated_at: string): Record<string, unknown> {
   return {
-    id: 6, slug: "companion-robot", name: "Companion", bible: null,
+    id: 6, public_id: "companion-0000-4000-8000-000000000006", slug: "companion-robot", name: "Companion", bible: null,
     portrait_key: null, portrait_mime: null, ref_keys_json: null, source_keys_json: null,
     created_at: "2026-06-24 00:00:00", updated_at,
     lora_key: null, lora_status: "training", lora_job_id: "01fd7d02-aged-e2",
@@ -63,7 +63,7 @@ function trainingRow(updated_at: string): Record<string, unknown> {
 }
 
 const cast = (over: Partial<CastMember> = {}): CastMember => ({
-  id: 6, slug: "companion-robot", name: "Companion", bible: null,
+  id: 6, public_id: "companion-0000-4000-8000-000000000006", slug: "companion-robot", name: "Companion", bible: null,
   portrait_key: null, portrait_mime: null, ref_keys: [], source_keys: [],
   created_at: "2026-06-24 00:00:00", updated_at: "2026-06-24 00:00:00",
   lora_key: null, lora_status: "training", lora_job_id: "01fd7d02-aged-e2",

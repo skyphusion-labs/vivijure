@@ -28,6 +28,7 @@ import type { Env } from "./env";
 import type { CastMember, CastRefImage, LoraStatus } from "./cast-db";
 import {
   getCastById,
+  toPublicCast,
   createCast,
   setPortrait,
   addRefs,
@@ -407,5 +408,5 @@ async function importInner(env: Env, body: Uint8Array): Promise<Response> {
   }
 
   const row = await getCastById(env, id);
-  return json({ cast: row, imported_from_schema: manifest.schema_version }, 201);
+  return json({ cast: row ? toPublicCast(row) : null, imported_from_schema: manifest.schema_version }, 201);
 }

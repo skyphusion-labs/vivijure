@@ -195,6 +195,14 @@ key was removed in the identity strip; see Epoch history above.)
 
 Every route the worker serves. The detail subsection for each follows in 2.2+. (Count: 64.)
 
+**Resource ids (`:id`).** `storyboard_projects`, `cast_members`, and `renders` are addressed by an
+**opaque public id** -- a UUID v4 minted per row (migration `0010_public_ids.sql`, S9/F13), never the
+internal sequential integer PK. Every `:id` route on these three resources accepts ONLY the public id
+(a bare integer matches no row and 404s), and the API returns it as `id` -- and, on a RenderRow, as the
+referenced `project_id` / `parent_id` (the FKs are resolved to their referents' public ids). Job ids
+(`/api/render/film/:id`, `/api/render/clips/:id`, `/api/job/:id`) are already opaque job UUIDs and are
+unchanged.
+
 | # | Method | Path | Detail |
 |---|--------|------|--------|
 | 1 | GET | `/health` | 2.2 |
