@@ -115,7 +115,7 @@ describe("speech-upscale: conformance (the live harness in src/modules/conforman
   const MANIFEST = {
     name: "speech-upscale",
     version: "0.1.0",
-    api: "vivijure-module/1",
+    api: "vivijure-module/2",
     hooks: ["speech"],
     provides: [{ id: "speech-upscale", label: "Clean dialogue audio (resemble-enhance)" }],
     config_schema: {

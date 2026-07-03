@@ -1,6 +1,6 @@
 # narration-gen
 
-A `score`-hook module (vivijure-module/1). It synthesizes **narration / voice-over for the whole
+A `score`-hook module (vivijure-module/2). It synthesizes **narration / voice-over for the whole
 film** with [MiniMax Speech 02 HD](https://www.minimax.io/) on a RunPod endpoint, then writes the
 track to R2 for muxing onto the assembled film.
 

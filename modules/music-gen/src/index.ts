@@ -1,4 +1,4 @@
-// music-gen: a `score` module worker (vivijure-module/1). Generates a music bed via MiniMax Music
+// music-gen: a `score` module worker (vivijure-module/2). Generates a music bed via MiniMax Music
 // 2.6 through Workers AI + the AI Gateway for the music / narration / beat-sync chain.
 //
 // ASYNC: a MiniMax music gen is a SINGLE BLOCKING env.AI.run (no async job handle on Workers AI -- the
@@ -80,7 +80,7 @@ export interface WorkflowParams {
 
 const MANIFEST: ModuleManifest = {
   name: "music-gen",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["score"],
   provides: [{ id: "minimax-music", label: "MiniMax Music 2.6 (Workers AI)" }],

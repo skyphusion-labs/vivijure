@@ -1,4 +1,4 @@
-# music-gen module worker (vivijure-module/1): MiniMax Music 2.6 via Workers AI for the `score`
+# music-gen module worker (vivijure-module/2): MiniMax Music 2.6 via Workers AI for the `score`
 # hook (music / narration / beat-sync chain). Bound as MODULE_MUSIC_GEN.
 # account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
 
