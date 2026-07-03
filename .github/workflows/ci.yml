@@ -113,7 +113,7 @@ jobs:
           #                      [[services]]) and its LOCAL_BACKEND_URL/TOKEN Secrets Store secrets are
           #                      not seeded yet, so deploy fails (code 10182). Broke v0.7.6. Drop from
           #                      here once the homelab box is up: seed the secrets + add the core binding.
-          EXCLUDE="openai-sora alibaba-wan25 plan-enhance-py local-gpu"
+          EXCLUDE="openai-sora alibaba-wan25 local-gpu"
           deployed=0
           found=0
           for toml in modules/*/wrangler.toml; do

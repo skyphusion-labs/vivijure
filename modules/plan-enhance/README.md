@@ -8,15 +8,13 @@ through Cloudflare AI Gateway (Unified Billing, keyless), before any frame is re
 
 `plan.enhance` is a **pre-production** chain (cardinality `chain`, `0..n`, ordered by `ui.order`): it
 runs on the storyboard **before keyframe**, so every downstream stage renders from the enriched plan.
-plan-enhance is the first step (`ui.order` 10); the deterministic Python sibling
-[`plan-enhance-py`](../plan-enhance-py) sits just after it (11).
+plan-enhance is the step (`ui.order` 10).
 
 ```mermaid
 flowchart LR
   sb["storyboard"] --> plan
   subgraph plan["plan.enhance chain (pre-production · ui.order)"]
     pe["plan-enhance<br/>(Opus auto-direction) · 10"]
-    pep["plan-enhance-py · 11"]
   end
   plan --> kf["keyframe"] --> clips["clips<br/>(motion.backend)"] --> fin["finish chain"]
   fin --> asm["assemble -> mux -> done"]
