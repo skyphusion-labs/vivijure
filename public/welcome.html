@@ -6,7 +6,7 @@
     <title>Vivijure: a self-hosted AI film studio</title>
     <meta name="description" content="Write a storyboard, render it to video on your own GPU. A self-hosted AI film studio for the creative homelabber. Bring your own GPU and keys, own every artifact, no subscription, no account wall, no lock-in." />
     <!-- No favicon links: they would point at gated-domain root paths outside /welcome*,
-         which a public visitor cannot fetch. Keeping the page to a single /welcome bypass
+         which a public visitor cannot fetch. Keeping the page to a single public /welcome
          path is worth more than a favicon here. -->
     <meta name="theme-color" content="#0E1730" />
     <meta property="og:title" content="Vivijure: a self-hosted AI film studio" />
@@ -22,12 +22,12 @@
     <meta name="twitter:description" content="Write a storyboard, render it to video on your own GPU. Bring your own GPU and keys, own every artifact, no subscription, no lock-in." />
     <meta name="twitter:image" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.jpg" />
     <meta name="twitter:image:alt" content="A still from the Vivijure speaks showcase film." />
-    <!-- The storefront is meant to be discoverable: /welcome is the public Access bypass and
-         the project showcase. No og:url / <link rel=canonical> on purpose: those would bake one
+    <!-- The storefront is meant to be discoverable: /welcome is the public route (open in every
+         auth mode) and the project showcase. No og:url / <link rel=canonical> on purpose: those would bake one
          deploy host into the shipped artifact; the canonical host is a per-deploy value. -->
     <meta name="robots" content="index, follow" />
     <!-- Styles are inlined on purpose: the page is one self-contained file so the only
-         vivijure-domain path that needs a public Access bypass is /welcome itself. The
+         vivijure-domain path that is publicly reachable is /welcome itself. The
          showcase film and poster live on assets.skyphusion.net (separate public domain). -->
     <style>
       :root {

@@ -240,8 +240,9 @@ cd vivijure
 npm install
 
 # Configure: edit wrangler.toml (R2 bucket, D1 database, module service bindings);
-# set secrets via `wrangler secret put`: the RunPod key + endpoint id, the R2 S3 key pair
-# for the GPU backend, the AI Gateway ids, and STUDIO_API_TOKEN (the built-in login).
+# seed the core creds (RunPod key + endpoint id, R2 S3 key pair, AI Gateway ids) ONCE into the
+# Cloudflare Secrets Store -- they bind declaratively, not via `wrangler secret put` (#238/#473).
+# STUDIO_API_TOKEN (the built-in login) is the one secret you `wrangler secret put` directly.
 # The full list with commands is docs/DEPLOYMENT.md section 3b.
 
 npm run dev        # wrangler dev -- hot reload at localhost:8787
@@ -250,7 +251,8 @@ npm run deploy     # wrangler deploy
 
 See [CLAUDE.md](CLAUDE.md) for conventions and [docs/module-authoring.md](docs/module-authoring.md)
 for how to write your own module worker. See [docs/SECURITY.md](docs/SECURITY.md) for the
-security model (Cloudflare Access boundary, job-id capabilities, credential blast radius).
+security model (the studio auth gate -- token mode by default, Access optional -- job-id
+capabilities, credential blast radius).
 
 ## Architecture
 
@@ -277,7 +279,7 @@ core (this worker)
 ```
 
 The module contract is `vivijure-module/2` in [`src/modules/types.ts`](src/modules/types.ts)
-(the host also accepts `/1` transitionally; the `/1` -> `/2` bump removed `user_email` from
+(the `/1` window is closed, `/2` only; the `/1` -> `/2` bump removed `user_email` from
 the hook context, an anti-SaaS identity strip -- see [docs/CONTRACT.md](docs/CONTRACT.md)).
 A module is a Cloudflare Worker that serves `GET /module.json` (manifest) and `POST /invoke`
 (run a hook). That is the whole interface; a module in another language, on another platform,
@@ -328,7 +330,8 @@ npm run deploy        # wrangler deploy
 ```
 
 `account_id` comes from `CLOUDFLARE_ACCOUNT_ID` in the environment, not hardcoded. All bindings
-are in `wrangler.toml` (committed); secrets go in via `wrangler secret put`.
+are in `wrangler.toml` (committed); the core + module creds bind from the Cloudflare Secrets Store
+(seeded once), and `STUDIO_API_TOKEN` goes in via `wrangler secret put`.
 
 ## Legal
 
