@@ -102,7 +102,7 @@ describe("audio-master: manifest + output conformance", () => {
   const MANIFEST = {
     name: "audio-master",
     version: "0.1.0",
-    api: "vivijure-module/1",
+    api: "vivijure-module/2",
     hooks: ["master"],
     provides: [{ id: "master", label: "Master film audio (loudness + music upscale)" }],
     config_schema: {

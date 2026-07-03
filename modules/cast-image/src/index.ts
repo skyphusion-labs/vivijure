@@ -1,4 +1,4 @@
-// cast-image: a cast.image module worker (vivijure-module/1). Generates a character's LoRA TRAINING
+// cast-image: a cast.image module worker (vivijure-module/2). Generates a character's LoRA TRAINING
 // reference set from a portrait + bible, via the studio's image models (FLUX 2 Klein / Nano Banana
 // Pro) with the safety-flag fallback. Lifts the proven browser-side generator (public/cast.js
 // generateTrainingSet) server-side so it is swappable AND no longer blocks the cast page for minutes.
@@ -41,7 +41,7 @@ interface R2Bucket {
 }
 interface Env {
   AI: AiRun;              // AI binding: FLUX 2 run direct (gateway-bypassed), proxied models via the gateway
-  GATEWAY_ID: string;     // AI Gateway slug (secret); needed for the proxied / nano-banana fallback path
+  GATEWAY_ID: SecretsStoreSecret;     // AI Gateway slug (secret); needed for the proxied / nano-banana fallback path
   R2_RENDERS: R2Bucket;   // the shared `vivijure` bucket: run state + generated refs land here
   IMAGES?: ImagesBinding; // Cloudflare Images: downscale refs to <=512px (FLUX-2's input cap; bounds nano-banana payloads)
 }
@@ -55,7 +55,7 @@ const MODELS = [
 
 const MANIFEST: ModuleManifest = {
   name: "cast-image",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["cast.image"],
   provides: [{ id: "cast-refs", label: "Training references (FLUX 2 / Nano Banana)" }],
@@ -72,6 +72,19 @@ const PER_POLL = 1;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
 }
 
 /** /invoke: validate, compose the prompt set, persist the run state to R2, return a stable poll
@@ -103,18 +116,19 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<CastImage
   if (!obj) return { ok: false, error: "cast.image: run state not found (expired or bad token)" };
   const state = JSON.parse(await obj.text()) as CastImageState;
   if (state.prompts.length === 0) return { ok: true, output: readOutput(state) };
+  const gatewayId = await secretValue(env.GATEWAY_ID);
 
   for (let i = 0; i < PER_POLL && state.prompts.length > 0; i++) {
     const prompt = state.prompts[0];
     let img: { bytes: ArrayBuffer; mime: string };
     try {
-      img = await generateImage(env.AI, env.IMAGES, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
+      img = await generateImage(env.AI, env.IMAGES, gatewayId, state.model, prompt, state.ref_urls);
     } catch (e) {
       if (isFlaggedError((e as Error).message) && state.model !== FLAG_FALLBACK_MODEL) {
         state.model = FLAG_FALLBACK_MODEL;
         state.fallback_used = true;
         try {
-          img = await generateImage(env.AI, env.IMAGES, env.GATEWAY_ID, state.model, prompt, state.ref_urls);
+          img = await generateImage(env.AI, env.IMAGES, gatewayId, state.model, prompt, state.ref_urls);
         } catch (e2) {
           return { ok: false, error: "cast.image: generation failed (post-fallback): " + (e2 as Error).message };
         }

@@ -1,4 +1,4 @@
-// narration-gen: a `score` module worker (vivijure-module/1). Synthesizes narration via MiniMax
+// narration-gen: a `score` module worker (vivijure-module/2). Synthesizes narration via MiniMax
 // Speech 02 HD on RunPod's hosted endpoint, using the SAME async submit+poll transport as seedance/kling.
 //
 // ASYNC: a synth takes tens of seconds, longer than a Worker request can hold, so (NOT Workers AI /
@@ -45,7 +45,7 @@ interface R2Bucket {
 }
 
 interface Env {
-  RUNPOD_API_KEY: string;
+  RUNPOD_API_KEY: SecretsStoreSecret;
   R2_RENDERS: R2Bucket;
 }
 
@@ -53,7 +53,7 @@ const ENDPOINT = "https://api.runpod.ai/v2/" + MODEL;
 
 const MANIFEST: ModuleManifest = {
   name: "narration-gen",
-  version: "0.2.0",
+  version: "0.2.1",
   api: MODULE_API,
   hooks: ["score"],
   provides: [{ id: "minimax-speech", label: "MiniMax Speech 02 HD (RunPod)" }],
@@ -91,13 +91,26 @@ const MANIFEST: ModuleManifest = {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
-const auth = (env: Env) => ({ authorization: "Bearer " + env.RUNPOD_API_KEY });
+const auth = (apiKey: string) => ({ authorization: "Bearer " + apiKey });
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
 
 /** Is the endpoint still in its virgin cold start (no worker has ever come up)? Best-effort: any
  *  transport/HTTP failure reads as "not cold" so the #141 verdict still fires. */
-async function endpointStillCold(env: Env): Promise<boolean> {
+async function endpointStillCold(apiKey: string): Promise<boolean> {
   try {
-    const r = await fetch(ENDPOINT + "/health", { headers: auth(env) });
+    const r = await fetch(ENDPOINT + "/health", { headers: auth(apiKey) });
     if (!r.ok) return false;
     return workersStillCold(await r.json());
   } catch {
@@ -108,9 +121,9 @@ async function endpointStillCold(env: Env): Promise<boolean> {
 /** Best-effort cancel of a RunPod job we are about to fail: a hung-error job otherwise HOLDS the
  *  billed worker until someone cancels it by hand (F17 spend leak). Never throws; the honest
  *  failure below is the point, the cancel is damage control. */
-async function cancelRunpodJobBestEffort(env: Env, jobId: string): Promise<void> {
+async function cancelRunpodJobBestEffort(apiKey: string, jobId: string): Promise<void> {
   try {
-    await fetch(ENDPOINT + "/cancel/" + jobId, { method: "POST", headers: auth(env) });
+    await fetch(ENDPOINT + "/cancel/" + jobId, { method: "POST", headers: auth(apiKey) });
   } catch {
     /* best-effort */
   }
@@ -122,7 +135,8 @@ async function submit(env: Env, req: InvokeRequest<ScoreInput>): Promise<InvokeR
   const input = req.input;
   const filmKey = typeof input?.film_key === "string" ? input.film_key.trim() : "";
   if (!filmKey) return { ok: false, error: "score: input.film_key required" };
-  if (!env.RUNPOD_API_KEY) return { ok: false, error: "narration-gen: RUNPOD_API_KEY not configured" };
+  const apiKey = await secretValue(env.RUNPOD_API_KEY);
+  if (!apiKey) return { ok: false, error: "narration-gen: RUNPOD_API_KEY not configured" };
 
   const config = normalizeConfig(req.config ?? {});
   let body: { input: Record<string, unknown> };
@@ -138,7 +152,7 @@ async function submit(env: Env, req: InvokeRequest<ScoreInput>): Promise<InvokeR
   try {
     const r = await fetch(ENDPOINT + "/run", {
       method: "POST",
-      headers: { ...auth(env), "content-type": "application/json" },
+      headers: { ...auth(apiKey), "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!r.ok) return { ok: false, error: "narration-gen /run -> " + r.status };
@@ -158,12 +172,13 @@ async function submit(env: Env, req: InvokeRequest<ScoreInput>): Promise<InvokeR
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<ScoreOutput>> {
   const st = decodePoll(body.poll);
   if (!st) return { ok: false, error: "narration-gen: bad poll token" };
-  if (!env.RUNPOD_API_KEY) return { ok: false, error: "narration-gen: RUNPOD_API_KEY not configured" };
+  const apiKey = await secretValue(env.RUNPOD_API_KEY);
+  if (!apiKey) return { ok: false, error: "narration-gen: RUNPOD_API_KEY not configured" };
 
   let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    const resp = await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(env) });
+    const resp = await fetch(ENDPOINT + "/status/" + st.jobId, { headers: auth(apiKey) });
     httpStatus = resp.status;
     s = (await resp.json()) as typeof s;
   } catch {
@@ -179,7 +194,7 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<ScoreOutp
       // polling up to the cold cap instead of false-failing the first-ever job.
       if (
         classifyGoneState(st.submittedAt, now, RUNPOD_COLD_GRACE_MS) === "gone-grace" &&
-        (await endpointStillCold(env))
+        (await endpointStillCold(apiKey))
       ) {
         return { ok: true, pending: true };
       }
@@ -194,7 +209,7 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<ScoreOutp
     // terminal error. Surface the REAL error (never "not found") and cancel to stop the spend.
     const backendErr = terminalErrorInOutput(s.output);
     if (backendErr) {
-      await cancelRunpodJobBestEffort(env, st.jobId);
+      await cancelRunpodJobBestEffort(apiKey, st.jobId);
       return { ok: false, error: "narration-gen backend error (job " + st.jobId + ", status stuck " + String(s.status ?? "unknown") + ", cancel issued): " + backendErr };
     }
     return { ok: true, pending: true }; // IN_QUEUE / IN_PROGRESS

@@ -1,4 +1,4 @@
-# beat-sync module worker (vivijure-module/1): librosa beat analysis via the always-on
+# beat-sync module worker (vivijure-module/2): librosa beat analysis via the always-on
 # audio-beat-sync container on the Hetzner fleet (Workers VPC). Bound as MODULE_BEAT_SYNC.
 # account_id is read from CLOUDFLARE_ACCOUNT_ID (env), not hardcoded, same as the core.
 

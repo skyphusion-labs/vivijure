@@ -1,4 +1,4 @@
-# google-veo module worker (vivijure-module/1): Google Veo 3.1 Fast I2V on RunPod, a
+# google-veo module worker (vivijure-module/2): Google Veo 3.1 Fast I2V on RunPod, a
 # motion.backend module (#172). Bound into the core as MODULE_GOOGLE_VEO; the registry discovers
 # it from GET /module.json and the studio renders the motion.backend stage from it.
 #

@@ -1,4 +1,4 @@
-// alibaba-wan: a motion.backend module worker (vivijure-module/1), Wan 2.6 I2V on RunPod. ASYNC:
+// alibaba-wan: a motion.backend module worker (vivijure-module/2), Wan 2.6 I2V on RunPod. ASYNC:
 // cloud i2v takes minutes, longer than a Worker request can hold, so:
 //   GET  /module.json -> manifest
 //   POST /invoke      -> submit the job, return { ok, pending, poll } IMMEDIATELY (no blocking)
@@ -32,7 +32,7 @@ const OUT_FPS = 24;
 
 const MANIFEST: ModuleManifest = {
   name: "alibaba-wan",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["motion.backend"],
   provides: [{ id: "i2v-cloud", label: "Wan 2.6 (cloud i2v)" }],

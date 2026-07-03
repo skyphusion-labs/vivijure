@@ -1,8 +1,8 @@
-// Vendored subset of the Vivijure module contract (vivijure-module/1) for the cloud-keyframe module.
+// Vendored subset of the Vivijure module contract (vivijure-module/2) for the cloud-keyframe module.
 // Matches src/modules/types.ts for the shapes used here. Dependency-free (a module in another repo
 // vendors this exact contract).
 
-export const MODULE_API = "vivijure-module/1" as const;
+export const MODULE_API = "vivijure-module/2" as const;
 
 export type HookName = "keyframe" | "motion.backend" | "finish" | "score" | "plan.enhance" | "cast.image";
 
@@ -33,7 +33,6 @@ export interface ModuleManifest {
 export interface InvokeContext {
   project: string;
   job_id: string;
-  user_email?: string;
 }
 
 export interface InvokeRequest<I = unknown> {
@@ -58,7 +57,7 @@ export type PollResponse<O = unknown> =
   | { ok: true; output: O }
   | { ok: false; error: string };
 
-// keyframe payloads (vivijure-module/1). A PROJECT-level pass: one job renders every shot's start
+// keyframe payloads (vivijure-module/2). A PROJECT-level pass: one job renders every shot's start
 // keyframe. The keyframes are written to R2 by the module; this reports their keys, the core presigns
 // them for the motion.backend stage.
 export interface KeyframeInput {

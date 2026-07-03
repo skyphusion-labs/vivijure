@@ -1,4 +1,4 @@
-// own-gpu: a motion.backend module worker (vivijure-module/1) that renders image-to-video on YOUR
+// own-gpu: a motion.backend module worker (vivijure-module/2) that renders image-to-video on YOUR
 // OWN GPU via the vivijure-backend RunPod serverless endpoint (Wan2.2-I2V), the i2v_clip action.
 // This is the BYO-GPU default -- no rent, own keys -- so it sorts ahead of the cloud i2v modules.
 //
@@ -33,7 +33,7 @@ interface Env {
 // this module's `quality` enum stays in lockstep with the core QUALITY_TIERS set.
 export const MANIFEST: ModuleManifest = {
   name: "own-gpu",
-  version: "0.1.0",
+  version: "0.1.1",
   api: MODULE_API,
   hooks: ["motion.backend"],
   provides: [{ id: "i2v-own-gpu", label: "Own GPU (Wan2.2 i2v)" }],

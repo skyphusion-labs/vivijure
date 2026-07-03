@@ -1,6 +1,6 @@
 # audio-master
 
-A **`master`**-chain module (vivijure-module/1). It masters a film's audio at **film level** -- a
+A **`master`**-chain module (vivijure-module/2). It masters a film's audio at **film level** -- a
 **music upscale** (VHQ soxr resample to 48 kHz + a gentle high-shelf "air" lift) followed by **two-pass
 LUFS loudness normalization** to a web target -- via the always-on **audio-master CPU container** on the
 fleet over **Workers VPC** (CPU ffmpeg, no GPU; CPU mastering must never touch a GPU/RunPod -- GPU money
