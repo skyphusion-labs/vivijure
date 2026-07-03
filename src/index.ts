@@ -970,7 +970,7 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   return summary;
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[]; cast_loras?: Record<string, number> }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[]; cast_loras?: Record<string, string> }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   // Same boundary check as hSubmitRender: canonical bundle shape before any use.
   if (!isSafeBundleKey(a.bundle_key)) throw badRequest("bundle_key must be a plain relative key under bundles/");
@@ -981,14 +981,20 @@ const hStartFilm: Handler = async (req, env) => {
   // from the cast (cast_loras) when given and defaulting otherwise. So a hand-authored dialogue bundle
   // with no D1 project and no dialogue_lines arg still renders VOICED. Explicit lines always win; a
   // bundle with no dialogue stays silent (derived lines are []).
+  // S9 (F13): resolve the planner castLoras ({ slot: <opaque cast public id> }) to the INTERNAL cast
+  // ids ONCE, at this boundary. The int castIds map is what the film job persists (the keyframe LoRA
+  // bank-back keys off it); the per-slot voices ride the same resolve for bundle-derived dialogue. A
+  // browser never hands the internal int across the wire, and never gets it back.
+  const resolvedLoras = (a.cast_loras && Object.keys(a.cast_loras).length)
+    ? await resolveCastLoras(env, a.cast_loras)
+    : null;
+  const castIds = resolvedLoras && Object.keys(resolvedLoras.castIds).length ? resolvedLoras.castIds : undefined;
+
   let dialogue_lines = a.dialogue_lines;
   if (!dialogue_lines || !dialogue_lines.length) {
     const bundleScenes = await readBundleScenes(env, a.bundle_key);
     if (bundleScenes.some((s) => s.dialogue)) {
-      const voices = (a.cast_loras && Object.keys(a.cast_loras).length)
-        ? (await resolveCastLoras(env, a.cast_loras)).voices
-        : {};
-      dialogue_lines = dialogueLinesFromBundleScenes(bundleScenes, voices);
+      dialogue_lines = dialogueLinesFromBundleScenes(bundleScenes, resolvedLoras?.voices ?? {});
     }
   }
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
@@ -1005,7 +1011,7 @@ const hStartFilm: Handler = async (req, env) => {
     // TTS+lip-sync stage (enterDialogueOrFinish) and the subtitle module (buildCaptionCues), both of
     // which read job.dialogue_lines. cast_loras carries the speaking cast (slot -> cast id) so the
     // LoRA write-back + voice resolution have it.
-    dialogue_lines, cast_loras: a.cast_loras,
+    dialogue_lines, cast_loras: castIds,
   });
   // Write a renders-table row so this film shows in the history panel (#164), the same way
   // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm

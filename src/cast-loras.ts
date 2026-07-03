@@ -1,9 +1,11 @@
-// Resolve planner castLoras ({ slot: cast_id }) into pretrained LoRA R2 keys for the GPU backend, and
+// Resolve planner castLoras ({ slot: <opaque cast public id> }) into pretrained LoRA R2 keys for the
+// GPU backend, and
 // (riding the same cast-row fetch) the per-slot dialogue voice. The studio is single-user, so the cast
 // lookup is not really identity-scoped; voice comes free off the row we already read for the LoRA.
 
 import type { Env } from "./env";
-import { getCastById } from "./cast-db";
+import { getCastById, getCastIdByPublicId } from "./cast-db";
+import { isPublicId } from "./public-id";
 import { refreshTrainingLora } from "./cast-lora-train";
 import { coerceVoiceId, DEFAULT_VOICE_ID } from "./voices";
 
@@ -27,8 +29,9 @@ export interface ResolvedCastLoras {
 
 export interface SkippedCast {
   slot: string;
-  castId?: number;
-  // Display name of the cast member, when the row resolved (absent for a bad id / missing row).
+  // Display name of the cast member, when the row resolved (absent for a bad id / missing row). The
+  // internal integer cast id is NEVER carried here (S9 F13): it must not ride an externally-derived
+  // struct, and an integer probe never resolves to a row, so it never earns a name.
   name?: string;
   reason: "not a valid cast id" | "cast member not found" | "LoRA still training" | "no trained LoRA";
 }
@@ -50,9 +53,17 @@ export async function resolveCastLoras(
 
   for (const [slot, raw] of Object.entries(castLoras)) {
     if (typeof slot !== "string" || !slot.trim()) continue;
-    const id = typeof raw === "number" ? raw : Number(raw);
-    if (!Number.isInteger(id) || id <= 0) {
+    // S9 (F13): castLoras values are OPAQUE cast public ids from the browser, resolved to the internal
+    // int at THIS boundary. A bare integer (an enumeration probe) fails isPublicId and lands in the
+    // same "not a valid cast id" skip as any garbage -- with NO row data attached -- so the
+    // untrained-cast message can never become an id-enumeration oracle (harvesting names by counting).
+    if (!isPublicId(raw)) {
       skip({ slot, reason: "not a valid cast id" });
+      continue;
+    }
+    const id = await getCastIdByPublicId(env, raw);
+    if (id === null) {
+      skip({ slot, reason: "cast member not found" });
       continue;
     }
     castIds[slot] = id;
@@ -63,12 +74,12 @@ export async function resolveCastLoras(
     // Voice rides the row we already fetched, independent of LoRA readiness.
     if (cast) voices[slot] = coerceVoiceId(cast.voice_id) ?? DEFAULT_VOICE_ID;
     if (!cast) {
-      skip({ slot, castId: id, reason: "cast member not found" });
+      skip({ slot, reason: "cast member not found" });
       continue;
     }
     if (cast.lora_status !== "ready" || !cast.lora_key || !cast.lora_key.startsWith("loras/")) {
       skip({
-        slot, castId: id, name: cast.name,
+        slot, name: cast.name,
         reason: cast.lora_status === "training" ? "LoRA still training" : "no trained LoRA",
       });
       continue;
