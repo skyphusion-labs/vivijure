@@ -10,8 +10,8 @@
 // the caller polls sequentially.
 
 import type { Env } from "./env";
-import { discoverModules, invokeModule, pollModule, resolveFetcher, servingForHook, validateConfig } from "./modules/registry";
-import type { MotionBackendInput, MotionBackendOutput, PollResponse } from "./modules/types";
+import { discoverModules, invokeModule, pollModule, cancelModule, resolveFetcher, servingForHook, validateConfig } from "./modules/registry";
+import type { MotionBackendInput, MotionBackendOutput, PollResponse, RegisteredModule } from "./modules/types";
 import { hookOutputViolation } from "./modules/conformance";
 
 export interface ClipShotInput {
@@ -28,6 +28,12 @@ export interface ClipShot extends ClipShotInput {
   clip_key?: string;
   error?: string;
   binding?: string | null; // resolved env binding for this shot's motion module
+  // #536: the backend RunPod job id from the async-accept envelope (#318 jobId), retained so a cancel /
+  // orphan log can NAME the job. Absent when the module omits the optional field.
+  runpod_job_id?: string;
+  // #536: set once a best-effort remote cancel has been ATTEMPTED for this shot (failed shot or teardown),
+  // so the driver does not re-fire the cancel on every subsequent tick. Best-effort, whatever the outcome.
+  cancel_sent?: boolean;
 }
 export interface ClipJob {
   job_id: string;
@@ -137,9 +143,10 @@ export async function startClipJob(
     config?: Record<string, unknown>;
     module_configs?: Record<string, Record<string, unknown>>;
   },
+  preModules?: RegisteredModule[],
 ): Promise<ClipJob> {
   const envRec = env as unknown as Record<string, unknown>;
-  const modules = await discoverModules(envRec);
+  const modules = preModules ?? await discoverModules(envRec);
   const serving = servingForHook(modules, "motion.backend");
   const defaultMb = args.motion_backend
     ? serving.find((m) => m.name === args.motion_backend) ?? null
@@ -179,6 +186,7 @@ export async function startClipJob(
       shot.error = r.error;
     } else if ((r as { pending?: boolean }).pending) {
       shot.poll = (r as { poll: string }).poll;
+      shot.runpod_job_id = (r as { jobId?: string }).jobId; // #536: retain the backend job id for cancel/accounting
     } else if ("output" in r) {
       const output = r.output as MotionBackendOutput;
       const violation = hookOutputViolation(mb.name, "motion.backend", output);
@@ -205,7 +213,7 @@ export async function startClipJob(
 }
 
 /** Advance a clip job: poll the shots still pending; the module finalizes a clip to R2 on done. */
-export async function advanceClipJob(env: Env, jobId: string): Promise<ClipJob | null> {
+export async function advanceClipJob(env: Env, jobId: string, preModules?: RegisteredModule[]): Promise<ClipJob | null> {
   const obj = await env.R2_RENDERS.get(jobKey(jobId));
   if (!obj) return null;
   const job = JSON.parse(await obj.text()) as ClipJob;
@@ -227,8 +235,64 @@ export async function advanceClipJob(env: Env, jobId: string): Promise<ClipJob |
   // landed. Runs BEFORE the caller's summarizeJob() complete/advance judgment. (The caller also calls
   // reclaimClipsFromR2 again right before its complete-check; both are idempotent + cheap.)
   await reclaimClipsFromR2(env, job);
+  // #536: a shot still FAILED that had started a remote job (it held a poll token) may have left the RunPod
+  // job running -- fire a best-effort cancel so the backend does not keep burning GPU after the studio gave
+  // up (the 307s-of-H200 zombie observed on the S18 gate). reclaimClipsFromR2 ran first, so a shot whose
+  // clip actually landed is already done and skipped. A module without /cancel logs an honest orphan.
+  await cancelFailedShots(env, job, preModules);
   await env.R2_RENDERS.put(jobKey(jobId), JSON.stringify(job), { httpMetadata: { contentType: "application/json" } });
   return job;
+}
+
+/** #536: fire a best-effort remote cancel for every shot that is FAILED, held a poll token (so a remote
+ *  job was started), and has not been cancelled yet. Discovers the registry only when there IS an orphan to
+ *  cancel (the happy path pays nothing); the film tick threads its once-discovered registry in. */
+async function cancelFailedShots(env: Env, job: ClipJob, preModules?: RegisteredModule[]): Promise<void> {
+  const orphans = job.shots.filter((s) => s.status === "failed" && s.poll && !s.cancel_sent);
+  if (!orphans.length) return;
+  const envRec = env as unknown as Record<string, unknown>;
+  const modules = preModules ?? await discoverModules(envRec);
+  for (const shot of orphans) await cancelShotRemote(envRec, job, shot, modules);
+}
+
+/** #536: cancel ONE shot in-flight RunPod job via its motion module (cancelModule, keyed by the poll
+ *  token, exactly as cancelInFlightKeyframe does for the keyframe phase). Records cancel_sent so it fires
+ *  at most once, and NAMES the RunPod job in every orphan log so a left-running job is actionable. Mirrors
+ *  the honest-orphan discipline: an unbound module or a module with no cancel primitive logs loudly, it
+ *  never hides the leak. */
+async function cancelShotRemote(envRec: Record<string, unknown>, job: ClipJob, shot: ClipShot, modules: RegisteredModule[]): Promise<void> {
+  const jobId = shot.runpod_job_id ?? "(job id unknown)";
+  const binding = shot.binding ?? job.binding;
+  const mb = binding ? (modules.find((m) => m.binding === binding) ?? null) : null;
+  const fetcher = binding ? resolveFetcher(envRec, binding) : null;
+  shot.cancel_sent = true; // best-effort ONCE, whatever the outcome -- never re-fire every tick
+  if (!mb || !fetcher) {
+    console.warn(`clip job ${job.job_id}: cannot cancel failed shot ${shot.shot_id} -- module ${binding ?? "?"} not bound; RunPod job ${jobId} left running (ORPHAN) (#536)`);
+    return;
+  }
+  if (!mb.cancelable) {
+    console.warn(`clip job ${job.job_id}: motion module ${mb.name} has no cancel primitive (cancelable=false); RunPod job ${jobId} for shot ${shot.shot_id} left running (ORPHAN) (#536)`);
+    return;
+  }
+  const r = await cancelModule(fetcher, { poll: shot.poll as string });
+  if (r.ok) console.warn(`clip job ${job.job_id}: cancelled in-flight RunPod job ${jobId} for failed shot ${shot.shot_id} via ${mb.name} (#536)`);
+  else console.warn(`clip job ${job.job_id}: cancel FAILED (${r.error}) for shot ${shot.shot_id} -- RunPod job ${jobId} left running (ORPHAN) (#536)`);
+}
+
+/** #536: teardown cancel -- STOP every in-flight (pending, poll-token-bearing) shot RunPod job when a clip
+ *  job is cancelled/torn down, so a user-cancelled render does not leave the GPU running (the motion-phase
+ *  sibling of cancelInFlightKeyframe; cancelFilmJob calls this off the clips phase). Persists cancel_sent.
+ *  No-op when nothing is in flight. */
+export async function cancelInFlightClips(env: Env, jobId: string, preModules?: RegisteredModule[]): Promise<void> {
+  const obj = await env.R2_RENDERS.get(jobKey(jobId));
+  if (!obj) return;
+  const job = JSON.parse(await obj.text()) as ClipJob;
+  const inflight = job.shots.filter((s) => s.status === "pending" && s.poll && !s.cancel_sent);
+  if (!inflight.length) return;
+  const envRec = env as unknown as Record<string, unknown>;
+  const modules = preModules ?? await discoverModules(envRec);
+  for (const shot of inflight) await cancelShotRemote(envRec, job, shot, modules);
+  await env.R2_RENDERS.put(jobKey(jobId), JSON.stringify(job), { httpMetadata: { contentType: "application/json" } });
 }
 
 /** R2 PRESENCE IS THE SOURCE OF TRUTH for clip completion. Mutates the clip job in place: any shot that

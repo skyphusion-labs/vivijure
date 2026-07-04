@@ -601,7 +601,7 @@ const hSubmitRender: Handler = async (req, env) => {
     film_titles: b.keyframesOnly ? undefined : b.film_titles,
     pretrained_loras: Object.keys(pretrained).length ? pretrained : undefined,
     cast_loras: Object.keys(castIds).length ? castIds : undefined,
-  });
+  }, modules);
   const view = filmJobToPollView(job, null);
   const row: NewRenderRow = {
     jobId: view.jobId,
@@ -667,7 +667,7 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
     master_config: mapped.master_config,
     derive_mode: "finalized",
     audio_key: b.audioKey,
-  });
+  }, modules);
   if (job.phase === "failed") {
     return json({ error: job.error || "render from keyframes failed" }, 422);
   }
@@ -716,7 +716,7 @@ const hRegenShot: Handler = async (req, env, _c, p) => {
     keyframe_backend: mapped.keyframe_backend,
     keyframe_config: mapped.keyframe_config,
     keyframes_only: true,
-  });
+  }, modules);
   if (job.phase === "failed") {
     return json({ ok: false, error: job.error || "regen submit failed" }, 422);
   }
@@ -1055,7 +1055,7 @@ const hStartFilm: Handler = async (req, env) => {
     // which read job.dialogue_lines. cast_loras carries the speaking cast (slot -> cast id) so the
     // LoRA write-back + voice resolution have it.
     dialogue_lines, cast_loras: castIds,
-  });
+  }, filmModules);
   // Write a renders-table row so this film shows in the history panel (#164), the same way
   // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
   // keeps the row's status in sync as the job advances.
