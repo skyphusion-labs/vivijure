@@ -180,13 +180,16 @@ route LLM/AI calls through a **Cloudflare AI Gateway** (for caching, rate-limit,
   authenticated gateway named `vivijure` for you (needs **AI Gateway: Edit** on your API token); set
   it only to point at an existing gateway (**dash.cloudflare.com -> AI -> AI Gateway**).
 - `CF_AIG_TOKEN` -- an AI Gateway authentication token: a Cloudflare API token with
-  **AI Gateway: Run** permission. **The core storyboard planner requires it** (every release
-  planning model bills through Unified Billing), and the `plan-enhance` module's Opus pass
-  uses it too. You can leave it blank in `deploy.env`: `deploy.sh` auto-mints a purpose-named
-  Run-only token when the deploy token carries **Account API Tokens: Edit** (see 2a); if it
-  cannot, the deploy still completes and the final banner prints the exact steps. To make one
-  by hand: dashboard -> AI Gateway -> your gateway -> **Settings** -> **Create authentication
-  token** (Run permission), then paste it into `deploy.env` and re-run `./deploy.sh`.
+  **AI Gateway: Run** permission. **It is a deploy prerequisite now, not a later arm step:** since
+  #473 the core and the `plan-enhance` module both bind it from the Secrets Store, and `wrangler
+  deploy` fails (code 10182) against a store secret that is not yet seeded, so the planner token must
+  exist before anything ships. You can still leave it blank in `deploy.env` **if** your deploy token
+  carries **Account API Tokens: Edit** (see 2a): `deploy.sh` then auto-mints a purpose-named Run-only
+  token and seeds it into the store before the first deploy. If it can neither find a pasted token nor
+  auto-mint one, `deploy.sh` STOPS before it deploys anything and prints the exact fix (fail-closed;
+  no half-deployed studio). To supply one by hand: dashboard -> AI Gateway -> your gateway ->
+  **Settings** -> **Create authentication token** (Run permission), then paste it into `deploy.env`
+  and re-run `./deploy.sh`.
   Unified Billing also requires the gateway's **Authenticated Gateway** toggle ON --
   `deploy.sh` enables it via the API, or the banner tells you to flip it in the same
   Settings page. Run tokens are account-scoped (they cannot be pinned to one gateway).
@@ -449,7 +452,7 @@ config; everything else in the Studio is single-user and needs no email.
 - [ ] auth mode picked: `token` (default; SAVE the printed token) or `access` (Zero Trust team + AUD)
 - [ ] RunPod API key + a Serverless endpoint running `vivijure-backend` (its id)
 - [ ] R2 S3 access key/secret scoped to the render bucket
-- [ ] AI Gateway slug (`GATEWAY_ID`) + `CF_AIG_TOKEN` (required by the storyboard planner; auto-minted or pasted, see 2d)
+- [ ] AI Gateway slug (`GATEWAY_ID`) + `CF_AIG_TOKEN` (a deploy PREREQUISITE -- the planner token; auto-minted or pasted, see 2d)
 - [ ] AI credits loaded on the gateway ($10 minimum; the planner will not run on $0.00 -- see 2e)
 - [ ] `wrangler d1 create` + both `r2 bucket create`s, ids in `wrangler.toml`
 - [ ] secrets set, migrations applied, **modules deployed before core**

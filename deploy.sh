@@ -168,9 +168,18 @@ seed_secret() {   # name value
     info "created $name"
   fi
 }
+# store_has_secret NAME -> 0 if the store already holds a secret named NAME (word-exact, so
+# CF_AIG_TOKEN never matches PLAN_ENHANCE_CF_AIG_TOKEN: the leading "_" is a word char).
+store_has_secret() {
+  $WR secrets-store secret list "$STORE_ID" --remote --per-page 100 2>/dev/null | grep -qw "$1"
+}
 seed_secret RUNPOD_API_KEY            "$RUNPOD_API_KEY"
 seed_secret GATEWAY_ID                "$GATEWAY_ID"
 seed_secret BACKEND_RUNPOD_ENDPOINT_ID "$RUNPOD_ENDPOINT_ID"
+# The core also binds R2 S3 creds from the store (#473 core migration); seed them here so the core
+# [[secrets_store_secrets]] blocks resolve to a value instead of empty. Both are need-required above.
+seed_secret R2_S3_ACCESS_KEY_ID       "$R2_S3_ACCESS_KEY_ID"
+seed_secret R2_S3_SECRET_ACCESS_KEY   "$R2_S3_SECRET_ACCESS_KEY"
 if [ "$VIVIJURE_PROFILE" = full ]; then
   [ -n "${VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID:-}" ] || die "full profile: VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID required (finish-upscale)"
   [ -n "${MUSETALK_RUNPOD_ENDPOINT_ID:-}" ]      || die "full profile: MUSETALK_RUNPOD_ENDPOINT_ID required (finish-lipsync)"
@@ -188,6 +197,57 @@ for m in $MODULES; do
   [ -f "$f" ] || die "missing $f"
   sed -i -E "s/store_id = \"[^\"]*\"/store_id = \"$STORE_ID\"/g" "$f"
 done
+
+# ---- 3 (cont.). resolve + seed the AI Gateway planner token BEFORE any deploy ---------------
+# CF_AIG_TOKEN (core) and PLAN_ENHANCE_CF_AIG_TOKEN (plan-enhance) are load-bearing store bindings
+# since the #473 core migration: `wrangler deploy` FAILS (code 10182) against a store secret that is
+# not yet seeded. plan-enhance binds them in step 6 and the core in step 7, so BOTH must be in the
+# store now -- this can no longer be a post-deploy "arm later" step. Three doors, in order:
+# (1) pasted in deploy.env; (2) already in the store from a prior run; (3) auto-mint a purpose-named
+# "AI Gateway Run"-only token (needs "Account API Tokens: Edit" on CLOUDFLARE_API_TOKEN). If ALL three
+# miss we die HERE, before ANY worker is deployed -- a fail-closed prerequisite, not a silent degrade
+# (the old "deploy anyway, planner unarmed" path is impossible once the token is a load-bearing store
+# binding; findings F9/F16 updated).
+say "Step 3/8 (cont.): resolve the AI Gateway planner token (required before deploy)"
+arm_plan_enhance() { # $1 = the AIG token value -> the module-scoped store secret (per-function key)
+  # plan-enhance binds CF_AIG_TOKEN from the store secret PLAN_ENHANCE_CF_AIG_TOKEN, and GATEWAY_ID
+  # from the shared store secret already seeded above. Seed the module token into the store; a
+  # `wrangler secret put` of either name on the module would collide with those store bindings (#479).
+  seed_secret PLAN_ENHANCE_CF_AIG_TOKEN "$1"
+}
+if [ -n "${CF_AIG_TOKEN:-}" ]; then
+  # Door 1: pasted in deploy.env. Seeds (or rotates) both store secrets from the paste.
+  seed_secret CF_AIG_TOKEN "$CF_AIG_TOKEN"
+  arm_plan_enhance "$(strip_val "$CF_AIG_TOKEN")"
+  info "planner token seeded from deploy.env"
+elif store_has_secret CF_AIG_TOKEN && store_has_secret PLAN_ENHANCE_CF_AIG_TOKEN; then
+  # Door 2: a prior run already seeded both. Store secret VALUES cannot be read back, so BOTH must be
+  # present to reuse; if either is missing we fall through to door 3 and mint a fresh pair.
+  info "planner token already in the Secrets Store (prior run); reusing it"
+else
+  # Door 3: auto-mint a Run-only token. The mint response contains the secret value: it goes STRAIGHT
+  # from the script into the store seed and is never echoed or logged (same discipline as STUDIO_API_TOKEN).
+  say "CF_AIG_TOKEN not in deploy.env -- minting a Run-only token via the API"
+  AIG_MINTED="$(python3 scripts/mint-aig-run-token.py 2>/dev/null || true)"
+  if [ -n "$AIG_MINTED" ]; then
+    seed_secret CF_AIG_TOKEN "$AIG_MINTED"
+    info "CF_AIG_TOKEN auto-minted (vivijure-planner-aig-run)"
+    arm_plan_enhance "$AIG_MINTED"
+  else
+    printf "\n"
+    printf "  ====================== PLANNER TOKEN REQUIRED ======================\n"
+    printf "  CF_AIG_TOKEN could not be obtained, and it is REQUIRED before deploy: the core Worker and\n"
+    printf "  the plan-enhance module BOTH bind it from the Secrets Store (#473), and wrangler fails a\n"
+    printf "  deploy whose store secret is unseeded (code 10182). Fix EITHER way, then re-run ./deploy.sh:\n"
+    printf "    1. Paste a token into deploy.env:  CF_AIG_TOKEN=<AI Gateway auth token, Run permission>\n"
+    printf "       Mint it at https://dash.cloudflare.com/%s/ai/ai-gateway/gateways/%s\n" "$CLOUDFLARE_ACCOUNT_ID" "$GATEWAY_ID"
+    printf "       (Settings -> Create authentication token -> Run), or\n"
+    printf "    2. Grant your CLOUDFLARE_API_TOKEN the \"Account API Tokens: Edit\" scope so deploy.sh\n"
+    printf "       auto-mints the Run-only token for you.\n"
+    printf "  ====================================================================\n\n"
+    die "CF_AIG_TOKEN is required before deploy (see the steps above)"
+  fi
+fi
 
 # ---- 4. render wrangler.toml from the template ------------------------------
 say "Step 4/8: render wrangler.toml ($VIVIJURE_PROFILE profile)"
@@ -222,9 +282,18 @@ case "$DEPLOY_HOSTNAME" in
     info "workers.dev target: workers_dev=true, custom-domain route dropped"
     ;;
 esac
+# Point the CORE at YOUR store too (the step-3 module loop only did the modules). The template ships
+# the REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID placeholder in every core [[secrets_store_secrets]] block;
+# fill it with your real store id or `wrangler deploy` of the core dies on the literal placeholder
+# (#473 core store migration; #479). Same idempotent rewrite as the module configs (matches the
+# placeholder OR a prior id inside the quotes, so a re-run is a no-op).
+sed -i -E "s/store_id = \"[^\"]*\"/store_id = \"$STORE_ID\"/g" wrangler.toml
+info "wired your store id into the core config"
+
 # fail-closed: no leftover placeholder, AUTH_MODE rendered non-empty, and in access mode the
 # Access vars must be present + non-empty (empty would unarm the F2 backstop -> DENY-everything).
 if grep -q "\${" wrangler.toml; then grep -n "\${" wrangler.toml; die "unsubstituted placeholder left in wrangler.toml"; fi
+if grep -q "REPLACE_WITH_" wrangler.toml; then grep -n "REPLACE_WITH_" wrangler.toml; die "unfilled store_id placeholder left in wrangler.toml -- the step-4 store wiring failed"; fi
 grep -Eq "AUTH_MODE = \".+\"" wrangler.toml || die "AUTH_MODE is empty after render -- refusing to deploy an unauthenticated studio"
 if [ "$AUTH_MODE" = access ]; then
   grep -Eq "ACCESS_AUD = \".+\"" wrangler.toml && grep -Eq "ACCESS_TEAM_DOMAIN = \".+\"" wrangler.toml \
@@ -283,46 +352,16 @@ npm run deploy
 # ---- 8. core worker secrets (applied live; safe after deploy) ---------------
 say "Step 8/8: set core worker secrets"
 put_secret() { printf "%s" "$(strip_val "$2")" | $WR secret put "$1" >/dev/null && info "set $1"; }
+# Only CLOUDFLARE_ACCOUNT_ID stays a direct worker secret here; STUDIO_API_TOKEN is the only other one
+# (set below). Every former worker secret (RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID, R2_S3_ACCESS_KEY_ID,
+# R2_S3_SECRET_ACCESS_KEY, GATEWAY_ID, CF_AIG_TOKEN, PLAN_ENHANCE_CF_AIG_TOKEN) now binds from the
+# Secrets Store, all seeded in step 3 BEFORE the deploys. Putting any of them as a worker secret would
+# collide with the core's [[secrets_store_secrets]] binding of the same name (#473 core store migration; #479).
 put_secret CLOUDFLARE_ACCOUNT_ID    "$CLOUDFLARE_ACCOUNT_ID"
-put_secret RUNPOD_API_KEY           "$RUNPOD_API_KEY"
-put_secret RUNPOD_ENDPOINT_ID       "$RUNPOD_ENDPOINT_ID"
-put_secret R2_S3_ACCESS_KEY_ID      "$R2_S3_ACCESS_KEY_ID"
-put_secret R2_S3_SECRET_ACCESS_KEY  "$R2_S3_SECRET_ACCESS_KEY"
 # R2_S3_ENDPOINT + R2_S3_BUCKET are NOT secrets -- they render into [vars] (see step 4). #238 follow-up.
-put_secret GATEWAY_ID               "$GATEWAY_ID"
 
-# ---- CF_AIG_TOKEN: pays the storyboard planner via Unified Billing (finding F16) -------------
-# The planner's release models (Anthropic) and the plan-enhance Opus pass authenticate to the
-# AI Gateway with cf-aig-authorization; without this secret the planner is dead on arrival.
-# Three doors, in order: (1) pasted in deploy.env; (2) already on the worker from a prior run;
-# (3) auto-mint a purpose-named "AI Gateway Run"-only token (needs "Account API Tokens: Edit"
-# on CLOUDFLARE_API_TOKEN). If all three miss, the deploy still completes and the final banner
-# prints the exact dashboard steps (re-runs are idempotent, finding F9).
-PLANNER_ARMED=""
-arm_plan_enhance() { # $1 = the token value; per-module secrets so the Opus pass works too
-  printf "%s" "$1"                         | $WR secret put CF_AIG_TOKEN --config modules/plan-enhance/wrangler.toml >/dev/null && info "set plan-enhance CF_AIG_TOKEN"
-  printf "%s" "$(strip_val "$GATEWAY_ID")" | $WR secret put GATEWAY_ID   --config modules/plan-enhance/wrangler.toml >/dev/null && info "set plan-enhance GATEWAY_ID"
-}
-if [ -n "${CF_AIG_TOKEN:-}" ]; then
-  put_secret CF_AIG_TOKEN "$CF_AIG_TOKEN"
-  arm_plan_enhance "$(strip_val "$CF_AIG_TOKEN")"
-  PLANNER_ARMED=1
-elif $WR secret list 2>/dev/null | grep -q '"CF_AIG_TOKEN"'; then
-  info "CF_AIG_TOKEN already set on the worker (prior run); skipping mint"
-  PLANNER_ARMED=1
-else
-  say "CF_AIG_TOKEN not in deploy.env -- minting a Run-only token via the API"
-  # The mint response contains the secret value: it goes STRAIGHT from the script into the
-  # secret puts and is never echoed or logged (same discipline as the STUDIO_API_TOKEN mint).
-  AIG_MINTED="$(python3 scripts/mint-aig-run-token.py 2>/dev/null || true)"
-  if [ -n "$AIG_MINTED" ]; then
-    printf "%s" "$AIG_MINTED" | $WR secret put CF_AIG_TOKEN >/dev/null && info "set CF_AIG_TOKEN (auto-minted: vivijure-planner-aig-run)"
-    arm_plan_enhance "$AIG_MINTED"
-    PLANNER_ARMED=1
-  else
-    info "could not mint (deploy token lacks Account API Tokens: Edit?) -- see the banner below"
-  fi
-fi
+# The planner token is already resolved + seeded (step 3); it is a hard deploy prerequisite now, so
+# by here it always exists. What remains is the AI Gateway itself, a RUNTIME (not deploy) dependency.
 # Ensure the AI Gateway exists (finding F2). When GATEWAY_ID was not supplied we create it here with
 # authentication + cache_invalidate_on_update ON at birth (a fresh gateway otherwise defaults to
 # authentication=false, which breaks Unified Billing). Best-effort: a deploy token without
@@ -444,7 +483,7 @@ MSG
 fi
 
 # ---- planner status (finding F16): tell the operator exactly where the planner stands --------
-if [ -n "$PLANNER_ARMED" ] && [ "$GW_AUTH_OK" = ok ]; then
+if [ "$GW_AUTH_OK" = ok ]; then
 cat <<MSG
 
   Planner: ARMED. Storyboard planning bills your AI Gateway credits -- load them on the
@@ -456,16 +495,6 @@ cat <<MSG
 
   ====================== PLANNER NOT FULLY ARMED YET ======================
 MSG
-if [ -z "$PLANNER_ARMED" ]; then
-cat <<MSG
-  CF_AIG_TOKEN is not set, so storyboard planning is DISABLED until you:
-    1. Mint an AI Gateway auth token: dashboard -> AI Gateway -> your gateway ->
-       Settings -> "Create authentication token" (Run permission). Direct URL:
-       https://dash.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/ai/ai-gateway/gateways/$GATEWAY_ID
-    2. Add it to deploy.env:   CF_AIG_TOKEN=<the token>
-    3. Re-run ./deploy.sh (safe: a re-run updates in place)
-MSG
-fi
 if [ "$GW_CREATE_OK" != ok ]; then
 cat <<MSG
   The AI Gateway "$GATEWAY_ID" could not be created automatically (your deploy token likely lacks
