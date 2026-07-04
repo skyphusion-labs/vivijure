@@ -31,13 +31,11 @@ workers_dev = false
 #     routes itself (STUDIO_PAGE_ASSETS, incl. "/" -> /modules.html). Dev-verified, no loop.
 assets = { directory = "./public", binding = "ASSETS", html_handling = "none", run_worker_first = true }
 
-# >>> OPTIONAL: tail-consumer -- core render logs -> Loki/Grafana via OUR vivijure-tail worker
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
+# >>> SELFHOST-SKIP: tail-consumer -- core render logs -> Loki/Grafana via OUR vivijure-tail worker
 # Tail consumer -- ships core render logs + exceptions to vivijure-tail -> Loki -> Grafana.
 # DEPLOY-ORDERED: vivijure-tail must be live BEFORE this binding deploys (dangling-binding hazard).
 tail_consumers = [ { service = "vivijure-tail" } ]
-# <<< OPTIONAL: tail-consumer
+# <<< SELFHOST-SKIP: tail-consumer
 
 # Auth for /api/* (#423, src/auth-gate.ts). AUTH_MODE picks the gate:
 #   "token"  -> built-in bearer token: /api/* requires Authorization: Bearer <token> checked
@@ -132,11 +130,11 @@ tag = "v2-drop-cpu-containers"
 # an outsider deploying from this example does not.
 deleted_classes = ["VideoFinishContainer"]
 
-# >>> OPTIONAL: finish-fleet-vpc -- the 4 Workers-VPC CPU containers (video-finish / image-prep / audio-beat-sync / audio-mix) on your own box
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
-# Workers VPC: the 3 CPU containers (video-finish / image-prep / audio-beat-sync) run always-on on
-# the fleet, reached over private VPC bindings (issue #83 -- off CF Containers, no cold start).
+# Workers VPC -> the media-stack CPU containers (video-finish / image-prep / audio-beat-sync /
+# audio-mix) run always-on on the operator's own container host (containers/compose.yaml),
+# reached over private VPC bindings. STANDARD as of #519: deploy.sh creates the tunnel + these
+# VPC services and renders their ids here, so there is nothing to strip (issue #83 -- off CF
+# Containers, no cold start).
 [[vpc_services]]
 binding = "VIDEO_FINISH_VPC"
 service_id = "${VPC_VIDEO_FINISH_ID}"
@@ -157,7 +155,6 @@ remote = true
 binding = "AUDIO_MIX_VPC"
 service_id = "${VPC_AUDIO_MIX_ID}"
 remote = true
-# <<< OPTIONAL: finish-fleet-vpc
 
 # --- Credential secrets via the Cloudflare Secrets Store (#238). Seeded ONCE by the operator
 # --- (npx wrangler secrets-store secret create <STORE_ID> --name <NAME> ...); values never touch
@@ -215,6 +212,10 @@ service = "vivijure-module-plan-enhance"
 binding = "MODULE_OWN_GPU"
 service = "vivijure-module-own-gpu"
 
+# >>> LOCAL-GPU: local-gpu -- i2v on the operator's OWN local GPU box (opt-in)
+#     deploy.sh strips this unless INSTALL_LOCAL_GPU=1: the local-gpu module is only
+#     deployed when you have a local backend, so binding it before then would dangle
+#     (code 10143). CI keeps it (prod binds the deployed module). See docs/DEPLOYMENT.md.
 # Local-consumer i2v (LTX-Video on a disposable RunPod SECURE pod running vivijure-local-12gb, exposed
 # via a TryCloudflare quick tunnel): the LOCAL door, the deliberate opposite of the datacenter own-gpu
 # path. LOCAL_BACKEND_URL is the ephemeral trycloudflare URL, re-seeded per pod (door fails loud when
@@ -223,6 +224,7 @@ service = "vivijure-module-own-gpu"
 [[services]]
 binding = "MODULE_LOCAL_GPU"
 service = "vivijure-module-local-gpu"
+# <<< LOCAL-GPU: local-gpu
 
 [[services]]
 binding = "MODULE_SEEDANCE"
@@ -240,29 +242,20 @@ service = "vivijure-module-keyframe"
 binding = "MODULE_FINISH_RIFE"
 service = "vivijure-module-finish-rife"
 
-# >>> OPTIONAL: finish-upscale -- Real-ESRGAN upscale on a SEPARATE RunPod endpoint
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
+# >>> SATELLITE: finish-upscale -- Real-ESRGAN upscale on a SEPARATE RunPod endpoint
 # Upscale: a finish-chain module (Real-ESRGAN 2x/4x spatial upscale) on the dedicated vivijure-upscale
 # RunPod endpoint (CUDA, separate from vivijure-backend). Folds after finish-rife in ui.order.
 [[services]]
 binding = "MODULE_UPSCALE"
 service = "vivijure-module-finish-upscale"
-# <<< OPTIONAL: finish-upscale
+# <<< SATELLITE: finish-upscale
 
-# >>> OPTIONAL: text-overlay -- burn titles/credits via the video-finish CPU container
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
 # Text overlay: a finish-chain module (titles / credits / lower-thirds / subtitles) that burns text
 # via the video-finish container's /overlay route. Folds after finish-rife in ui.order.
 [[services]]
 binding = "MODULE_TEXT_OVERLAY"
 service = "vivijure-module-text-overlay"
-# <<< OPTIONAL: text-overlay
 
-# >>> OPTIONAL: film-titles -- opening + end credit cards via the video-finish CPU container
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
 # Film titles: a film.finish-chain module (opening title + end credit cards) that runs on the
 # assembled+muxed film via the video-finish /film-titles route. The orchestrator invokes the
 # film.finish chain (applyFilmFinish, post-mux before done) since v0.3.0, so this runs on every
@@ -270,7 +263,6 @@ service = "vivijure-module-text-overlay"
 [[services]]
 binding = "MODULE_FILM_TITLES"
 service = "vivijure-module-film-titles"
-# <<< OPTIONAL: film-titles
 
 # Cast.image: generate a character's LoRA training reference set (FLUX 2 / Nano Banana). Cast-prep.
 [[services]]
@@ -292,18 +284,11 @@ service = "vivijure-module-music-gen"
 binding = "MODULE_NARRATION_GEN"
 service = "vivijure-module-narration-gen"
 
-# >>> OPTIONAL: beat-sync -- librosa beat analysis via the audio-beat-sync CPU container
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
 # Beat sync: librosa analysis via fleet audio-beat-sync container (score chain, VPC).
 [[services]]
 binding = "MODULE_BEAT_SYNC"
 service = "vivijure-module-beat-sync"
-# <<< OPTIONAL: beat-sync
 
-# >>> OPTIONAL: audio-master -- LUFS mastering via the audio-master CPU container
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
 # Audio master: film-level mastering of the assembled audio bed (music upscale + LUFS loudness) on the
 # audio-master CPU VPC container (containers/audio-master over AUDIO_MASTER_VPC -- CPU ffmpeg, NEVER
 # RunPod/GPU). The `master` chain runs after assemble, before the final mux; a master miss soft-degrades
@@ -311,7 +296,6 @@ service = "vivijure-module-beat-sync"
 [[services]]
 binding = "MODULE_AUDIO_MASTER"
 service = "vivijure-module-audio-master"
-# <<< OPTIONAL: audio-master
 
 # Dialogue: per-shot spoken lines -> Deepgram Aura-1 (Workers AI) in the cast member's voice. The
 # `dialogue` phase runs after clips, before finish; its audio_key feeds the lip-sync finish module.
@@ -319,26 +303,22 @@ service = "vivijure-module-audio-master"
 binding = "MODULE_DIALOGUE"
 service = "vivijure-module-dialogue-gen"
 
-# >>> OPTIONAL: finish-lipsync -- MuseTalk lip-sync on a SEPARATE RunPod endpoint
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
+# >>> SATELLITE: finish-lipsync -- MuseTalk lip-sync on a SEPARATE RunPod endpoint
 # Lip-sync (finish chain): MuseTalk on the dedicated cu128 RunPod endpoint; rewrites a shot's mouth
 # to the dialogue audio_key. Runs before the upscaler (ui.order 15 < 20).
 [[services]]
 binding = "MODULE_LIPSYNC"
 service = "vivijure-module-finish-lipsync"
-# <<< OPTIONAL: finish-lipsync
+# <<< SATELLITE: finish-lipsync
 
-# >>> OPTIONAL: speech-upscale -- speech cleanup on a SEPARATE RunPod endpoint
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
+# >>> SATELLITE: speech-upscale -- speech cleanup on a SEPARATE RunPod endpoint
 # Speech upscale (the `speech` hook): aviation-grade speech cleanup / enhancement on the dialogue
 # audio_key before lip-sync consumes it. Its own per-module worker; the registry discovers it as a
 # MODULE_* binding.
 [[services]]
 binding = "MODULE_SPEECH_UPSCALE"
 service = "vivijure-module-speech-upscale"
-# <<< OPTIONAL: speech-upscale
+# <<< SATELLITE: speech-upscale
 
 # Cloud i2v motion.backend modules (RunPod-hosted), joining own-gpu / seedance / kling. Each is its
 # own per-module worker with a scoped RUNPOD_API_KEY; the registry discovers them as MODULE_* bindings.
@@ -375,15 +355,11 @@ service = "vivijure-module-alibaba-wan-lora"
 binding = "MODULE_CLOUD_KEYFRAME"
 service = "vivijure-module-cloud-keyframe"
 
-# >>> OPTIONAL: subtitle -- burn SRT subtitles via the video-finish CPU container
-#     Stripped by deploy.sh when VIVIJURE_PROFILE=minimal; it dangles for an outsider
-#     (needs OUR fleet or a second endpoint) and would fail wrangler deploy. See docs/DEPLOYMENT.md.
 # Subtitle (film.finish): burns a time-synced SRT via the video-finish container (POST /subtitle).
 # ADDED in v0.3.0; depends on the video-finish container rebuild (runbook 1.0).
 [[services]]
 binding = "MODULE_SUBTITLE"
 service = "vivijure-module-subtitle"
-# <<< OPTIONAL: subtitle
 
 # --- Phase 3: Workers for Platforms (WfP) dynamic dispatch -- OPT-IN, ships COMMENTED OUT on purpose.
 # ---

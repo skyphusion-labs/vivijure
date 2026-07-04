@@ -6,10 +6,15 @@
 # never ship a half-configured studio. Read docs/DEPLOYMENT.md for what each key is and why.
 #
 # Two profiles (set VIVIJURE_PROFILE in deploy.env):
-#   minimal -> studio core + cloud/own-GPU render (Cloudflare + RunPod + AI Gateway only).
-#   full    -> also the finish modules that need your own CPU boxes or a 2nd RunPod endpoint.
-# A minimal deploy STRIPS the "# >>> OPTIONAL: ... # <<< OPTIONAL:" blocks from wrangler.toml.example
-# so those extra bindings never dangle and break the deploy.
+#   standard   -> studio core + cloud/own-GPU render + the media stack (5 always-on CPU containers
+#                 reached over Workers VPC). deploy.sh AUTOMATES the media stack: it creates the
+#                 Cloudflare tunnel + the 5 VPC Services and wires their ids in; you just run
+#                 `docker compose up` for the containers (#519).
+#   satellites -> also the 3 opt-in GPU satellites (upscale / lip-sync / speech-upscale), each on
+#                 its own RunPod endpoint.
+# The render strips the wrangler.toml.example blocks this deploy does not want: SATELLITE blocks
+# unless the satellites profile, the LOCAL-GPU block unless INSTALL_LOCAL_GPU=1, and SELFHOST-SKIP
+# (our-fleet-only) blocks always. The media-stack bindings are unconditional (standard).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -39,11 +44,18 @@ strip_val() { printf "%s" "$1" | cut -d= -f2- | tr -d "[:space:]"; }
 [ -f deploy.env ] || die "deploy.env not found. Run: cp deploy.env.example deploy.env  (then edit it)."
 set -a; . ./deploy.env; set +a
 
-VIVIJURE_PROFILE="${VIVIJURE_PROFILE:-minimal}"
+VIVIJURE_PROFILE="${VIVIJURE_PROFILE:-standard}"
 case "$VIVIJURE_PROFILE" in
-  minimal|full) ;;
-  *) die "VIVIJURE_PROFILE must be minimal or full (got: $VIVIJURE_PROFILE)";;
+  standard|satellites) ;;
+  # Back-compat with the pre-#519 names. The media stack is STANDARD now, so both old names map onto
+  # the new ones (minimal gained the media stack; full == standard + satellites). Warn, do not fail.
+  minimal) info "VIVIJURE_PROFILE=minimal is deprecated -> using 'standard' (the media stack is standard now, #519)"; VIVIJURE_PROFILE=standard ;;
+  full)    info "VIVIJURE_PROFILE=full is deprecated -> using 'satellites'"; VIVIJURE_PROFILE=satellites ;;
+  *) die "VIVIJURE_PROFILE must be standard or satellites (got: $VIVIJURE_PROFILE)";;
 esac
+# local-gpu is a SEPARATE opt-in (it needs YOUR own local GPU box + a running local backend). Off by
+# default: set INSTALL_LOCAL_GPU=1 in deploy.env once your local backend is up (docs/DEPLOYMENT.md).
+INSTALL_LOCAL_GPU="${INSTALL_LOCAL_GPU:-}"
 
 need() { local v; eval "v=\${$1:-}"; [ -n "$v" ] || die "deploy.env: $1 is required but empty -- $2"; }
 need CLOUDFLARE_ACCOUNT_ID   "your Cloudflare account id"
@@ -93,17 +105,22 @@ export CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
 
 # The module workers this profile deploys. Explicit (not a glob) so a work-in-progress module in
 # modules/ is never picked up by accident, and the list matches the profile boundary in the docs.
-MIN_MODULES="own-gpu seedance kling keyframe cloud-keyframe finish-rife plan-enhance cast-image \
+# STANDARD = core render modules + the media-stack finish modules (text-overlay / film-titles /
+# subtitle / beat-sync / audio-master), all reached over Workers VPC (provisioned in step 4, #519).
+STANDARD_MODULES="own-gpu seedance kling keyframe cloud-keyframe finish-rife plan-enhance cast-image \
 notify-email music-gen narration-gen dialogue-gen minimax-hailuo google-veo vidu-q3 alibaba-wan \
-alibaba-wan-lora"
-OPT_MODULES="finish-upscale text-overlay film-titles subtitle beat-sync audio-master \
-finish-lipsync speech-upscale"
-if [ "$VIVIJURE_PROFILE" = full ]; then MODULES="$MIN_MODULES $OPT_MODULES"; else MODULES="$MIN_MODULES"; fi
+alibaba-wan-lora text-overlay film-titles subtitle beat-sync audio-master"
+# SATELLITES = the 3 opt-in GPU finish modules, each on its own separate RunPod endpoint.
+SATELLITE_MODULES="finish-upscale finish-lipsync speech-upscale"
+MODULES="$STANDARD_MODULES"
+[ "$VIVIJURE_PROFILE" = satellites ] && MODULES="$STANDARD_MODULES $SATELLITE_MODULES"
+# Opt-in: the local-GPU door module (only deployed when you run your own local backend).
+[ "$INSTALL_LOCAL_GPU" = "1" ] && MODULES="$MODULES local-gpu"
 
 say "Vivijure Studio deploy -- profile: $VIVIJURE_PROFILE, auth: $AUTH_MODE, hostname: $DEPLOY_HOSTNAME"
 
 # ---- 1. D1 database ----------------------------------------------------------
-say "Step 1/8: D1 database vivijure-studio"
+say "Step 1/9: D1 database vivijure-studio"
 D1_ID="$($WR d1 info vivijure-studio --json 2>/dev/null \
   | python3 -c "import sys,json
 try:
@@ -121,7 +138,7 @@ fi
 export D1_DATABASE_ID="$D1_ID"
 
 # ---- 2. R2 buckets -----------------------------------------------------------
-say "Step 2/8: R2 buckets (vivijure, skyphusion-llm)"
+say "Step 2/9: R2 buckets (vivijure, skyphusion-llm)"
 for b in vivijure skyphusion-llm; do
   if $WR r2 bucket info "$b" >/dev/null 2>&1; then
     info "bucket $b already exists"
@@ -143,7 +160,7 @@ for b in vivijure skyphusion-llm; do
 done
 
 # ---- 3. Secrets Store (module secrets) --------------------------------------
-say "Step 3/8: Cloudflare Secrets Store (module secrets)"
+say "Step 3/9: Cloudflare Secrets Store (module secrets)"
 STORE_ID="$($WR secrets-store store list --remote 2>/dev/null | grep -oE "[0-9a-f]{32}" | head -1 || true)"
 if [ -z "$STORE_ID" ]; then
   out="$($WR secrets-store store create vivijure --remote 2>&1)" || { printf "%s\n" "$out"; die "store create failed"; }
@@ -180,10 +197,10 @@ seed_secret BACKEND_RUNPOD_ENDPOINT_ID "$RUNPOD_ENDPOINT_ID"
 # [[secrets_store_secrets]] blocks resolve to a value instead of empty. Both are need-required above.
 seed_secret R2_S3_ACCESS_KEY_ID       "$R2_S3_ACCESS_KEY_ID"
 seed_secret R2_S3_SECRET_ACCESS_KEY   "$R2_S3_SECRET_ACCESS_KEY"
-if [ "$VIVIJURE_PROFILE" = full ]; then
-  [ -n "${VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID:-}" ] || die "full profile: VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID required (finish-upscale)"
-  [ -n "${MUSETALK_RUNPOD_ENDPOINT_ID:-}" ]      || die "full profile: MUSETALK_RUNPOD_ENDPOINT_ID required (finish-lipsync)"
-  [ -n "${AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID:-}" ] || die "full profile: AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID required (speech-upscale)"
+if [ "$VIVIJURE_PROFILE" = satellites ]; then
+  [ -n "${VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID:-}" ] || die "satellites profile: VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID required (finish-upscale)"
+  [ -n "${MUSETALK_RUNPOD_ENDPOINT_ID:-}" ]      || die "satellites profile: MUSETALK_RUNPOD_ENDPOINT_ID required (finish-lipsync)"
+  [ -n "${AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID:-}" ] || die "satellites profile: AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID required (speech-upscale)"
   seed_secret VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID "$VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID"
   seed_secret MUSETALK_RUNPOD_ENDPOINT_ID      "$MUSETALK_RUNPOD_ENDPOINT_ID"
   seed_secret AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID  "$AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID"
@@ -210,7 +227,7 @@ done
 # miss we die HERE, before ANY worker is deployed -- a fail-closed prerequisite, not a silent degrade
 # (the old "deploy anyway, planner unarmed" path is impossible once the token is a load-bearing store
 # binding; findings F9/F16 updated).
-say "Step 3/8 (cont.): resolve the AI Gateway planner token (required before deploy)"
+say "Step 3/9 (cont.): resolve the AI Gateway planner token (required before deploy)"
 arm_plan_enhance() { # $1 = the AIG token value -> the module-scoped store secret (per-function key)
   # plan-enhance binds CF_AIG_TOKEN from the store secret PLAN_ENHANCE_CF_AIG_TOKEN, and GATEWAY_ID
   # from the shared store secret already seeded above. Seed the module token into the store; a
@@ -251,25 +268,62 @@ else
   fi
 fi
 
-# ---- 4. render wrangler.toml from the template ------------------------------
-say "Step 4/8: render wrangler.toml ($VIVIJURE_PROFILE profile)"
+# ---- 4. media stack: Cloudflare tunnel + Workers VPC services ----------------
+# STANDARD as of #519. scripts/setup-media-vpc.py reuses-or-creates ONE cloudflared tunnel and the 5
+# Workers VPC Services (video-finish / image-prep / audio-beat-sync / audio-mix / audio-master), and
+# writes the tunnel CONNECTOR TOKEN to containers/tunnel.env (0600, for docker compose) -- the token
+# never touches stdout or a log. Its JSON stdout carries only the NON-secret ids, which we render into
+# the core wrangler.toml (envsubst below) and into the 5 media module tomls (the F8/#520 fix: no
+# hardcoded prod VPC ids in the tracked configs). Idempotent: a re-run reuses the tunnel + services.
+say "Step 4/9: media stack -- Cloudflare tunnel + Workers VPC services"
+if ! MEDIA_JSON="$(python3 scripts/setup-media-vpc.py --token-file containers/tunnel.env)"; then
+  die "media-stack VPC setup failed (see the error above). The deploy token needs Cloudflare Tunnel: Write + Connectivity Directory: Admin -- see docs/DEPLOYMENT.md 2a."
+fi
+media_id() { printf "%s" "$MEDIA_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"services\"][\"$1\"])"; }
+# assign then export (separate, so a media_id failure is not masked -- SC2155); the guard below
+# then fails closed on any empty id.
+VPC_VIDEO_FINISH_ID="$(media_id video-finish)"
+VPC_IMAGE_PREP_ID="$(media_id image-prep)"
+VPC_AUDIO_BEAT_SYNC_ID="$(media_id audio-beat-sync)"
+VPC_AUDIO_MIX_ID="$(media_id audio-mix)"
+VPC_AUDIO_MASTER_ID="$(media_id audio-master)"
+export VPC_VIDEO_FINISH_ID VPC_IMAGE_PREP_ID VPC_AUDIO_BEAT_SYNC_ID VPC_AUDIO_MIX_ID
+for v in VPC_VIDEO_FINISH_ID VPC_IMAGE_PREP_ID VPC_AUDIO_BEAT_SYNC_ID VPC_AUDIO_MIX_ID VPC_AUDIO_MASTER_ID; do
+  eval "vv=\${$v:-}"; [ -n "$vv" ] || die "media stack: $v came back empty from setup-media-vpc.py"
+done
+# Fill each media module's service_id placeholder with its real VPC service id (idempotent: matches the
+# committed REPLACE_WITH_* placeholder OR a prior id). Mirrors the store_id rewrite above.
+set_module_vpc() { sed -i -E "s|^service_id = \"[^\"]*\"|service_id = \"$2\"|" "modules/$1/wrangler.toml"; }
+for m in film-titles subtitle text-overlay; do set_module_vpc "$m" "$VPC_VIDEO_FINISH_ID"; done
+set_module_vpc beat-sync    "$VPC_AUDIO_BEAT_SYNC_ID"
+set_module_vpc audio-master "$VPC_AUDIO_MASTER_ID"
+info "media stack: tunnel + 5 VPC services ready; token -> containers/tunnel.env (0600)"
+
+# ---- 5. render wrangler.toml from the template ------------------------------
+say "Step 5/9: render wrangler.toml ($VIVIJURE_PROFILE profile)"
 command -v envsubst >/dev/null || die "envsubst not found -- install gettext (apt-get install gettext-base)"
 export AUTH_MODE ACCESS_TEAM_DOMAIN ACCESS_AUD D1_DATABASE_ID WEB_ANALYTICS_TOKEN SPEND_RATE_LIMITER_NS_ID
 export R2_S3_ENDPOINT R2_S3_BUCKET   # #238 follow-up: now rendered into [vars], not put as secrets
-export VPC_VIDEO_FINISH_ID="${VPC_VIDEO_FINISH_ID:-}" VPC_IMAGE_PREP_ID="${VPC_IMAGE_PREP_ID:-}" \
-       VPC_AUDIO_BEAT_SYNC_ID="${VPC_AUDIO_BEAT_SYNC_ID:-}" VPC_AUDIO_MIX_ID="${VPC_AUDIO_MIX_ID:-}"
+# VPC_* ids are already exported by step 4 (the media stack is provisioned before this render).
 VARS="\$AUTH_MODE \$ACCESS_TEAM_DOMAIN \$ACCESS_AUD \$D1_DATABASE_ID \$VPC_VIDEO_FINISH_ID \$VPC_IMAGE_PREP_ID \$VPC_AUDIO_BEAT_SYNC_ID \$VPC_AUDIO_MIX_ID \$SPEND_RATE_LIMITER_NS_ID \$WEB_ANALYTICS_TOKEN \$R2_S3_ENDPOINT \$R2_S3_BUCKET"
 
-if [ "$VIVIJURE_PROFILE" = minimal ]; then
-  # drop each OPTIONAL block whole (markers + body): these need OUR fleet or a 2nd endpoint.
-  awk "/^# >>> OPTIONAL:/{skip=1;next} /^# <<< OPTIONAL:/{skip=0;next} !skip" wrangler.toml.example > .wrangler.stage.toml
-else
-  # full: keep the bodies, drop only the marker + its two description lines (cosmetic).
-  awk "/^# >>> OPTIONAL:/{skipn=2;next} skipn>0{skipn--;next} /^# <<< OPTIONAL:/{next} {print}" wrangler.toml.example > .wrangler.stage.toml
-  for v in VPC_VIDEO_FINISH_ID VPC_IMAGE_PREP_ID VPC_AUDIO_BEAT_SYNC_ID VPC_AUDIO_MIX_ID; do
-    eval "vv=\${$v:-}"; [ -n "$vv" ] || die "full profile: $v required (set it in deploy.env, or use VIVIJURE_PROFILE=minimal)"
-  done
-fi
+# Strip the wrangler.toml.example blocks this deploy does not want, then envsubst the rest:
+#   SELFHOST-SKIP -- OUR-fleet-only (e.g. the vivijure-tail consumer); ALWAYS stripped for a self-host.
+#   SATELLITE     -- the 3 opt-in GPU finish modules; stripped unless VIVIJURE_PROFILE=satellites.
+#   LOCAL-GPU     -- the local-GPU door binding; stripped unless INSTALL_LOCAL_GPU=1 (else it dangles
+#                    10143, the local-gpu module being deployed only with a local backend).
+# The media-stack bindings are unconditional (standard, #519) -- nothing strips them.
+KEEP_SAT=0; [ "$VIVIJURE_PROFILE" = satellites ] && KEEP_SAT=1
+KEEP_LGPU=0; [ "$INSTALL_LOCAL_GPU" = "1" ] && KEEP_LGPU=1
+awk -v sat="$KEEP_SAT" -v lgpu="$KEEP_LGPU" '
+  /^# >>> SELFHOST-SKIP:/ { skip=1; next }
+  /^# <<< SELFHOST-SKIP:/ { skip=0; next }
+  /^# >>> SATELLITE:/      { skip=(sat==1?0:1); next }
+  /^# <<< SATELLITE:/      { skip=0; next }
+  /^# >>> LOCAL-GPU:/      { skip=(lgpu==1?0:1); next }
+  /^# <<< LOCAL-GPU:/      { skip=0; next }
+  !skip { print }
+' wrangler.toml.example > .wrangler.stage.toml
 envsubst "$VARS" < .wrangler.stage.toml > wrangler.toml
 rm -f .wrangler.stage.toml
 # retarget the route: the template ships OUR production hostname; point it at yours.
@@ -329,12 +383,12 @@ if [ -n "$UNAUTH_ON" ]; then
   printf "  #########################################################################\n\n"
 fi
 
-# ---- 5. D1 migrations --------------------------------------------------------
-say "Step 5/8: apply D1 migrations"
+# ---- 6. D1 migrations --------------------------------------------------------
+say "Step 6/9: apply D1 migrations"
 $WR d1 migrations apply vivijure-studio --remote
 
-# ---- 6. module workers (BEFORE the core) ------------------------------------
-say "Step 6/8: deploy module workers -- these MUST ship before the core"
+# ---- 7. module workers (BEFORE the core) ------------------------------------
+say "Step 7/9: deploy module workers -- these MUST ship before the core"
 for m in $MODULES; do
   info "deploying vivijure-module-$m"
   # Retry a transient Cloudflare API flake (e.g. 10013 on the per-worker /subdomain call) so a
@@ -347,12 +401,12 @@ for m in $MODULES; do
 done
 info "deployed $(printf "%s" "$MODULES" | wc -w) module worker(s)"
 
-# ---- 7. core worker ----------------------------------------------------------
-say "Step 7/8: deploy the core studio worker"
+# ---- 8. core worker ----------------------------------------------------------
+say "Step 8/9: deploy the core studio worker"
 npm run deploy
 
-# ---- 8. core worker secrets (applied live; safe after deploy) ---------------
-say "Step 8/8: set core worker secrets"
+# ---- 9. core worker secrets (applied live; safe after deploy) ---------------
+say "Step 9/9: set core worker secrets"
 put_secret() { printf "%s" "$(strip_val "$2")" | $WR secret put "$1" >/dev/null && info "set $1"; }
 # Only CLOUDFLARE_ACCOUNT_ID stays a direct worker secret here; STUDIO_API_TOKEN is the only other one
 # (set below). Every former worker secret (RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID, R2_S3_ACCESS_KEY_ID,
@@ -360,7 +414,7 @@ put_secret() { printf "%s" "$(strip_val "$2")" | $WR secret put "$1" >/dev/null 
 # Secrets Store, all seeded in step 3 BEFORE the deploys. Putting any of them as a worker secret would
 # collide with the core's [[secrets_store_secrets]] binding of the same name (#473 core store migration; #479).
 put_secret CLOUDFLARE_ACCOUNT_ID    "$CLOUDFLARE_ACCOUNT_ID"
-# R2_S3_ENDPOINT + R2_S3_BUCKET are NOT secrets -- they render into [vars] (see step 4). #238 follow-up.
+# R2_S3_ENDPOINT + R2_S3_BUCKET are NOT secrets -- they render into [vars] (see step 5). #238 follow-up.
 
 # The planner token is already resolved + seeded (step 3); it is a hard deploy prerequisite now, so
 # by here it always exists. What remains is the AI Gateway itself, a RUNTIME (not deploy) dependency.
@@ -459,8 +513,11 @@ cat <<MSG
   Optional hardening (teams/orgs): put Cloudflare Access in front of the hostname
   and redeploy with AUTH_MODE=access. See docs/SECURITY.md.
 
-  Profile: $VIVIJURE_PROFILE. To add the finish modules later, set VIVIJURE_PROFILE=full in
-  deploy.env (with the extra endpoint + VPC ids) and re-run ./deploy.sh.
+  Profile: $VIVIJURE_PROFILE. Bring the media-stack containers up on your box:
+      docker network create vivijure   # once, if it does not exist
+      docker compose -f containers/compose.yaml up -d --build
+  To add the GPU satellites later, set VIVIJURE_PROFILE=satellites in deploy.env (with the 3 extra
+  RunPod endpoint ids) and re-run ./deploy.sh.
 MSG
 elif [ "$AUTH_MODE" = token ]; then
 cat <<MSG
@@ -468,8 +525,11 @@ cat <<MSG
   Login unchanged: your existing STUDIO_API_TOKEN was kept, so saved studio logins keep working.
   Need a fresh token? Re-run:  ./deploy.sh --rotate-token  (invalidates the old one).
 
-  Profile: $VIVIJURE_PROFILE. To add the finish modules later, set VIVIJURE_PROFILE=full in
-  deploy.env (with the extra endpoint + VPC ids) and re-run ./deploy.sh.
+  Profile: $VIVIJURE_PROFILE. Bring the media-stack containers up on your box:
+      docker network create vivijure   # once, if it does not exist
+      docker compose -f containers/compose.yaml up -d --build
+  To add the GPU satellites later, set VIVIJURE_PROFILE=satellites in deploy.env (with the 3 extra
+  RunPod endpoint ids) and re-run ./deploy.sh.
 MSG
 else
 cat <<MSG
@@ -479,8 +539,11 @@ cat <<MSG
   ACCESS_TEAM_DOMAIN/ACCESS_AUD, but you still need the Access app itself on the hostname,
   or anyone can read and delete your projects. See docs/SECURITY.md.
 
-  Profile: $VIVIJURE_PROFILE. To add the finish modules later, set VIVIJURE_PROFILE=full in
-  deploy.env (with the extra endpoint + VPC ids) and re-run ./deploy.sh.
+  Profile: $VIVIJURE_PROFILE. Bring the media-stack containers up on your box:
+      docker network create vivijure   # once, if it does not exist
+      docker compose -f containers/compose.yaml up -d --build
+  To add the GPU satellites later, set VIVIJURE_PROFILE=satellites in deploy.env (with the 3 extra
+  RunPod endpoint ids) and re-run ./deploy.sh.
 MSG
 fi
 

@@ -23,5 +23,5 @@ bucket_name = "vivijure"
 # core uses for /finish and remuxAudioOnly; this module calls /overlay (new route in #190).
 [[vpc_services]]
 binding = "VIDEO_FINISH_VPC"
-service_id = "019ecbe6-9fc1-70a0-9946-14bbec0f51bc"
+service_id = "REPLACE_WITH_VPC_VIDEO_FINISH_ID"
 remote = true

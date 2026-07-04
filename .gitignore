@@ -29,3 +29,6 @@ __pycache__/
 
 # Node diagnostic reports (--report-on-fatalerror): embed the full process env, never committable
 report.[0-9]*.json
+
+# Media-stack connector token (0600), written by deploy.sh -> scripts/setup-media-vpc.py; NEVER commit.
+/containers/tunnel.env

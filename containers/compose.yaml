@@ -1,13 +1,14 @@
 # Vivijure media stack -- the always-on CPU containers (issue #83).
 #
 # These run always-on on the operator's container host instead of CF Containers (beta,
-# scale-to-zero -> cold-start 504s). The studio Worker reaches each privately
-# over Workers VPC: one cloudflared tunnel (3111f3fe) -> a VPC Service per
-# container -> the docker service name on the `vivijure` network. Service names
-# below MUST match the VPC Service `host` (video-finish / image-prep /
-# audio-beat-sync). All three are stateless and credential-free: the Worker
-# presigns short-lived R2 GET/PUT URLs and passes them in the request body, so
-# no R2 binding, no secrets, no mounts here.
+# scale-to-zero -> cold-start 504s). The studio Worker reaches each privately over Workers VPC:
+# the `cloudflared` connector below -> one Cloudflare tunnel -> a VPC Service per container -> the
+# docker service name on the `vivijure` network. Service names below MUST match the VPC Service
+# `host` (video-finish / image-prep / audio-beat-sync / audio-mix / audio-master). The tunnel + the
+# 5 VPC Services are created for you by `deploy.sh` (scripts/setup-media-vpc.py, #519); it also writes
+# the connector token to tunnel.env (0600, gitignored), which the cloudflared service reads. The
+# containers are stateless and credential-free: the Worker presigns short-lived R2 GET/PUT URLs and
+# passes them in the request body, so no R2 binding, no secrets, no mounts here.
 #
 # Deploy:  docker compose -p vivijure-media -f compose.yaml up -d --build
 # Health:  curl http://127.0.0.1:8780/health   (video-finish; 8781 prep, 8782 beat-sync, 8783 mix, 8784 master)
@@ -99,6 +100,27 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  # cloudflared: the tunnel connector that terminates the media-stack Workers VPC (#519). It joins
+  # the `vivijure` network so it can resolve the container service names the VPC Services point at.
+  # The connector TOKEN is written to tunnel.env (0600, gitignored) by deploy.sh; `cloudflared tunnel
+  # run` reads it from TUNNEL_TOKEN. No ingress config -- the VPC Services ARE the routing. If
+  # tunnel.env is missing, compose fails closed (run deploy.sh first). Pin the image tag if you prefer.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: vivijure-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file:
+      - tunnel.env
+    networks:
+      - vivijure
+    depends_on:
+      - video-finish
+      - image-prep
+      - audio-beat-sync
+      - audio-mix
+      - audio-master
 
 # Shared external network (also joined by the cloudflared stack). Create once on
 # a fresh box:  docker network create vivijure

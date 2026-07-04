@@ -86,17 +86,19 @@ note on what the value is and where to get it, matching sections 2a-2d below.
 
 Pick a profile with `VIVIJURE_PROFILE` in `deploy.env`:
 
-- **minimal** (the default) -- the studio core plus cloud and own-GPU render. Needs ONLY Cloudflare,
-  RunPod, and an AI Gateway. Use this for your first deploy.
-- **full** -- also the extra "finish" modules that need your own CPU containers (over a Cloudflare
-  VPC) or a second RunPod endpoint: upscale, lip-sync, titles, subtitles, beat-sync, audio-master,
-  and speech-upscale.
+- **standard** (the default) -- the studio core, cloud + own-GPU render, AND the media stack (5
+  always-on CPU containers reached over Workers VPC). `deploy.sh` creates the tunnel + the 5 VPC
+  Services and wires their ids in automatically (#519); you just bring the containers up with
+  `docker compose` (section 5). This is your first deploy.
+- **satellites** -- also the 3 opt-in GPU finish modules that each need a separate RunPod endpoint:
+  upscale, lip-sync, and speech-upscale.
 
-How the split works: in `wrangler.toml.example`, every opt-in piece is wrapped in a comment-marker
-pair, `# >>> OPTIONAL: <name>` ... `# <<< OPTIONAL: <name>`. A minimal deploy strips those blocks so
-their bindings cannot dangle and break the deploy; a full deploy keeps them. The opt-in blocks are:
-the `tail_consumers` log shipper, the four `[[vpc_services]]` (video-finish / image-prep /
-audio-beat-sync / audio-mix), and the eight finish modules named above.
+How the split works: in `wrangler.toml.example`, opt-in blocks are wrapped in comment markers.
+`deploy.sh` strips `# >>> SATELLITE:` blocks unless the satellites profile, the `# >>> LOCAL-GPU:`
+block unless `INSTALL_LOCAL_GPU=1`, and the `# >>> SELFHOST-SKIP:` (our-fleet-only, e.g. the
+`tail_consumers` log shipper) blocks always -- so a binding can never dangle and break the deploy. The
+media-stack bindings (the four `[[vpc_services]]` + the media finish modules) are unconditional now
+(standard). The local-GPU door stays opt-in because it needs your own local GPU box.
 
 For the whole constellation (studio + GPU backend + local doors), `deploy/constellation.sh` is the
 top orchestrator that calls into each repo's own deploy script. Today it drives the studio and stubs
@@ -136,6 +138,8 @@ Scope it to **your account only** (Account Resources -> Include -> your account)
 | `Account > AI Gateway > Edit` | Resolve the AI Gateway the LLM features route through, AND enable its **Authenticated Gateway** toggle at deploy (a Unified Billing requirement -- Read cannot flip it). |
 | `Account > Account Settings > Read` | `wrangler` reads account metadata at deploy time. |
 | `Account > Secrets Store > Edit` | Bind module secrets from the Cloudflare Secrets Store at deploy (the `[[secrets_store_secrets]]` blocks). Binding a store secret to a worker is a write-level association, so READ is NOT enough -- without Edit the deploy fails with `Secrets store binding authorization failed [code: 10021]`. |
+| `Account > Cloudflare Tunnel > Write` | Create the media-stack tunnel and read its connector token (`deploy.sh` -> `scripts/setup-media-vpc.py`, #519). Part of the standard install. |
+| `Account > Connectivity Directory > Admin` | Create the 5 Workers VPC Services the studio reaches the CPU containers through (missing this surfaces as CF error 10196). Part of the standard install. |
 | `Account > API Tokens > Edit` (optional) | Lets `deploy.sh` auto-mint the Run-only `CF_AIG_TOKEN` (2d below) so the planner arms with zero extra pastes. Honest trade-off: this scope can mint further API tokens on the account; omit it if that bothers you and paste `CF_AIG_TOKEN` yourself instead. |
 
 > Why so specific: each line maps to a real deploy step below. If a module never touches D1, its
@@ -267,15 +271,15 @@ npx wrangler d1 migrations apply vivijure-studio --remote
 
 # 3d. Deploy. Module workers MUST deploy before the core (the core binds each as a service;
 #     a binding to a not-yet-deployed module makes the core deploy fail).
-# The minimal-profile modules (this list mirrors MIN_MODULES in deploy.sh):
+# The standard modules (this list mirrors STANDARD_MODULES in deploy.sh; the last five are the
+# media-stack finish modules, reached over Workers VPC):
 for m in own-gpu seedance kling keyframe cloud-keyframe finish-rife plan-enhance cast-image \
          notify-email music-gen narration-gen dialogue-gen minimax-hailuo google-veo vidu-q3 \
-         alibaba-wan alibaba-wan-lora; do
+         alibaba-wan alibaba-wan-lora text-overlay film-titles subtitle beat-sync audio-master; do
   npx wrangler deploy -c modules/$m/wrangler.toml
 done
-# The full profile also deploys (OPT_MODULES in deploy.sh; they need the CPU containers or a
-# separate RunPod endpoint): finish-upscale text-overlay film-titles subtitle beat-sync
-# audio-master finish-lipsync speech-upscale
+# The satellites profile also deploys (SATELLITE_MODULES in deploy.sh; each needs a separate RunPod
+# endpoint): finish-upscale finish-lipsync speech-upscale
 npm run deploy   # the core Studio Worker
 ```
 
@@ -424,18 +428,28 @@ pull).
 
 ---
 
-## 5. The CPU helper containers (optional, advanced)
+## 5. The media-stack CPU containers (STANDARD)
 
-`video-finish` / `image-prep` / `audio-beat-sync` run always-on as Docker on your own box and are
-reached over private **Cloudflare VPC** bindings (`VIDEO_FINISH_VPC`, etc.). Bring them up with:
+`video-finish` / `image-prep` / `audio-beat-sync` / `audio-mix` / `audio-master` run always-on as
+Docker on your own box, reached privately over **Workers VPC**. As of #519 this is part of the
+**standard** install: `deploy.sh` already created the Cloudflare tunnel and the 5 VPC Services for you
+(`scripts/setup-media-vpc.py`), rendered their ids into the configs, and wrote the connector token to
+`containers/tunnel.env` (0600). All that is left is to bring the containers up:
 
 ```bash
-docker compose -p vivijure-media -f containers/compose.yaml up -d --build
+docker network create vivijure          # once, if it does not exist
+docker compose -f containers/compose.yaml up -d --build
 ```
 
-Then create the VPC Services in the Cloudflare dashboard pointing at each container, and set the
-`service_id` for each `[[vpc_services]]` binding in `wrangler.toml`. Without these, the Studio still
-renders clips; it just can't do the final concat/mux or title cards.
+The `cloudflared` service in that compose file reads the token from `tunnel.env` and joins the
+`vivijure` network, so each VPC Service resolves its container by service name. Without the containers
+running, a render still delivers the per-shot clips and reports "finish unavailable" rather than
+failing (the honest degrade, #519); bring them up to get the assembled/finished film.
+
+Doing it by hand instead of `deploy.sh`? Run `scripts/setup-media-vpc.py --token-file
+containers/tunnel.env` with `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` set (the token needs
+`Cloudflare Tunnel: Write` + `Connectivity Directory: Admin`); it prints the service ids as JSON and
+writes the token file, both idempotent on a re-run.
 
 ---
 
@@ -449,7 +463,7 @@ config; everything else in the Studio is single-user and needs no email.
 
 ## Quick checklist
 
-- [ ] Cloudflare API token (Workers/D1/R2/Vectorize/AI-Gateway scopes above) + account id
+- [ ] Cloudflare API token (Workers/D1/R2/AI-Gateway/Secrets-Store/Tunnel/Connectivity scopes above) + account id
 - [ ] R2 enabled on the account (one dashboard click: <https://dash.cloudflare.com/?to=/:account/r2>)
 - [ ] auth mode picked: `token` (default; SAVE the printed token) or `access` (Zero Trust team + AUD)
 - [ ] RunPod API key + a Serverless endpoint running `vivijure-backend` (its id)
@@ -458,5 +472,5 @@ config; everything else in the Studio is single-user and needs no email.
 - [ ] AI credits loaded on the gateway ($10 minimum; the planner will not run on $0.00 -- see 2e)
 - [ ] `wrangler d1 create` + both `r2 bucket create`s, ids in `wrangler.toml`
 - [ ] secrets set, migrations applied, **modules deployed before core**
-- [ ] (optional) CPU containers up + VPC services wired
+- [ ] (standard) media-stack containers up: `docker compose -f containers/compose.yaml up -d` (deploy.sh already made the tunnel + VPC services)
 - [ ] render a test project end to end

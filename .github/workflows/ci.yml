@@ -87,6 +87,11 @@ jobs:
           # SECRETS_STORE_ID is a repo VARIABLE (an identifier, not a secret -- it was public in the
           # repo before #398 templated it out): the account Secrets Store id the module bindings bind.
           SECRETS_STORE_ID: ${{ vars.SECRETS_STORE_ID }}
+          # #520: the 5 media modules carry a REPLACE_WITH_VPC_*_ID placeholder (no hardcoded prod VPC
+          # service id in the tracked tomls). Filled per-module below from these repo secrets.
+          VPC_VIDEO_FINISH_ID: ${{ secrets.VPC_VIDEO_FINISH_ID }}
+          VPC_AUDIO_BEAT_SYNC_ID: ${{ secrets.VPC_AUDIO_BEAT_SYNC_ID }}
+          VPC_AUDIO_MASTER_ID: ${{ secrets.VPC_AUDIO_MASTER_ID }}
         run: |
           set -eu
           # The committed module tomls ship store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID" (no
@@ -99,6 +104,16 @@ jobs:
             echo "::error::SECRETS_STORE_ID repo variable is unset -- refusing to deploy modules with an unfilled store_id placeholder"
             exit 1
           fi
+          # #520: the media modules (film-titles/subtitle/text-overlay -> video-finish, beat-sync ->
+          # audio-beat-sync, audio-master -> audio-master) need their VPC service_id filled. Fail
+          # closed if any secret is unset -- an empty service_id ships a broken VPC binding.
+          # NOTE: VPC_AUDIO_MASTER_ID is a NEW repo secret (its value = the prod audio-master VPC
+          # service id, formerly hardcoded in modules/audio-master/wrangler.toml). Add it before the
+          # next release tag, or this step fails loud here.
+          for v in VPC_VIDEO_FINISH_ID VPC_AUDIO_BEAT_SYNC_ID VPC_AUDIO_MASTER_ID; do
+            eval "vv=\${$v:-}"
+            if [ -z "$vv" ]; then echo "::error::$v repo secret is unset -- refusing to deploy a module with an unfilled VPC service_id (#520)"; exit 1; fi
+          done
           # Explicit, reviewable skip-list (space-separated module DIR names). Empty = deploy all.
           # DO NOT replace this with a hardcoded include-list: that is what drifted (v0.6.0 omitted
           # 9 modules incl. notify-email, which served config_schema:null). Deploy-by-default; the
@@ -134,6 +149,8 @@ jobs:
             # Fill the store_id placeholder for THIS module (only those actually deployed, post-EXCLUDE),
             # then guard: a surviving placeholder means an unfilled binding, so fail rather than ship it.
             sed -i "s/REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID/${SECRETS_STORE_ID}/g" "$toml"
+            # #520: fill the media-module VPC service_id placeholders (a no-op sed on modules without one).
+            sed -i "s/REPLACE_WITH_VPC_VIDEO_FINISH_ID/${VPC_VIDEO_FINISH_ID}/g;s/REPLACE_WITH_VPC_AUDIO_BEAT_SYNC_ID/${VPC_AUDIO_BEAT_SYNC_ID}/g;s/REPLACE_WITH_VPC_AUDIO_MASTER_ID/${VPC_AUDIO_MASTER_ID}/g" "$toml"
             if grep -q "REPLACE_WITH_" "$toml"; then
               echo "::error::store_id placeholder survived in $toml"
               exit 1
