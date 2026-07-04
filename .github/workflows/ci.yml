@@ -138,7 +138,16 @@ jobs:
               echo "::error::store_id placeholder survived in $toml"
               exit 1
             fi
-            npx wrangler deploy -c "$toml"
+            # Retry a transient Cloudflare API flake (e.g. the Workflows trigger registration
+            # that failed the v0.13.0 deploy, #492) so a single hiccup does not abort the ordered
+            # tag deploy under set -eu. A persistent failure still fails the step after 3 attempts.
+            n=0
+            until npx wrangler deploy -c "$toml"; do
+              n=$((n + 1))
+              [ "$n" -ge 3 ] && { echo "::error::module ${module} failed to deploy after 3 attempts"; exit 1; }
+              echo "  transient deploy failure for ${module} -- retry ${n}/3"
+              sleep 3
+            done
             deployed=$((deployed + 1))
           done
           if [ "$found" -eq 0 ]; then
