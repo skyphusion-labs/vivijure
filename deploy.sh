@@ -66,6 +66,17 @@ need R2_S3_ACCESS_KEY_ID     "R2 S3 access key id"
 need R2_S3_SECRET_ACCESS_KEY "R2 S3 secret access key"
 need DEPLOY_HOSTNAME         "the hostname your studio serves on"
 
+# local-gpu door (opt-in): the module worker binds LOCAL_BACKEND_URL + LOCAL_BACKEND_TOKEN from the
+# Secrets Store, so BOTH must be seeded before its deploy or a wrangler deploy hard-fails (CF 10182).
+# Their values only exist AFTER you bring your local door container up (it prints them in its banner and
+# holds them in its own .env), so there is no default to invent -- require them here, fail-closed and
+# EARLY, before any tunnel / VPC service / worker is created (mirrors the satellites + planner-token
+# prerequisites; #534).
+if [ "$INSTALL_LOCAL_GPU" = "1" ]; then
+  need LOCAL_BACKEND_URL   "bring your vivijure-local-12gb/-16gb door up FIRST, then copy its tunnel URL from the door startup banner (or the door .env) into deploy.env"
+  need LOCAL_BACKEND_TOKEN "copy LOCAL_BACKEND_TOKEN from your door box .env (the door also prints it in its startup banner) into deploy.env"
+fi
+
 # GATEWAY_ID is optional (finding F2): if unset, the deploy creates an authenticated AI Gateway with
 # this default slug, so a first-time operator has no manual AI-Gateway prereq. Set it in deploy.env
 # only to point at an existing gateway.
@@ -204,6 +215,14 @@ if [ "$VIVIJURE_PROFILE" = satellites ]; then
   seed_secret VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID "$VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID"
   seed_secret MUSETALK_RUNPOD_ENDPOINT_ID      "$MUSETALK_RUNPOD_ENDPOINT_ID"
   seed_secret AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID  "$AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID"
+fi
+
+# local-gpu door: seed the two backend secrets the module worker binds from the store (required +
+# validated up top when INSTALL_LOCAL_GPU=1). Without these the local-gpu wrangler deploy in step 7
+# fails CF 10182 on the unseeded store binding (#534).
+if [ "$INSTALL_LOCAL_GPU" = "1" ]; then
+  seed_secret LOCAL_BACKEND_URL   "$LOCAL_BACKEND_URL"
+  seed_secret LOCAL_BACKEND_TOKEN "$LOCAL_BACKEND_TOKEN"
 fi
 
 # Point every module we are about to deploy at YOUR store. The committed configs ship the
