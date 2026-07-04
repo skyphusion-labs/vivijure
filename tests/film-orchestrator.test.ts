@@ -1994,3 +1994,56 @@ describe("#519 video-finish UNAVAILABLE -> complete-with-clips degrade (vs #245/
     expect((out.clips as { shot_id: string; key: string }[])[0]).toEqual({ shot_id: "shot_01", key: "renders/p/clips/shot_01_finished.mp4" });
   });
 });
+
+// --- #521: module discovery is threaded ONCE per tick (no per-leg fan-out) ---
+// A single advanceFilmJob tick can chain several discovering legs (a mux tick runs enterMuxPhase ->
+// transitionToDone -> film.finish chain + notify). Each used to re-run the N-module `/module.json`
+// manifest scan, and on a 25-module install that blew the free-plan 50-subrequest cap (F9/#521). The
+// tick now discovers once and threads the registry down, so each module manifest is read exactly once.
+describe("#521 discovery threaded once per tick (no per-leg module.json fan-out)", () => {
+  const MANIFEST = {
+    name: "film-titles", version: "0.1.0", api: "vivijure-module/2",
+    hooks: ["film.finish"], provides: [{ id: "film-titles", label: "Title cards" }],
+    config_schema: {}, ui: { section: "film.finish", order: 10 },
+  };
+  function countingEnv(job: object) {
+    const filmId = (job as { film_id: string }).film_id;
+    let stored = JSON.stringify(job);
+    let manifestHits = 0;
+    const jsonResp = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    const env = {
+      R2_RENDERS: {
+        get: async (k: string) => (k === filmJobDocKey(filmId) ? { text: async () => stored } : null),
+        head: async () => null,
+        put: async (k: string, v: string) => { if (k === filmJobDocKey(filmId)) stored = v; },
+      },
+      VIDEO_FINISH_VPC: { fetch: async () => jsonResp({ ok: true, key: `renders/${filmId}/film-audio.mp4` }) },
+      MODULE_FILM_TITLES: {
+        fetch: async (input: Request | string) => {
+          const url = typeof input === "string" ? input : input.url;
+          if (url.endsWith("/module.json")) { manifestHits += 1; return jsonResp(MANIFEST); }
+          return jsonResp({ ok: true, output: { film_key: `renders/${filmId}/film-audio.mp4`, applied: ["film-titles"] } });
+        },
+      },
+      R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+    } as unknown as Env;
+    return { env, hits: () => manifestHits };
+  }
+
+  it("a mux -> film.finish -> notify tick reads each module manifest exactly ONCE", async () => {
+    const job = {
+      film_id: "film-521-tick", project: "p",
+      scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+      phase: "mux" as const,
+      silent_film_key: "renders/film-521-tick/silent.mp4",
+      audio_key: "renders/film-521-tick/audio.mp4",
+      film_titles: { title: { text: "NEON" } },
+      created_at: 0,
+    };
+    const { env, hits } = countingEnv(job);
+    const r = await advanceFilmJob(env, "film-521-tick");
+    expect(r?.job.phase).toBe("done"); // the mux + film.finish chain still completes
+    expect(hits()).toBe(1); // discovered ONCE for the whole tick (was 2+: runFilmFinish + fireNotify each re-scanned)
+  });
+});

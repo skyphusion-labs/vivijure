@@ -170,8 +170,8 @@ const putFilm = (env: Env, job: FilmJob) =>
 /** Internal: clips done -> set up the finish chain (one FinishShot per done clip). No finish modules
  *  installed -> skip straight to assemble (the raw clips). No clips rendered at all -> fail (nothing
  *  to assemble). */
-async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob): Promise<void> {
-  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob, preModules?: RegisteredModule[]): Promise<void> {
+  const modules = preModules ?? await discoverModules(env as unknown as Record<string, unknown>);
   const serving = servingForHook(modules, "finish"); // ui.order; the full finish chain
   const chain = serving.map((m) => m.binding);
   const configs = resolveFinishConfigs(serving, job.finish_config);
@@ -186,7 +186,7 @@ async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob): Promi
   }));
   // finish_shots are built; interpose the dialogue phase (synthesize per-shot speech) before finish so
   // a lip-sync finish module has the audio to drive the mouth. No dialogue -> straight to finish.
-  await enterDialogueOrFinish(env, job);
+  await enterDialogueOrFinish(env, job, preModules);
 }
 
 /** Fold a dialogue module's batch result into the per-shot audio map the finish stage reads. */
@@ -202,13 +202,13 @@ function applyDialogueOutput(job: FilmJob, out: DialogueOutput): void {
  *  submit the per-shot speech batch and enter the dialogue phase; otherwise go straight to finish. A
  *  submit failure (or no module) soft-degrades to a SILENT finish -- a dialogue glitch must never fail
  *  a fully-rendered film (lip-sync no-ops without an audio_key). */
-async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
+async function enterDialogueOrFinish(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   const lines = job.dialogue_lines;
-  if (!lines || !lines.length) { await enterSpeechOrFinish(env, job); return; }
+  if (!lines || !lines.length) { await enterSpeechOrFinish(env, job, preModules); return; }
   const envRec = env as unknown as Record<string, unknown>;
-  const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
+  const dialogueModule = servingForHook(preModules ?? await discoverModules(envRec), "dialogue")[0];
   const fetcher = dialogueModule ? resolveFetcher(envRec, dialogueModule.binding) : null;
-  if (!fetcher) { await enterSpeechOrFinish(env, job); return; }  // no dialogue module bound: silent film
+  if (!fetcher) { await enterSpeechOrFinish(env, job, preModules); return; }  // no dialogue module bound: silent film
   const req = {
     hook: "dialogue" as const,
     input: { project: job.project, lines } as DialogueInput,
@@ -216,43 +216,43 @@ async function enterDialogueOrFinish(env: Env, job: FilmJob): Promise<void> {
     context: { project: job.project, job_id: job.film_id },
   };
   const r = await invokeModule<DialogueInput, DialogueOutput>(fetcher, req);
-  if (!r.ok) { console.warn(`film ${job.film_id}: dialogue submit failed (${r.error}); silent finish`); await enterSpeechOrFinish(env, job); return; }
+  if (!r.ok) { console.warn(`film ${job.film_id}: dialogue submit failed (${r.error}); silent finish`); await enterSpeechOrFinish(env, job, preModules); return; }
   if ((r as { pending?: boolean }).pending) { job.dialogue_poll = (r as { poll: string }).poll; job.phase = "dialogue"; return; }
   if ("output" in r) {
     const v = hookOutputViolation(dialogueModule.name, "dialogue", r.output);
-    if (v) { console.warn(`film ${job.film_id}: dialogue ${v}; silent finish`); await enterSpeechOrFinish(env, job); return; }
+    if (v) { console.warn(`film ${job.film_id}: dialogue ${v}; silent finish`); await enterSpeechOrFinish(env, job, preModules); return; }
     applyDialogueOutput(job, r.output as DialogueOutput);
   }
-  await enterSpeechOrFinish(env, job);
+  await enterSpeechOrFinish(env, job, preModules);
 }
 
 /** Poll the in-flight dialogue batch. On done, record the per-shot audio map and advance to finish; a
  *  failure soft-degrades to a silent finish (the rendered clips are fine, just unvoiced). */
-async function advanceDialoguePhase(env: Env, job: FilmJob): Promise<void> {
-  if (!job.dialogue_poll) { await enterSpeechOrFinish(env, job); return; }
+async function advanceDialoguePhase(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
+  if (!job.dialogue_poll) { await enterSpeechOrFinish(env, job, preModules); return; }
   const envRec = env as unknown as Record<string, unknown>;
-  const dialogueModule = servingForHook(await discoverModules(envRec), "dialogue")[0];
+  const dialogueModule = servingForHook(preModules ?? await discoverModules(envRec), "dialogue")[0];
   const fetcher = dialogueModule ? resolveFetcher(envRec, dialogueModule.binding) : null;
-  if (!fetcher) { job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
+  if (!fetcher) { job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job, preModules); return; }
   const p = await pollModule<DialogueOutput>(fetcher, { poll: job.dialogue_poll });
-  if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
+  if (!p.ok) { console.warn(`film ${job.film_id}: dialogue failed (${p.error}); silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job, preModules); return; }
   if ((p as { pending?: boolean }).pending) return;  // still synthesizing
   const out = (p as { output: DialogueOutput }).output;
   const v = hookOutputViolation(dialogueModule.name, "dialogue", out);
-  if (v) { console.warn(`film ${job.film_id}: dialogue ${v}; silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job); return; }
+  if (v) { console.warn(`film ${job.film_id}: dialogue ${v}; silent finish`); job.dialogue_poll = undefined; await enterSpeechOrFinish(env, job, preModules); return; }
   applyDialogueOutput(job, out);
   job.dialogue_poll = undefined;
-  await enterSpeechOrFinish(env, job);
+  await enterSpeechOrFinish(env, job, preModules);
 }
 
 /** After dialogue is resolved: if any `speech` module is installed AND there is dialogue audio to clean,
  *  build the per-shot speech chain and enter the speech phase; otherwise go straight to finish. No speech
  *  module, or no shot with dialogue audio -> straight to finish (an unvoiced film needs no speech pass). */
-async function enterSpeechOrFinish(env: Env, job: FilmJob): Promise<void> {
+async function enterSpeechOrFinish(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   const audio = job.dialogue_audio ?? {};
   const shotIds = Object.keys(audio);
   if (!shotIds.length) { job.phase = "finish"; return; }  // unvoiced film: nothing to enhance
-  const serving = servingForHook(await discoverModules(env as unknown as Record<string, unknown>), "speech"); // ui.order
+  const serving = servingForHook(preModules ?? await discoverModules(env as unknown as Record<string, unknown>), "speech"); // ui.order
   const chain = serving.map((m) => m.binding);
   if (!chain.length) { job.phase = "finish"; return; }  // no speech modules installed: passthrough to finish
   const configs = resolveFinishConfigs(serving, job.speech_config ?? {});
@@ -334,9 +334,9 @@ async function advanceSpeechPhase(env: Env, job: FilmJob): Promise<void> {
  *  the chain's FINAL artifact: this advances ONE step on its OWN predicted output, so the remaining modules
  *  still run and it can never ship a half-finished clip (the mid-chain phantom-adopt the silent-render bug
  *  warned against). Returns true iff it advanced the step. */
-async function adoptFinishStepFromR2(env: Env, job: FilmJob, fs: FinishShot): Promise<boolean> {
-  // Registry discovery is cached, so reading the manifests here (for finish_artifacts) is cheap.
-  const modules = await discoverModules(env as unknown as Record<string, unknown>);
+async function adoptFinishStepFromR2(env: Env, job: FilmJob, fs: FinishShot, preModules?: RegisteredModule[]): Promise<boolean> {
+  // The tick threads its once-discovered registry in (preModules); a direct caller discovers fresh.
+  const modules = preModules ?? await discoverModules(env as unknown as Record<string, unknown>);
   const expected = finishStepOutputKey(job.project, fs, modules);
   if (!expected) return false;
   if ((await env.R2_RENDERS.head(expected)) === null) return false;
@@ -346,7 +346,7 @@ async function adoptFinishStepFromR2(env: Env, job: FilmJob, fs: FinishShot): Pr
 
 /** Advance the finish chain: per shot, submit its current finish module or poll the in-flight one,
  *  chaining to the next module on completion. Phase -> assemble when every shot is terminal. */
-async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
+async function advanceFinishPhase(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   const envRec = env as unknown as Record<string, unknown>;
   // A transient invocation/poll blip re-dispatches the step (status stays `pending`) up to the cap
   // instead of failing it; a deterministic reject or the cap exhausted fails loud. `keepPoll` keeps a
@@ -386,7 +386,7 @@ async function advanceFinishPhase(env: Env, job: FilmJob): Promise<void> {
         if (v) { fs.status = "failed"; fs.error = v; } else { applyFinishOutput(fs, out); }
       } else if (!p.ok && classifyFinishFailure(p.error) === "transient") {
         failOrRetry(fs, p.error, true); // a transport blip: re-poll the same job under the cap
-      } else if (!(await adoptFinishStepFromR2(env, job, fs))) {
+      } else if (!(await adoptFinishStepFromR2(env, job, fs, preModules))) {
         // The step's RunPod job is GONE (a deterministic poll failure -- 404 job-not-found, the
         // GC'd-after-complete path) or FROZEN (envelope stuck IN_PROGRESS so /poll pends forever, #166),
         // and this step's output is NOT in R2. A deterministic failure with no artifact fails loud; a
@@ -588,11 +588,11 @@ const MAX_ASSEMBLE_ATTEMPTS = 6;
  *  (email, webhook, ...) delivers independently. Presigns the film's download link + hands over the
  *  completion context. A notifier failure (or none installed) NEVER fails the already-assembled render;
  *  the film is in R2 by the time this runs. */
-async function fireNotify(env: Env, job: FilmJob): Promise<void> {
+async function fireNotify(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   if (!job.film_key) return;
   try {
     const envRec = env as unknown as Record<string, unknown>;
-    const notifiers = servingForHook(await discoverModules(envRec), "notify");
+    const notifiers = servingForHook(preModules ?? await discoverModules(envRec), "notify");
     if (!notifiers.length) return;
     const download_url = await presignR2Get(env, job.film_key, FILM_DOWNLOAD_TTL_SECONDS); // matches the poll summary
     const input: NotifyInput = {
@@ -620,9 +620,9 @@ async function fireNotify(env: Env, job: FilmJob): Promise<void> {
 /** Final transition: run the film.finish chain (title / credit cards) on the assembled+muxed film,
  *  then mark done + notify. FAIL-SAFE: no film.finish module, no title/credits, or ANY error -> the
  *  film keeps its original key. A film.finish step must never drop a fully-rendered film. (#190) */
-async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
+async function transitionToDone(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   try {
-    await applyFilmFinish(env, job);
+    await applyFilmFinish(env, job, preModules);
   } catch (e) {
     // A swallowed throw must not ship as a silent green: record it on the job so the degraded outcome is
     // observable. The film keeps its original (uncarded) key -- a finish step never drops the film. (#190)
@@ -636,7 +636,7 @@ async function transitionToDone(env: Env, job: FilmJob): Promise<void> {
     console.warn(`film.finish failed for ${job.film_id}: ${msg}; keeping the original film`);
   }
   job.phase = "done";
-  await fireNotify(env, job);
+  await fireNotify(env, job, preModules);
 }
 
 // The film.finish hook I/O is the named FilmFinishInput / FilmFinishOutput pair in ./modules/types
@@ -672,9 +672,9 @@ export interface RunFilmFinishResult {
  *  line's start from the cumulative duration of preceding shots), so the caller passes the FULL scenes +
  *  dialogue_lines in assembled (shot) order. FAIL-SAFE: a module soft-degrade / failure passes the film
  *  through (recorded in degraded), never drops it. */
-export async function runFilmFinish(env: Env, input: RunFilmFinishInput): Promise<RunFilmFinishResult> {
+export async function runFilmFinish(env: Env, input: RunFilmFinishInput, preModules?: RegisteredModule[]): Promise<RunFilmFinishResult> {
   const envRec = env as unknown as Record<string, unknown>;
-  const modules = await discoverModules(envRec);
+  const modules = preModules ?? await discoverModules(envRec);
   if (servingForHook(modules, "film.finish").length === 0) {
     return { ran: false, film_key: input.film_key, applied: [], errors: [] }; // nothing installed -> no-op
   }
@@ -760,7 +760,7 @@ export async function runFilmFinish(env: Env, input: RunFilmFinishInput): Promis
 
 /** Single-film film.finish: thin wrapper over runFilmFinish that folds the outcome back onto the job
  *  (behavior-identical to the pre-refactor inline version -- no-op leaves the job untouched). */
-async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
+async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   if (!job.film_key) return;
   const r = await runFilmFinish(env, {
     film_key: job.film_key,
@@ -771,7 +771,7 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
     bundle_key: job.bundle_key,
     project: job.project,
     job_id: job.film_id,
-  });
+  }, preModules);
   if (!r.ran) return; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
   if (r.errors.length > 0) {
     console.warn(`film.finish errors for ${job.film_id}: ${r.errors.join("; ")}`);
@@ -825,24 +825,24 @@ function degradeAssembleUnavailable(
  *  could not be muxed onto it. Ship the silent film with a loud, structured status rather than
  *  hard-failing a fully-rendered film (#519). transitionToDone still runs any film.finish cards on the
  *  silent film and fires notify with its download link. UNAVAILABILITY ONLY (#245/#249). */
-async function degradeMuxUnavailable(env: Env, job: FilmJob, silentKey: string, reason: string): Promise<void> {
+async function degradeMuxUnavailable(env: Env, job: FilmJob, silentKey: string, reason: string, preModules?: RegisteredModule[]): Promise<void> {
   job.finish_unavailable = { at: "mux", reason, delivered: "silent_film" };
   job.mux_attempts = 0;
   emitFinishUnavailable(job);
   job.film_key = silentKey;
-  await transitionToDone(env, job);
+  await transitionToDone(env, job, preModules);
 }
 
-async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
+async function enterMuxPhase(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   const silentKey = job.silent_film_key;
   const audioKey = job.audio_key;
   if (!silentKey || !audioKey) {
     job.film_key = silentKey;
-    await transitionToDone(env, job);
+    await transitionToDone(env, job, preModules);
     return;
   }
   if (!env.VIDEO_FINISH_VPC) {
-    await degradeMuxUnavailable(env, job, silentKey, "video-finish tier not installed (VIDEO_FINISH_VPC unbound); shipped silent film");
+    await degradeMuxUnavailable(env, job, silentKey, "video-finish tier not installed (VIDEO_FINISH_VPC unbound); shipped silent film", preModules);
     return;
   }
 
@@ -882,11 +882,11 @@ async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
     return;
   }
   if (transport.state === "exhausted") {
-    await degradeMuxUnavailable(env, job, silentKey, transport.error);
+    await degradeMuxUnavailable(env, job, silentKey, transport.error, preModules);
     return;
   }
   if (!resp) {
-    await degradeMuxUnavailable(env, job, silentKey, "video-finish container unreachable; shipped silent film");
+    await degradeMuxUnavailable(env, job, silentKey, "video-finish container unreachable; shipped silent film", preModules);
     return;
   }
   if (!resp.ok) {
@@ -910,25 +910,25 @@ async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
     return;
   }
   job.film_key = outKey;
-  await transitionToDone(env, job);
+  await transitionToDone(env, job, preModules);
 }
 
 
 /** After the silent film is assembled and an audio bed exists: set up the `master` chain (if any master
  *  module is installed) to polish the bed before mux. No master module -> straight to mux with the bed
  *  as-is. Mirrors enterDialogueOrFinish -- it kicks the phase and lets advanceMasterPhase drive it. */
-async function enterMasterOrMux(env: Env, job: FilmJob): Promise<void> {
+async function enterMasterOrMux(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   const envRec = env as unknown as Record<string, unknown>;
-  const serving = servingForHook(await discoverModules(envRec), "master"); // ui.order; the full master chain
+  const serving = servingForHook(preModules ?? await discoverModules(envRec), "master"); // ui.order; the full master chain
   const chain = serving.map((mod) => mod.binding);
-  if (!chain.length) { job.phase = "mux"; await enterMuxPhase(env, job); return; } // no master installed: mux as-is
+  if (!chain.length) { job.phase = "mux"; await enterMuxPhase(env, job, preModules); return; } // no master installed: mux as-is
   // Per-step planner config, clamped against each module's schema (by name), aligned to chain order --
   // mirrors enterSpeechOrFinish / the finish chain so the audio-master knobs (target_lufs/upscale/format)
   // actually reach the module instead of dispatching with {}.
   const configs = resolveFinishConfigs(serving, job.master_config ?? {});
   job.master = { chain, idx: 0, applied: [], degraded: [], configs };
   job.phase = "master";
-  await advanceMasterPhase(env, job);
+  await advanceMasterPhase(env, job, preModules);
 }
 
 /** Drive the master chain over the film's audio bed: submit the current step or poll the in-flight one,
@@ -937,9 +937,9 @@ async function enterMasterOrMux(env: Env, job: FilmJob): Promise<void> {
  *  NEVER fails on a master miss (#249 / #77). When the chain is exhausted, record the outcome and mux.
  *  One network round-trip (submit OR poll) per step per tick: a synchronous step folds and continues in
  *  the same tick; an async step parks on its poll token and returns (the next advanceFilmJob re-enters). */
-async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
+async function advanceMasterPhase(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
   const m = job.master;
-  if (!m || !job.audio_key) { job.phase = "mux"; await enterMuxPhase(env, job); return; } // defensive: nothing to master
+  if (!m || !job.audio_key) { job.phase = "mux"; await enterMuxPhase(env, job, preModules); return; } // defensive: nothing to master
   const envRec = env as unknown as Record<string, unknown>;
   const seconds = filmSeconds(job);
 
@@ -1003,25 +1003,26 @@ async function advanceMasterPhase(env: Env, job: FilmJob): Promise<void> {
   // Chain exhausted: the (maybe mastered) bed is in job.audio_key. A degrade is observable, not a silent green.
   if (m.degraded.length) console.warn(`film ${job.film_id}: master degraded -- ${m.degraded.join("; ")}`);
   job.phase = "mux";
-  await enterMuxPhase(env, job);
+  await enterMuxPhase(env, job, preModules);
 }
 
-async function finishAssembledFilm(env: Env, job: FilmJob, silentKey: string): Promise<void> {
+async function finishAssembledFilm(env: Env, job: FilmJob, silentKey: string, preModules?: RegisteredModule[]): Promise<void> {
   job.silent_film_key = silentKey;
   if (!job.audio_key) {
     job.film_key = silentKey;
-    await transitionToDone(env, job);
+    await transitionToDone(env, job, preModules);
     return;
   }
   // There IS an audio bed: master it (music upscale + loudness) if a master module is installed, then mux.
   // enterMasterOrMux soft-degrades to a straight mux when no master module is present (or the polish fails).
-  await enterMasterOrMux(env, job);
+  await enterMasterOrMux(env, job, preModules);
 }
 
 async function enterAssemblePhase(
   env: Env,
   job: FilmJob,
   finalClips: { shot_id: string; clip_key: string }[],
+  preModules?: RegisteredModule[],
 ): Promise<void> {
   if (!finalClips.length) { job.phase = "failed"; job.error = "no clips to assemble"; return; }
 
@@ -1034,7 +1035,7 @@ async function enterAssemblePhase(
   const outputKey = filmOutKey(job.film_id);
   if (await r2ObjectExists(env, outputKey)) {
     job.assemble_attempts = 0;
-    await finishAssembledFilm(env, job, outputKey);
+    await finishAssembledFilm(env, job, outputKey, preModules);
     return;
   }
 
@@ -1095,7 +1096,7 @@ async function enterAssemblePhase(
     job.phase = "failed"; job.error = "video-finish returned a non-JSON response"; return;
   }
   if (!body.ok) { job.phase = "failed"; job.error = `video-finish failed: ${body.error || "unknown error"}`; return; }
-  await finishAssembledFilm(env, job, outputKey);
+  await finishAssembledFilm(env, job, outputKey, preModules);
 }
 
 
@@ -1384,7 +1385,7 @@ export async function listProjectClips(env: Env, project: string, scenes: FilmSc
  *  that would block the next partial pass. Returns true iff it advanced the film phase out of "clips".
  *  A partial pass returns false (phase stays "clips"; the next stalled sweep re-attempts the rest); a pass
  *  that adopts nothing AND finds nothing already terminal also returns false (the hard ceiling decides). */
-async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean> {
+async function recoverStalledClipsPhase(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<boolean> {
   if (!job.clip_job_id) return false;
   const cjObj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id));
   if (!cjObj) return false;
@@ -1401,7 +1402,7 @@ async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean
   // pick up the shots that have since landed. Do NOT set a one-shot gate on a partial pass.
   if (!summarizeJob(clipJob).complete) return false;
   job.clips_recovered = true;
-  await enterFinishPhase(env, job, clipJob);
+  await enterFinishPhase(env, job, clipJob, preModules);
   return true;
 }
 
@@ -1409,7 +1410,7 @@ async function recoverStalledClipsPhase(env: Env, job: FilmJob): Promise<boolean
  *  progressed within its deadline: try a same-phase recovery (keyframe adoption from R2), else, once
  *  past the absolute ceiling, fail loudly so a wedged render surfaces instead of hanging forever (#129).
  *  Returns true iff it changed the phase (so the caller re-stamps phase_started_at + persists). */
-async function recoverStalledPhase(env: Env, job: FilmJob, now: number = Date.now()): Promise<boolean> {
+async function recoverStalledPhase(env: Env, job: FilmJob, preModules?: RegisteredModule[], now: number = Date.now()): Promise<boolean> {
   if (!POLLABLE_PHASES.has(job.phase)) return false;
   const age = phaseAgeSeconds(job, now);
 
@@ -1425,7 +1426,7 @@ async function recoverStalledPhase(env: Env, job: FilmJob, now: number = Date.no
   // RE-FIRE every stalled sweep to pick up shots whose clips land after an earlier partial pass;
   // recoverStalledClipsPhase only advances (and sets clips_recovered) once the whole job is complete.
   if (job.phase === "clips" && age >= KEYFRAME_STALL_SECONDS) {
-    if (await recoverStalledClipsPhase(env, job)) return true;
+    if (await recoverStalledClipsPhase(env, job, preModules)) return true;
   }
 
   // Absolute ceiling: a still-pollable phase this old is genuinely wedged with nothing in R2 to adopt
@@ -1504,12 +1505,17 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
   if (job.cancelled) return { job, clipJob: null };
   const envRec = env as unknown as Record<string, unknown>;
   const entryPhase = job.phase;
+  // #521: discover the module registry ONCE per tick and thread it through every phase leg, instead of
+  // each phase function re-fanning-out N `/module.json` subrequests. A tick can chain several discovering
+  // legs (finish -> assemble -> master/mux -> film.finish + notify), so the old per-leg discovery blew the
+  // free-plan 50-subrequest cap on a 25-module install (F9). Manifests are static within a tick.
+  const modules = await discoverModules(envRec);
 
   // Stall recovery (#129): a pollable phase whose module poll never resolves (RunPod GC'd the finished
   // job) would otherwise hang IN_PROGRESS forever. Run BEFORE the phase legs so an adopted keyframe
   // phase advances to clips and the clips leg below drives it in the same tick. A persist happens at the
   // end via the phase-transition stamp; the helper only mutates the in-memory job.
-  await recoverStalledPhase(env, job);
+  await recoverStalledPhase(env, job, modules);
 
   // Phase 1: poll the keyframe job; on completion, presign + hand off to the clip orchestrator.
   if (job.phase === "keyframe" && job.keyframe_poll) {
@@ -1550,7 +1556,7 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
       const adopted = await reclaimClipsFromR2(env, clipJob);
       if (adopted > 0) await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
     }
-    if (clipJob && summarizeJob(clipJob).complete) { await enterFinishPhase(env, job, clipJob); }
+    if (clipJob && summarizeJob(clipJob).complete) { await enterFinishPhase(env, job, clipJob, modules); }
     await putFilm(env, job);
   } else if (job.clip_job_id) {
     const cj = await env.R2_RENDERS.get(clipDocKey(job.clip_job_id)); // load for the summary
@@ -1560,7 +1566,7 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
   // Phase 2.5: synthesize per-shot dialogue audio (one batch via the dialogue module), then -> finish.
   // Soft-degrades to a silent finish on any failure (see advanceDialoguePhase).
   if (job.phase === "dialogue") {
-    await advanceDialoguePhase(env, job);
+    await advanceDialoguePhase(env, job, modules);
     await putFilm(env, job);
   }
 
@@ -1574,7 +1580,7 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
 
   // Phase 3: drive the finish chain per clip (async, across requests), then -> assemble.
   if (job.phase === "finish" && job.finish_shots) {
-    await advanceFinishPhase(env, job);
+    await advanceFinishPhase(env, job, modules);
     await putFilm(env, job);
   }
 
@@ -1590,20 +1596,20 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
       : (clipJob?.shots || [])
           .filter((s) => s.status === "done" && s.clip_key)
           .map((s) => ({ shot_id: s.shot_id, clip_key: s.clip_key as string }));
-    await enterAssemblePhase(env, job, orderFinalClips(job.scenes, source));
+    await enterAssemblePhase(env, job, orderFinalClips(job.scenes, source), modules);
     await putFilm(env, job);
   }
 
   // Phase 4.5: master the assembled film's audio bed (music upscale + loudness) before mux. Pollable
   // like dialogue; FAIL-SAFE -- a master miss passes the bed through and proceeds to mux (#249 / #77).
   if (job.phase === "master") {
-    await advanceMasterPhase(env, job);
+    await advanceMasterPhase(env, job, modules);
     await putFilm(env, job);
   }
 
   // Phase 5: mux the (mastered) audio bed onto the silent film via video-finish (VPC remuxAudioOnly).
   if (job.phase === "mux") {
-    await enterMuxPhase(env, job);
+    await enterMuxPhase(env, job, modules);
     await putFilm(env, job);
   }
 
