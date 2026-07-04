@@ -62,7 +62,7 @@ RESOLVE a module to a Fetcher, not a new way to TALK to one.
 
 ```mermaid
 flowchart TD
-  subgraph edge["Cloudflare edge (Access-gated zone vivijure.skyphusion.org)"]
+  subgraph edge["Cloudflare edge (auth-gated zone vivijure.skyphusion.org)"]
     UI["Studio UI<br/>(projection of GET /api/modules)"]
   end
 

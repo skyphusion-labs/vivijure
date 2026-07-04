@@ -29,7 +29,7 @@ render reaches your hook. **The core never knows who answers** -- it just asks t
 
 The `MODULE_<NAME>` **service binding IS the authentication.** Service-binding calls are
 worker-to-worker and never traverse the public internet, so your `/invoke` never needs (and must not
-add) its own auth check -- the core is the only caller, and the core sits behind Cloudflare Access.
+add) its own auth check -- the core is the only caller, and the core sits behind the studio auth gate.
 
 That guarantee holds ONLY while your module has **no public surface.** In your `wrangler.toml` set
 `workers_dev = false` and declare **no `route`** (every first-party module does). A module that

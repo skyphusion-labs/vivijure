@@ -365,8 +365,10 @@ Once the store is seeded and `store_id` is filled in, deploy as in 3d -- each mo
 through the binding. A `wrangler deploy` against a secret that does not yet exist in the store fails
 at deploy time, so a misconfigured module can no longer ship a silent passthrough.
 
-> The core Studio Worker still uses `wrangler secret put` (section 3b). Migrating it to the Secrets
-> Store is a follow-up; it is not required for this module durability fix.
+> The core Studio Worker's own credentials (RUNPOD_*, R2_S3_ACCESS_KEY_ID / R2_S3_SECRET_ACCESS_KEY,
+> GATEWAY_ID, CF_AIG_TOKEN) now bind from this SAME Secrets Store (#238/#473); only STUDIO_API_TOKEN
+> stays a direct `wrangler secret put` (section 3b). There is no longer a `wrangler secret put`
+> migration pending for the core.
 
 You now have a working Studio for everything except the GPU render itself.
 

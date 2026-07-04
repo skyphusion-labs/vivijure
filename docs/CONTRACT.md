@@ -21,16 +21,16 @@ never once needing to open a `.ts` file.
 > The doc IS the institutional memory, so no single head is a point of failure. See section 0.
 
 Contract version: **`vivijure-module/2`** (the `MODULE_API` constant). It bumps only on a breaking
-change to the hook or manifest shapes. The host accepts the SET of currently-supported epochs
-(`SUPPORTED_MODULE_APIS` = {`vivijure-module/1`, `vivijure-module/2`}), so a bump is a deprecation
-WINDOW, not a hard cutover -- a module on an older still-supported epoch keeps loading.
+change to the hook or manifest shapes. The host accepts only the currently-supported epoch
+(`SUPPORTED_MODULE_APIS` = {`vivijure-module/2`}); the `/1` deprecation window has CLOSED (#294), so a
+`/1` module is now rejected at registration.
 
 **Epoch history**
 - **`/1` -> `/2`** (the identity strip): `user_email` removed from `NotifyInput` and `InvokeContext`.
   The studio is single-operator; identity was legacy multi-tenant cruft and a SaaS seam, so it is
-  removed by design (anti-SaaS by architecture). `/1` modules still load (none read `user_email`, and
-  a `/2` host sends none) and migrate opportunistically; the notify recipient now lives in the
-  notify-email module's OWN config (`notify_email`), not in any core-sent field.
+  removed by design (anti-SaaS by architecture). Every first-party module has since migrated to `/2` and
+  the `/1` window is now CLOSED (#294), so `/1` is no longer in `SUPPORTED_MODULE_APIS`; the notify
+  recipient lives in the notify-email module's OWN config (`notify_email`), not in any core-sent field.
 
 Conventions in this doc:
 - "R2 key" = an object key in the `R2_RENDERS` bucket (the studio's render store).
@@ -54,8 +54,8 @@ rules below are how the contract stays true over time without depending on any s
 ### 0.1 The version
 
 - **`vivijure-module/2`** is the current contract version, carried as the `MODULE_API` constant and
-  echoed on the wire in `GET /api/modules.api` and in every module manifest's `api` field; `/1` is
-  accepted transitionally (see Epoch history).
+  echoed on the wire in `GET /api/modules.api` and in every module manifest's `api` field; the `/1`
+  window is closed (see Epoch history).
 - It covers: the 11 hook names + their cardinality, every hook's Input/Output shape, the module
   manifest schema (including the `ConfigField` union), the invoke/poll envelopes, and the
   `GET /api/modules` projection payload.
@@ -66,18 +66,17 @@ rules below are how the contract stays true over time without depending on any s
 
 ### 0.1.1 Supported versions (the deprecation window)
 
-The host does NOT pin a single epoch. It loads any module whose `api` is in
-`SUPPORTED_MODULE_APIS` -- currently `{ vivijure-module/1, vivijure-module/2 }` -- checked by
-`validateManifest` (the registry gate) and the conformance harness via `.has()`. A version bump is
-therefore a DEPRECATION WINDOW, not a hard cutover:
+The host loads any module whose `api` is in `SUPPORTED_MODULE_APIS` -- currently `{ vivijure-module/2 }`
+-- checked by `validateManifest` (the registry gate) and the conformance harness via `.has()`. The set
+is what makes a version bump a DEPRECATION WINDOW rather than a hard cutover:
 
-- When the contract moved to `/2` (the identity strip), the ~28 first-party modules still declaring
-  `/1` keep loading and serving -- they are runtime-compatible because none read the removed
-  `user_email`, and a `/2` host simply sends none.
-- Modules migrate `/1` -> `/2` opportunistically (tracked as a follow-up issue). Once every
-  first-party module is `/2`, `/1` is removed from `SUPPORTED_MODULE_APIS`, closing the window.
-- This generalizes the older exact-match gate (`m.api !== MODULE_API`), which could not express a
-  migration -- a `/2` host under that gate would have rejected all 28 `/1` modules at once.
+- When the contract moved to `/2` (the identity strip), `/1` was kept in the set so the ~28 first-party
+  modules still declaring `/1` kept loading and serving while they migrated -- runtime-compatible because
+  none read the removed `user_email`, and a `/2` host simply sends none.
+- That migration is now COMPLETE: every first-party module declares `/2`, so `/1` was removed from
+  `SUPPORTED_MODULE_APIS` (#294) and the window is CLOSED. A module still declaring `/1` is now rejected.
+- The set (vs the older exact-match gate `m.api !== MODULE_API`) is what expressed that migration -- a
+  `/2` host under the exact-match gate would have rejected all 28 `/1` modules at once instead.
 
 Only an api NOT in the set is rejected (`unsupported api ...`).
 
@@ -162,9 +161,10 @@ render. Only malformed I/O fails loud.
 ### 1.1 Auth model
 
 The studio is **single-operator and identity-free**. There is no per-user/tenant scoping anywhere:
-all data is global to the one operator, and no route reads an identity field. Access gating is
-enforced at the edge (Cloudflare Access), not in the worker. `/api/whoami` returns a fixed studio
-identity and does NOT echo the Access email (no identity leak). Per-operator settings (`/api/prefs`)
+all data is global to the one operator, and no route reads an identity field. Auth gating is enforced
+by the studio auth gate -- the built-in token gate in-worker by default (`AUTH_MODE = "token"`), or
+Cloudflare Access at the edge as optional hardening. `/api/whoami` returns a fixed studio identity and
+does NOT echo any caller email (no identity leak). Per-operator settings (`/api/prefs`)
 are a global singleton. The `notify` hook carries completion facts only -- the email recipient lives
 in the notify-email module's OWN config, not in any core-sent field. (The legacy per-user ownership
 key was removed in the identity strip; see Epoch history above.)
@@ -290,7 +290,7 @@ isolate (a refresh storm does not re-fetch every module manifest).
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `api` | `"vivijure-module/2"` | Contract version (the host also accepts `/1` transitionally). |
+| `api` | `"vivijure-module/2"` | Contract version (the `/1` window is closed; `/2` only). |
 | `modules` | `PublicModule[]` | Every installed module's manifest, **minus** `binding`. Each is the manifest shape from section 4. |
 | `hooks` | `{ [hook]: string[] }` | Map of hook name -> module **names** serving it, **pre-sorted** in canonical `ui.order` then name order (section 5). The frontend consumes this verbatim and never re-sorts. A hook with no installed module is absent from the map. |
 | `catalog` | `HookCatalogEntry[]` | Every hook (independent of what is installed): `{ name, blurb, cardinality }`. |
@@ -1143,7 +1143,7 @@ conformance harness (`checkManifest`) proves a candidate module honors it.
 |-------|------|-----|---------|
 | `name` | string | yes | Unique module id. |
 | `version` | string | yes | Module version. |
-| `api` | `ModuleApi` (`"vivijure-module/2"`; `/1` accepted transitionally) | yes | Contract version (must be in `SUPPORTED_MODULE_APIS`). |
+| `api` | `ModuleApi` (`"vivijure-module/2"`; `/1` closed) | yes | Contract version (must be in `SUPPORTED_MODULE_APIS`). |
 | `hooks` | `HookName[]` | yes | The hooks this module serves (must be known hook names). |
 | `provides?` | `{ id: string, label: string }[]` | no | User-facing capabilities (each needs `id` + `label`). |
 | `config_schema?` | `{ [field]: ConfigField }` | no | The knobs the module exposes; the UI renders controls from these and the core clamps the user's value against them before invoking. A field's `scope?` (4.1.1) marks it per-render (default) or operator install config. |
