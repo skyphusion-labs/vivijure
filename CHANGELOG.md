@@ -3,6 +3,34 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.14.3
+
+**S16 backlog burn-down: retire two dead modules, harden the tag deploy, finish the Secrets Store
+migration.** PATCH. No new feature surface; three footgun/parity fixes ahead of announce.
+
+- **Retire openai-sora + alibaba-wan25; deploy `EXCLUDE` empty (#306 / #509).** Both were never
+  core-bound and never live: openai-sora's un-exclude was gated on the parked Sora build (#184) and still
+  carried an unresolved CF `workers.dev/subdomain` first-deploy blocker; alibaba-wan25 was a redundant
+  OLDER sibling (Wan 2.5) of the shipped alibaba-wan (Wan 2.6). Deleted both module dirs + their tests,
+  swept the two names from 7 sibling `motion.backend` READMEs + the deploy-runbook, and cleared the
+  retired plan-enhance-py (#469) leftovers. The CI `EXCLUDE` list goes to empty (the skip-list MECHANISM
+  is kept for the next not-ready module). The code is recoverable from git history if #184 revives Sora.
+- **Bounded transient-retry in the module-deploy loop (#492 / #510).** The tag-deploy "Deploy module
+  workers" step ran `wrangler deploy` per module with no retry, so a single transient Cloudflare API
+  hiccup (e.g. the Workflows trigger registration that failed the v0.13.0 deploy) aborted the whole
+  ordered deploy under `set -eu`, skipping the core render, D1 migrations, core deploy, and the
+  post-deploy gate. Ported deploy.sh's pattern: an `until` retry, up to 3 attempts with a 3s backoff; a
+  persistent (non-transient) failure still fails the step loud after the attempts are exhausted. POSIX sh
+  / BusyBox ash, now at parity with deploy.sh.
+- **speech-upscale bound from the Secrets Store (#238 / #511).** The last secret-bearing module still on
+  imperative `wrangler secret put`. Because it deploys via the CI glob loop but CI never runs
+  `wrangler secret put`, a CI/fresh deploy shipped it credless -> silent `no-runpod-secrets` passthrough
+  (the v0.2.2 finish-upscale class #237 exists to kill). It now binds `RUNPOD_API_KEY` (shared) +
+  `RUNPOD_ENDPOINT_ID` (store secret `AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID`, the vivijure-audio-upscale
+  endpoint) from the account Secrets Store via the string-tolerant `secretValue()` resolver; deploy.sh +
+  docs updated. This finishes the #238 migration (the core worker and every other secret-bearing module
+  were already done).
+
 ## v0.14.2
 
 **Every full-render submit path now bounces an unresolved motion backend at the door.** PATCH. Extends
