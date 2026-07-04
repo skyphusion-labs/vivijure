@@ -35,8 +35,11 @@ import urllib.request
 
 API = "https://rest.runpod.io/v1"
 
-# The GPU pool proven by the cold run: mid-range secure-cloud SKUs the backend image supports.
-DEFAULT_GPU_TYPES = "NVIDIA GeForce RTX 4090,NVIDIA RTX A5000,NVIDIA L4"
+# The serverless backend image is CUDA >= 12.8 (Blackwell/Hopper-class ONLY, per Conrad ruling F5/#517):
+# a consumer/mid-range card (RTX 4090 / A5000 / L4) crash-loops the worker at startup. Default to the
+# recommended datacenter set; the full proven pool is RTX 6000 PRO / H200 / B200 (docs/DEPLOYMENT.md
+# section 4). Override with --gpu-types only with other same-class (sm_90+) SKUs you have allocated.
+DEFAULT_GPU_TYPES = "NVIDIA H200,NVIDIA B200"
 DEFAULT_IMAGE = "ghcr.io/skyphusion-labs/vivijure-backend:latest"
 
 
