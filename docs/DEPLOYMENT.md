@@ -145,8 +145,10 @@ Issue a **separate, narrowly-scoped key per function** -- never one god-token. I
 rotate it, the blast radius is one function, not your whole account.
 
 ### 2a. Cloudflare API token (deploy-time)
-Create at **dash.cloudflare.com -> My Profile -> API Tokens -> Create Token -> Custom token**.
-Scope it to **your account only** (Account Resources -> Include -> your account).
+Create a **user API token**: **dash.cloudflare.com -> My Profile -> API Tokens -> Create Token ->
+Custom token** (NOT an account-owned token under Account Home -> API Tokens -- that flow makes the
+scope picker painful and hides `Connectivity Directory`). Scope it to **your account only**
+(Account Resources -> Include -> your account).
 
 | Permission | Why it's needed |
 |---|---|
@@ -498,6 +500,14 @@ Doing it by hand instead of `deploy.sh`? Run `scripts/setup-media-vpc.py --token
 containers/tunnel.env` with `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` set (the token needs
 `Cloudflare Tunnel: Write` + `Connectivity Directory: Admin`); it prints the service ids as JSON and
 writes the token file, both idempotent on a re-run.
+
+> **Upgrading from a pre-media-stack (pre-#519) install?** Your existing `deploy.env` keeps working as
+> is EXCEPT the Cloudflare API token: it predates the two media-stack scopes above. Re-mint it per
+> section 2a (a user token with `Cloudflare Tunnel: Write` + `Connectivity Directory: Admin` added) and
+> update `deploy.env`, then re-run `./deploy.sh`. If the old token is still in place, step 4 stops with
+> the exact missing scope named (`your token lacks 'Cloudflare Tunnel: Write'`), not a raw error. The
+> re-run **adopts** the tunnel your existing VPC services already point at -- it does not create a
+> second one (#531).
 
 ---
 

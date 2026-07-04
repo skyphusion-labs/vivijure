@@ -276,7 +276,11 @@ fi
 # the core wrangler.toml (envsubst below) and into the 5 media module tomls (the F8/#520 fix: no
 # hardcoded prod VPC ids in the tracked configs). Idempotent: a re-run reuses the tunnel + services.
 say "Step 4/9: media stack -- Cloudflare tunnel + Workers VPC services"
-if ! MEDIA_JSON="$(python3 scripts/setup-media-vpc.py --token-file containers/tunnel.env)"; then
+# Optional VIVIJURE_TUNNEL_NAME override (deploy.env) names the tunnel on a FIRST install; on an
+# upgrade the script adopts whatever tunnel the existing VPC services already point at (#531).
+media_args=(--token-file containers/tunnel.env)
+[ -n "${VIVIJURE_TUNNEL_NAME:-}" ] && media_args+=(--tunnel-name "$VIVIJURE_TUNNEL_NAME")
+if ! MEDIA_JSON="$(python3 scripts/setup-media-vpc.py "${media_args[@]}")"; then
   die "media-stack VPC setup failed (see the error above). The deploy token needs Cloudflare Tunnel: Write + Connectivity Directory: Admin -- see docs/DEPLOYMENT.md 2a."
 fi
 media_id() { printf "%s" "$MEDIA_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)[\"services\"][\"$1\"])"; }
