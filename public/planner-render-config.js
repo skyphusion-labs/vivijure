@@ -416,28 +416,34 @@
     cap.appendChild(capHint);
     section.appendChild(cap);
 
+    // Authoritative value element: a hidden <select> that ALWAYS carries the chosen
+    // motion_backend whenever at least one serving backend is installed, so collect()
+    // emits an EXPLICIT motion_backend for every full render (closes vivijure#500 caller
+    // side: a full render can no longer be submitted with an unresolved motion leg, and
+    // the core never has to resolve an omitted backend). The <option>s and the default
+    // are a projection of the registry (mods = GET /api/modules hooks["motion.backend"],
+    // server-sorted by ui.order then name); nothing per-backend is hardcoded. Default =
+    // mods[0], matching the prior picker preselect. Keeps the collect()/restore() contract
+    // (#planner-motion-backend) byte-identical to the prior dropdown.
+    const sel = document.createElement("select");
+    sel.id = "planner-motion-backend";
+    sel.hidden = true;
+    sel.setAttribute("aria-hidden", "true");
+    sel.tabIndex = -1;
+    for (const m of mods) {
+      const opt = document.createElement("option");
+      opt.value = m.name;
+      opt.textContent = moduleLabel(m);
+      sel.appendChild(opt);
+    }
+    sel.value = mods[0].name;
+    section.appendChild(sel);
+
     const doors = document.createElement("div");
     doors.className = "planner-backend-doors";
 
     if (mods.length > 1) {
-      // Authoritative value element: a hidden <select> keeps the collect()/restore()
-      // contract (#planner-motion-backend) byte-identical to the prior dropdown; the
-      // door radios just drive it. Default to the first backend (registry order =
-      // ui.order then name, server-sorted), matching the prior picker's preselect.
-      const sel = document.createElement("select");
-      sel.id = "planner-motion-backend";
-      sel.hidden = true;
-      sel.setAttribute("aria-hidden", "true");
-      sel.tabIndex = -1;
-      for (const m of mods) {
-        const opt = document.createElement("option");
-        opt.value = m.name;
-        opt.textContent = moduleLabel(m);
-        sel.appendChild(opt);
-      }
-      sel.value = mods[0].name;
-      section.appendChild(sel);
-
+      // Multiple doors: each radio drives the hidden select above.
       mods.forEach((m, i) => doors.appendChild(backendDoor(m, true, i === 0)));
       section.appendChild(doors);
       motionWrap.appendChild(section);
@@ -445,9 +451,11 @@
       return true;
     }
 
-    // Single backend: informational only. No #planner-motion-backend element, so
-    // collect() emits no motion_backend and the core resolves the one installed backend
-    // (prior behavior preserved).
+    // Single backend: informational door (no radio) -- there is nothing to pick -- but the
+    // hidden select above still carries its value, so collect() emits an explicit
+    // motion_backend and this door is never a silent default. Returns false (no CHOICE was
+    // offered); motionWrap stays visible via the .planner-backend-selector guard in
+    // renderPanel because a door WAS rendered.
     doors.appendChild(backendDoor(mods[0], false, false));
     section.appendChild(doors);
     motionWrap.appendChild(section);
