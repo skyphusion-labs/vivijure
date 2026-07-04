@@ -423,8 +423,10 @@
     // the core never has to resolve an omitted backend). The <option>s and the default
     // are a projection of the registry (mods = GET /api/modules hooks["motion.backend"],
     // server-sorted by ui.order then name); nothing per-backend is hardcoded. Default =
-    // mods[0], matching the prior picker preselect. Keeps the collect()/restore() contract
-    // (#planner-motion-backend) byte-identical to the prior dropdown.
+    // mods[0] for the single-backend case; for 2+ doors that default is CLEARED below
+    // (vivijure#501) so a locality-blind mods[0] is never auto-picked. Keeps the
+    // collect()/restore() contract (#planner-motion-backend) byte-identical to the prior
+    // dropdown.
     const sel = document.createElement("select");
     sel.id = "planner-motion-backend";
     sel.hidden = true;
@@ -443,8 +445,15 @@
     doors.className = "planner-backend-doors";
 
     if (mods.length > 1) {
-      // Multiple doors: each radio drives the hidden select above.
-      mods.forEach((m, i) => doors.appendChild(backendDoor(m, true, i === 0)));
+      // Multiple doors (vivijure#501): the registry order (ui.order then name) is
+      // locality-blind, so mods[0] can be a bound-but-non-operational door that would
+      // sail through the #500 submit preflight and then die deep in the render. Clear the
+      // default so NO door is preselected; every radio starts unchecked and
+      // collectForSubmit() blocks submit until the novice picks one deliberately (or
+      // supplies motion_backend via expert JSON). The single-backend case above keeps its
+      // explicit default (only one serving backend -- nothing to get wrong).
+      sel.selectedIndex = -1;
+      mods.forEach((m) => doors.appendChild(backendDoor(m, true, false)));
       section.appendChild(doors);
       motionWrap.appendChild(section);
       syncBackendDoors();
@@ -594,12 +603,30 @@
       }
       overrides = mergeExpert(overrides, expert);
     }
+    // vivijure#501: with 2+ motion.backend doors the selector renders the hidden
+    // #planner-motion-backend select with NO default (see renderBackendSelector). A
+    // deliberate choice is mandatory before submit -- block here (all three submit paths
+    // surface this thrown message and abort) until the novice picks a door, or supplies
+    // motion_backend via the expert JSON. The single-backend case carries an explicit
+    // default, so its select always has a value and this never fires; zero backends
+    // render no select, so it never fires there either.
+    const backendSel = document.getElementById("planner-motion-backend");
+    if (backendSel && !overrides.motion_backend) {
+      const names = Array.from(backendSel.options || [])
+        .map((o) => (o.textContent || o.value || "").trim())
+        .filter(Boolean);
+      throw new Error(
+        "pick a render backend before rendering" +
+          (names.length ? " (" + names.join(", ") + ")" : ""),
+      );
+    }
     if (!overrides.config && !overrides.motion_backend) return undefined;
     return overrides;
   }
 
   global.plannerRenderConfig = {
     renderPanel,
+    renderBackendSelector,
     collect,
     collectForSubmit,
     restore,
