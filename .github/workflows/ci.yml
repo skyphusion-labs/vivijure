@@ -109,11 +109,13 @@ jobs:
           #                      workers_dev=false (v0.6.2). Onboard the script, then drop from here.
           #   alibaba-wan25   -- WIP; not wired into the core yet (not in [[services]]).
           #   plan-enhance-py -- superseded by the TS plan-enhance module; Python variant not shipped.
-          #   local-gpu       -- WIP homelab "local" door; not bound to the core (no MODULE_LOCAL_GPU
-          #                      [[services]]) and its LOCAL_BACKEND_URL/TOKEN Secrets Store secrets are
-          #                      not seeded yet, so deploy fails (code 10182). Broke v0.7.6. Drop from
-          #                      here once the homelab box is up: seed the secrets + add the core binding.
-          EXCLUDE="openai-sora alibaba-wan25 local-gpu"
+          # local-gpu is NO LONGER excluded: its backend is a disposable RunPod SECURE pod running
+          # vivijure-local-12gb (LTX i2v) exposed via a TryCloudflare QUICK tunnel -- the recipe proven
+          # in that repo (RUN-LOG.md:187-195). LOCAL_BACKEND_URL is the ephemeral *.trycloudflare.com URL
+          # re-seeded per pod in the Secrets Store, with the backend-auto-generated LOCAL_BACKEND_TOKEN;
+          # the door fails loud when no pod is attached, and the core binds MODULE_LOCAL_GPU. (Excluding
+          # it before the backend existed aborted the v0.7.6 deploy: code 10182, unsatisfiable binding.)
+          EXCLUDE="openai-sora alibaba-wan25"
           deployed=0
           found=0
           for toml in modules/*/wrangler.toml; do
