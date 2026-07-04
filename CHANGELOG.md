@@ -3,6 +3,55 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.15.0
+
+**The media stack becomes part of the standard install, and the whole studio is proven live on a
+$0 Cloudflare account.** MINOR. The S18 payload: the finish/media containers stop being an optional
+tier (the pre-local-door privacy rationale is gone), deploy.sh automates the entire tunnel + VPC
+leg, a film that loses its finish container still delivers clips, and the free-plan gate PASSED on
+a fresh free-plan account -- full standard install E2E and all THREE render routes (own-gpu
+serverless, cloud i2v, local-gpu door) shipped assembled 1080p24 films. The #521 verdict: install
+free, render free (pay only usage), Workers Paid ($5/mo) buys ONLY the 3-GPU-satellite suite; a
+plan flip needs a core redeploy.
+
+- **Media stack promoted to the standard install; tunnel + VPC fully automated (#519 / #520 /
+  #513, #527).** The 5 CPU media containers + cloudflared tunnel + 5 Workers VPC services are now
+  part of the default `deploy.sh` run: profiles collapse to `standard` / `satellites`
+  (`minimal` / `full` become warn-aliases), `INSTALL_LOCAL_GPU=1` is the separate local-door
+  opt-in, and the new `scripts/setup-media-vpc.py` creates/adopts the tunnel, creates the VPC
+  services, injects the service ids, and emits a `0600` `tunnel.env`. Only the 3 GPU satellites
+  (upscale / lipsync / speech-upscale) remain optional.
+- **Degrade to completed-with-clips when video-finish is unavailable (#519, #524).** If
+  `VIDEO_FINISH_VPC` is unbound or unreachable after bounded retry at assemble, the film now
+  COMPLETES with a loud `finish_unavailable` block (`delivered: "clips"` + presigned clip URLs)
+  instead of hard-failing; at mux the degrade delivers a `silent_film`. You can close your laptop
+  and still get your clips. A GENUINE container error still fails the render loud with the real
+  per-shot error (the #245 / #249 honest-failure guards are untouched).
+- **Free-plan subrequest scoping (#521 / #535, #526 + #538).** Root cause of the free-tier
+  `Too many subrequests` failures was scan-count, not module-count (a trimmed 18-module install
+  still failed): the film tick discovered the registry per interested-module scan, and the
+  keyframe->clips transition tick ran TWO full discovery fan-outs (46/50 subrequests before any
+  work). Discovery now runs once per film tick (#526) and is threaded request-scoped through the
+  clip-job path (#538). Post-fix, all three render routes complete on the free plan's 50-subrequest
+  cap.
+- **Zombie GPU-job cancel (#536, #538).** The clip orchestrator persists the backend job id per
+  shot and best-effort-cancels it on shot failure / job teardown, gated so it fires once; R2
+  reclaim runs FIRST, so a clip that already landed is adopted, never cancelled. Kills the class
+  where the studio gives up but an H200 keeps burning.
+- **Media tunnel adoption + named token scopes (#528 / #531, #532).** `setup-media-vpc.py` now
+  adopts an existing `vivijure-media` tunnel instead of creating a split-brain second one, and
+  hard-stops if it detects a split (services pointing at a tunnel it did not adopt). Deploy-time
+  scope errors now name the exact missing token scope (e.g. `Cloudflare Tunnel:Edit`,
+  `Connectivity Directory:Admin`) instead of a bare CF `10000`.
+- **Serverless provisioning defaults to datacenter GPUs (#517, #530).** `runpod-provision.py`
+  defaults new endpoints to the H200 / B200 pool (the baked-image sm target), not the consumer
+  pool a fresh account would otherwise land on.
+- **Docs swept to the standard/satellites shape (#529)**; quickstart, DEPLOYMENT, opt-in-tiers,
+  CONTRACT and the runbook all describe the post-#519 install (Joan). **Node diagnostic reports
+  gitignored (#525)** after a near-miss: a `--report-on-fatalerror` OOM dump (full env, creds
+  included) landed in a working tree and was caught by push protection; `report.[0-9]*.json` can
+  never be committed again.
+
 ## v0.14.3
 
 **S16 backlog burn-down: retire two dead modules, harden the tag deploy, finish the Secrets Store
