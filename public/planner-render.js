@@ -118,10 +118,16 @@ async function submitRender() {
     setRenderStatus("every scene needs a prompt before render", "error");
     return;
   }
+  // v0.40.0: the keyframes-only checkbox is the source of truth for the next submission;
+  // read it BEFORE collecting overrides so the collect can honor the #500 keyframes-only
+  // exemption (vivijure#501) -- a keyframes-only preview runs no motion leg and needs no
+  // backend pick, so it must never be blocked by the multi-backend choice gate.
+  const kfOnlyEl = $("#planner-keyframes-only");
+  const keyframesOnly = !!(kfOnlyEl && kfOnlyEl.checked);
   // v0.35.3 + module config: collect registry-driven overrides + optional expert JSON.
   let renderOverrides;
   try {
-    renderOverrides = collectRenderOverrides();
+    renderOverrides = collectRenderOverrides({ keyframesOnly });
   } catch (err) {
     setRenderStatus(err.message, "error");
     const ta = $("#planner-render-overrides");
@@ -134,12 +140,10 @@ async function submitRender() {
     renderState.pollTimer = null;
   }
   const qualityTier = $("#planner-quality-tier").value;
-  // v0.40.0: the checkbox is the source of truth for the next submission.
-  // The Worker merges this into render_overrides.keyframes_only=true on
-  // the wire; the GPU side (vivijure-serverless 0.4.2+) short-circuits
-  // the orchestrator after the SDXL pass when it is set.
-  const kfOnlyEl = $("#planner-keyframes-only");
-  const keyframesOnly = !!(kfOnlyEl && kfOnlyEl.checked);
+  // v0.40.0: the checkbox (read above) is the source of truth for the next submission. The
+  // Worker merges this into render_overrides.keyframes_only=true on the wire; the GPU side
+  // (vivijure-serverless 0.4.2+) short-circuits the orchestrator after the SDXL pass when
+  // it is set.
   setRenderStatus(
     keyframesOnly ? "submitting keyframes-only preview..." : "submitting render pipeline...",
     "loading",
