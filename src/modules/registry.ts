@@ -474,6 +474,31 @@ export function defaultGpuDoorModule(modules: RegisteredModule[]): RegisteredMod
   return doors.find((m) => m.ui?.locality === "byo") ?? doors[0];
 }
 
+/** Preflight for a FULL (non-keyframesOnly) render: the caller MUST name an explicit, serving
+ *  motion.backend module. Relying on the registry's serving[0] default is the #500 trap -- it can
+ *  silently land on a bound-but-non-operational module (e.g. an unseeded local door), so the film
+ *  burns its keyframes then dies at assemble with "no clips rendered to assemble". Returns a
+ *  novice-readable 400 message that names the problem AND lists the installed choices, or null when
+ *  the choice resolves. keyframesOnly renders never call this (they have no motion leg). Pure +
+ *  reusable so hStartFilm / scatter can adopt it once their callers always send a backend. */
+export function motionBackendPreflightError(
+  modules: RegisteredModule[],
+  explicitChoice: string | undefined,
+): string | null {
+  const names = servingForHook(modules, "motion.backend").map((m) => m.name);
+  if (names.length === 0) {
+    return "no motion.backend module is installed, so a full film cannot be rendered. Install a motion backend, or submit a keyframes-only render.";
+  }
+  const choice = (explicitChoice ?? "").trim();
+  if (!choice) {
+    return `choose a motion backend for a full render -- a full film needs one to turn keyframes into video. Installed: ${names.join(", ")}. (Or submit a keyframes-only render, which needs no motion backend.)`;
+  }
+  if (!names.includes(choice)) {
+    return `motion backend "${choice}" is not an installed, serving module. Choose one of: ${names.join(", ")}.`;
+  }
+  return null;
+}
+
 /** A short label for a module's transport, for error/log messages that must name it without leaking to
  *  the wire (these strings stay core-side, in the pipeline's degrade log). */
 function transportLabel(module: RegisteredModule): string {
