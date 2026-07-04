@@ -19,8 +19,11 @@ installed, serving `motion.backend` module used to burn the keyframe phase and t
   defaulted (via `pickOneForHook`) to `serving[0]` = the `local-gpu` door (`ui.order` 4), not
   `alibaba-wan` (order 70), and the door has no seeded backend URL server-side, so the motion phase
   produced zero clips.
-- **Planner caller side (#502).** The planner surfaces the 400 `{error}` string verbatim (no
-  truncation, no `[object Object]`), so the novice sees the full backend list.
+- **Planner caller side (#502).** The planner now ALWAYS sends an explicit `motion_backend` when at
+  least one serving backend is installed; it previously OMITTED it in the single-backend case (relying
+  on the core `serving[0]` default), which the new preflight would have rejected. The pre-existing
+  render surface already renders the 400 `{error}` string verbatim, so the novice sees the full backend
+  list when a pick is genuinely needed.
 - **Follow-ups noted (next-sprint triage, not in this release):** planner default motion-backend pick
   (#501); extend the same preflight to `hStartFilm` + `hScatterRender` once Slate sends an explicit
   backend (#504); the Slate caller-side fix (`skyphusion-labs/slate#58`).
