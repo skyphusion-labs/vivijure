@@ -14,5 +14,5 @@ enabled = true
 # Workers VPC -> fleet audio-beat-sync (issue #83; off CF Containers, no cold start).
 [[vpc_services]]
 binding = "AUDIO_BEAT_SYNC_VPC"
-service_id = "019ecc06-3790-7403-9d8f-20f1287a513a"
+service_id = "REPLACE_WITH_VPC_AUDIO_BEAT_SYNC_ID"
 remote = true

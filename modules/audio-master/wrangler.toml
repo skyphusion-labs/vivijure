@@ -25,5 +25,5 @@ enabled = true
 # master phase to the un-mastered bed (#249 / #77); it never drops the film.
 [[vpc_services]]
 binding = "AUDIO_MASTER_VPC"
-service_id = "019ef2c3-9fe9-7000-bbca-5e6c7f655ee0"
+service_id = "REPLACE_WITH_VPC_AUDIO_MASTER_ID"
 remote = true

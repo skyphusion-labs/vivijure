@@ -22,5 +22,5 @@ enabled = true
 # /finish and film-titles uses for /film-titles; this module calls the /subtitle route (caption burn).
 [[vpc_services]]
 binding = "VIDEO_FINISH_VPC"
-service_id = "019ecbe6-9fc1-70a0-9946-14bbec0f51bc"
+service_id = "REPLACE_WITH_VPC_VIDEO_FINISH_ID"
 remote = true
