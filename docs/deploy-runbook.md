@@ -41,8 +41,7 @@ Style: no em-dashes or en-dashes (double hyphen `--` only).
   The core binds each module as a `[[services]]` dependency. **A `[[services]]` binding pointing at a
   worker that does not exist makes the core `wrangler deploy` FAIL.** Typecheck/test does NOT catch a
   dangling binding; only a real deploy does. Modules therefore MUST exist before the core deploys.
-  This is the commented-binding pattern (the excluded openai-sora / alibaba-wan25 modules use it
-  today): keep the core binding commented out until the module worker is live, then uncomment it
+  This is the commented-binding pattern: keep the core binding commented out until the module worker is live, then uncomment it
   in the SAME change.
 - **The 3 CPU containers are NOT deployed by `wrangler`.** `video-finish`, `image-prep`, and
   `audio-beat-sync` run always-on on the operator's container host as Docker services via

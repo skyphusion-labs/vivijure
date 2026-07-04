@@ -11,7 +11,7 @@ This is the cost-door for controllable cloud i2v: your own trained look, no GPU 
 
 `motion.backend` is a **pick_one** hook: the studio binds exactly one motion backend per render, and
 this is one selectable provider among several (seedance, kling, minimax-hailuo, google-veo, vidu-q3,
-alibaba-wan, alibaba-wan25, openai-sora, and this LoRA variant). It sits at the **clips** stage, right
+alibaba-wan, and this LoRA variant). It sits at the **clips** stage, right
 after the keyframe is fixed and before dialogue: the keyframe drives the motion, the clip flows on into
 the dialogue and speech phases and then finish.
 

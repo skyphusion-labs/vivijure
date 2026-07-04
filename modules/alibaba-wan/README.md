@@ -9,7 +9,7 @@ seconds** (not a continuous range), and has no audio param -- the core's score/m
 
 `motion.backend` is a **pick_one** hook: the studio binds exactly one motion backend per render, and
 this is one selectable provider among several (seedance, kling, minimax-hailuo, google-veo, vidu-q3,
-alibaba-wan, openai-sora, alibaba-wan25). It sits at the **clips** stage, right after the keyframe is
+alibaba-wan). It sits at the **clips** stage, right after the keyframe is
 fixed and before dialogue: the keyframe drives the motion, the clip flows on into the dialogue and
 speech phases and then finish.
 
