@@ -154,12 +154,13 @@ service = "vivijure-module-subtitle"
 
 Shipped on `main` as `modules/speech-upscale/` (service `vivijure-module-speech-upscale`). It is a
 RunPod module -- the dedicated `vivijure-audio-upscale` CUDA endpoint, NOT a CPU container -- so the
-deploy pattern matches alibaba-wan-lora; it needs both RunPod secrets:
+deploy pattern matches alibaba-wan-lora; since #238 its two RunPod secrets are Secrets-Store-bound (not per-module wrangler secret put):
 
 ```bash
 npx wrangler deploy -c modules/speech-upscale/wrangler.toml
-npx wrangler secret put RUNPOD_API_KEY -c modules/speech-upscale/wrangler.toml
-npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/speech-upscale/wrangler.toml   # = vivijure-audio-upscale
+# RUNPOD_API_KEY (shared) + RUNPOD_ENDPOINT_ID (store secret AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID = the
+# vivijure-audio-upscale endpoint) are seeded ONCE in the account Secrets Store, not per-module
+# `wrangler secret put`; deploy.sh (full profile) seeds them. See docs/DEPLOYMENT.md.
 ```
 
 Core binding:

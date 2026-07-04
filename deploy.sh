@@ -183,8 +183,10 @@ seed_secret R2_S3_SECRET_ACCESS_KEY   "$R2_S3_SECRET_ACCESS_KEY"
 if [ "$VIVIJURE_PROFILE" = full ]; then
   [ -n "${VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID:-}" ] || die "full profile: VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID required (finish-upscale)"
   [ -n "${MUSETALK_RUNPOD_ENDPOINT_ID:-}" ]      || die "full profile: MUSETALK_RUNPOD_ENDPOINT_ID required (finish-lipsync)"
+  [ -n "${AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID:-}" ] || die "full profile: AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID required (speech-upscale)"
   seed_secret VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID "$VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID"
   seed_secret MUSETALK_RUNPOD_ENDPOINT_ID      "$MUSETALK_RUNPOD_ENDPOINT_ID"
+  seed_secret AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID  "$AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID"
 fi
 
 # Point every module we are about to deploy at YOUR store. The committed configs ship the
