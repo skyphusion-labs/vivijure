@@ -3,6 +3,28 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.14.1
+
+**Novice-first: a full render with no resolvable motion backend bounces at the door, not deep at assemble.**
+PATCH. A full (non-`keyframesOnly`) film render whose effective `motion_backend` did not resolve to an
+installed, serving `motion.backend` module used to burn the keyframe phase and then fail with the opaque
+`no clips rendered to assemble` (an assemble-leg symptom of a submit-leg cause). It now rejects with a
+400 at submit, naming the problem and listing the installed backends, before any keyframe GPU work.
+
+- **Core submit preflight (#500 / #503).** `hSubmitRender` resolves the EXPLICIT `motion_backend` (the
+  top-level field or `render_overrides.motion_backend`, NEVER the `serving[0]` default) and returns 400
+  with the serving `motion.backend` module names when it does not resolve; `keyframesOnly` renders are
+  unaffected (they have no motion leg). New reusable `motionBackendPreflightError(modules, choice)`
+  helper (`src/modules/registry.ts`). Root cause confirmed against the live registry: an omitted backend
+  defaulted (via `pickOneForHook`) to `serving[0]` = the `local-gpu` door (`ui.order` 4), not
+  `alibaba-wan` (order 70), and the door has no seeded backend URL server-side, so the motion phase
+  produced zero clips.
+- **Planner caller side (#502).** The planner surfaces the 400 `{error}` string verbatim (no
+  truncation, no `[object Object]`), so the novice sees the full backend list.
+- **Follow-ups noted (next-sprint triage, not in this release):** planner default motion-backend pick
+  (#501); extend the same preflight to `hStartFilm` + `hScatterRender` once Slate sends an explicit
+  backend (#504); the Slate caller-side fix (`skyphusion-labs/slate#58`).
+
 ## v0.14.0
 
 **The local-consumer door goes live in production.** The `local-gpu` module (the 12GB LTX "local"
