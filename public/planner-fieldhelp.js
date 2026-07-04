@@ -19,9 +19,9 @@
 // (every pod config knob: default, range, behavior), expanded into plain
 // language. The popover auto-derives values/range/default, so each entry only
 // needs `what`. Empty on a control still means "use the bundle/pod default".
-function collectRenderOverrides() {
+function collectRenderOverrides(opts) {
   if (!window.plannerRenderConfig) return undefined;
-  return window.plannerRenderConfig.collectForSubmit(readVal("#planner-render-overrides"));
+  return window.plannerRenderConfig.collectForSubmit(readVal("#planner-render-overrides"), opts);
 }
 
 // Film title + credit-card TEXT for the film.finish chain. Shapes FilmTitleSpec{text,subtitle?} +
