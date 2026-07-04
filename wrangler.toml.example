@@ -215,6 +215,15 @@ service = "vivijure-module-plan-enhance"
 binding = "MODULE_OWN_GPU"
 service = "vivijure-module-own-gpu"
 
+# Local-consumer i2v (LTX-Video on a disposable RunPod SECURE pod running vivijure-local-12gb, exposed
+# via a TryCloudflare quick tunnel): the LOCAL door, the deliberate opposite of the datacenter own-gpu
+# path. LOCAL_BACKEND_URL is the ephemeral trycloudflare URL, re-seeded per pod (door fails loud when
+# none is attached). Bind ONLY after local-gpu is un-excluded + deployed (flip 1/2) and LOCAL_BACKEND_URL
+# / LOCAL_BACKEND_TOKEN are seeded in the Secrets Store, else this [[services]] target dangles.
+[[services]]
+binding = "MODULE_LOCAL_GPU"
+service = "vivijure-module-local-gpu"
+
 [[services]]
 binding = "MODULE_SEEDANCE"
 service = "vivijure-module-seedance"
