@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
+import { filmJobToPollView } from "../src/film-render-bridge";
 
 const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
   shot_id: "shot_01", clip_key: "clips/shot_01.mp4", chain: ["MODULE_FINISH_RIFE"], idx: 0,
@@ -1844,5 +1845,152 @@ describe("finish_artifacts: contract-carried conventions beat the legacy name-de
     const modules = [mod("MODULE_X_ODD", { output_key: { kind: "append_suffix", suffix: "_o" }, applied: [{ when: { knob: "on", equals: true }, tag: "on" }] })];
     expect(finishStepAppliedTag(fs({ chain: ["MODULE_X_ODD"], configs: [{}] }), modules)).toBe("MODULE_X_ODD:r2-adopted");
     expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_LIPSYNC"], configs: [{ version: "v1" }] }), modules)).toBe("lipsync:v1");
+  });
+});
+
+// --- #519: video-finish tier UNAVAILABLE degrades to a COMPLETED film with clips (never hard-fail) ---
+// When VIDEO_FINISH_VPC is unbound, OR the finish container is unreachable at assemble/mux AFTER the
+// bounded retry, the film must COMPLETE delivering what was rendered (per-shot clips at assemble, the
+// silent film at mux) with a loud, structured status + a `film.finish_unavailable` event -- never a hard
+// fail after the GPU spend. A GENUINE per-shot / container ERROR (the container ran and reported a real
+// failure) still fails loud (#245/#249). Drives the real assemble/mux legs through advanceFilmJob.
+describe("#519 video-finish UNAVAILABLE -> complete-with-clips degrade (vs #245/#249 hard-fail on a real error)", () => {
+  // Env double parameterized on the VPC: absent (unbound), or bound with a chosen status/body. head()
+  // returns null so the #122 R2-presence short-circuit never fires (there is no assembled film yet).
+  function degradeEnv(job: object, opts: { vpc?: { status?: number; body?: unknown } } = {}) {
+    const filmId = (job as { film_id: string }).film_id;
+    let stored = JSON.stringify(job);
+    const env: Record<string, unknown> = {
+      DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey(filmId) ? { text: async () => stored } : null),
+        head: async () => null,
+        put: async (key: string, val: string) => { if (key === filmJobDocKey(filmId)) stored = val; },
+      },
+      R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+    };
+    if (opts.vpc) {
+      const { status = 200, body = { ok: true } } = opts.vpc;
+      env.VIDEO_FINISH_VPC = { fetch: async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }) };
+    }
+    return { env: env as unknown as Env, read: () => JSON.parse(stored) as FilmJob };
+  }
+
+  const asmJob = (over: object = {}) => ({
+    film_id: "film-519-asm",
+    project: "p",
+    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }, { shot_id: "shot_02", prompt: "y", seconds: 3 }],
+    phase: "assemble" as const,
+    finish_shots: [
+      { shot_id: "shot_01", clip_key: "renders/p/clips/shot_01_finished.mp4", chain: ["M"], idx: 1, status: "done" as const, applied: [] },
+      { shot_id: "shot_02", clip_key: "renders/p/clips/shot_02_finished.mp4", chain: ["M"], idx: 1, status: "done" as const, applied: [] },
+    ],
+    created_at: 0,
+    ...over,
+  });
+
+  const muxJob = (over: object = {}) => ({
+    film_id: "film-519-mux",
+    project: "p",
+    scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+    phase: "mux" as const,
+    silent_film_key: "renders/film-519-mux/film-silent.mp4",
+    audio_key: "renders/film-519-mux/audio.mp4",
+    created_at: 0,
+    ...over,
+  });
+
+  // Capture the structured film.finish_unavailable event off console.log.
+  function captureEvent<T>(fn: () => Promise<T>): Promise<{ result: T; event: Record<string, unknown> | undefined }> {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    return fn().then((result) => {
+      let event: Record<string, unknown> | undefined;
+      for (const call of spy.mock.calls) {
+        const line = call[0];
+        if (typeof line !== "string") continue;
+        try {
+          const o = JSON.parse(line) as Record<string, unknown>;
+          if (o.ev === "film.finish_unavailable") event = o;
+        } catch { /* not a JSON event line */ }
+      }
+      spy.mockRestore();
+      return { result, event };
+    }).catch((e) => { spy.mockRestore(); throw e; });
+  }
+
+  it("assemble + VIDEO_FINISH_VPC UNBOUND -> COMPLETED delivering the per-shot clips, loud status + event", async () => {
+    const { env, read } = degradeEnv(asmJob()); // no VIDEO_FINISH_VPC
+    const { result: r, event } = await captureEvent(() => advanceFilmJob(env, "film-519-asm"));
+    expect(r?.job.phase).toBe("done"); // NOT failed -- the clips are delivered
+    expect(r?.job.finish_unavailable?.at).toBe("assemble");
+    expect(r?.job.finish_unavailable?.delivered).toBe("clips");
+    expect(r?.job.finish_unavailable?.clips?.map((c) => c.shot_id)).toEqual(["shot_01", "shot_02"]);
+    expect(r?.job.film_key).toBeUndefined(); // there is no single assembled film
+    // the degrade is a persisted, observable state (not a silent green)
+    expect(read().finish_unavailable?.at).toBe("assemble");
+    // and a loud structured event on the observability channel
+    expect(event?.at).toBe("assemble");
+    expect(event?.delivered).toBe("clips");
+    expect(event?.clips).toBe(2);
+  });
+
+  it("assemble + container UNREACHABLE after the bounded retry -> same complete-with-clips degrade", async () => {
+    // assemble_attempts at the cap-1 so this tick exhausts (502 is a transient gateway status, no backoff).
+    const { env } = degradeEnv(asmJob({ assemble_attempts: 5 }), { vpc: { status: 502 } });
+    const r = await advanceFilmJob(env, "film-519-asm");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.finish_unavailable?.at).toBe("assemble");
+    expect(r?.job.finish_unavailable?.delivered).toBe("clips");
+    expect(r?.job.finish_unavailable?.clips?.length).toBe(2);
+  });
+
+  it("assemble + the container RAN and returned a real error (500) -> STILL FAILS LOUD (#245/#249)", async () => {
+    const { env } = degradeEnv(asmJob(), { vpc: { status: 500, body: { ok: false, error: "ffmpeg concat boom" } } });
+    const r = await advanceFilmJob(env, "film-519-asm");
+    expect(r?.job.phase).toBe("failed"); // a genuine failure is NOT degraded
+    expect(r?.job.error).toContain("500");
+    expect(r?.job.finish_unavailable).toBeUndefined();
+  });
+
+  it("mux + VIDEO_FINISH_VPC UNBOUND -> COMPLETED shipping the SILENT film, loud status + event", async () => {
+    const { env, read } = degradeEnv(muxJob()); // no VIDEO_FINISH_VPC, no film.finish/notify modules
+    const { result: r, event } = await captureEvent(() => advanceFilmJob(env, "film-519-mux"));
+    expect(r?.job.phase).toBe("done"); // NOT failed -- the silent film ships
+    expect(r?.job.finish_unavailable?.at).toBe("mux");
+    expect(r?.job.finish_unavailable?.delivered).toBe("silent_film");
+    expect(r?.job.film_key).toBe("renders/film-519-mux/film-silent.mp4"); // the delivered (silent) film
+    expect(read().finish_unavailable?.at).toBe("mux");
+    expect(event?.at).toBe("mux");
+    expect(event?.delivered).toBe("silent_film");
+  });
+
+  it("mux + the container RAN and returned a real error (500) -> STILL FAILS LOUD (#245/#249)", async () => {
+    const { env } = degradeEnv(muxJob(), { vpc: { status: 500, body: { ok: false, error: "remux boom" } } });
+    const r = await advanceFilmJob(env, "film-519-mux");
+    expect(r?.job.phase).toBe("failed");
+    expect(r?.job.error).toContain("500");
+    expect(r?.job.finish_unavailable).toBeUndefined();
+  });
+
+  it("summarizeFilm + filmJobToPollView surface the degrade + clip keys for the UI", () => {
+    const job = {
+      ...asmJob(),
+      phase: "done" as const,
+      finish_unavailable: {
+        at: "assemble" as const,
+        reason: "video-finish tier not installed (VIDEO_FINISH_VPC unbound); delivered per-shot clips",
+        delivered: "clips" as const,
+        clips: [{ shot_id: "shot_01", clip_key: "renders/p/clips/shot_01_finished.mp4" }],
+      },
+    } as unknown as FilmJob;
+    const summary = summarizeFilm(job, null);
+    expect(summary.finish_unavailable?.at).toBe("assemble");
+    expect(summary.finish_unavailable?.clips?.[0].shot_id).toBe("shot_01");
+    const view = filmJobToPollView(job, null);
+    expect(view.status).toBe("COMPLETED");
+    const out = view.output as Record<string, unknown>;
+    expect((out.finish_unavailable as { at: string }).at).toBe("assemble");
+    expect((out.clips as { shot_id: string; key: string }[])[0]).toEqual({ shot_id: "shot_01", key: "renders/p/clips/shot_01_finished.mp4" });
   });
 });

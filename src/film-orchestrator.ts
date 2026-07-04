@@ -783,6 +783,56 @@ async function applyFilmFinish(env: Env, job: FilmJob): Promise<void> {
   job.film_key = r.film_key;
 }
 
+/** Emit the loud, structured degrade event when the video-finish tier is UNAVAILABLE (VIDEO_FINISH_VPC
+ *  unbound, or the container/tunnel unreachable after the bounded assemble/mux retry) so the film
+ *  COMPLETES with what was rendered instead of hard-failing after the GPU spend (#519). Mirrors the
+ *  scatter.* structured events (docs/observability.md): a Loki-greppable `{"ev":"film.finish_unavailable"}`
+ *  line the UI and smoke tests assert on. NEVER emitted for a genuine per-shot / container ERROR -- that
+ *  still fails the render loud (#245/#249); this is the UNAVAILABILITY path only. */
+function emitFinishUnavailable(job: FilmJob): void {
+  const u = job.finish_unavailable;
+  if (!u) return;
+  console.log(JSON.stringify({
+    ev: "film.finish_unavailable",
+    film_id: job.film_id,
+    project: job.project,
+    at: u.at,
+    delivered: u.delivered,
+    clips: u.clips?.length ?? 0,
+    reason: u.reason,
+  }));
+}
+
+/** Video-finish tier UNAVAILABLE at assemble (VIDEO_FINISH_VPC unbound, or the concat container
+ *  unreachable after the bounded retry): there is no single concatenated film, but every per-shot clip
+ *  is rendered and sitting in R2. COMPLETE the film delivering those clips with a loud, structured
+ *  "clips only, finish unavailable" status, rather than hard-failing after the keyframe/i2v/finish GPU
+ *  spend (#519 -- "you can at least get your clips if you close your laptop"). UNAVAILABILITY ONLY: a
+ *  container that RAN and reported a real assemble error still fails loud (#245/#249). */
+function degradeAssembleUnavailable(
+  job: FilmJob,
+  finalClips: { shot_id: string; clip_key: string }[],
+  reason: string,
+): void {
+  job.finish_unavailable = { at: "assemble", reason, delivered: "clips", clips: finalClips };
+  job.assemble_attempts = 0;
+  emitFinishUnavailable(job);
+  job.phase = "done"; // no assembled film to finish/notify; the clips ARE the delivered render
+}
+
+/** Video-finish tier UNAVAILABLE at mux (VIDEO_FINISH_VPC unbound, or the remux container unreachable
+ *  after the bounded retry): the SILENT assembled film exists in R2 (silentKey), the audio bed just
+ *  could not be muxed onto it. Ship the silent film with a loud, structured status rather than
+ *  hard-failing a fully-rendered film (#519). transitionToDone still runs any film.finish cards on the
+ *  silent film and fires notify with its download link. UNAVAILABILITY ONLY (#245/#249). */
+async function degradeMuxUnavailable(env: Env, job: FilmJob, silentKey: string, reason: string): Promise<void> {
+  job.finish_unavailable = { at: "mux", reason, delivered: "silent_film" };
+  job.mux_attempts = 0;
+  emitFinishUnavailable(job);
+  job.film_key = silentKey;
+  await transitionToDone(env, job);
+}
+
 async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
   const silentKey = job.silent_film_key;
   const audioKey = job.audio_key;
@@ -792,8 +842,7 @@ async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
     return;
   }
   if (!env.VIDEO_FINISH_VPC) {
-    job.phase = "failed";
-    job.error = "video-finish VPC binding not configured";
+    await degradeMuxUnavailable(env, job, silentKey, "video-finish tier not installed (VIDEO_FINISH_VPC unbound); shipped silent film");
     return;
   }
 
@@ -833,13 +882,11 @@ async function enterMuxPhase(env: Env, job: FilmJob): Promise<void> {
     return;
   }
   if (transport.state === "exhausted") {
-    job.phase = "failed";
-    job.error = transport.error;
+    await degradeMuxUnavailable(env, job, silentKey, transport.error);
     return;
   }
   if (!resp) {
-    job.phase = "failed";
-    job.error = "video-finish container unreachable";
+    await degradeMuxUnavailable(env, job, silentKey, "video-finish container unreachable; shipped silent film");
     return;
   }
   if (!resp.ok) {
@@ -991,7 +1038,10 @@ async function enterAssemblePhase(
     return;
   }
 
-  if (!env.VIDEO_FINISH_VPC) { job.phase = "failed"; job.error = "video-finish VPC binding not configured"; return; }
+  if (!env.VIDEO_FINISH_VPC) {
+    degradeAssembleUnavailable(job, finalClips, "video-finish tier not installed (VIDEO_FINISH_VPC unbound); delivered per-shot clips");
+    return;
+  }
 
   const clips: { url: string }[] = [];
   for (const c of finalClips) {
@@ -1022,13 +1072,12 @@ async function enterAssemblePhase(
     return;
   }
   if (transport.state === "exhausted") {
-    job.phase = "failed";
-    job.error = transport.error;
+    degradeAssembleUnavailable(job, finalClips, transport.error);
     return;
   }
   // state === "ok": a transient status is never null, so resp is non-null here. The guard keeps the
   // compiler happy and is a defensive backstop.
-  if (!resp) { job.phase = "failed"; job.error = "video-finish container unreachable"; return; }
+  if (!resp) { degradeAssembleUnavailable(job, finalClips, "video-finish container unreachable; delivered per-shot clips"); return; }
   if (!resp.ok) {
     // A non-transient error status: the container's own failure (e.g. a 500 with an ffmpeg/assemble
     // error body). Surface the body -- an opaque "returned 500" is undiagnosable -- and go terminal;

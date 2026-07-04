@@ -984,9 +984,19 @@ const hPollClips: Handler = async (_req, env, _c, p) => {
  *  film_key lives in the private R2 render bucket; a presigned GET (24h) lets a caller without CF
  *  Access (e.g. the Slate Discord bot posting into a channel) fetch/share the mp4 directly, with no
  *  size limit and no extra API surface. Absent until the film is done. */
-async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<FilmSummary & { download_url?: string }> {
+async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<FilmSummary & { download_url?: string; clip_urls?: { shot_id: string; download_url: string }[] }> {
   if (summary.phase === "done" && summary.film_key) {
     return { ...summary, download_url: await presignR2Get(env, summary.film_key, FILM_DOWNLOAD_TTL_SECONDS) };
+  }
+  // #519: clips-only degrade (video-finish tier unavailable at assemble) has no single assembled film,
+  // but the per-shot clips ARE the delivered render -- presign each so the caller can actually fetch them.
+  const u = summary.finish_unavailable;
+  if (summary.phase === "done" && u?.at === "assemble" && u.clips?.length) {
+    const clip_urls = await Promise.all(u.clips.map(async (c) => ({
+      shot_id: c.shot_id,
+      download_url: await presignR2Get(env, c.clip_key, FILM_DOWNLOAD_TTL_SECONDS),
+    })));
+    return { ...summary, clip_urls };
   }
   return summary;
 }

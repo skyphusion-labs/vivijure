@@ -163,6 +163,19 @@ export function filmJobToPollView(job: FilmJob, clipJob: ClipJob | null, keyfram
       project: job.project,
       mode,
     };
+    // #519: video-finish tier was UNAVAILABLE (unbound / unreachable-after-retry) -- the film COMPLETED
+    // delivering what was rendered (per-shot clips at assemble, or the silent film at mux). Surface the
+    // loud status + the deliverable clip keys so the planner/UI shows "clips only, finish unavailable"
+    // instead of a plain green with a missing film.
+    if (job.finish_unavailable) {
+      output.finish_unavailable = {
+        at: job.finish_unavailable.at,
+        reason: job.finish_unavailable.reason,
+        delivered: job.finish_unavailable.delivered,
+      };
+      const uClips = job.finish_unavailable.clips;
+      if (uClips?.length) output.clips = uClips.map((c) => ({ shot_id: c.shot_id, key: c.clip_key }));
+    }
     if (job.keyframes_only && job.keyframes?.length) {
       output.keyframes = job.keyframes.map((k) => ({ shot_id: k.shot_id, key: k.keyframe_key }));
       output.scenes = job.scenes;

@@ -121,6 +121,20 @@ export interface FilmJob {
     steps?: string[];    // last output detail: ["film-titles"] applied, or ["passthrough:..."]/["noop:no-cards"] degraded
     degraded?: string;   // set when the film was passed through UNCARDED; the reason (cards NOT applied)
   };
+  // Loud, structured degrade when the video-finish tier (VIDEO_FINISH_VPC) is UNAVAILABLE at
+  // assemble/mux -- the binding is unbound, or the container/tunnel was unreachable after the bounded
+  // retry. The film COMPLETES (never hard-fails after the GPU spend, #519) delivering what was rendered:
+  // the per-shot clips (assemble degrade, no single concatenated film) or the SILENT assembled film (mux
+  // degrade, the audio bed could not be muxed). This is the UNAVAILABILITY path ONLY; a genuine per-shot
+  // finish / container ERROR (the container ran and reported a real failure) still fails the render loud
+  // (#245/#249). Surfaced on FilmSummary + a `film.finish_unavailable` structured event so the UI and
+  // smoke tests can assert on it, never a silent green.
+  finish_unavailable?: {
+    at: "assemble" | "mux";      // which delegated step could not run
+    reason: string;              // the honest cause (unbound binding, or unreachable-after-retry)
+    delivered: "clips" | "silent_film"; // what shipped instead of the finished film
+    clips?: { shot_id: string; clip_key: string }[]; // per-shot clips (assemble degrade), the deliverable
+  };
   mux_output_key?: string; // deterministic mux destination for idempotent retries
   mix_audio_key?: string; // #231: multi-track mixed audio (dialogue + ducked music + loudnorm) destination
   mux_attempts?: number;
@@ -204,6 +218,10 @@ export interface FilmSummary {
   // honest degrade state -- a film that reached "done" but shipped WITHOUT cards (e.g. the video-finish
   // container was unreachable) has film_finish.degraded set. Absent until film.finish runs. (#211 follow-up)
   film_finish?: FilmJob["film_finish"];
+  // Loud degrade status when the video-finish tier was UNAVAILABLE (unbound / unreachable-after-retry):
+  // the film COMPLETED delivering per-shot clips (assemble) or the silent film (mux) instead of the
+  // finished film. Absent on a normal render. Lets the API/UI show "clips only, finish unavailable" (#519).
+  finish_unavailable?: FilmJob["finish_unavailable"];
 }
 export function summarizeFinish(shots: FinishShot[]): FinishSummary {
   return {
@@ -220,6 +238,7 @@ export function summarizeFilm(job: FilmJob, clipJob: ClipJob | null): FilmSummar
     finish: job.finish_shots ? summarizeFinish(job.finish_shots) : undefined,
     film_key: job.film_key,
     film_finish: job.film_finish,
+    finish_unavailable: job.finish_unavailable,
   };
 }
 
