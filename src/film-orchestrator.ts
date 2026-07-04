@@ -12,7 +12,7 @@ import { discoverModules, invokeModule, pollModule, cancelModule, resolveFetcher
 import { loadInstallConfig } from "./operator-config";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput, RegisteredModule } from "./modules/types";
 import {
-  startClipJob, advanceClipJob, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
+  startClipJob, advanceClipJob, cancelInFlightClips, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { hookOutputViolation } from "./modules/conformance";
@@ -131,7 +131,7 @@ async function recordTrainedLorasToCast(env: Env, job: FilmJob, kfOut: KeyframeO
 }
 
 /** Internal: after keyframes, either stop (preview) or hand off to the clip orchestrator. */
-async function afterKeyframeOutput(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
+async function afterKeyframeOutput(env: Env, job: FilmJob, kfOut: KeyframeOutput, preModules?: RegisteredModule[]): Promise<void> {
   // Bank trained adapters before anything else, so a character LoRA is recorded even for a
   // keyframes-only preview / regen (which is exactly where the perpetual retrain hurt most).
   await recordTrainedLorasToCast(env, job, kfOut);
@@ -139,11 +139,11 @@ async function afterKeyframeOutput(env: Env, job: FilmJob, kfOut: KeyframeOutput
     completeKeyframesOnly(job, kfOut);
     return;
   }
-  await advanceToClips(env, job, kfOut);
+  await advanceToClips(env, job, kfOut, preModules);
 }
 
 /** Internal: presign each matched keyframe -> start the clip job, advancing the film to phase=clips. */
-async function advanceToClips(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
+async function advanceToClips(env: Env, job: FilmJob, kfOut: KeyframeOutput, preModules?: RegisteredModule[]): Promise<void> {
   const { matched, missing } = joinKeyframesToScenes(job.scenes, kfOut.keyframes || []);
   if (!matched.length) {
     job.phase = "failed";
@@ -159,7 +159,7 @@ async function advanceToClips(env: Env, job: FilmJob, kfOut: KeyframeOutput): Pr
     project: job.project, shots,
     motion_backend: job.motion_backend ?? undefined,
     config: job.motion_config,
-  });
+  }, preModules);
   job.clip_job_id = clip.job_id;
   job.phase = "clips";
 }
@@ -1120,6 +1120,7 @@ export async function startFilmFromKeyframes(
     parent_render_id?: number;
     audio_key?: string;
   },
+  preModules?: RegisteredModule[],
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
   const stagedAudio = await resolveStagedAudioKey(env, args.audio_key);
@@ -1166,7 +1167,7 @@ export async function startFilmFromKeyframes(
     motion_backend: args.motion_backend,
     config: args.motion_config,
     module_configs: args.motion_configs,
-  });
+  }, preModules);
   job.clip_job_id = clip.job_id;
   job.phase = summarizeJob(clip).failed === clip.shots.length ? "failed" : "clips";
   if (job.phase === "failed") job.error = "every clip submission failed";
@@ -1192,11 +1193,12 @@ export async function startFilmJob(
     cast_loras?: Record<string, number>;
     film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   },
+  preModules?: RegisteredModule[],
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
   const stagedAudio = args.clips_only ? undefined : await resolveStagedAudioKey(env, args.audio_key);
   const envRec = env as unknown as Record<string, unknown>;
-  const modules = await discoverModules(envRec);
+  const modules = preModules ?? await discoverModules(envRec);
   // Honor the planner's keyframe backend pick (e.g. cloud-keyframe) over the ui.order default, mirroring
   // motion.backend selection. An explicit-but-unknown choice resolves to null -> the render fails loud
   // with a clear "keyframe module <choice> not installed" rather than silently swapping backends.
@@ -1243,7 +1245,7 @@ export async function startFilmJob(
     });
     if (!r.ok) { job.phase = "failed"; job.error = r.error; }
     else if ((r as { pending?: boolean }).pending) { job.keyframe_poll = (r as { poll: string }).poll; job.keyframe_job_id = (r as { jobId?: string }).jobId; }
-    else if ("output" in r) { const v = hookOutputViolation(kf.name, "keyframe", r.output); if (v) { job.phase = "failed"; job.error = v; } else { await afterKeyframeOutput(env, job, r.output as KeyframeOutput); } }
+    else if ("output" in r) { const v = hookOutputViolation(kf.name, "keyframe", r.output); if (v) { job.phase = "failed"; job.error = v; } else { await afterKeyframeOutput(env, job, r.output as KeyframeOutput, modules); } }
     else { job.phase = "failed"; job.error = "keyframe module returned neither output nor a poll token"; }
   }
   await putFilm(env, job);
@@ -1262,6 +1264,9 @@ export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob |
   // follow-ups once their modules advertise `cancelable`; until then cancelInFlightKeyframe is a no-op
   // off the keyframe phase and the orphan, if any, is the existing behavior -- not made worse here.)
   await cancelInFlightKeyframe(env, job);
+  // #536: the motion-phase sibling -- STOP any in-flight clip shots RunPod jobs too, so a user cancel off
+  // the clips phase does not leave the GPU running (the follow-up the cancelInFlightKeyframe comment named).
+  if (job.clip_job_id) await cancelInFlightClips(env, job.clip_job_id);
   job.cancelled = true;
   job.phase = "failed";
   job.error = "cancelled";
@@ -1342,7 +1347,7 @@ export async function cancelInFlightKeyframe(env: Env, job: FilmJob): Promise<vo
  *  Output -> clips, or done for a keyframes-only preview). Idempotent: marks keyframe_recovered so it
  *  runs once, and a fresh-completion advance on a later poll is unaffected (the phase has moved on).
  *  Returns true iff it adopted keyframes and moved the phase. */
-async function recoverStalledKeyframePhase(env: Env, job: FilmJob): Promise<boolean> {
+async function recoverStalledKeyframePhase(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<boolean> {
   const adopted = await listProjectKeyframes(env, job.project, job.scenes);
   if (!adopted.length) return false; // nothing in R2 to adopt -- not actually complete; let the ceiling handle it
   console.warn(`film ${job.film_id}: keyframe poll stale, adopting ${adopted.length} orphaned keyframes from R2 (#129)`);
@@ -1352,7 +1357,7 @@ async function recoverStalledKeyframePhase(env: Env, job: FilmJob): Promise<bool
   await cancelInFlightKeyframe(env, job);
   job.keyframe_recovered = true;
   job.keyframe_poll = undefined; // the RunPod job is cancelled (or logged as an orphan) above
-  await afterKeyframeOutput(env, job, { project: job.project, keyframes: adopted });
+  await afterKeyframeOutput(env, job, { project: job.project, keyframes: adopted }, preModules);
   return true;
 }
 
@@ -1416,7 +1421,7 @@ async function recoverStalledPhase(env: Env, job: FilmJob, preModules?: Register
 
   // Same-phase recovery: a keyframe poll that never resolved, but the keyframes are in R2.
   if (job.phase === "keyframe" && !job.keyframe_recovered && age >= KEYFRAME_STALL_SECONDS) {
-    if (await recoverStalledKeyframePhase(env, job)) return true;
+    if (await recoverStalledKeyframePhase(env, job, preModules)) return true;
   }
 
   // Same-phase recovery: a clips (motion.backend) poll that never resolved, but the clips are in R2
@@ -1528,7 +1533,7 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
         const out = (p as { output: KeyframeOutput }).output;
         const v = hookOutputViolation(job.keyframe_binding ?? "keyframe", "keyframe", out);
         if (v) { job.phase = "failed"; job.error = v; }
-        else await afterKeyframeOutput(env, job, out);
+        else await afterKeyframeOutput(env, job, out, modules);
       } else if (await keyframeSetCompleteInR2(env, job)) {
         // R2 PRESENCE IS AUTHORITATIVE, even on a *pending* poll (#129 sibling, mirrors #154 for finish):
         // the keyframe job's RunPod envelope can freeze at IN_PROGRESS after the GPU already wrote every
@@ -1537,7 +1542,7 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
         // completeness guard is essential: adopting a PARTIAL set (mid-generation) would advance to clips
         // with keyframes missing. (recoverStalledKeyframePhase stays as the >20min backstop, which is
         // lenient on partial = genuine non-renders.)
-        await recoverStalledKeyframePhase(env, job);
+        await recoverStalledKeyframePhase(env, job, modules);
       }
     }
     await putFilm(env, job);
@@ -1546,7 +1551,7 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
   // Phase 2: drive the clip orchestrator; when every shot is terminal, hand off to the finish chain.
   let clipJob: ClipJob | null = null;
   if (job.phase === "clips" && job.clip_job_id) {
-    clipJob = await advanceClipJob(env, job.clip_job_id);
+    clipJob = await advanceClipJob(env, job.clip_job_id, modules);
     // R2 PRESENCE IS AUTHORITATIVE, BEFORE the complete-judgment (issue #141): a module fast-fail (#142)
     // makes summarizeJob read complete (done+failed===total) at ~150s; without this, enterFinishPhase
     // builds from done clips only and DROPS the failed shots -- even though their clips are in R2. Reclaim

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { summarizeJob, applyPoll, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, advanceClipJob } from "../src/render-orchestrator";
+import { summarizeJob, applyPoll, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, advanceClipJob, startClipJob, cancelInFlightClips } from "../src/render-orchestrator";
 import type { ClipJob, ClipShot } from "../src/render-orchestrator";
+import type { RegisteredModule } from "../src/modules/types";
 import type { Env } from "../src/env";
 
 const job = (statuses: ClipShot["status"][]): ClipJob => ({
@@ -128,5 +129,121 @@ describe("advanceClipJob fail-time R2 reclaim (#141: R2 presence beats a module 
     const out = await advanceClipJob(env, "clips-genuine-fail");
     expect(out?.shots[0].status).toBe("failed");
     expect(out?.shots[0].error).toBe("real failure");
+  });
+});
+
+
+// --- #535 / #536: request-scoped discovery through the clip tick + best-effort remote cancel on failure ---
+// #536: when the clip orchestrator marks a shot FAILED (e.g. the poll threw "Too many subrequests"), the
+// RunPod job it started may still be burning GPU (the S18 gate saw 307s of H200 after the studio gave up).
+// advanceClipJob now fires a best-effort remote cancel (via the module, keyed by the poll token, gated on
+// the module advertising `cancelable`) and records cancel_sent. #535: it accepts a threaded registry so
+// the cancelable lookup does NOT re-fan-out the module.json discovery on the clip tick.
+const SEEDANCE_MANIFEST = (cancelable: boolean) => ({
+  name: "seedance", version: "0.1.0", api: "vivijure-module/2",
+  hooks: ["motion.backend"], provides: [{ id: "seedance", label: "Seedance i2v" }],
+  config_schema: {}, ui: { section: "motion.backend", order: 10 }, cancelable,
+});
+function jr(b: unknown) { return new Response(JSON.stringify(b), { headers: { "content-type": "application/json" } }); }
+
+function cancelClipEnv(clipJob: ClipJob, opts: { cancelable: boolean; pollResp: unknown; clipKeys?: string[]; invokeResp?: unknown }) {
+  const docKey = `renders/${clipJob.job_id}/clips-job.json`;
+  let stored = JSON.stringify(clipJob);
+  const cancelCalls: string[] = [];
+  let manifestHits = 0;
+  const env = {
+    R2_RENDERS: {
+      get: async (k: string) => (k === docKey ? { text: async () => stored } : null),
+      put: async (k: string, b: string) => { if (k === docKey) stored = b; },
+      list: async ({ prefix }: { prefix: string }) => ({
+        objects: (opts.clipKeys ?? []).filter((x) => x.startsWith(prefix)).map((x) => ({ key: x })),
+        truncated: false,
+      }),
+    },
+    MODULE_SEEDANCE: {
+      fetch: async (input: Request | string) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.endsWith("/module.json")) { manifestHits += 1; return jr(SEEDANCE_MANIFEST(opts.cancelable)); }
+        if (url.endsWith("/cancel")) { cancelCalls.push(url); return jr({ ok: true }); }
+        if (url.endsWith("/invoke")) return jr(opts.invokeResp ?? { ok: true, pending: true, poll: "tok" });
+        return jr(opts.pollResp); // /poll
+      },
+    },
+  } as unknown as Env;
+  return { env, read: () => JSON.parse(stored) as ClipJob, cancelCalls, manifestHits: () => manifestHits };
+}
+
+const failingShot = (jobId: string): ClipJob => ({
+  job_id: jobId, project: "neon", motion_backend: "seedance", binding: "MODULE_SEEDANCE", created_at: 0,
+  shots: [{ shot_id: "shot_01", keyframe_url: "u", prompt: "x", seconds: 5, status: "pending", poll: "tok", binding: "MODULE_SEEDANCE", runpod_job_id: "rp-123" }],
+});
+
+describe("#536 best-effort remote cancel when a clip shot is marked failed (zombie-GPU guard)", () => {
+  it("fires a cancel via the module and records cancel_sent when the shot fails and the module is cancelable", async () => {
+    const { env, read, cancelCalls } = cancelClipEnv(failingShot("clips-536a"), { cancelable: true, pollResp: { ok: false, error: "Too many subrequests" } });
+    const out = await advanceClipJob(env, "clips-536a");
+    expect(out?.shots[0].status).toBe("failed");
+    expect(cancelCalls.length).toBe(1);           // the in-flight RunPod job was cancelled
+    expect(out?.shots[0].cancel_sent).toBe(true);
+    expect(read().shots[0].cancel_sent).toBe(true); // persisted
+  });
+
+  it("does NOT call cancel but still records cancel_sent (honest orphan) when the module is not cancelable", async () => {
+    const { env, cancelCalls } = cancelClipEnv(failingShot("clips-536b"), { cancelable: false, pollResp: { ok: false, error: "boom" } });
+    const out = await advanceClipJob(env, "clips-536b");
+    expect(out?.shots[0].status).toBe("failed");
+    expect(cancelCalls.length).toBe(0);           // no /cancel primitive -> logged orphan, not a crash
+    expect(out?.shots[0].cancel_sent).toBe(true); // best-effort attempted once
+  });
+
+  it("does not re-fire the cancel on a later tick (cancel_sent gates it)", async () => {
+    const { env, cancelCalls } = cancelClipEnv(failingShot("clips-536c"), { cancelable: true, pollResp: { ok: false, error: "boom" } });
+    await advanceClipJob(env, "clips-536c");
+    await advanceClipJob(env, "clips-536c"); // second tick: shot already failed + cancel_sent
+    expect(cancelCalls.length).toBe(1);
+  });
+
+  it("does NOT cancel a shot whose clip actually landed in R2 (reclaim to done wins over cancel)", async () => {
+    const { env, cancelCalls } = cancelClipEnv(failingShot("clips-536d"), { cancelable: true, pollResp: { ok: false, error: "poll blip" }, clipKeys: ["renders/neon/clips/shot_01_i2v.mp4"] });
+    const out = await advanceClipJob(env, "clips-536d");
+    expect(out?.shots[0].status).toBe("done"); // reclaimed
+    expect(cancelCalls.length).toBe(0);        // nothing to cancel; the job completed
+  });
+
+  it("cancelInFlightClips cancels every in-flight (pending) shot on teardown", async () => {
+    const cj = failingShot("clips-536e");
+    cj.shots[0].status = "pending"; // still in flight
+    const { env, read, cancelCalls } = cancelClipEnv(cj, { cancelable: true, pollResp: { ok: true, pending: true } });
+    await cancelInFlightClips(env, "clips-536e");
+    expect(cancelCalls.length).toBe(1);
+    expect(read().shots[0].cancel_sent).toBe(true);
+  });
+});
+
+describe("#535 clip tick reuses the threaded registry (no per-tick module.json fan-out)", () => {
+  it("advanceClipJob with preModules does not re-discover, yet still cancels a failed shot", async () => {
+    const { env, cancelCalls, manifestHits } = cancelClipEnv(failingShot("clips-535a"), { cancelable: true, pollResp: { ok: false, error: "boom" } });
+    const modules = [{
+      name: "seedance", version: "0.1.0", api: "vivijure-module/2", hooks: ["motion.backend"],
+      provides: [{ id: "seedance", label: "Seedance" }], config_schema: {}, ui: { section: "motion.backend", order: 10 },
+      cancelable: true, binding: "MODULE_SEEDANCE",
+    }] as unknown as RegisteredModule[];
+    const out = await advanceClipJob(env, "clips-535a", modules);
+    expect(out?.shots[0].status).toBe("failed");
+    expect(cancelCalls.length).toBe(1);   // cancel still fires, using the threaded registry
+    expect(manifestHits()).toBe(0);       // NO discovery fan-out -- the module.json was never fetched
+  });
+
+  it("startClipJob captures the backend RunPod job id from the async envelope, and reuses a threaded registry", async () => {
+    const modules = [{
+      name: "seedance", version: "0.1.0", api: "vivijure-module/2", hooks: ["motion.backend"],
+      provides: [{ id: "seedance", label: "Seedance" }], config_schema: {}, ui: { section: "motion.backend", order: 10 },
+      cancelable: true, binding: "MODULE_SEEDANCE",
+    }] as unknown as RegisteredModule[];
+    const { env, manifestHits } = cancelClipEnv(failingShot("clips-535b"), { cancelable: true, pollResp: { ok: true, pending: true }, invokeResp: { ok: true, pending: true, poll: "tok9", jobId: "rp-xyz" } });
+    const job = await startClipJob(env, { project: "neon", shots: [{ shot_id: "shot_01", keyframe_url: "u", prompt: "x", seconds: 5 }], motion_backend: "seedance" }, modules);
+    expect(job.shots[0].poll).toBe("tok9");
+    expect(job.shots[0].runpod_job_id).toBe("rp-xyz"); // #536: retained for cancel/accounting
+    expect(manifestHits()).toBe(0);                    // #535: threaded registry, no discovery fan-out
   });
 });
