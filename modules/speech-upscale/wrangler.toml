@@ -14,7 +14,19 @@ workers_dev = false
 [observability]
 enabled = true
 
-# Secrets, set AFTER deploy (never committed). RUNPOD_ENDPOINT_ID = your vivijure-audio-upscale
-# endpoint id (from the RunPod console, e.g. abc123def456gh):
-#   ! npx wrangler secret put RUNPOD_API_KEY -c modules/speech-upscale/wrangler.toml
-#   ! npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/speech-upscale/wrangler.toml
+# RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID are bound from the account-level Cloudflare Secrets Store --
+# declarative config that every `wrangler deploy` re-establishes, so a fresh-create can't start
+# secretless and silently degrade into "no-runpod-secrets" passthrough (#238, the same class as the
+# v0.2.2 finish-upscale bug #237 fixed). Seeded ONCE by the operator; values never touch CI/GitHub.
+# RUNPOD_ENDPOINT_ID resolves to the dedicated vivijure-audio-upscale endpoint (store secret
+# AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID); RUNPOD_API_KEY is the shared store secret. store_id is filled at
+# deploy (ci.yml / deploy.sh). See docs/DEPLOYMENT.md "Module secrets via the Secrets Store".
+[[secrets_store_secrets]]
+binding = "RUNPOD_API_KEY"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "RUNPOD_API_KEY"
+
+[[secrets_store_secrets]]
+binding = "RUNPOD_ENDPOINT_ID"
+store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+secret_name = "AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID"

@@ -35,8 +35,8 @@ import {
 } from "./speech";
 
 interface Env {
-  RUNPOD_API_KEY: string;
-  RUNPOD_ENDPOINT_ID: string;
+  RUNPOD_API_KEY: SecretsStoreSecret;
+  RUNPOD_ENDPOINT_ID: SecretsStoreSecret;
 }
 
 const MANIFEST: ModuleManifest = {
@@ -58,19 +58,41 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function runpodBase(env: Env): string {
-  return `https://api.runpod.ai/v2/${env.RUNPOD_ENDPOINT_ID}`;
+function runpodBase(endpointId: string): string {
+  return `https://api.runpod.ai/v2/${endpointId}`;
 }
 
-function auth(env: Env) {
-  return { authorization: "Bearer " + env.RUNPOD_API_KEY };
+function auth(apiKey: string) {
+  return { authorization: "Bearer " + apiKey };
+}
+
+/** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
+ *  Returns "" if unset/unreadable so the existing "not configured" guards still fire. */
+async function secretValue(s: SecretsStoreSecret | string | undefined): Promise<string> {
+  if (typeof s === "string") return s;
+  if (!s) return "";
+  try {
+    return await s.get();
+  } catch (e) {
+    console.warn("secrets-store get failed: " + (e as Error).message);
+    return "";
+  }
+}
+
+/** Resolve both RunPod secrets once per request. */
+async function runpodCreds(env: Env): Promise<{ apiKey: string; endpointId: string }> {
+  const [apiKey, endpointId] = await Promise.all([
+    secretValue(env.RUNPOD_API_KEY),
+    secretValue(env.RUNPOD_ENDPOINT_ID),
+  ]);
+  return { apiKey, endpointId };
 }
 
 /** Is the endpoint still in its virgin cold start (no worker has ever come up)? Best-effort: any
  *  transport/HTTP failure reads as "not cold" so the #141 verdict still fires. */
-async function endpointStillCold(env: Env): Promise<boolean> {
+async function endpointStillCold(apiKey: string, endpointId: string): Promise<boolean> {
   try {
-    const r = await fetch(runpodBase(env) + "/health", { headers: auth(env) });
+    const r = await fetch(runpodBase(endpointId) + "/health", { headers: auth(apiKey) });
     if (!r.ok) return false;
     return workersStillCold(await r.json());
   } catch {
@@ -80,9 +102,9 @@ async function endpointStillCold(env: Env): Promise<boolean> {
 
 /** Best-effort cancel of a RunPod job we are about to degrade away from: a hung-error job otherwise
  *  HOLDS the billed worker until someone cancels it by hand (F17 spend leak). Never throws. */
-async function cancelRunpodJobBestEffort(env: Env, jobId: string): Promise<void> {
+async function cancelRunpodJobBestEffort(apiKey: string, endpointId: string, jobId: string): Promise<void> {
   try {
-    await fetch(runpodBase(env) + "/cancel/" + jobId, { method: "POST", headers: auth(env) });
+    await fetch(runpodBase(endpointId) + "/cancel/" + jobId, { method: "POST", headers: auth(apiKey) });
   } catch {
     /* best-effort */
   }
@@ -109,12 +131,13 @@ async function submit(env: Env, req: InvokeRequest<SpeechInput>): Promise<Invoke
   }
   const cfg = coerceConfig(req.config);
   if (!cfg.enable) return passthrough(input, "disabled");              // opt-in off: clean no-op
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) return passthrough(input, "no-runpod-secrets");
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!apiKey || !endpointId) return passthrough(input, "no-runpod-secrets");
 
   try {
-    const r = await fetch(runpodBase(env) + "/run", {
+    const r = await fetch(runpodBase(endpointId) + "/run", {
       method: "POST",
-      headers: { ...auth(env), "content-type": "application/json" },
+      headers: { ...auth(apiKey), "content-type": "application/json" },
       body: JSON.stringify(buildRunPodBody(input, cfg)),
     });
     if (!r.ok) return passthrough(input, "runpod-run-failed", "HTTP " + r.status);
@@ -133,12 +156,13 @@ async function submit(env: Env, req: InvokeRequest<SpeechInput>): Promise<Invoke
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<SpeechOutput>> {
   const st = decodePoll(body.poll);
   if (!st) return { ok: false, error: "speech-upscale: bad poll token" };
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_ENDPOINT_ID) return pollPassthrough(st, "not-configured");
+  const { apiKey, endpointId } = await runpodCreds(env);
+  if (!apiKey || !endpointId) return pollPassthrough(st, "not-configured");
 
   let httpStatus: number;
   let s: { status?: string; output?: unknown; error?: unknown };
   try {
-    const resp = await fetch(runpodBase(env) + "/status/" + st.jobId, { headers: auth(env) });
+    const resp = await fetch(runpodBase(endpointId) + "/status/" + st.jobId, { headers: auth(apiKey) });
     httpStatus = resp.status;
     s = await resp.json() as typeof s;
   } catch {
@@ -154,7 +178,7 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<SpeechOut
       // 404s. If no worker has EVER come up, keep polling up to the cold cap before degrading.
       if (
         classifyGoneState(st.submittedAt, now, RUNPOD_COLD_GRACE_MS) === "gone-grace" &&
-        (await endpointStillCold(env))
+        (await endpointStillCold(apiKey, endpointId))
       ) {
         return { ok: true, pending: true };
       }
@@ -169,7 +193,7 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<SpeechOut
     // terminal error. Cancel to stop the spend, then soft-degrade (polish step, never fail the chain).
     const backendErr = terminalErrorInOutput(s.output);
     if (backendErr) {
-      await cancelRunpodJobBestEffort(env, st.jobId);
+      await cancelRunpodJobBestEffort(apiKey, endpointId, st.jobId);
       return pollPassthrough(st, "endpoint-error", backendErr.slice(0, 160));
     }
     return { ok: true, pending: true };
