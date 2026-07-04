@@ -37,6 +37,7 @@ vi.mock("../src/bundle-storyboard", async (orig) => {
 
 import worker from "../src/index";
 import { startFilmJob } from "../src/film-orchestrator";
+import { MODULE_API } from "../src/modules/types";
 import type { Env } from "../src/env";
 
 const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
@@ -46,13 +47,17 @@ const env = {
   // A healthy default deploy binds SPEND_RATE_LIMITER (wrangler.toml.example); model it so the
   // fail-closed spend gate (S9 F7) passes and these tests exercise the render handlers, not the gate.
   SPEND_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  MODULE_ALIBABA_WAN: { fetch: async () => new Response(JSON.stringify({ name: "alibaba-wan", version: "0.1.0", api: MODULE_API, hooks: ["motion.backend"], ui: { order: 10, locality: "cloud" } }), { status: 200, headers: { "content-type": "application/json" } }) },
 } as unknown as Env;
 
 function postFilm(body: unknown): Request {
+  // #504: a full film now requires an explicit, serving motion.backend at the door. Default it here (a
+  // body that sets its own still wins) so these tests exercise dialogue behavior, not the backend preflight.
+  const withBackend = { motion_backend: "alibaba-wan", ...(body as Record<string, unknown>) };
   return new Request("https://studio.example/api/render/film", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withBackend),
   });
 }
 

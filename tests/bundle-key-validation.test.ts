@@ -37,6 +37,7 @@ vi.mock("../src/bundle-storyboard", async (orig) => {
 
 import worker from "../src/index";
 import { isSafeBundleKey, BUNDLE_KEY_PREFIX } from "../src/shared";
+import { MODULE_API } from "../src/modules/types";
 import type { Env } from "../src/env";
 
 const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
@@ -46,6 +47,7 @@ const env = {
   // A healthy default deploy binds SPEND_RATE_LIMITER (wrangler.toml.example); model it so the
   // fail-closed spend gate (S9 F7) passes and these tests exercise the render handlers, not the gate.
   SPEND_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  MODULE_ALIBABA_WAN: { fetch: async () => new Response(JSON.stringify({ name: "alibaba-wan", version: "0.1.0", api: MODULE_API, hooks: ["motion.backend"], ui: { order: 10, locality: "cloud" } }), { status: 200, headers: { "content-type": "application/json" } }) },
 } as unknown as Env;
 
 function post(path: string, body: unknown): Request {
@@ -104,7 +106,7 @@ describe("render submit routes reject a malformed bundleKey with 400", () => {
   it("control: a canonical bundles/ key still submits (POST /api/render/film -> 201)", async () => {
     h.started = 0;
     const res = await worker.fetch(
-      post("/api/render/film", { bundle_key: "bundles/good.tar.gz", scenes: SCENES }),
+      post("/api/render/film", { bundle_key: "bundles/good.tar.gz", scenes: SCENES, motion_backend: "alibaba-wan" }),
       env,
       ctx,
     );
