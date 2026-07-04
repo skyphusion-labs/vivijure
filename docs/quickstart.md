@@ -3,9 +3,12 @@
 This is the short path. Fill in your keys once, run one script, and you have a working Vivijure
 Studio that can write a storyboard and render it to video. It takes a few steps, not a weekend.
 
-When you finish this page you will have the **minimal profile**: the studio core plus cloud and
-own-GPU render. That is the whole thing most people need. You can add the extra "finish" parts later
-(see [opt-in-tiers.md](opt-in-tiers.md)); you do not need them to start.
+When you finish this page you will have the **standard install**: the studio core, cloud and own-GPU
+render, and the **media stack** (the always-on CPU helpers that assemble your rendered clips into one
+finished film, add title cards, and polish the audio). The media stack is standard because the film
+assembly step runs inside it: without it, a render gives you a folder of separate clips, not a single
+movie. The only things NOT included are the three GPU "finish" satellites (sharper video, lip-sync);
+those cost extra GPU money and stay opt-in (see [opt-in-tiers.md](opt-in-tiers.md)).
 
 New here? The one-page picture of how the parts fit together is in
 [constellation.md](constellation.md). You are about to stand up the **Studio** box in the center of
@@ -18,6 +21,14 @@ You need two accounts and one tool:
 - A **Cloudflare** account (hosts the studio and your data). Sign up at dash.cloudflare.com.
 - A **RunPod** account (rents the GPUs that render your video). Sign up at runpod.io.
 - **Node 22 or newer** on your computer.
+- **Docker** on the computer that will run the media-stack containers (usually the same computer). The
+  media stack is five small always-on CPU containers; `docker compose` starts them.
+
+> **A note on cost.** Vivijure runs on your own accounts and you pay your own bills. The full module
+> suite needs Cloudflare's **Workers Paid** plan ($5/month); the free plan caps a Worker at 50
+> subrequests per request, which a full render exceeds (#521). A plan change only takes effect after you
+> redeploy, so flip to Workers Paid first if you need it. Whether a minimum install fits the free plan
+> is being measured right now, so we do not promise a free-plan fit yet.
 
 You do **not** need to own a domain. The studio ships with its own login (a studio API token the
 deploy script mints for you), and it can serve on the free `workers.dev` address that comes with
@@ -68,11 +79,32 @@ cp deploy.env.example deploy.env
 ./deploy.sh
 ```
 
-That is it. The script installs its own npm tools on first run. Leave
-`VIVIJURE_PROFILE=minimal` in `deploy.env` for your first deploy.
+That is it for the Cloudflare side. The script installs its own npm tools on first run. Leave
+`VIVIJURE_PROFILE=standard` (the default) in `deploy.env` for your first deploy. One more step brings
+up the media-stack containers on your own box -- see just below.
 
 > **Keep `deploy.env` private.** It holds your keys. It is already set to be ignored by git, so it
 > will not be committed. Never share it or paste it anywhere.
+
+## Bring up the media stack
+
+`deploy.sh` set up the Cloudflare side of the media stack for you: the tunnel and the private VPC
+links the studio uses to reach your containers. The last piece is starting those containers on your
+own computer:
+
+```bash
+docker network create vivijure                        # once, if it does not exist
+docker compose -f containers/compose.yaml up -d --build
+```
+
+That starts the five CPU helpers (film assembly, image prep, audio beat-sync, audio mix, audio
+master). The `cloudflared` service in that compose file already has its connector token wired in by
+the deploy (`containers/tunnel.env`), so the studio can reach the containers privately. The full
+walk-through is [DEPLOYMENT.md](DEPLOYMENT.md) section 5.
+
+If you skip this step, your studio still deploys and still renders; a finished render just delivers
+your separate clips instead of one assembled film, with a clear "finish unavailable" status. Start the
+containers whenever you want finished films.
 
 ## What the script does for you
 
@@ -124,10 +156,12 @@ gateway's Credits page (DEPLOYMENT.md 2e).
 
 ## Growing later
 
-When you want sharper video, talking characters (lip-sync), title cards, or beat-synced music, those
-are the **opt-in tiers**. Each one is explained in plain words -- what it is, what it adds, and how to
-turn it on -- in [opt-in-tiers.md](opt-in-tiers.md). When you are ready, set `VIVIJURE_PROFILE=full`
-in `deploy.env` (after standing up the extra pieces) and run `./deploy.sh` again.
+Title cards, on-screen text, beat-synced music, and audio mastering are already part of your standard
+install -- they run on the media stack you just started. When you want the GPU "finish" satellites --
+sharper video (upscale) or talking characters (lip-sync) -- those are the **opt-in add-ons**. Each one
+is explained in plain words -- what it is, what it adds, and how to turn it on -- in
+[opt-in-tiers.md](opt-in-tiers.md). When you are ready, set `VIVIJURE_PROFILE=satellites` in
+`deploy.env` (after standing up the extra RunPod endpoints) and run `./deploy.sh` again.
 
 ## If something goes wrong
 
