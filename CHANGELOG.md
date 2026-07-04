@@ -3,6 +3,32 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.14.0
+
+**The local-consumer door goes live in production.** The `local-gpu` module (the 12GB LTX "local"
+door) is now deployed and bound into the core registry, so the studio routes renders to a
+self-hosted GPU backend. MINOR: a new module binds into prod.
+
+- **`local-gpu` deployed + core-bound (#383 / #384).** Flip 1 (#383) dropped `local-gpu` from the CI
+  deploy `EXCLUDE` so `vivijure-module-local-gpu` ships on this tag; flip 2 (#384) added the core
+  `[[services]]` `MODULE_LOCAL_GPU` binding so the registry discovers the door. The tag lane deploys
+  modules BEFORE the core, so the module ships first and the core binds an existing service (no
+  dangling-binding failure). The `local-gpu` door slice of #306 is now live.
+- **Backend = a disposable RunPod SECURE pod behind a trycloudflare quick tunnel.**
+  `LOCAL_BACKEND_URL` + `LOCAL_BACKEND_TOKEN` live in the Cloudflare Secrets Store (freshly seeded,
+  verified live through the tunnel), so the module no longer `10182`s on an unseeded binding (the
+  v0.7.6 failure). `LOCAL_BACKEND_URL` is re-seeded per pod, and the door FAILS LOUD when no pod is
+  attached; it never silently degrades. The old "once the homelab box is up" condition is void (the
+  door runs on a RunPod pod, not local hardware).
+- **`deploy.sh` is store-first; the planner token is a fail-closed deploy prerequisite (#479 / #498).**
+  The one-script self-host deploy now fills the core `store_id`, seeds every core store secret (incl.
+  `R2_S3_*`) before the deploys that bind them, and resolves + seeds `CF_AIG_TOKEN` +
+  `PLAN_ENHANCE_CF_AIG_TOKEN` up front. A `[[secrets_store_secrets]]` binding to an unseeded store
+  secret hard-fails `wrangler deploy` (code `10182`), so the planner token can no longer be an
+  "arm-later" step: if it is neither pasted nor auto-mintable the deploy stops early with the exact
+  fix, before anything ships. Only `STUDIO_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` stay direct worker
+  secrets.
+
 ## v0.13.2
 
 **Re-includes `dialogue-gen` + `music-gen` in the module deploy loop now that the Cloudflare
