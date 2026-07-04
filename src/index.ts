@@ -788,6 +788,17 @@ const hScatterRender: Handler = async (req, env) => {
   const shardCount = typeof b.shardCount === "number" ? b.shardCount : 2;
   const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
   const tier = coerceQualityTier(b.qualityTier) ?? "final";
+  // #504: same full-render door as hSubmitRender (#500) / hStartFilm. A scatter render always runs the
+  // full keyframe -> clips chain across shards (no keyframes-only mode), and an omitted motion_backend
+  // defaults to defaultGpuDoorModule (an order-first door that can be non-operational). Require an
+  // EXPLICIT, serving motion.backend at the door -- top-level motion_backend ?? render_overrides.motion_backend,
+  // NEVER the door default -- so a bad backend bounces 400 BEFORE any shard/keyframe dispatch.
+  const scatterModules = await discoverModules(env as unknown as Record<string, unknown>);
+  const scatterMotionErr = motionBackendPreflightError(
+    scatterModules,
+    b.motion_backend ?? parseModuleRenderOverrides(b.renderOverrides).motion_backend,
+  );
+  if (scatterMotionErr) throw badRequest(scatterMotionErr);
   try {
     const job = await startScatterRender(env, {
       project,
@@ -985,6 +996,18 @@ const hStartFilm: Handler = async (req, env) => {
   // Same boundary check as hSubmitRender: canonical bundle shape before any use.
   if (!isSafeBundleKey(a.bundle_key)) throw badRequest("bundle_key must be a plain relative key under bundles/");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
+
+  // #504: a full film must name an EXPLICIT, serving motion.backend -- the same door-check hSubmitRender
+  // (#500) enforces. hStartFilm passed motion_backend straight to startFilmJob with NO install check, so
+  // an omitted value defaulted downstream (pickOneForHook) to serving[0] -- which can be a bound-but-non-
+  // operational module (e.g. an unseeded local door): the keyframes burn, the motion phase yields zero
+  // clips, and the film dies at assemble ("no clips rendered to assemble"). hStartFilm has no keyframes-
+  // only mode (it always runs the full keyframe -> clips -> finish -> assemble chain), so the check is
+  // unconditional. The explicit choice is the top-level motion_backend (this endpoint carries no
+  // render_overrides bag); NEVER the serving[0] default. Bounces BEFORE any keyframe dispatch.
+  const filmModules = await discoverModules(env as unknown as Record<string, unknown>);
+  const filmMotionErr = motionBackendPreflightError(filmModules, a.motion_backend);
+  if (filmMotionErr) throw badRequest(filmMotionErr);
 
   // Bundle-only voicing (#313): when the caller passed NO explicit dialogue_lines, derive them from the
   // bundle storyboard's per-shot dialogue (round-tripped by #307), resolving each speaking slot's voice
