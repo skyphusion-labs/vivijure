@@ -102,7 +102,11 @@ How the split works: in `wrangler.toml.example`, opt-in blocks are wrapped in co
 block unless `INSTALL_LOCAL_GPU=1`, and the `# >>> SELFHOST-SKIP:` (our-fleet-only, e.g. the
 `tail_consumers` log shipper) blocks always -- so a binding can never dangle and break the deploy. The
 media-stack bindings (the four `[[vpc_services]]` + the media finish modules) are unconditional now
-(standard). The local-GPU door stays opt-in because it needs your own local GPU box.
+(standard). The media stack is FIVE containers behind FIVE Workers VPC Services: the studio core binds
+FOUR of them (`VIDEO_FINISH_VPC`, `IMAGE_PREP_VPC`, `AUDIO_BEAT_SYNC_VPC`, `AUDIO_MIX_VPC`) directly,
+and the fifth (`audio-master`) is reached by its own `audio-master` module worker, so the "four" here
+and the "5 VPC Services" in section 5 are both correct at their own layer. The local-GPU door stays
+opt-in because it needs your own local GPU box.
 
 **Cloudflare plan: free vs Workers Paid (#521).** The full module suite needs the **Workers Paid**
 plan ($5/month). Cloudflare's free plan caps a Worker at 50 subrequests per invocation; a film
