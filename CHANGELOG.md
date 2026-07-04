@@ -3,6 +3,30 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.14.2
+
+**Every full-render submit path now bounces an unresolved motion backend at the door.** PATCH. Extends
+the v0.14.1 / #500 novice-first hardening (a full render with no resolvable motion backend rejects at
+submit, not deep at assemble with `no clips rendered to assemble`) to the remaining submit paths, and
+closes the planner's default-pick hole.
+
+- **Core preflight on the last two submit paths (#504).** The reusable `motionBackendPreflightError`
+  (`src/modules/registry.ts`) is now wired into `hStartFilm` (`POST /api/render/film`) and
+  `hScatterRender` (`POST /api/storyboard/render/scatter`), resolving the EXPLICIT `motion_backend` (the
+  top-level field or `render_overrides.motion_backend`, NEVER the `serving[0]`/door default) exactly as
+  `hSubmitRender` does. Neither endpoint has a keyframes-only mode, so the check is unconditional; both
+  reject with a 400 listing the serving `motion.backend` names before any keyframe/shard GPU work. With
+  Slate now always sending an explicit backend (slate v0.2.1, `skyphusion-labs/slate#58`), every
+  full-render submit path is covered and the `serving[0]`/door default is unreachable for a full render.
+- **Planner no-default-force-pick (#501).** With 2+ serving `motion.backend` modules the planner used to
+  preselect the order-first door (locality-blind), so a novice clicking straight to submit sent a
+  possibly-non-operational door EXPLICITLY -- passing the new submit preflight, then failing downstream.
+  Every door radio now starts unchecked and submit blocks with a novice cue, `pick a render backend
+  before rendering (Label A, Label B)`, until a door is chosen (or `motion_backend` is supplied via the
+  expert JSON). Single-backend and zero-backend cases are unchanged, and a keyframes-only preview is
+  exempt (no motion leg). Stays a projection of the registry; no module manifest touched. (Authored by
+  Joan, #506.)
+
 ## v0.14.1
 
 **Novice-first: a full render with no resolvable motion backend bounces at the door, not deep at assemble.**
