@@ -1,6 +1,6 @@
 // Vivijure studio core: module host, render API router, planner/cast UI server.
 
-import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest, cloudMotionModules, defaultGpuDoorModule, gpuDoorMotionModules } from "./modules/registry";
+import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest, cloudMotionModules, defaultGpuDoorModule, gpuDoorMotionModules, motionBackendPreflightError } from "./modules/registry";
 import { runLiveConformance, allPass, failures } from "./modules/conformance";
 import { installModuleRow, uninstallModuleRow, setModuleEnabled, listInstalledModules } from "./installed-modules";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
@@ -64,7 +64,7 @@ import {
   isScatterJobId,
 } from "./scatter-orchestrator";
 import { sweepUnresolvedJobs } from "./render-sweep";
-import { renderConfigProjection } from "./render-module-config";
+import { renderConfigProjection, parseModuleRenderOverrides } from "./render-module-config";
 import {
   coerceQualityTier, deriveProjectFromBundleKey,
   type AudioAnalyzeRequest,
@@ -554,8 +554,18 @@ const hSubmitRender: Handler = async (req, env) => {
   }
   const scenes = filterScenesByShotIds(normalizeFilmScenes(b.scenes), b.processShotIds);
   if (!scenes.length) throw badRequest("scenes[] required (storyboard shots with prompt and duration)");
-  if (!b.keyframesOnly && servingForHook(modules, "motion.backend").length === 0) {
-    throw badRequest("no motion.backend module installed for full render");
+  // #500: a full render must name an EXPLICIT, serving motion.backend. The old check only verified
+  // that SOME module was installed, so an omitted motion_backend silently defaulted (via pickOneForHook)
+  // to serving[0] -- which can be a bound-but-non-operational module (e.g. an unseeded local door): the
+  // keyframes burn, then the motion phase yields zero clips and the film dies at assemble ("no clips
+  // rendered to assemble"). Resolve the explicit choice (top-level or render_overrides, NEVER the
+  // serving[0] default) and bounce at the door, BEFORE any keyframe dispatch. keyframesOnly has no
+  // motion leg, so it is unaffected. (The serving[0] default in pickOneForHook is unchanged, but this
+  // preflight makes it unreachable for a full render.)
+  if (!b.keyframesOnly) {
+    const explicitMotionBackend = b.motion_backend ?? parseModuleRenderOverrides(b.renderOverrides).motion_backend;
+    const motionErr = motionBackendPreflightError(modules, explicitMotionBackend);
+    if (motionErr) throw badRequest(motionErr);
   }
 
   // FAIL HARD on any bound character whose cast LoRA is not ready, instead of letting the GPU
