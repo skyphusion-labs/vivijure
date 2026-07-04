@@ -26,3 +26,6 @@ __pycache__/
 
 # Playwright MCP debug artifacts
 .playwright-mcp/
+
+# Node diagnostic reports (--report-on-fatalerror): embed the full process env, never committable
+report.[0-9]*.json
