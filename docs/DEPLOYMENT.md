@@ -9,10 +9,14 @@ Vivijure has three pieces:
    cast, and render orchestration, plus a registry of opt-in **module workers** (one per capability).
 2. **The GPU backend** (`vivijure-backend`) -- a container on **RunPod Serverless** that does the
    heavy lifting: LoRA training, SDXL keyframes, image-to-video, lip-sync.
-3. **Three CPU helper containers** (`video-finish`, `image-prep`, `audio-beat-sync`) -- ffmpeg/CPU
-   work that runs always-on on your own box, reached privately over a Cloudflare VPC binding. Optional
-   for a first deploy (the Worker degrades gracefully without the finish container, just no final
-   concat/cards).
+3. **The media-stack CPU containers** (`video-finish`, `image-prep`, `audio-beat-sync`,
+   `audio-mix`, `audio-master`) -- ffmpeg/CPU work that runs always-on on your own box, reached
+   privately over Cloudflare VPC bindings. As of #519 these are part of the **standard** install: the
+   film assembly step runs in `video-finish`, so without the media stack you get a folder of separate
+   clips, not one finished film. `deploy.sh` creates the tunnel + the VPC Services for you; you bring
+   the containers up with `docker compose` (section 5). At render time, if the media tier is
+   unreachable the film still COMPLETES with the rendered clips delivered and a loud "finish
+   unavailable" status (#519 / #524), never a hard-fail after the GPU spend.
 
 You do NOT need a separate API key per video provider. Seedance, Kling, MiniMax Hailuo, Google Veo, Vidu, Wan,
 keyframes, and lip-sync all run **through RunPod**, so one RunPod key covers them.
@@ -98,7 +102,21 @@ How the split works: in `wrangler.toml.example`, opt-in blocks are wrapped in co
 block unless `INSTALL_LOCAL_GPU=1`, and the `# >>> SELFHOST-SKIP:` (our-fleet-only, e.g. the
 `tail_consumers` log shipper) blocks always -- so a binding can never dangle and break the deploy. The
 media-stack bindings (the four `[[vpc_services]]` + the media finish modules) are unconditional now
-(standard). The local-GPU door stays opt-in because it needs your own local GPU box.
+(standard). The media stack is FIVE containers behind FIVE Workers VPC Services: the studio core binds
+FOUR of them (`VIDEO_FINISH_VPC`, `IMAGE_PREP_VPC`, `AUDIO_BEAT_SYNC_VPC`, `AUDIO_MIX_VPC`) directly,
+and the fifth (`audio-master`) is reached by its own `audio-master` module worker, so the "four" here
+and the "5 VPC Services" in section 5 are both correct at their own layer. The local-GPU door stays
+opt-in because it needs your own local GPU box.
+
+**Cloudflare plan: free vs Workers Paid (#521).** The full module suite needs the **Workers Paid**
+plan ($5/month). Cloudflare's free plan caps a Worker at 50 subrequests per invocation; a film
+render fans out across the installed modules plus its own D1 / R2 / presign calls, and the full set
+exceeds that cap. Note a plan change only takes effect after you **redeploy the core** (`./deploy.sh`
+again) -- a running Worker keeps the plan it was deployed under, so flip your account to Workers Paid
+first, then redeploy. The free-plan floor for a MINIMUM install (local-GPU + serverless render + media
+stack) is being measured this sprint; module discovery is now cached once per film tick (#526) to cut
+the per-invocation fan-out. Until that measurement lands we do not claim a free-plan fit either way --
+the paid-plan facts above are the honest, verified ones.
 
 For the whole constellation (studio + GPU backend + local doors), `deploy/constellation.sh` is the
 top orchestrator that calls into each repo's own deploy script. Today it drives the studio and stubs
@@ -314,6 +332,17 @@ store `secret_name` differs. Modules that share an endpoint share one secret (si
 | finish-lipsync                 | `MUSETALK_RUNPOD_ENDPOINT_ID`          | MuseTalk        |
 | speech-upscale                 | `AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID`     | audio upscale   |
 
+> **The satellite ENDPOINTS themselves also need R2 credentials (#522).** The store secret above only
+> carries each satellite's endpoint *id*. Every GPU satellite (finish-upscale, finish-lipsync,
+> speech-upscale) reads its inputs from, and writes its outputs to, YOUR R2 bucket directly, so its
+> RunPod endpoint template must ALSO set `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+> and `R2_BUCKET` in the endpoint env (the same R2 values the backend endpoint uses in section 4). Miss
+> them and the first full render fails at finish with the satellite's honest error (`R2 mode needs
+> R2_ENDPOINT_URL + R2_ACCESS_KEY_ID/SECRET in the endpoint env`), correctly, after the keyframe/i2v
+> GPU spend. **RunPod gotcha:** editing an endpoint's template env does NOT reach already-warm
+> workers -- FlashBoot keeps cached containers alive, so you must trigger an **endpoint release**
+> (redeploy/bump the endpoint) for env changes to take effect.
+
 The `plan-enhance` module binds two: the shared `GATEWAY_ID` slug, plus `CF_AIG_TOKEN` -- a
 Unified-Billing AI Gateway token scoped to THAT module (per-function key). To keep it independent of
 the core Worker's own `CF_AIG_TOKEN`, plan-enhance binds it from a module-scoped store secret named
@@ -406,17 +435,36 @@ python3 scripts/runpod-provision.py  # last line prints RUNPOD_ENDPOINT_ID=<id>
 ```
 
 Put the printed id in `deploy.env` as `RUNPOD_ENDPOINT_ID` and run `./deploy.sh`. The endpoint is
-created scale-to-zero (workersMin=0): it costs nothing until a render job runs. Defaults are the
-proven starter pool (RTX 4090 / A5000 / L4, 20GB disk, 1 worker max); `--help` lists the knobs. No
-network volume is attached (the backend self-preloads models from R2 on cold start); for the warm
-H200/B200-class setup below, attach a volume and widen the GPU pool afterwards.
+created scale-to-zero (workersMin=0): it costs nothing until a render job runs.
+
+**GPU class: Blackwell / Hopper only (#517).** The serverless backend runs on a **CUDA 12.8** baked
+image, so it requires a **Blackwell- or Hopper-class** GPU. The proven set is **RTX PRO 6000
+Blackwell, H200, and B200**; recommend **H200 or B200**. This is not a preference. A consumer card
+(RTX 4090 / A5000 / L4 and the like) carries an older driver, so the container fails to start with
+`nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.8` and RunPod crash-loops
+the worker roughly every 15 seconds -- billing you the whole time while never rendering a frame.
+Consumer cards are the LOCAL-GPU door's territory (the `vivijure-local-12gb` / `-local-16gb` repos),
+never the rented serverless pool. Why top cards only: the GPU-rationing thesis -- rent the fastest
+cards by the second and scale to zero, rather than own a slow one. Pass the pool explicitly:
+
+```bash
+python3 scripts/runpod-provision.py --gpu-types "NVIDIA H200,NVIDIA B200"
+```
+
+Do NOT run the script with no `--gpu-types`: its built-in default is still a consumer pool (being
+corrected under #517), which will crash-loop as above. `--help` lists the other knobs (disk,
+workers-max, idle-timeout). No network volume is attached (the backend self-preloads models from R2
+on cold start), so the first cold worker pulls the full baked image (~60 GB+): **expect roughly 10
+minutes before the first frame** on a cold endpoint. For a warm setup, attach a network volume so the
+weights stay resident between jobs.
 
 **By hand instead:**
 
-2. In **runpod.io -> Serverless -> New Endpoint**, point it at the image, pick a GPU (H200/B200 class
-   for training + i2v), and attach a **network volume** for the model weights (they self-preload from
-   R2 on first run, then stay warm -- avoid scaling fully to zero between jobs or every cold worker
-   re-pulls the image).
+2. In **runpod.io -> Serverless -> New Endpoint**, point it at the image, pick a **Blackwell/Hopper
+   class** GPU (RTX PRO 6000 Blackwell, H200, or B200; recommend H200/B200 -- a consumer card
+   crash-loops the CUDA 12.8 image, see above), and attach a **network volume** for the model weights
+   (they self-preload from R2 on first run, then stay warm -- avoid scaling fully to zero between jobs
+   or every cold worker re-pulls the image).
 3. Set the backend env on the endpoint: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`,
    `R2_ENDPOINT` (your `https://<account>.r2.cloudflarestorage.com`), and the HuggingFace/offline
    flags the image documents.

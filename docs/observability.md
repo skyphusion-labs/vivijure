@@ -91,6 +91,34 @@ A Loki line is `{"msg":"<inner>"}`:
 
 So to parse structured fields you unwrap twice: `| json | line_format "{{.msg}}" | json`.
 
+## The clips-only / silent-film degrade event (`film.finish_unavailable`)
+
+When the video-finish media tier is UNAVAILABLE at assemble or mux (its `VIDEO_FINISH_VPC` binding is
+unbound, or the container/tunnel is unreachable after the bounded retry), the film does not hard-fail
+after the GPU spend. It COMPLETES delivering what was rendered, and the orchestrator emits one loud,
+structured line so you can see it happened (#519 / #524):
+
+```
+{"ev":"film.finish_unavailable","film_id":"...","project":"...","at":"assemble","delivered":"clips","clips":3,"reason":"VIDEO_FINISH_VPC not configured"}
+```
+
+- `at` -- which delegated step could not run: `assemble` or `mux`.
+- `delivered` -- what shipped instead of the finished film: `clips` (the per-shot clips, no single
+  concatenated film) at the assemble step, or `silent_film` (the assembled film with no audio bed
+  muxed onto it) at the mux step.
+- `clips` -- the count of per-shot clips delivered (the assemble degrade); `0` for the silent-film case.
+- `reason` -- the honest cause (unbound binding, or unreachable-after-retry).
+
+This is the UNAVAILABILITY path ONLY. A genuine per-shot / container ERROR (the container ran and
+reported a real failure) still fails the render loud with the real per-shot error (#245 / #249); it
+never emits this event. So a `film.finish_unavailable` line means "completed, but the finish tier was
+not reachable", never "silently shipped a broken render".
+
+The same fact surfaces on the API poll view (`finish_unavailable = { at, reason, delivered }`, plus
+the deliverable `clips[]` of `{ shot_id, clip_key }` at the assemble step) so the UI shows "clips
+only, finish unavailable" instead of a plain green with a missing film. On the clips-only path the
+film download route presigns each clip so the caller can fetch the delivered clips directly.
+
 ## Query recipes (Grafana -> Explore -> Loki datasource)
 
 ```logql
@@ -111,6 +139,9 @@ So to parse structured fields you unwrap twice: `| json | line_format "{{.msg}}"
 
 # errors only
 {worker="vivijure-studio", level="error"}
+
+# the finish-unavailable degrade (completed-with-clips / silent-film, #519 / #524)
+{worker="vivijure-studio"} |= "film.finish_unavailable"
 ```
 
 ```logql
