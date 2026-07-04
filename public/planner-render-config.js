@@ -391,6 +391,17 @@
       const radio = card.querySelector(".planner-backend-radio");
       if (radio) radio.checked = isSel;
     });
+    // vivijure#501: with 2+ doors, surface the obligation in the caption so a novice sees
+    // "required" BEFORE hitting the submit-time block; it clears the moment a door is
+    // picked. No new element -- just the existing caption hint's text.
+    if (cards.length > 1) {
+      const hint = wrap.querySelector(".planner-backend-caption-hint");
+      if (hint) {
+        hint.textContent = value
+          ? "Pick which backend renders the motion (image-to-video) step."
+          : "Required: pick which backend renders the motion (image-to-video) step.";
+      }
+    }
   }
 
   // Render the backend selector into motionWrap. Returns true if a real CHOICE (>= 2
@@ -591,7 +602,7 @@
     return out;
   }
 
-  function collectForSubmit(expertText) {
+  function collectForSubmit(expertText, opts) {
     let overrides = collect();
     const raw = (expertText || "").trim();
     if (raw) {
@@ -605,13 +616,16 @@
     }
     // vivijure#501: with 2+ motion.backend doors the selector renders the hidden
     // #planner-motion-backend select with NO default (see renderBackendSelector). A
-    // deliberate choice is mandatory before submit -- block here (all three submit paths
-    // surface this thrown message and abort) until the novice picks a door, or supplies
-    // motion_backend via the expert JSON. The single-backend case carries an explicit
-    // default, so its select always has a value and this never fires; zero backends
-    // render no select, so it never fires there either.
+    // deliberate choice is mandatory before a FULL render -- block here (all three submit
+    // paths surface this thrown message and abort) until the novice picks a door, or
+    // supplies motion_backend via the expert JSON. The single-backend case carries an
+    // explicit default, so its select always has a value and this never fires; zero
+    // backends render no select, so it never fires there either. keyframes-only submits
+    // run NO motion leg, so the #500 core preflight exempts them; mirror that exactly via
+    // opts.keyframesOnly so a keyframes-only preview is never falsely blocked here.
+    const keyframesOnly = !!(opts && opts.keyframesOnly);
     const backendSel = document.getElementById("planner-motion-backend");
-    if (backendSel && !overrides.motion_backend) {
+    if (!keyframesOnly && backendSel && !overrides.motion_backend) {
       const names = Array.from(backendSel.options || [])
         .map((o) => (o.textContent || o.value || "").trim())
         .filter(Boolean);

@@ -112,8 +112,9 @@ function makeDocument(roots: El[]) {
 // ---- load the real IIFE once ------------------------------------------------
 let mod: {
   renderBackendSelector: (mods: unknown[], wrap: El) => boolean;
-  collectForSubmit: (expert?: string) => unknown;
+  collectForSubmit: (expert?: string, opts?: { keyframesOnly?: boolean }) => unknown;
   collect: () => { motion_backend?: string };
+  restore: (o: unknown) => void;
 };
 
 beforeAll(() => {
@@ -164,6 +165,17 @@ describe("renderBackendSelector (vivijure#501: no default when 2+ doors serve)",
     // collect against the rendered single-backend state emits the explicit backend, never blocks
     expect(mod.collectForSubmit("")).toEqual({ motion_backend: "solo" });
   });
+
+  it("2+ doors: caption carries a 'required' cue until a door is picked, then clears", () => {
+    const wrap = freshWrap();
+    mod.renderBackendSelector([backend("a", "Door A"), backend("b", "Door B")], wrap);
+    const hint = wrap.querySelector(".planner-backend-caption-hint") as El;
+    expect(hint).not.toBeNull();
+    expect(hint.textContent).toMatch(/^Required: pick which backend/i);
+    mod.restore({ motion_backend: "a" }); // pick a door via the real restore path
+    expect(hint.textContent).not.toMatch(/Required/);
+    expect(hint.textContent).toMatch(/^Pick which backend/i);
+  });
 });
 
 describe("collectForSubmit (vivijure#501: block submit until a door is chosen)", () => {
@@ -211,5 +223,13 @@ describe("collectForSubmit (vivijure#501: block submit until a door is chosen)",
       querySelectorAll: () => [] as El[],
     };
     expect(mod.collectForSubmit("")).toBeUndefined();
+  });
+
+  it("does NOT block a keyframes-only submit even with 2+ unpicked doors (#500 exemption)", () => {
+    selectDoc(""); // 2 doors, nothing picked
+    // keyframes-only runs no motion leg, so the backend pick is not required
+    expect(mod.collectForSubmit("", { keyframesOnly: true })).toBeUndefined();
+    // and the full-render path with the same state still blocks
+    expect(() => mod.collectForSubmit("", { keyframesOnly: false })).toThrow(/pick a render backend/i);
   });
 });
