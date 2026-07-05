@@ -27,7 +27,6 @@ services:
     <<: *common
     build: ./video-finish
     image: vj-video-finish:local
-    container_name: video-finish
     ports:
       - "127.0.0.1:8780:8000"
     healthcheck:
@@ -41,7 +40,6 @@ services:
     <<: *common
     build: ./image-prep
     image: vj-image-prep:local
-    container_name: image-prep
     ports:
       - "127.0.0.1:8781:8000"
     healthcheck:
@@ -55,7 +53,6 @@ services:
     <<: *common
     build: ./audio-beat-sync
     image: vj-audio-beat-sync:local
-    container_name: audio-beat-sync
     ports:
       - "127.0.0.1:8782:8000"
     healthcheck:
@@ -72,7 +69,6 @@ services:
     <<: *common
     build: ./audio-mix
     image: vj-audio-mix:local
-    container_name: audio-mix
     ports:
       - "127.0.0.1:8783:8000"
     healthcheck:
@@ -91,7 +87,6 @@ services:
     <<: *common
     build: ./audio-master
     image: vj-audio-master:local
-    container_name: audio-master
     ports:
       - "127.0.0.1:8784:8000"
     healthcheck:
@@ -108,7 +103,6 @@ services:
   # tunnel.env is missing, compose fails closed (run deploy.sh first). Pin the image tag if you prefer.
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: vivijure-cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     env_file:
