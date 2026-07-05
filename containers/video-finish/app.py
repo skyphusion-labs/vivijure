@@ -24,6 +24,7 @@ import tempfile
 from aiohttp import ClientSession, ClientTimeout, web
 
 from url_guard import validate_fetch_url
+import inspect_core
 
 PORT = int(os.environ.get("PORT", "8000"))
 DOWNLOAD_TIMEOUT_S = 120
@@ -31,6 +32,7 @@ UPLOAD_TIMEOUT_S = 120
 MAX_CLIP_BYTES = 256 * 1024 * 1024   # 256 MB per clip
 MAX_AUDIO_BYTES = 64 * 1024 * 1024   # 64 MB soundtrack
 MAX_CLIPS = 80
+MAX_KEYFRAME_BYTES = 32 * 1024 * 1024   # keyframe PNG for content-inspect (#523 Layer 2)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("video-finish")
@@ -977,12 +979,62 @@ async def subtitle(req):
         shutil.rmtree(work, ignore_errors=True)
 
 
+
+# ---------------------------------------------------------------------------
+# /inspect: content validation (#523 Layer 2). The studio Worker cannot decode
+# pixels; this catches the noise class Layer 1 (structural) cannot. Presigned
+# GET URLs only (bytes never touch the Worker); read-only, no PUT. Returns a
+# verdict the core folds into the shot: "corrupt" (keyframe mismatch, confident)
+# fails the shot before finish/upscale spend; "suspect" (chroma-noise heuristic)
+# is a warn/degrade marker; "ok" passes.
+# ---------------------------------------------------------------------------
+async def inspect(req):
+    try:
+        body = await req.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+    clip_url = body.get("clipUrl")
+    keyframe_url = body.get("keyframeUrl")
+    if not clip_url:
+        return web.json_response({"ok": False, "error": "clipUrl required"}, status=400)
+    work = tempfile.mkdtemp(prefix="inspect-")
+    try:
+        clip_path = os.path.join(work, "clip.mp4")
+        kf_path = None
+        async with ClientSession(timeout=ClientTimeout(total=DOWNLOAD_TIMEOUT_S)) as s:
+            ok, info = await _download(s, clip_url, clip_path, MAX_CLIP_BYTES)
+            if not ok:
+                sc = 413 if info == "too large" else (400 if str(info).startswith("blocked:") else 502)
+                return web.json_response({"ok": False, "error": f"clip {info}"}, status=sc)
+            if keyframe_url:
+                kf_path = os.path.join(work, "keyframe.png")
+                kok, kinfo = await _download(s, keyframe_url, kf_path, MAX_KEYFRAME_BYTES)
+                if not kok:
+                    # keyframe is optional -- a failed keyframe fetch drops to the content-only heuristic,
+                    # it never fails the inspect (honest degrade of the check itself).
+                    log.warning("/inspect keyframe fetch failed: %s (falling back to content-only)", kinfo)
+                    kf_path = None
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(None, inspect_core.inspect, clip_path, kf_path)
+        except Exception as e:  # noqa: BLE001
+            log.exception("/inspect failed")
+            return web.json_response({"ok": False, "error": f"inspect failed: {e}"}, status=500)
+        log.info("/inspect verdict=%s ratio=%.3f kf_sim=%s",
+                 result["verdict"], result["metrics"].get("chroma_structure_ratio", 0.0),
+                 result.get("keyframe_similarity"))
+        return web.json_response({"ok": True, **result})
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 app = web.Application(client_max_size=1024 * 1024)  # JSON bodies are small (URLs + a short SRT)
 app.router.add_get("/health", health)
 app.router.add_post("/finish", finish)
 app.router.add_post("/overlay", overlay)
 app.router.add_post("/film-titles", film_titles)
 app.router.add_post("/subtitle", subtitle)
+app.router.add_post("/inspect", inspect)
 
 if __name__ == "__main__":
     log.info("video-finish listening on 0.0.0.0:%d", PORT)

@@ -146,6 +146,37 @@ on a vGPU) passes this gate -- separating noise from content needs a pixel decod
 pre-finish gate in the video-finish CPU container, tracked separately). A `clip.validate` `pass` means
 "the container is well-formed", never "the picture is good".
 
+## The content-validation event (`clip.content_validate`, #523 Layer 2)
+
+Layer 1 (`clip.validate`) is a Worker-side STRUCTURAL check and cannot see pixels. Layer 2 is the
+pixel-content catch: at the film **finish gate** (before finish/upscale GPU spend), the core asks the
+video-finish container (which runs ffmpeg) to look at the frames and judge whether the clip plausibly
+contains its conditioning keyframe. It runs only on the film path (where spend happens), only when the
+video-finish tier is installed, and emits one line per shot:
+
+```
+{"ev":"clip.content_validate","job_id":"clips-...","shot_id":"shot_01","verdict":"corrupt","keyframe_similarity":0.02,"metrics":{"sat_mean":108.7,"gray_std_mean":18.5,"chroma_structure_ratio":5.63,"frames":12},"reason":"first frame does not resemble its keyframe ..."}
+```
+
+- `verdict`:
+  - `corrupt` -- CONFIDENT: the clip's first frame does not resemble its conditioning keyframe (the
+    local-16gb#35 signature). The shot is FAILED with the real reason BEFORE finish/upscale spend
+    (honest-failure #245/#249). This is the pixel-noise catch Layer 1 cannot make.
+  - `suspect` -- the weaker content-only heuristic fired (chromatic-noise signature: high saturation,
+    low luma structure). WARN only: a `content_degraded` marker is set on the shot and the film
+    still completes. Never a hard fail on the heuristic alone (deliberately-abstract films exist).
+  - `ok` -- passed.
+  - `skip` -- the tier is not installed (self-host), the container was unreachable, or the presign/inspect
+    errored. A down inspector never fails a real render.
+- `keyframe_similarity` -- normalized first-frame-vs-keyframe correlation in [0,1] (present when a keyframe
+  was available); ~0 = the output ignored its conditioning.
+- `metrics` -- `sat_mean`, `gray_std_mean`, `chroma_structure_ratio` (the fallback noise signature), `frames`.
+
+Empirically (S12 evidence): the CogVideoX-on-vGPU noise clips score `chroma_structure_ratio` ~5.6 while
+every good clip (LTX, film, LoRA, high-motion) scores <= 2.5; the threshold sits mid-gap at 4.0. That
+fallback only WARNS; the keyframe-similarity check (available in production, where every shot has its
+keyframe) is the confident signal.
+
 ## Query recipes (Grafana -> Explore -> Loki datasource)
 
 ```logql
@@ -172,6 +203,9 @@ pre-finish gate in the video-finish CPU container, tracked separately). A `clip.
 
 # output-validation verdicts (structural clip gate, #523); a `fail` rejected a corrupt clip before finish spend
 {worker="vivijure-studio"} | json | line_format "{{.msg}}" | json | ev="clip.validate"
+
+# Layer 2 content verdicts (#523); a `corrupt` failed a noise clip before finish spend
+{worker="vivijure-studio"} | json | line_format "{{.msg}}" | json | ev="clip.content_validate"
 ```
 
 ```logql

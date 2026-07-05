@@ -648,7 +648,12 @@ a rejected clip is sticky (R2-presence reclaim never re-adopts it). Each shot em
 structured event (`verdict: pass|fail|skip`; see `docs/observability.md`). The requested `seconds` is NOT
 gated against the actual duration (motion backends emit a fixed frame count). This is a Worker-side
 STRUCTURAL check only; it cannot decode pixels, so a structurally-valid clip of pure noise passes it
-(pixel-content validation is a separate video-finish-container pre-gate, tracked in #523's follow-up).
+(pixel-content validation is a separate video-finish-container pre-gate, tracked in #523's follow-up). At the film FINISH GATE (before finish/upscale spend) a second, pixel-content pass runs when the
+video-finish tier is installed: the core presigns the clip (+ its keyframe) and the video-finish container
+judges whether the first frame resembles its conditioning keyframe. A `corrupt` verdict FAILS the shot
+there (the noise catch); a `suspect` verdict is a warn/degrade marker (the film still completes); both
+emit a `clip.content_validate` event (see `docs/observability.md`). This runs on the film path only; the
+standalone clips route gets the structural check only.
 
 ### 2.20 POST /api/render/film -- start a film job
 

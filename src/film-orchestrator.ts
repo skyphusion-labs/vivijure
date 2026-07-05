@@ -18,6 +18,7 @@ import {
 import { hookOutputViolation } from "./modules/conformance";
 import { presignR2Get, presignR2Put, FILM_DOWNLOAD_TTL_SECONDS } from "./r2-presign";
 import { readShotDurationsFromBundle } from "./bundle-assembler";
+import { contentValidateDoneClips } from "./clip-content-validate";
 import { buildCaptionCues } from "./captions";
 import { resolveStagedAudioKey } from "./audio-stage";
 import { coerceShotId } from "./storyboard-validate";
@@ -176,6 +177,12 @@ async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob, preMod
   // `validated` flag makes this idempotent (a no-op on the normal path). Persist if it dropped a shot so
   // the clip-job summary stays honest.
   if (job.clip_job_id && (await validateDoneClips(env, clipJob))) {
+    await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
+  }
+  // #523 Layer 2: pixel-content gate (video-finish container) at the finish spend boundary. A "corrupt"
+  // verdict fails the shot here, so finish/upscale never spends on a noise clip; "suspect" degrades. A
+  // no-op when the tier is not installed (self-host) -- Layer 1 still stands. Persist if it changed a shot.
+  if (job.clip_job_id && (await contentValidateDoneClips(env, clipJob))) {
     await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
   }
   const modules = preModules ?? await discoverModules(env as unknown as Record<string, unknown>);
