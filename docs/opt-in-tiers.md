@@ -82,8 +82,10 @@ shared note just below), then put its endpoint id into the account Secrets Store
 > **Every satellite endpoint needs R2 credentials in its RunPod env (#522).** Each satellite reads its
 > inputs from, and writes its outputs to, YOUR R2 bucket directly, so its RunPod endpoint template must
 > set `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` (the same R2 values
-> the backend endpoint uses; [DEPLOYMENT.md](DEPLOYMENT.md) section 4). The deploy path only collects the
-> endpoint *ids*, so setting these on the endpoint itself is on you. Miss them and the first full render
+> the backend endpoint uses; [DEPLOYMENT.md](DEPLOYMENT.md) section 4). `scripts/runpod-provision.py
+> --satellite <upscale|lipsync|audio-upscale>` sets these four vars on the endpoint for you from your
+> `deploy.env` (recommended; see each tier below), or set them by hand -- the `deploy.sh` path itself
+> only collects the endpoint *ids*. Miss them and the first full render
 > fails at finish with the satellite's honest error (`R2 mode needs R2_ENDPOINT_URL +
 > R2_ACCESS_KEY_ID/SECRET in the endpoint env`), correctly, after the keyframe/i2v GPU spend. **RunPod
 > gotcha:** changing an endpoint's template env does NOT reach already-warm workers -- FlashBoot keeps
@@ -96,6 +98,9 @@ shared note just below), then put its endpoint id into the account Secrets Store
 - **What it needs:** a RunPod endpoint running the `vivijure-upscale` image, with the four R2 env vars
   above set on it; its id in the store secret `VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID`; and the
   `finish-upscale` (`MODULE_UPSCALE`) binding kept.
+- **Provision it:** `python3 scripts/runpod-provision.py --satellite upscale --allow-latest` sets the
+  image + the four R2 env vars from your `deploy.env` (`--allow-latest` because the `vivijure-upscale`
+  image has no pinned release tag yet). Put the printed `VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID` in deploy.env.
 
 ### finish-lipsync (talking characters)
 - **What it is:** a lip-sync engine (MuseTalk). It rewrites a character's mouth to match spoken lines.
@@ -103,6 +108,8 @@ shared note just below), then put its endpoint id into the account Secrets Store
 - **What it needs:** a RunPod endpoint running the `vivijure-musetalk` image, with the four R2 env vars
   above set on it; its id in the store secret `MUSETALK_RUNPOD_ENDPOINT_ID`; and the `finish-lipsync`
   (`MODULE_LIPSYNC`) binding kept. It works best with `speech-upscale` on.
+- **Provision it:** `python3 scripts/runpod-provision.py --satellite lipsync` sets the image + the four
+  R2 env vars from your `deploy.env`. Put the printed `MUSETALK_RUNPOD_ENDPOINT_ID` in deploy.env.
 
 ### speech-upscale
 - **What it is:** a speech cleanup step for dialogue audio.
@@ -114,6 +121,8 @@ shared note just below), then put its endpoint id into the account Secrets Store
   per-module `wrangler secret put`. `deploy.sh` (satellites profile) seeds the id from
   `AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID` in `deploy.env`. Keep the `speech-upscale`
   (`MODULE_SPEECH_UPSCALE`) binding.
+- **Provision it:** `python3 scripts/runpod-provision.py --satellite audio-upscale` sets the image +
+  the four R2 env vars from your `deploy.env`. Put the printed `AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID` in deploy.env.
 
 ---
 
