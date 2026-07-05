@@ -187,9 +187,10 @@ path you take, the security gate below is non-negotiable.
 >
 > Vivijure performs **NO per-user authorization**. Every `:id` route (`/api/cast/:id`,
 > `/api/storyboard/projects/:id`, `/api/render/film/:id`, `GET /api/cast/export/:id`, ...) trusts the
-> caller; ids are sequential integers (trivially enumerable), and the cast-export route returns a
-> whole character bundle (portrait + LoRA + bible) by id. This is safe ONLY when exactly one operator
-> can reach the Worker.
+> caller; the studio runs no per-caller check, and the cast-export route returns a whole character
+> bundle (portrait + LoRA + bible) by id. Resource ids are opaque (UUID v4, 122 bits of entropy; a
+> bare integer 404s), so they are not enumerable, but the studio still authorizes no caller beyond
+> the single shared token. This is safe ONLY when exactly one operator can reach the Worker.
 >
 > The deploy ships with that lock built in: `AUTH_MODE = "token"` (the `deploy.sh` default) makes
 > the Worker itself require `Authorization: Bearer <token>` on every `/api/*` request, checked

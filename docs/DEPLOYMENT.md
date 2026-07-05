@@ -471,8 +471,9 @@ cards by the second and scale to zero, rather than own a slow one. Pass the pool
 python3 scripts/runpod-provision.py --gpu-types "NVIDIA H200,NVIDIA B200"
 ```
 
-Do NOT run the script with no `--gpu-types`: its built-in default is still a consumer pool (being
-corrected under #517), which will crash-loop as above. `--help` lists the other knobs (disk,
+Since #530 the built-in default is a datacenter set (`NVIDIA H200,NVIDIA B200`), so running with no
+`--gpu-types` is safe; override it only with other same-class (Blackwell/Hopper, sm_90+) SKUs you have
+allocated -- a consumer card will crash-loop as above. `--help` lists the other knobs (disk,
 workers-max, idle-timeout). No network volume is attached (the backend self-preloads models from R2
 on cold start), so the first cold worker pulls the full baked image (~60 GB+): **expect roughly 10
 minutes before the first frame** on a cold endpoint. For a warm setup, attach a network volume so the
