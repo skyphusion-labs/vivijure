@@ -190,11 +190,18 @@ running the `vivijure-backend` image (see section 4).
 
 ### 2c. R2 S3 access keys (for the GPU backend)
 Create at **dash.cloudflare.com -> R2 -> Manage R2 API Tokens -> Create API token**, scoped to
-**Object Read & Write** on your render bucket.
+**Object Read & Write**.
+
+> **First install: scope it to "Apply to all buckets in this account".** The render bucket
+> (`vivijure`) does not exist yet -- `deploy.sh` Step 2 creates it -- so on a fresh account the
+> bucket picker has nothing to select. Once the first deploy has created the bucket you can
+> (optionally) rotate to a key scoped to just `vivijure`: same page -> Create API token -> pick the
+> `vivijure` bucket, then update `R2_S3_ACCESS_KEY_ID` / `R2_S3_SECRET_ACCESS_KEY` in `deploy.env`
+> and re-run.
 
 | Why it's needed |
 |---|
-| The RunPod backend is NOT a Cloudflare Worker, so it can't use a Worker R2 binding. It talks to R2 over the S3 API to read inputs (refs, bundles) and write outputs (LoRAs, keyframes, clips). Hence a classic access-key/secret pair, scoped to just the render bucket. |
+| The RunPod backend is NOT a Cloudflare Worker, so it can't use a Worker R2 binding. It talks to R2 over the S3 API to read inputs (refs, bundles) and write outputs (LoRAs, keyframes, clips). Hence a classic access-key/secret pair, scoped to your render bucket (or all buckets on a first install, before that bucket exists -- see the note above). |
 
 These become the backend env `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` (the handler's names;
 `scripts/runpod-provision.py` maps your pasted `R2_S3_*` values onto them) (and the matching
@@ -582,7 +589,7 @@ config; everything else in the Studio is single-user and needs no email.
 - [ ] R2 enabled on the account (one dashboard click: <https://dash.cloudflare.com/?to=/:account/r2>)
 - [ ] auth mode picked: `token` (default; SAVE the printed token) or `access` (Zero Trust team + AUD)
 - [ ] RunPod API key + a Serverless endpoint running `vivijure-backend` (its id)
-- [ ] R2 S3 access key/secret scoped to the render bucket
+- [ ] R2 S3 access key/secret (scope to all buckets on a first install; the render bucket does not exist yet -- see 2c)
 - [ ] AI Gateway slug (`GATEWAY_ID`) + `CF_AIG_TOKEN` (a deploy PREREQUISITE -- the planner token; auto-minted or pasted, see 2d)
 - [ ] AI credits loaded on the gateway ($10 minimum; the planner will not run on $0.00 -- see 2e)
 - [ ] `wrangler d1 create` + both `r2 bucket create`s, ids in `wrangler.toml`
