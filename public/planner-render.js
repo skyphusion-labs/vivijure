@@ -106,17 +106,23 @@ async function loraPreflightGate() {
 }
 
 async function submitRender() {
+  // vivijure#552: own the in-flight flag for the whole submit; cleared on jobId
+  // handoff or on any bail/error path below.
+  renderState.submitting = true;
   if (!bundleState.bundleKey) {
     setRenderStatus("no bundleKey; run 'bundle' first", "error");
+    renderState.submitting = false;
     return;
   }
   if (!planState.storyboard || !Array.isArray(planState.storyboard.scenes) || planState.storyboard.scenes.length === 0) {
     setRenderStatus("no storyboard scenes; plan first", "error");
+    renderState.submitting = false;
     return;
   }
   const filmScenes = buildFilmScenes(planState.storyboard);
   if (filmScenes.length === 0) {
     setRenderStatus("every scene needs a prompt before render", "error");
+    renderState.submitting = false;
     return;
   }
   // v0.40.0: the keyframes-only checkbox is the source of truth for the next submission;
@@ -133,6 +139,7 @@ async function submitRender() {
     setRenderStatus(err.message, "error");
     const ta = $("#planner-render-overrides");
     if (ta) ta.focus();
+    renderState.submitting = false;
     return;
   }
   // Stop any prior poll loop before starting a new render.
@@ -201,6 +208,7 @@ async function submitRender() {
     data = await resp.json();
   } catch (err) {
     setRenderStatus("network error: " + err.message, "error");
+    renderState.submitting = false;
     $("#planner-render-btn").disabled = false;
     return;
   }
@@ -208,17 +216,21 @@ async function submitRender() {
   if (!resp.ok || (data && data.ok === false)) {
     const errs = (data && data.errors) || [(data && data.error) || "HTTP " + resp.status];
     setRenderStatus("submit failed: " + errs.join("; "), "error");
+    renderState.submitting = false;
     $("#planner-render-btn").disabled = false;
     return;
   }
 
   if (!data || !data.jobId) {
     setRenderStatus("submit returned no jobId", "error");
+    renderState.submitting = false;
     $("#planner-render-btn").disabled = false;
     return;
   }
 
   renderState.jobId = data.jobId;
+  // vivijure#552: jobId set; the jobId/pollTimer guard now owns the button.
+  renderState.submitting = false;
   // v0.44.0: reset the elapsed/ETA anchor on a fresh submit so a
   // previous render's startedAt does not leak in. updateRenderProgress
   // re-anchors on the first non-IN_QUEUE status update.
@@ -313,7 +325,7 @@ function updateRenderGate() {
   if (!btn) return;
   const reasonEl = $("#planner-render-reason");
   // While a render is submitting/streaming the submit path owns the button; leave it be.
-  if (renderState && (renderState.jobId || renderState.pollTimer)) return;
+  if (renderState && (renderState.submitting || renderState.jobId || renderState.pollTimer)) return;
   const kfOnlyEl = $("#planner-keyframes-only");
   const keyframesOnly = !!(kfOnlyEl && kfOnlyEl.checked);
   const cfg = window.plannerRenderConfig;
@@ -335,8 +347,11 @@ function updateRenderGate() {
 // projectId exactly. shotIds are derived via sceneIdAt (the canonical id
 // source that matches the GPU's per-shot clip filenames).
 async function submitScatterRender() {
+  // vivijure#552: see submitRender.
+  renderState.submitting = true;
   if (!bundleState.bundleKey) {
     setRenderStatus("no bundleKey; run 'bundle' first", "error");
+    renderState.submitting = false;
     return;
   }
   const scenes =
@@ -346,6 +361,7 @@ async function submitScatterRender() {
   const shotIds = scenes.map((s, i) => sceneIdAt(s, i));
   if (shotIds.length < 2) {
     setRenderStatus("scatter requires >= 2 shots", "error");
+    renderState.submitting = false;
     return;
   }
   const castLoras = buildCastLoraSubmit();
@@ -354,6 +370,7 @@ async function submitScatterRender() {
       "scatter requires at least one character with a trained LoRA bound",
       "error",
     );
+    renderState.submitting = false;
     return;
   }
 
@@ -374,6 +391,7 @@ async function submitScatterRender() {
     setRenderStatus(err.message, "error");
     const ta = $("#planner-render-overrides");
     if (ta) ta.focus();
+    renderState.submitting = false;
     return;
   }
 
@@ -411,6 +429,7 @@ async function submitScatterRender() {
     data = await resp.json();
   } catch (err) {
     setRenderStatus("network error: " + err.message, "error");
+    renderState.submitting = false;
     $("#planner-render-btn").disabled = false;
     return;
   }
@@ -419,17 +438,21 @@ async function submitScatterRender() {
     const errs =
       (data && data.errors) || [(data && data.error) || "HTTP " + resp.status];
     setRenderStatus("scatter submit failed: " + errs.join("; "), "error");
+    renderState.submitting = false;
     $("#planner-render-btn").disabled = false;
     return;
   }
 
   if (!data || !data.jobId) {
     setRenderStatus("scatter submit returned no jobId", "error");
+    renderState.submitting = false;
     $("#planner-render-btn").disabled = false;
     return;
   }
 
   renderState.jobId = data.jobId;
+  // vivijure#552: jobId set; the jobId/pollTimer guard now owns the button.
+  renderState.submitting = false;
   renderState.startedAt = null;
   if (renderState.tickTimer !== null) {
     clearInterval(renderState.tickTimer);
