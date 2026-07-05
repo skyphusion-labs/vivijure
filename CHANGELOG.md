@@ -3,6 +3,45 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.16.0
+
+**The studio stops trusting its clips: output validation lands at both layers (#523).** MINOR.
+A render engine that returns a structurally broken file, or a "valid" mp4 full of pure noise, is
+now caught at the gate instead of being polished and shipped. Layer 1 rejects broken files at
+motion-clip intake; Layer 2 rejects garbage pixels at the film finish boundary; both fail the shot
+BEFORE any finish/upscale GPU spend, with the real error on the shot. Plus the S20 planner/provision
+fix batch.
+
+- **Layer 1: structural mp4 validation at motion-clip intake (#556, #523).** Every adopted clip's
+  mp4 box tree is parsed in-Worker from bounded R2 ranged reads (no full download): ftyp/moov
+  present, duration/dimension sanity, minimum size. A structurally broken clip fails its shot at
+  intake with a `clip.validate` structured event; the fail is sticky (R2 reclaim never re-adopts a
+  known-bad clip). Engine-agnostic: applies to own-gpu, cloud i2v, and local-door clips alike.
+- **Layer 2: pixel-content validation at the film finish boundary (#558, #557, #523).** The
+  video-finish container grows `POST /inspect`: keyframe-vs-first-frame similarity is the primary
+  corrupt signal (a noise clip scores ~0.0 against its own keyframe), chroma/structure ratio is the
+  warn-only fallback (empirically tuned on real fixtures: noise 5.6-5.7 vs good <= 2.5, threshold
+  4.0). Verdicts: `corrupt` fails the shot pre-spend, `suspect` completes the film flagged
+  `content_degraded`, an unreachable/older container degrades to `skip` -- content validation never
+  hard-fails a render by being absent. Emits `clip.content_validate` structured events.
+- **video-finish image fix (#559).** The #558 image build omitted `inspect_core.py` from the
+  Dockerfile COPY list (crash-loop on import at container start); one-line fix. Ships as
+  `vj-video-finish` 0.2.1; the 0.2.0 image tag is known-broken, never deploy it.
+- **Provisioning hardening (#551, #553, #555).** `runpod-provision.py` pins the backend image tag
+  by default and rejects bare `:latest`; finish satellites provision with their correct per-service
+  R2 env; the upscale satellite pins to its first current-main release `vivijure-upscale:0.2.7`.
+- **Planner fixes (#550, #554).** Numeric override fields get bounds hints and the render button
+  gates on out-of-bounds values (#544 / #546); the pre-jobId window can no longer re-enable the
+  render button mid-submit and double-fire a film (#552).
+- **Deploy fixes (#541, #549).** `INSTALL_LOCAL_GPU=1` seeds the local-gpu door secrets so a fresh
+  install stops failing with code 10182; deploy.sh surfaces the real planner-mint failure reason
+  and validates a reused token before reporting ARMED.
+- **Misc (#542, #547).** compose.yaml drops explicit `container_name` so two projects can coexist
+  (#533); alibaba-wan-lora pins its seed `config_schema` floor at `min: -1`.
+- **Docs (#543, #548).** The free-plan hedge flips to the proven S18 verdict (install free, render
+  free, Workers Paid only for the 3 GPU satellites) plus the local-GPU door move recipe; R2 token
+  scoping on a first install documented (bucket does not exist yet).
+
 ## v0.15.0
 
 **The media stack becomes part of the standard install, and the whole studio is proven live on a
