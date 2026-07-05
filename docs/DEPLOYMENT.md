@@ -108,15 +108,19 @@ and the fifth (`audio-master`) is reached by its own `audio-master` module worke
 and the "5 VPC Services" in section 5 are both correct at their own layer. The local-GPU door stays
 opt-in because it needs your own local GPU box.
 
-**Cloudflare plan: free vs Workers Paid (#521).** The full module suite needs the **Workers Paid**
-plan ($5/month). Cloudflare's free plan caps a Worker at 50 subrequests per invocation; a film
-render fans out across the installed modules plus its own D1 / R2 / presign calls, and the full set
-exceeds that cap. Note a plan change only takes effect after you **redeploy the core** (`./deploy.sh`
-again) -- a running Worker keeps the plan it was deployed under, so flip your account to Workers Paid
-first, then redeploy. The free-plan floor for a MINIMUM install (local-GPU + serverless render + media
-stack) is being measured this sprint; module discovery is now cached once per film tick (#526) to cut
-the per-invocation fan-out. Until that measurement lands we do not claim a free-plan fit either way --
-the paid-plan facts above are the honest, verified ones.
+**Cloudflare plan: free vs Workers Paid (#521).** The full standard install runs on Cloudflare's
+**free** plan: install free, render free. This is live-proven -- a brand-new free-plan account stood up
+the whole 23-module standard bundle (core, D1, R2, Secrets Store, AI Gateway, tunnel, and the 5-service
+media stack) and rendered finished 1080p24 films on all three render paths (own GPU on RunPod, cloud
+i2v, and a local-GPU door). You pay only usage: RunPod GPU seconds, cloud render API calls, AI Gateway
+credits for the planner, or $0 on your own hardware. **Workers Paid ($5/month) is required only for the
+three GPU finish satellites** (finish-upscale, finish-lipsync, speech-upscale); their fan-out at
+satellite scale is what needs the larger per-invocation subrequest budget. One operational rule either
+way: a plan change (free to paid, or back) only takes effect after you **redeploy the core**
+(`./deploy.sh` again), because a running Worker keeps the plan it was deployed under -- so flip the
+account plan first, then redeploy. (Cloudflare's free plan caps a Worker at 50 subrequests per
+invocation; the S18 subrequest fixes (#526, #538) brought the standard bundle's per-tick fan-out under
+that cap.)
 
 For the whole constellation (studio + GPU backend + local doors), `deploy/constellation.sh` is the
 top orchestrator that calls into each repo's own deploy script. Today it drives the studio and stubs
@@ -511,7 +515,60 @@ writes the token file, both idempotent on a re-run.
 
 ---
 
-## 6. Email notifications (optional)
+## 6. The local-GPU door (opt-in): render on your own GPU
+
+The local-GPU doors (`vivijure-local-12gb` / `vivijure-local-16gb`) let you render on your own
+graphics card instead of renting a serverless GPU. They are off by default. Stand up the door on your
+GPU box first (follow that repo's README); the core binds to the door's URL and token, so those must
+exist before you deploy the core with the door enabled.
+
+**Two required inputs (#534).** When `INSTALL_LOCAL_GPU=1`, `deploy.env` must also set
+`LOCAL_BACKEND_URL` and `LOCAL_BACKEND_TOKEN`; `deploy.sh` fails early (fail-closed) if either is blank,
+so you cannot half-configure the door. Both values come from the door box: bring the
+`vivijure-local-12gb` / `-16gb` container up FIRST, then copy them from its startup banner (the door
+also keeps them in its own `.env`). `LOCAL_BACKEND_URL` is the Cloudflare tunnel URL that terminates at
+your door box; `LOCAL_BACKEND_TOKEN` is the shared token the door checks on each render call.
+`deploy.sh` seeds both into the Secrets Store and the `local-gpu` module binds them from there, which is
+why the door must be running before you deploy the studio with the door enabled: an unseeded binding
+hard-fails `wrangler deploy` (CF error 10182), and #534 makes `deploy.sh` catch a blank value up front
+instead of dying late. So the order is: door up, copy the URL and token into `deploy.env`, run
+`./deploy.sh`.
+
+### Moving a local-GPU door to a different studio or account (#539)
+
+A local-GPU door holds its OWN R2 credentials in its `.env` (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, `R2_BUCKET`): it reads keyframes from, and writes finished clips to, the
+STUDIO's R2 bucket directly, not through the studio Worker. So the studio-side switch (update the two
+Secrets Store secrets `LOCAL_BACKEND_URL` + `LOCAL_BACKEND_TOKEN`) is complete only when the new studio
+shares the SAME R2 account and bucket. If you point a door at a studio on a DIFFERENT Cloudflare account
+(or a different bucket), you must ALSO re-wire the door's own `.env` R2 credentials to the new studio's
+bucket, then recreate the container.
+
+Two things to pin when you recreate the door container:
+
+- **Pin `LOCAL_BACKEND_TOKEN` in the door's `.env` before recreating it.** Left blank, the door
+  auto-generates a fresh token on start, which no longer matches the value the studio has stored, so
+  every render is rejected. Pin the token, and seed that SAME value into the studio's
+  `LOCAL_BACKEND_TOKEN` secret.
+- **Restart only the backend service, not the whole stack,** to keep the door's quick-tunnel URL
+  stable. A full recreate can hand you a new URL, which then also has to be re-seeded into the studio's
+  `LOCAL_BACKEND_URL` secret.
+
+**Failure signature (self-diagnosis).** If you moved a door but skipped the R2 re-wire, the film fails
+fast at the clips phase with a keyframe 404 even though the keyframe plainly exists in the studio's
+bucket:
+
+```
+local-gpu job failed: "i2v_clip: could not fetch keyframe
+'renders/<project>/keyframes/<shot>.png': ... (404) ... Not Found"
+```
+
+The 404 is the door looking in the OLD account's bucket. Re-wire the door's `.env` R2 credentials to
+the new studio's account/bucket and recreate the container to clear it.
+
+---
+
+## 7. Email notifications (optional)
 
 The `notify-email` module sends "your film is done" mail via Cloudflare Email. It is the **only**
 place an operator email matters. Bind your sending domain to Cloudflare Email and set the module's
