@@ -12,7 +12,7 @@ import { discoverModules, invokeModule, pollModule, cancelModule, resolveFetcher
 import { loadInstallConfig } from "./operator-config";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput, RegisteredModule } from "./modules/types";
 import {
-  startClipJob, advanceClipJob, cancelInFlightClips, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2,
+  startClipJob, advanceClipJob, cancelInFlightClips, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2, validateDoneClips,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { hookOutputViolation } from "./modules/conformance";
@@ -171,6 +171,13 @@ const putFilm = (env: Env, job: FilmJob) =>
  *  installed -> skip straight to assemble (the raw clips). No clips rendered at all -> fail (nothing
  *  to assemble). */
 async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob, preModules?: RegisteredModule[]): Promise<void> {
+  // #523 Layer 1 defense-in-depth: validate any clip that reached done via a film-level R2 reclaim after
+  // advanceClipJob's own pass, so finish/dialogue/upscale never spends on a structurally-corrupt clip. The
+  // `validated` flag makes this idempotent (a no-op on the normal path). Persist if it dropped a shot so
+  // the clip-job summary stays honest.
+  if (job.clip_job_id && (await validateDoneClips(env, clipJob))) {
+    await env.R2_RENDERS.put(clipDocKey(job.clip_job_id), JSON.stringify(clipJob), { httpMetadata: { contentType: "application/json" } });
+  }
   const modules = preModules ?? await discoverModules(env as unknown as Record<string, unknown>);
   const serving = servingForHook(modules, "finish"); // ui.order; the full finish chain
   const chain = serving.map((m) => m.binding);
