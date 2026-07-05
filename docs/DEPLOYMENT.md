@@ -450,6 +450,13 @@ python3 scripts/runpod-provision.py  # last line prints RUNPOD_ENDPOINT_ID=<id>
 Put the printed id in `deploy.env` as `RUNPOD_ENDPOINT_ID` and run `./deploy.sh`. The endpoint is
 created scale-to-zero (workersMin=0): it costs nothing until a render job runs.
 
+> **Image tag: pinned by default (#518).** `runpod-provision.py` defaults to a specific backend
+> release (`ghcr.io/skyphusion-labs/vivijure-backend:X.Y.Z`), never `:latest`, so your endpoint runs a
+> known image instead of silently changing on the next push (the section-4 pin rule, enforced in the
+> script). Run a different release with `--image ghcr.io/skyphusion-labs/vivijure-backend:X.Y.Z`. A
+> bare `:latest` is REJECTED unless you pass `--allow-latest` (a deliberate opt-in to a floating tag);
+> a git-sha tag is always rejected (it does not re-provision correctly).
+
 **GPU class: Blackwell / Hopper only (#517).** The serverless backend runs on a **CUDA 12.8** baked
 image, so it requires a **Blackwell- or Hopper-class** GPU. The proven set is **RTX PRO 6000
 Blackwell, H200, and B200**; recommend **H200 or B200**. This is not a preference. A consumer card

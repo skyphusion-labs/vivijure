@@ -40,7 +40,12 @@ API = "https://rest.runpod.io/v1"
 # recommended datacenter set; the full proven pool is RTX 6000 PRO / H200 / B200 (docs/DEPLOYMENT.md
 # section 4). Override with --gpu-types only with other same-class (sm_90+) SKUs you have allocated.
 DEFAULT_GPU_TYPES = "NVIDIA H200,NVIDIA B200"
-DEFAULT_IMAGE = "ghcr.io/skyphusion-labs/vivijure-backend:latest"
+# The backend image is pinned to a specific release tag, NOT :latest (#518): a floating tag silently
+# changes what a provisioned endpoint runs on the next push. Bump this on a vivijure-backend release
+# (it is the current GHCR bare tag; the image tag drops the git backend-v prefix). Override per run
+# with --image ghcr.io/skyphusion-labs/vivijure-backend:X.Y.Z.
+DEFAULT_IMAGE_TAG = "0.4.4"
+DEFAULT_IMAGE = "ghcr.io/skyphusion-labs/vivijure-backend:" + DEFAULT_IMAGE_TAG
 
 
 def die(msg: str) -> "None":
@@ -89,6 +94,8 @@ def main() -> None:
                     "Secrets via env only; see the module docstring.")
     ap.add_argument("--name", default="vivijure-backend", help="template + endpoint name (default: %(default)s)")
     ap.add_argument("--image", default=DEFAULT_IMAGE, help="backend image (default: %(default)s)")
+    ap.add_argument("--allow-latest", action="store_true",
+                    help="accept a floating :latest image tag (default REJECTS it; the default image is pinned)")
     ap.add_argument("--disk-gb", type=int, default=20, help="container disk GiB (default: %(default)s)")
     ap.add_argument("--gpu-types", default=DEFAULT_GPU_TYPES,
                     help="comma-separated RunPod GPU type ids (default: %(default)s)")
@@ -98,12 +105,25 @@ def main() -> None:
     ap.add_argument("--bucket", default="vivijure", help="R2 render bucket name (default: %(default)s)")
     args = ap.parse_args()
 
-    # Hard rule (learned the expensive way): pin a RunPod endpoint image to :latest or a bare
-    # semver :X.Y.Z tag ONLY. A git-sha tag does not re-provision correctly and needs manual repair.
+    # Hard rules (learned the expensive way):
+    #  - A git-sha tag does not re-provision correctly and needs manual repair -- always rejected.
+    #  - :latest FLOATS: a later image push silently changes what the endpoint runs. DEPLOYMENT.md
+    #    section 4 mandates pinning the GHCR image tag, so the recommended path (defaults) must produce
+    #    a pinned endpoint, not a floating one (#518). Reject a bare :latest unless --allow-latest is
+    #    an explicit, deliberate opt-in. The default image is a pinned release (DEFAULT_IMAGE_TAG).
     tag = args.image.rsplit(":", 1)[1] if ":" in args.image.split("/")[-1] else "latest"
-    if not (tag == "latest" or re.fullmatch(r"\d+\.\d+\.\d+", tag)):
-        die("image tag ':%s' is neither :latest nor a bare semver :X.Y.Z; "
-            "never pin a RunPod endpoint to a git sha tag" % tag)
+    if re.fullmatch(r"\d+\.\d+\.\d+", tag):
+        pass  # a pinned bare semver -- the recommended shape
+    elif tag == "latest":
+        if not args.allow_latest:
+            die("refusing to provision an endpoint pinned to a floating :latest tag: a later image "
+                "push would silently change what it runs (DEPLOYMENT.md section 4 mandates a pinned "
+                "tag). Pass --image ghcr.io/skyphusion-labs/vivijure-backend:X.Y.Z to pin a release, "
+                "or --allow-latest to accept the floating tag deliberately. The default is the pinned "
+                ":%s." % DEFAULT_IMAGE_TAG)
+    else:
+        die("image tag ':%s' is neither a bare semver :X.Y.Z nor :latest; never pin a RunPod endpoint "
+            "to a git sha tag (it does not re-provision correctly)." % tag)
 
     key = need_env("RUNPOD_API_KEY")
     acc = need_env("CLOUDFLARE_ACCOUNT_ID")
