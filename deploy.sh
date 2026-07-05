@@ -258,32 +258,74 @@ if [ -n "${CF_AIG_TOKEN:-}" ]; then
   seed_secret CF_AIG_TOKEN "$CF_AIG_TOKEN"
   arm_plan_enhance "$(strip_val "$CF_AIG_TOKEN")"
   info "planner token seeded from deploy.env"
-elif store_has_secret CF_AIG_TOKEN && store_has_secret PLAN_ENHANCE_CF_AIG_TOKEN; then
-  # Door 2: a prior run already seeded both. Store secret VALUES cannot be read back, so BOTH must be
-  # present to reuse; if either is missing we fall through to door 3 and mint a fresh pair.
-  info "planner token already in the Secrets Store (prior run); reusing it"
 else
-  # Door 3: auto-mint a Run-only token. The mint response contains the secret value: it goes STRAIGHT
-  # from the script into the store seed and is never echoed or logged (same discipline as STUDIO_API_TOKEN).
-  say "CF_AIG_TOKEN not in deploy.env -- minting a Run-only token via the API"
-  AIG_MINTED="$(python3 scripts/mint-aig-run-token.py 2>/dev/null || true)"
-  if [ -n "$AIG_MINTED" ]; then
-    seed_secret CF_AIG_TOKEN "$AIG_MINTED"
-    info "CF_AIG_TOKEN auto-minted (vivijure-planner-aig-run)"
-    arm_plan_enhance "$AIG_MINTED"
-  else
-    printf "\n"
-    printf "  ====================== PLANNER TOKEN REQUIRED ======================\n"
-    printf "  CF_AIG_TOKEN could not be obtained, and it is REQUIRED before deploy: the core Worker and\n"
-    printf "  the plan-enhance module BOTH bind it from the Secrets Store (#473), and wrangler fails a\n"
-    printf "  deploy whose store secret is unseeded (code 10182). Fix EITHER way, then re-run ./deploy.sh:\n"
-    printf "    1. Paste a token into deploy.env:  CF_AIG_TOKEN=<AI Gateway auth token, Run permission>\n"
-    printf "       Mint it at https://dash.cloudflare.com/%s/ai/ai-gateway/gateways/%s\n" "$CLOUDFLARE_ACCOUNT_ID" "$GATEWAY_ID"
-    printf "       (Settings -> Create authentication token -> Run), or\n"
-    printf "    2. Grant your CLOUDFLARE_API_TOKEN the \"Account API Tokens: Edit\" scope so deploy.sh\n"
-    printf "       auto-mints the Run-only token for you.\n"
-    printf "  ====================================================================\n\n"
-    die "CF_AIG_TOKEN is required before deploy (see the steps above)"
+  # No paste. Try to reuse a prior run's store secrets (door 2), else auto-mint (door 3).
+  REUSE_OK=""
+  if store_has_secret CF_AIG_TOKEN && store_has_secret PLAN_ENHANCE_CF_AIG_TOKEN; then
+    # Door 2: a prior run seeded both. Store secret VALUES cannot be read back, so we cannot probe the
+    # gateway with them here; instead validate the underlying vivijure-planner-aig-run API token is
+    # still ACTIVE before declaring the planner armed. Without this, a token revoked/deleted after a
+    # prior run deploys green and then 401s at the FIRST planner call (#516). --check prints no secret
+    # and returns: 0 active, 4 confirmed absent, 1 could-not-determine.
+    CHK_ERRF="$(mktemp 2>/dev/null || printf '/tmp/vivijure-aig-chk.%s' "$$")"
+    if python3 scripts/mint-aig-run-token.py --check 2>"$CHK_ERRF"; then CHK_RC=0; else CHK_RC=$?; fi
+    CHK_REASON="$(cat "$CHK_ERRF" 2>/dev/null || true)"; rm -f "$CHK_ERRF"
+    if [ "$CHK_RC" = 0 ]; then
+      info "planner token already in the Secrets Store (prior run); its API token is still active -- reusing it"
+      REUSE_OK=1
+    elif [ "$CHK_RC" = 4 ]; then
+      info "planner token is in the Secrets Store but its API token is gone/inactive -- re-minting (#516)"
+      # REUSE_OK stays empty -> door 3 mints a fresh pair.
+    else
+      # Could not validate (e.g. the deploy token cannot list account API tokens). Do NOT nuke a
+      # possibly-working setup by forcing a re-mint that would likely fail on the same missing scope:
+      # reuse the stored token, but WARN loudly that it was not validated (#516).
+      printf "\n"
+      printf "  NOTE: could not validate the reused planner token (%s).\n" "${CHK_REASON:-unknown reason}"
+      printf "  Reusing the stored CF_AIG_TOKEN unverified. If storyboard planning 401s at runtime, its\n"
+      printf "  underlying API token was likely revoked: delete the CF_AIG_TOKEN and PLAN_ENHANCE_CF_AIG_TOKEN\n"
+      printf "  store secrets, then re-run ./deploy.sh to re-mint (see docs/DEPLOYMENT.md 2d).\n\n"
+      REUSE_OK=1
+    fi
+  fi
+  if [ -z "$REUSE_OK" ]; then
+    # Door 3: auto-mint a Run-only token. The mint response carries the secret value: it goes STRAIGHT
+    # from the script into the store seed, never echoed or logged (same discipline as STUDIO_API_TOKEN).
+    # Capture stderr so a failure's REAL reason reaches the operator (#515) instead of a guess.
+    say "minting a Run-only planner token via the API"
+    AIG_ERRF="$(mktemp 2>/dev/null || printf '/tmp/vivijure-aig-mint.%s' "$$")"
+    if AIG_MINTED="$(python3 scripts/mint-aig-run-token.py 2>"$AIG_ERRF")"; then :; else AIG_MINTED=""; fi
+    AIG_REASON="$(cat "$AIG_ERRF" 2>/dev/null || true)"; rm -f "$AIG_ERRF"
+    if [ -n "$AIG_MINTED" ]; then
+      seed_secret CF_AIG_TOKEN "$AIG_MINTED"
+      info "CF_AIG_TOKEN auto-minted (vivijure-planner-aig-run)"
+      arm_plan_enhance "$AIG_MINTED"
+    else
+      printf "\n"
+      printf "  ====================== PLANNER TOKEN REQUIRED ======================\n"
+      [ -n "$AIG_REASON" ] && printf "  mint failed: %s\n\n" "$AIG_REASON"
+      printf "  CF_AIG_TOKEN could not be obtained, and it is REQUIRED before deploy: the core Worker and\n"
+      printf "  the plan-enhance module BOTH bind it from the Secrets Store (#473), and wrangler fails a\n"
+      printf "  deploy whose store secret is unseeded (code 10182). Fix, then re-run ./deploy.sh:\n"
+      case "$AIG_REASON" in
+        *"already exists"*)
+          # rc 3: a stale same-name token is blocking the auto-mint; its value is unrecoverable.
+          printf "    * A stale 'vivijure-planner-aig-run' API token is blocking the auto-mint (its value\n"
+          printf "      cannot be re-read). Delete it (dashboard -> My Profile -> API Tokens -> delete\n"
+          printf "      'vivijure-planner-aig-run'), then re-run ./deploy.sh to mint a fresh one, OR\n"
+          printf "      paste any AI Gateway Run token into deploy.env:  CF_AIG_TOKEN=<token>\n"
+          ;;
+        *)
+          printf "    1. Paste a token into deploy.env:  CF_AIG_TOKEN=<AI Gateway auth token, Run permission>\n"
+          printf "       Mint it at https://dash.cloudflare.com/%s/ai/ai-gateway/gateways/%s\n" "$CLOUDFLARE_ACCOUNT_ID" "$GATEWAY_ID"
+          printf "       (Settings -> Create authentication token -> Run), or\n"
+          printf "    2. Grant your CLOUDFLARE_API_TOKEN the \"Account API Tokens: Edit\" scope so deploy.sh\n"
+          printf "       auto-mints the Run-only token for you.\n"
+          ;;
+      esac
+      printf "  ====================================================================\n\n"
+      die "CF_AIG_TOKEN is required before deploy (see the steps above)"
+    fi
   fi
 fi
 
