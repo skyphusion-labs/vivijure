@@ -63,6 +63,12 @@ const bundleState = {
 const renderState = {
   jobId: null,
   pollTimer: null,
+  // vivijure#552: true from the render click through the whole submit sequence
+  // (LoRA preflight + the pre-jobId fetch) until jobId handoff or an error/pause
+  // path. Widens the updateRenderGate active-render guard to cover the pre-jobId
+  // window so a mid-submit form toggle (e.g. keyframes-only) cannot re-enable the
+  // button and let a second submit fire.
+  submitting: false,
   currentProject: null,     // v0.37.0: display name for notifications
   currentLabel: null,       // v0.37.0: user-authored label, preferred over project
   // v0.44.0: ms since epoch when the first IN_PROGRESS observation
