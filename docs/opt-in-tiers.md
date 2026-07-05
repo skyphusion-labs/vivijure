@@ -98,9 +98,9 @@ shared note just below), then put its endpoint id into the account Secrets Store
 - **What it needs:** a RunPod endpoint running the `vivijure-upscale` image, with the four R2 env vars
   above set on it; its id in the store secret `VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID`; and the
   `finish-upscale` (`MODULE_UPSCALE`) binding kept.
-- **Provision it:** `python3 scripts/runpod-provision.py --satellite upscale --allow-latest` sets the
-  image + the four R2 env vars from your `deploy.env` (`--allow-latest` because the `vivijure-upscale`
-  image has no pinned release tag yet). Put the printed `VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID` in deploy.env.
+- **Provision it:** `python3 scripts/runpod-provision.py --satellite upscale` sets the image (pinned
+  release tag) + the four R2 env vars from your `deploy.env`. Put the printed
+  `VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID` in deploy.env.
 
 ### finish-lipsync (talking characters)
 - **What it is:** a lip-sync engine (MuseTalk). It rewrites a character's mouth to match spoken lines.
