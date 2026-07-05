@@ -116,6 +116,21 @@
     input.dataset.fieldType = field.type;
     if (field.default !== undefined) input.dataset.default = String(field.default);
     label.appendChild(input);
+    // vivijure#544: surface the schema bounds ("range X to Y") next to a bounded numeric
+    // override, matching the same hint on /modules (app.js) so the valid range is visible
+    // BEFORE entry, not only when the core clamps at render time. Registry-projected from
+    // config_schema min/max; presentation only.
+    if ((field.type === "int" || field.type === "float") &&
+        (typeof field.min === "number" || typeof field.max === "number")) {
+      const lo = typeof field.min === "number" ? field.min : null;
+      const hi = typeof field.max === "number" ? field.max : null;
+      const hint = document.createElement("span");
+      hint.className = "mod-field-hint";
+      hint.textContent = lo !== null && hi !== null
+        ? "range " + lo + " to " + hi
+        : lo !== null ? "min " + lo : "max " + hi;
+      label.appendChild(hint);
+    }
     return label;
   }
 
@@ -402,6 +417,9 @@
           : "Required: pick which backend renders the motion (image-to-video) step.";
       }
     }
+    // vivijure#546: notify the render gate whenever the backend choice changes so the
+    // primary button can reflect a required-but-unmade pick as a disabled affordance.
+    document.dispatchEvent(new CustomEvent("planner:backend-change"));
   }
 
   // Render the backend selector into motionWrap. Returns true if a real CHOICE (>= 2
@@ -638,6 +656,17 @@
     return overrides;
   }
 
+  // vivijure#501/#546: true when a motion-backend choice is REQUIRED but unmade -- 2+
+  // installed backends (doors) with none selected. Registry-projected: reads the hidden
+  // authoritative <select> the doors write to, so no per-backend knowledge lives here.
+  // The render gate uses it to disable submit (with a reason) until a door is picked,
+  // making the obligation a visible affordance rather than a click-time-only block.
+  function backendChoicePending() {
+    const sel = document.getElementById("planner-motion-backend");
+    if (!sel || !sel.options || sel.options.length < 2) return false;
+    return !sel.value;
+  }
+
   global.plannerRenderConfig = {
     renderPanel,
     renderBackendSelector,
@@ -646,5 +675,6 @@
     restore,
     mergeExpert,
     selectTier,
+    backendChoicePending,
   };
 })(window);

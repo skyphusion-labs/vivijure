@@ -283,6 +283,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // render-stage form fields.
   const kfOnlyEl = $("#planner-keyframes-only");
   if (kfOnlyEl) kfOnlyEl.addEventListener("change", persistSoon);
+  // vivijure#546: keyframes-only exempts the motion-backend pick, so re-gate the render
+  // button whenever it toggles; and re-gate when the backend door choice changes.
+  if (kfOnlyEl) kfOnlyEl.addEventListener("change", updateRenderGate);
+  document.addEventListener("planner:backend-change", updateRenderGate);
   // v0.43.0: persist the structured render-settings fields. Each
   // listens for the appropriate event (input on text + number,
   // change on selects).
