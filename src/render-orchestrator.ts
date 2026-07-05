@@ -38,6 +38,9 @@ export interface ClipShot extends ClipShotInput {
   // #523 Layer 1: structural output-validation verdict for this shot clip, set once (idempotent).
   // "fail" flips the shot to failed and is sticky so R2-presence reclaim never re-adopts a rejected clip.
   validated?: "pass" | "fail" | "skip";
+  // #523 Layer 2: pixel-content verdict (video-finish container), set once at the film finish gate.
+  content_validated?: "ok" | "suspect" | "corrupt" | "skip";
+  content_degraded?: string; // set on a "suspect" warn/degrade; the film still completes
 }
 export interface ClipJob {
   job_id: string;

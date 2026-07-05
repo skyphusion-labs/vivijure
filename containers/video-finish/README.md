@@ -70,3 +70,25 @@ without it).
 ## License
 
 **AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
+
+## POST /inspect (#523 Layer 2 content validation)
+
+Read-only pixel-content inspection. The studio Worker cannot decode video; this endpoint runs ffmpeg on
+a rendered clip to catch the noise class the in-Worker structural gate (Layer 1) cannot. Presigned GET
+URLs only; bytes never touch the Worker; no PUT (inspection is side-effect-free).
+
+Request body:
+
+| Field | Type | Req | Meaning |
+|-------|------|-----|---------|
+| `clipUrl` | string | yes | Presigned GET URL for the clip (mp4). |
+| `keyframeUrl` | string | no | Presigned GET URL for the conditioning keyframe (PNG). When present, enables the confident first-frame-vs-keyframe similarity check. |
+
+Response `200 { ok: true, verdict, reason, metrics, keyframe_similarity }`:
+
+- `verdict` -- `ok` | `suspect` (chromatic-noise heuristic, warn) | `corrupt` (keyframe mismatch, confident).
+- `metrics` -- `sat_mean`, `gray_std_mean`, `chroma_structure_ratio`, `frames`.
+- `keyframe_similarity` -- normalized first-frame-vs-keyframe luma correlation in [0,1], or null when no keyframe.
+
+`400` on missing `clipUrl` / invalid JSON, `413` on an over-cap clip, `502` on a fetch failure, `500` on an
+ffmpeg/inspect error. Thresholds + rationale live in `inspect_core.py` (unit-tested by `test_inspect.py`).
