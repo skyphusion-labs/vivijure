@@ -60,7 +60,7 @@ const MANIFEST: ModuleManifest = {
     // URL/path to the LoRA file; HuggingFace URLs supported). Default "[]" = plain Wan 2.2 i2v.
     high_noise_loras: { type: "string", default: "[]", label: "high-noise LoRAs -- JSON [{path,scale}]" },
     low_noise_loras: { type: "string", default: "[]", label: "low-noise LoRAs -- JSON [{path,scale}]" },
-    seed: { type: "int", default: -1, label: "seed (-1 = random)" },
+    seed: { type: "int", default: -1, min: -1, label: "seed (-1 = random)" },
     enable_safety_checker: { type: "bool", default: true, label: "safety checker" },
   },
   ui: { section: "motion", order: 75, locality: "cloud", cost: "Pay per render", blurb: "Rents datacenter GPUs by the second -- top quality, scale-to-zero; you pay only for render seconds." },
