@@ -18,6 +18,7 @@ function showRenderStage() {
   hideLoraPreflightWarning();
   loraPreflightAck = null;
   updateScatterGate();
+  updateRenderGate();
 }
 
 // ---------- LoRA training preflight (v0.221.0) ----------
@@ -299,6 +300,32 @@ function updateScatterGate() {
     const cur = parseInt(shardInput.value, 10);
     if (!Number.isInteger(cur) || cur < 2) shardInput.value = "2";
     else if (cur > scenes.length) shardInput.value = String(scenes.length);
+  }
+}
+
+// vivijure#546: gate the primary render button on a REQUIRED-but-unmade motion-backend
+// choice so the obligation is a visible disabled affordance (mirroring the distributed-
+// render checkbox), not a click-time-only block. Keyframes-only previews run no motion
+// leg and are exempt. Presentation only; the collectForSubmit throw stays the hard
+// backstop. Never fights the in-flight/streaming disable owned by the submit paths.
+function updateRenderGate() {
+  const btn = $("#planner-render-btn");
+  if (!btn) return;
+  const reasonEl = $("#planner-render-reason");
+  // While a render is submitting/streaming the submit path owns the button; leave it be.
+  if (renderState && (renderState.jobId || renderState.pollTimer)) return;
+  const kfOnlyEl = $("#planner-keyframes-only");
+  const keyframesOnly = !!(kfOnlyEl && kfOnlyEl.checked);
+  const cfg = window.plannerRenderConfig;
+  const pending = !keyframesOnly
+    && cfg
+    && typeof cfg.backendChoicePending === "function"
+    && cfg.backendChoicePending();
+  const reason = pending ? "pick a render backend above" : "";
+  btn.disabled = !!reason;
+  if (reasonEl) {
+    reasonEl.textContent = reason;
+    reasonEl.hidden = !reason;
   }
 }
 

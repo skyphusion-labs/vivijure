@@ -104,6 +104,7 @@ function makeDocument(roots: El[]) {
     _roots: roots,
     createElement: (tag: string) => (tag === "select" ? new SelectEl() : new El(tag)),
     getElementById: (id: string) => find(id),
+    dispatchEvent: () => true,
     querySelector: () => null,
     querySelectorAll: () => [] as El[], // collect()'s complex selector: no config inputs in these tests
   };
@@ -123,6 +124,9 @@ beforeAll(() => {
   const g = globalThis as Record<string, unknown>;
   g.window = {};
   g.document = makeDocument([]);
+  // vivijure#546: the IIFE now emits a CustomEvent on backend-change; node has no DOM, so
+  // provide a minimal constructor for the eval scope (fake document.dispatchEvent is a no-op).
+  g.CustomEvent = function () {};
   (0, eval)(src);
   mod = (g.window as Record<string, unknown>).plannerRenderConfig as typeof mod;
 });
