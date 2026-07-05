@@ -24,11 +24,15 @@ You need two accounts and one tool:
 - **Docker** on the computer that will run the media-stack containers (usually the same computer). The
   media stack is five small always-on CPU containers; `docker compose` starts them.
 
-> **A note on cost.** Vivijure runs on your own accounts and you pay your own bills. The full module
-> suite needs Cloudflare's **Workers Paid** plan ($5/month); the free plan caps a Worker at 50
-> subrequests per request, which a full render exceeds (#521). A plan change only takes effect after you
-> redeploy, so flip to Workers Paid first if you need it. Whether a minimum install fits the free plan
-> is being measured right now, so we do not promise a free-plan fit yet.
+> **A note on cost.** Vivijure runs on your own accounts and you pay your own bills. The good news:
+> the full standard install fits Cloudflare's **free** plan. You can install it free and render films
+> free; you pay only for what you use (RunPod GPU seconds, cloud render API calls, and the AI Gateway
+> credits the planner spends, or $0 if you render on your own GPU). This is live-proven: a brand-new
+> free-plan account ran the whole 23-module standard bundle and rendered finished 1080p films on all
+> three render paths (own GPU, cloud, and local GPU). The one thing that needs Cloudflare's **Workers
+> Paid** plan ($5/month) is the three GPU "finish" satellites (sharper video, lip-sync); everything on
+> this page runs free. One caveat: a plan change (free to paid, or back) only takes effect after you
+> redeploy the core, because a running Worker keeps the plan it was deployed under.
 
 You do **not** need to own a domain. The studio ships with its own login (a studio API token the
 deploy script mints for you), and it can serve on the free `workers.dev` address that comes with
