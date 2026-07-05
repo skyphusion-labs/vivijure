@@ -119,6 +119,33 @@ the deliverable `clips[]` of `{ shot_id, clip_key }` at the assemble step) so th
 only, finish unavailable" instead of a plain green with a missing film. On the clips-only path the
 film download route presigns each clip so the caller can fetch the delivered clips directly.
 
+## The output-validation event (`clip.validate`, #523)
+
+Every rendered motion clip is **structurally validated at intake** -- the moment it reaches `done` with a
+clip key, BEFORE the finish / dialogue / upscale chain spends anything downstream (#523: a satellite GPU
+once upscaled 411KB of pure noise to 2.8MB because nothing looked at the clip). The gate is core-side and
+engine-agnostic, so it covers the cloud backend, both local-gpu doors, and any future `motion.backend`
+module with one check. It emits one structured line per shot:
+
+```
+{"ev":"clip.validate","job_id":"clips-...","shot_id":"shot_01","verdict":"pass","checks":{"container":true,"video_track":true,"duration_s":3.0,"expected_s":4,"frames":49,"width":720,"height":480,"bytes":411000}}
+```
+
+- `verdict` -- `pass` (structure sound), `fail` (structurally corrupt; the shot is failed with the real
+  reason BEFORE any finish spend, honest-failure #245/#249), or `skip` (the artifact was unreadable or
+  validation is disabled -- an I/O blip never false-rejects a real render, so it is left untouched).
+- `checks` -- what the in-Worker mp4 box parse could read: `container` (valid ftyp + moov), `video_track`,
+  `duration_s`, `expected_s` (the requested seconds, for context only -- NOT gated, since backends emit a
+  fixed frame count), `frames` (video sample count), `width`/`height`, `bytes` (object size).
+- `reason` -- present on `fail` / `skip`: the honest cause (truncated / non-mp4 / zero-frame /
+  zero-duration / out-of-bounds duration or dimension / unreadable).
+
+**Honest scope (do not over-read a `pass`).** A CF Worker has no video decoder, so this catches the
+STRUCTURAL-corruption class only. A structurally-valid clip of pure *pixel* noise (local-16gb#35: CogVideoX
+on a vGPU) passes this gate -- separating noise from content needs a pixel decode, which is Layer 2 (a
+pre-finish gate in the video-finish CPU container, tracked separately). A `clip.validate` `pass` means
+"the container is well-formed", never "the picture is good".
+
 ## Query recipes (Grafana -> Explore -> Loki datasource)
 
 ```logql
@@ -142,6 +169,9 @@ film download route presigns each clip so the caller can fetch the delivered cli
 
 # the finish-unavailable degrade (completed-with-clips / silent-film, #519 / #524)
 {worker="vivijure-studio"} |= "film.finish_unavailable"
+
+# output-validation verdicts (structural clip gate, #523); a `fail` rejected a corrupt clip before finish spend
+{worker="vivijure-studio"} | json | line_format "{{.msg}}" | json | ev="clip.validate"
 ```
 
 ```logql

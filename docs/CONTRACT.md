@@ -637,6 +637,19 @@ Both respond `200 { ok: true, job_id, motion_backend, total, done, failed, pendi
 shots: [...] }` where each shot is `{ shot_id, status, error }` (POST) or `{ shot_id, status,
 clip_key, error }` (GET). `status` is `"pending" | "done" | "failed"`.
 
+**Output validation at clip intake (#523).** The instant a shot reaches `done` with a `clip_key`, the core
+STRUCTURALLY validates the clip (parses the mp4 box tree from a few bounded R2 ranged reads) BEFORE the
+finish / dialogue / upscale chain spends anything downstream. It is core-side and engine-agnostic (one gate
+covers the cloud backend, both local-gpu doors, and any future `motion.backend` module). A structural
+failure -- truncated / empty / non-mp4 / zero-frame / zero-duration / out-of-bounds duration or dimension --
+**fails that shot** with the real per-shot error (honest-failure doctrine, #245/#249: never a silent
+advance to `done`, never an `applied=[]` ship) and the shot surfaces as `status:"failed"` with that reason;
+a rejected clip is sticky (R2-presence reclaim never re-adopts it). Each shot emits one `clip.validate`
+structured event (`verdict: pass|fail|skip`; see `docs/observability.md`). The requested `seconds` is NOT
+gated against the actual duration (motion backends emit a fixed frame count). This is a Worker-side
+STRUCTURAL check only; it cannot decode pixels, so a structurally-valid clip of pure noise passes it
+(pixel-content validation is a separate video-finish-container pre-gate, tracked in #523's follow-up).
+
 ### 2.20 POST /api/render/film -- start a film job
 
 The direct film-render entry (the planner film render and API clients such as the Slate bot). Submits
