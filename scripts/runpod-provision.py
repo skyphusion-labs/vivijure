@@ -70,7 +70,7 @@ DEFAULT_IMAGE = "ghcr.io/skyphusion-labs/vivijure-backend:" + DEFAULT_IMAGE_TAG
 # store key deploy.sh reads for that satellite's id.
 SATELLITES = {
     "upscale": {
-        "image_repo": "vivijure-upscale", "tag": None,
+        "image_repo": "vivijure-upscale", "tag": "0.2.7",
         "endpoint_var": "VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID",
     },
     "lipsync": {
