@@ -157,8 +157,11 @@ function readMvhd(buf: Uint8Array, payloadStart: number, end: number, info: Moov
 function readTkhd(buf: Uint8Array, payloadStart: number, end: number, ctx: TrakCtx): void {
   if (payloadStart + 4 > end) return;
   const version = buf[payloadStart];
-  // width/height are the last two 32-bit 16.16 fixed-point fields of tkhd.
-  const base = version === 1 ? payloadStart + 32 : payloadStart + 20; // through the duration field
+  // width/height are the last two 32-bit 16.16 fixed-point fields of tkhd. `base` is the payload offset
+  // JUST AFTER the duration field: v0 = ver/flags(4) creation(4) modification(4) track_ID(4) reserved(4)
+  // duration(4) = 24; v1 = ver/flags(4) creation(8) modification(8) track_ID(4) reserved(4) duration(8) =
+  // 36 (ISO 14496-12; the reserved(4) between track_ID and duration is easy to drop -- do not).
+  const base = version === 1 ? payloadStart + 36 : payloadStart + 24;
   const wOff = base + 8 + 2 + 2 + 2 + 2 + 36; // reserved(8) layer(2) alt(2) vol(2) reserved(2) matrix(36)
   if (wOff + 8 > end) return;
   ctx.trakWidth = u32(buf, wOff) >>> 16;
