@@ -68,6 +68,7 @@ export function buildRunPodBody(input: FinishInput, cfg: FinishConfig, project: 
         face_fidelity: cfg.face_fidelity,
         only_faces: cfg.only_faces,
       },
+      ...(input.output_hash ? { output_hash: input.output_hash } : {}), // #583: forward verbatim for the sidecar stamp
     },
   };
 }

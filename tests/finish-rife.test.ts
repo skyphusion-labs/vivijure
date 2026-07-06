@@ -76,6 +76,13 @@ describe("finish-rife: buildRunPodBody", () => {
     const cfg = input.config as Record<string, unknown>;
     expect(cfg.face_restore).toBe("gfpgan");
   });
+
+  it("forwards output_hash verbatim (top level) when present, omits it when absent (#583 sidecar stamp)", () => {
+    const withHash = buildRunPodBody({ ...SAMPLE_INPUT, output_hash: "abc123" }, coerceConfig({}), "p");
+    expect(withHash.input.output_hash).toBe("abc123");
+    const without = buildRunPodBody(SAMPLE_INPUT, coerceConfig({}), "p");
+    expect("output_hash" in without.input).toBe(false);
+  });
 });
 
 describe("finish-rife: poll token", () => {

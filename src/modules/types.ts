@@ -249,6 +249,11 @@ export interface FinishInput {
   frames?: number;
   width?: number;
   height?: number;
+  // #583 provenance: the core-computed param-hash of this step's inputs (finishStepInputHash), passed
+  // so the producer can STAMP it verbatim to `<output_key>.hash` (artifact first, sidecar last). OPAQUE
+  // to the module -- forward it into the RunPod job unchanged; never parse/recompute it. Optional +
+  // additive (no api bump); absent on a legacy core, in which case the producer writes NO sidecar.
+  output_hash?: string;
 }
 
 /** What a `finish` module returns: the processed clip plus what it did. Duration is invariant

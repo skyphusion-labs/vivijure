@@ -58,6 +58,13 @@ describe("finish-upscale: buildRunPodBody", () => {
     expect(input.model).toBe("RealESRGAN_x4plus");
     expect(input.action).toBeUndefined();  // dedicated endpoint, not a vivijure-backend action
   });
+
+  it("forwards output_hash verbatim when present, omits it when absent (#583 sidecar stamp)", () => {
+    const withHash = buildRunPodBody({ ...SAMPLE_INPUT, output_hash: "abc123" }, coerceConfig({}));
+    expect(withHash.input.output_hash).toBe("abc123");
+    const without = buildRunPodBody(SAMPLE_INPUT, coerceConfig({}));
+    expect("output_hash" in without.input).toBe(false);
+  });
 });
 
 describe("finish-upscale: poll token", () => {

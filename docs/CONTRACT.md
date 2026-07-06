@@ -1005,20 +1005,80 @@ deliberate: an identical resubmit reuses the finished artifacts instead of re-pa
 key is presence-addressable, a resubmit with **changed finish-relevant inputs** (a new dialogue voice, a
 changed interpolation factor, ...) must NOT ship the prior take's artifact.
 
-**Provenance sidecar (producer-written, atomic with the artifact).** Every finish producer writes a
-param-hash sidecar next to each artifact it produces, at key **`<outputKey>.hash`** (e.g.
-`renders/<project>/clips/shot_02_finished_ls.mp4.hash`), **in the same write as the artifact**. This
-mirrors the keyframe backend's param-hash sidecar (backend #112). The sidecar body is a hash of the
-step's identity-determining inputs:
+**Provenance sidecar (core-computed value, producer-stamped atomically).** Each finish step carries a
+param-hash sidecar at key **`<outputKey>.hash`** (e.g. `renders/<project>/clips/shot_02_finished_ls.mp4.hash`),
+mirroring the keyframe backend's param-hash sidecar (backend #112). Division of labor (the #583 Design 2
+decision, chosen over a producer-side hash because the step config is re-coerced inside each module worker,
+so "the config" has no single cross-language representation):
+
+- The **core computes the sidecar VALUE** at finish-invoke time from the step's identity-determining
+  inputs (below), using ONE exported function (`finishStepInputHash`) that the future adoption gate ALSO
+  calls -- one symbol, two call sites, so the stamp and the gate can never drift.
+- The value reaches the module as the OPTIONAL `output_hash` field on the finish hook input (additive; no
+  api bump), forwarded verbatim by the module worker into the RunPod job.
+- The **producer (container) STAMPS it**: after writing the artifact it writes `output_hash` verbatim to
+  `<outputKey>.hash`. The value is OPAQUE to the producer -- it never parses, recomputes, or synthesizes
+  it. A producer that received NO `output_hash` (a legacy invoke from an older core) writes NO sidecar
+  (missing sidecar = safe re-run at the gate, never a fabricated stamp).
+
+Producer-stamping (not core-writing) is essential: the sidecar lands atomically-adjacent to the artifact
+the producer wrote, so a GC'd / frozen-poll recovery (#141 / #166) still finds both. A core-WRITTEN sidecar
+would race the shared key and miss completions the core never witnessed -- which is why the core computes
+the value but never writes the object.
+
+The sidecar object body is **exactly the 64-character lowercase hex SHA-256 digest** (no wrapper, no
+trailing newline). Its identity-determining inputs:
 
 - the **input clip** identity (its R2 object etag),
-- the **audio_key** identity (its R2 object etag) for a step that consumes audio (lip-sync); absent
+- the **audio_key** identity (its R2 object etag) for a step that consumes audio (lip-sync); JSON `null`
   otherwise,
-- the **resolved step config** (the validated `config_schema` object the module received).
+- the **resolved step config** = the orchestrator's validated `fs.configs[idx]` object (NOT the module
+  worker's re-coerced form; the core hashes the one representation it also holds at gate time).
 
-Presence is not provenance: only the producer can stamp the sidecar atomically with the artifact, so the
-sidecar is authored **by the producer, never by the core** (a core-written sidecar would race the shared
-key and could not cover a GC'd/frozen-poll recovery). The `.hash` sidecar is an internal provenance
+**Write ordering: artifact FIRST, sidecar LAST.** R2 has no multi-object atomic write, so the producer
+PUTs the artifact (`.mp4`) first and the sidecar (`.hash`) second. This is the only safe order: the sole
+transient/crash state a reader can observe is (fresh artifact + stale-or-missing sidecar), which fails the
+hash match and yields one safe re-run. The reverse (sidecar first) would expose (stale artifact + fresh
+sidecar) -- the reader adopts stale content, which is exactly #583. A crashed sidecar write therefore only
+disables reuse (re-run), it can never cause a mis-adopt.
+
+**Hash algorithm (the single TS implementation `finishStepInputHash`).** The digest is `SHA-256` over the
+UTF-8 bytes of a canonical JSON serialization of the payload object
+
+```
+{ "audio_etag": <string | null>, "clip_etag": <string>, "config": <object> }
+```
+
+where `clip_etag` is the input clip's R2 ETag, `audio_etag` is the consumed audio's R2 ETag (or JSON
+`null` for a step that does not consume audio, e.g. upscale / interpolate), and `config` is the validated
+`fs.configs[idx]`. Rules of the canonical form:
+
+1. **ETag normalization.** R2 may return the ETag double-quoted (`"abc123"`); strip the surrounding double
+   quotes and use the inner value verbatim (the Workers R2 binding's `.etag` is already unquoted; the
+   normalization keeps it robust if handed the quoted `.httpEtag`).
+2. **Canonical JSON.** Object keys sorted; compact separators (`,` and `:`, no spaces); standard JSON
+   string escaping; booleans `true`/`false`; `null`. Numbers render with JS `JSON.stringify` semantics --
+   an integral value has NO decimal point (`2.0` -> `2`, `4.0` -> `4`), non-integral as the shortest
+   decimal (`0.5` -> `0.5`).
+3. **Golden vector.** `finishStepInputHash` is unit-tested against the shared vectors below. Because the
+   invoke-time stamp and the adoption gate are the SAME exported function, this one test protects both.
+
+Only the core computes the hash (the producer stores the string verbatim), so there is no cross-language
+surface: the golden vector pins the one TypeScript implementation.
+
+**Golden test vectors** (the canonical form and its digests; `finishStepInputHash` asserts these):
+
+| # | clip_etag | audio_etag | config | canonical JSON | SHA-256 |
+|---|-----------|-----------|--------|----------------|---------|
+| 1 (audio) | `d41d8cd98f00b204e9800998ecf8427e` | `9e107d9d372bb6826bd81d3542a419d6` | `{mode:"v15", scale:2, ratio:0.5, enabled:true}` | `{"audio_etag":"9e107d9d372bb6826bd81d3542a419d6","clip_etag":"d41d8cd98f00b204e9800998ecf8427e","config":{"enabled":true,"mode":"v15","ratio":0.5,"scale":2}}` | `67c6c7a13b3db646ab1923332efca36e9add3ba9c1ba9903e38c7988f1391ece` |
+| 2 (no audio) | `d41d8cd98f00b204e9800998ecf8427e` | `null` | `{mode:"x2", scale:4.0, ratio:0.25, enabled:false}` | `{"audio_etag":null,"clip_etag":"d41d8cd98f00b204e9800998ecf8427e","config":{"enabled":false,"mode":"x2","ratio":0.25,"scale":4}}` | `e9e5119cf006958b598a90c27dea5a1d6268bc2d8db8f42cc260c1f6b4f93c9a` |
+
+Vector 2 exercises the integral-float pin (`scale: 4.0` serializes as `4`, matching JS) and the
+`audio_etag: null` case.
+
+Presence is not provenance: the sidecar is **written by the producer** atomically-adjacent to the artifact
+(its VALUE computed by the core; see above), never written by the core to the shared key. The `.hash`
+sidecar is an internal provenance
 record; it is **never** an artifact the core lists or adopts as a clip -- the clip listers require a video
 extension (`.mp4/.mov/.webm/.mkv`), so a `.hash` object can never be matched (mirror of the #578 keyframe
 filter).

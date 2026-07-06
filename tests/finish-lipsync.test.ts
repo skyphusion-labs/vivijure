@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  coerceConfig, encodePoll, decodePoll, passthroughOutput, softDegradeInFailedEnvelope,
+  coerceConfig, encodePoll, decodePoll, passthroughOutput, softDegradeInFailedEnvelope, buildRunPodBody,
 } from "../modules/finish-lipsync/src/lipsync";
 import { MANIFEST } from "../modules/finish-lipsync/src/index";
 import { checkManifest, checkInvokeResponse, allPass, failures } from "../src/modules/conformance";
@@ -59,6 +59,15 @@ describe("finish-lipsync: softDegradeInFailedEnvelope (#565)", () => {
     expect(softDegradeInFailedEnvelope({ status: "COMPLETED", output: { ok: false } })).toBeNull();
     expect(softDegradeInFailedEnvelope({ status: "IN_PROGRESS", output: { ok: false } })).toBeNull();
     expect(softDegradeInFailedEnvelope({ output: { ok: false } })).toBeNull();
+  });
+});
+
+describe("finish-lipsync: buildRunPodBody (#583 sidecar stamp)", () => {
+  it("forwards output_hash verbatim when present, omits it when absent", () => {
+    const withHash = buildRunPodBody({ ...SAMPLE_INPUT, audio_key: "renders/neon/dialogue/shot_01.wav", output_hash: "abc123" }, coerceConfig({}));
+    expect(withHash.input.output_hash).toBe("abc123");
+    const without = buildRunPodBody({ ...SAMPLE_INPUT, audio_key: "renders/neon/dialogue/shot_01.wav" }, coerceConfig({}));
+    expect("output_hash" in without.input).toBe(false);
   });
 });
 
