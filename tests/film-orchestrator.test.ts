@@ -120,6 +120,8 @@ describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifa
     expect(stuck.status).toBe("done");
     expect(stuck.clip_key).toBe("renders/p/clips/shot_02_finished.mp4");
     expect(stuck.poll).toBeUndefined();
+    expect(stuck.applied).toEqual([]);                 // #583: reused from R2, never a fake applied-run tag
+    expect(stuck.adopted).toEqual(["interpolate:2x"]); // the reuse is disclosed in `adopted` (RIFE default 2x)
     expect(shots.every((s) => s.status !== "pending")).toBe(true); // phase can now advance to assemble
   });
 
@@ -330,7 +332,8 @@ describe("finish-step R2 advance (FIX C: a MID-chain step GC'd/frozen with its o
     await advanceFilmJob(env, "film-fixc");
     const a = read().finish_shots![0];
     expect(a.idx).toBe(1);                                              // advanced off the RIFE step...
-    expect(a.applied).toEqual(["interpolate:2x"]);                     // ...recording its reconstructed tag
+    expect(a.applied).toEqual([]);                                     // #583: adopted, NOT run -> never a fake applied-run tag
+    expect(a.adopted).toEqual(["interpolate:2x"]);                     // ...the reuse is disclosed in the `adopted` channel
     expect(a.clip_key).toBe("renders/neon/clips/shot_01_finished.mp4"); // next step's input is the RIFE output
     expect(a.status).toBe("pending");                                  // 3 modules still to run
     expect(a.poll).toBeUndefined();
@@ -1169,6 +1172,8 @@ describe("advanceFinishPhase R2 reclaim (#141: finish output in R2 beats a finis
     expect(fs2?.status).toBe("done");
     expect(fs2?.clip_key).toBe("renders/neon/clips/shot_02_finished.mp4");
     expect(fs2?.error).toBeUndefined();
+    expect(fs2?.applied).toEqual([]);                 // #583: reclaimed from R2, not run this pass
+    expect(fs2?.adopted).toEqual(["interpolate:2x"]); // the reuse is disclosed in `adopted`, never faked into applied
     expect(r?.job.phase).not.toBe("finish"); // advanced (clips_only -> done)
   });
 
@@ -1831,7 +1836,8 @@ describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 inc
     expect(fs?.idx).toBe(1); // advanced off RIFE -> text-overlay
     expect(fs?.clip_key).toBe("renders/fac/clips/shot_03_finished.mp4"); // now feeding text-overlay
     expect(fs?.poll).toBeUndefined(); // frozen poll cleared
-    expect(fs?.applied).toContain("interpolate:2x"); // RIFE's reconstructed tag (R2-adopted)
+    expect(fs?.applied ?? []).not.toContain("interpolate:2x"); // #583: adopted, NOT run -> never a fake applied-run tag
+    expect(fs?.adopted).toContain("interpolate:2x"); // RIFE's reconstructed tag, disclosed in the `adopted` channel
     expect(fs?.status).toBe("pending"); // still pending: text-overlay (idx 1) has yet to run
   });
 

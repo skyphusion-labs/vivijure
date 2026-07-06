@@ -54,6 +54,7 @@ describe("clipFileMatchesShot (#141/#143 shot-name matching)", () => {
     expect(clipFileMatchesShot("shot_10_i2v.mp4", "shot_1")).toBe(false); // boundary: shot_1 != shot_10
     expect(clipFileMatchesShot("shot_06_finished.mp4", "shot_06")).toBe(false);
     expect(clipFileMatchesShot("shot_09_i2v.txt", "shot_09")).toBe(false);
+    expect(clipFileMatchesShot("shot_09_i2v.mp4.hash", "shot_09")).toBe(false); // #583 param-hash sidecar, not a clip
   });
 });
 
@@ -63,6 +64,34 @@ describe("finishedClipFileMatchesShot (#141 finish-output matching)", () => {
     expect(finishedClipFileMatchesShot("shot_06_i2v.mp4", "shot_06")).toBe(false); // raw motion clip, not finish
     expect(finishedClipFileMatchesShot("shot_10_finished.mp4", "shot_1")).toBe(false); // boundary
     expect(finishedClipFileMatchesShot("shot_06_finished.txt", "shot_06")).toBe(false); // not a video
+    expect(finishedClipFileMatchesShot("shot_06_finished.mp4.hash", "shot_06")).toBe(false); // #583 param-hash sidecar
+    expect(finishedClipFileMatchesShot("shot_06_finished_ls.mp4.hash", "shot_06")).toBe(false); // suffixed-output sidecar
+  });
+});
+
+describe("listClipsByShotId ignores .hash param-hash sidecars (#583, mirror of the #578 keyframe filter)", () => {
+  const listEnv = (keys: string[]) => ({
+    R2_RENDERS: {
+      list: async ({ prefix }: { prefix: string }) => ({
+        objects: keys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        truncated: false,
+      }),
+    },
+  } as unknown as Env);
+
+  it("adopts the finished clip, never its sidecar, when both are present", async () => {
+    const env = listEnv([
+      "renders/p/clips/shot_01_finished.mp4.hash", // the param-hash sidecar must never be adopted as the clip
+      "renders/p/clips/shot_01_finished.mp4",
+    ]);
+    const found = await listClipsByShotId(env, "p", ["shot_01"], finishedClipFileMatchesShot);
+    expect(found.get("shot_01")).toBe("renders/p/clips/shot_01_finished.mp4");
+  });
+
+  it("a shot with ONLY a sidecar (no clip) is absent, never poisoned", async () => {
+    const env = listEnv(["renders/p/clips/shot_01_finished.mp4.hash"]);
+    const found = await listClipsByShotId(env, "p", ["shot_01"], finishedClipFileMatchesShot);
+    expect(found.has("shot_01")).toBe(false);
   });
 });
 

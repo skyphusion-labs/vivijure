@@ -33,7 +33,7 @@ import {
   filmJobDocKey as filmKey, clipJobDocKey as clipDocKey,
   type FilmScene, type FinishShot, type SpeechShot, type FilmKeyframeRef, type FilmJob, type MasterState,
   summarizeFinish, summarizeFilm, orderFinalClips, joinKeyframesToScenes, filmPhaseToShardStatus,
-  applyFinishOutput, applySpeechOutput,
+  applyFinishOutput, adoptFinishStepOutput, applySpeechOutput,
   FINISH_STEP_MAX_ATTEMPTS, classifyFinishFailure, classifyFinishRetry, resolveFinishConfigs,
   finishShotAdoptableFromR2, reclaimFinishShotsFromR2, finishStepOutputKey, finishStepAppliedTag,
   classifyAssembleTransport,
@@ -354,7 +354,8 @@ async function adoptFinishStepFromR2(env: Env, job: FilmJob, fs: FinishShot, pre
   const expected = finishStepOutputKey(job.project, fs, modules);
   if (!expected) return false;
   if ((await env.R2_RENDERS.head(expected)) === null) return false;
-  applyFinishOutput(fs, { shot_id: fs.shot_id, clip_key: expected, out_fps: 0, frames: 0, applied: [finishStepAppliedTag(fs, modules)] });
+  // #583: an R2-adopted step is REUSED, not run -- record the marker in `adopted`, never a fake `applied`-run tag.
+  adoptFinishStepOutput(fs, expected, finishStepAppliedTag(fs, modules));
   return true;
 }
 
@@ -422,7 +423,7 @@ async function advanceFinishPhase(env: Env, job: FilmJob, preModules?: Registere
   const finishShots = job.finish_shots || [];
   if (finishShots.some(finishShotAdoptableFromR2)) {
     const present = await listClipsByShotId(env, job.project, finishShots.map((fs) => fs.shot_id), finishedClipFileMatchesShot);
-    reclaimFinishShotsFromR2(finishShots, present);
+    reclaimFinishShotsFromR2(finishShots, present, preModules); // #583: thread modules so the reused marker reconstructs into `adopted`
   }
   if (finishShots.every((fs) => fs.status !== "pending")) {
     // Fail LOUD on a genuinely-failed finish step. After the bounded transient-retry (failOrRetry)
