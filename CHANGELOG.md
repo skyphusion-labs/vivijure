@@ -3,6 +3,30 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.17.0
+
+**Finish provenance write-side ships, and the last two S23 showcase finds are fixed.** MINOR (the
+module contract gains an additive field, and the #583 provenance machinery is new surface).
+
+- **Core-computed provenance hash + producer-stamped sidecar (#583, steps 2-3).** The core computes
+  `finishStepInputHash(clipEtag, audioEtag, config)` at invoke time (ONE exported symbol, golden-
+  vectored in CONTRACT.md 3.3.1) and passes the opaque value as `FinishInput.output_hash`; the
+  producer containers (musetalk :0.1.4, upscale :0.2.8, backend :0.4.8) write it verbatim to the
+  `<outputKey>.hash` sidecar, artifact FIRST, sidecar LAST. Write-side only: the adoption GATE
+  (require a matching sidecar before reusing an R2 artifact) flips in the next release, after the
+  stamped producers are verified in prod (correctness order: producers first, then the gate).
+- **Dialogue shots lip-sync the native-fps clip (#584).** A finish module may declare the additive
+  manifest field `finish_consumes_audio` (lip-sync does, 0.1.4); for a shot WITH a dialogue line the
+  core stable-partitions the finish chain so audio-consuming modules run FIRST -- lipsync -> rife ->
+  upscale -- because a lip-sync model's audio->mouth mapping is calibrated to the source frame rate
+  and smears across interpolated frames (the breathy look). Non-dialogue shots keep plain ui.order.
+  The companion container fix (vivijure-musetalk#32) stops the audio mux from silently re-encoding
+  the CRF-18 video at ~2 Mbps (`-c:v copy`). Both #584 mechanisms are dead.
+- **Photoreal upscale default (#585, first lever).** finish-upscale (0.1.2) defaults to
+  RealESRGAN_x4plus; the anime-tuned realesr-animevideov3 (which imposed an illustration-ish texture
+  on photoreal shots, visible at cuts) becomes the explicit anime opt-in. Deeper cross-shot style
+  locking is filed as #594.
+
 ## v0.16.5
 
 **The S24 sweep burn: every open S23 showcase find fixed in core.** PATCH. Four fixes:
