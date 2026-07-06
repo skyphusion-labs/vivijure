@@ -356,3 +356,31 @@ jobs:
             echo "::error::Cloudflare cache purge failed (HTTP ${CODE}). The worker is LIVE; purge https://${CF_PURGE_HOST}/welcome and https://${CF_PURGE_HOST}/ manually for zone ${CF_ZONE_ID}."
             exit 1
           fi
+
+      # Opt-in Studio MCP Worker deploy (docs/mcp.md). A SEPARATE Worker from the core (src/mcp.ts,
+      # its own host); it lets agents drive the Studio API through MCP tools. Gated exactly like the
+      # WfP / analytics / purge opt-ins: a community self-host sets neither var, so this is a clean
+      # no-op. Only when BOTH MCP_HOST (the MCP hostname) and MCP_STUDIO_URL (the studio base URL the
+      # MCP proxies to) are set do we render wrangler.mcp.toml and deploy. Its two secrets
+      # (STUDIO_API_TOKEN, MCP_TOKEN) are seeded ONCE out-of-band (see docs/mcp.md), never in CI --
+      # same doctrine as the module secrets, so no secret value passes through GitHub. POSIX sh
+      # (BusyBox ash in node:22-alpine); no bash-isms.
+      - name: Deploy Studio MCP Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MCP_HOST: ${{ vars.MCP_HOST }}
+          MCP_STUDIO_URL: ${{ vars.MCP_STUDIO_URL }}
+        run: |
+          set -eu
+          if [ -z "${MCP_HOST:-}" ] || [ -z "${MCP_STUDIO_URL:-}" ]; then
+            echo "MCP deploy not configured (MCP_HOST / MCP_STUDIO_URL unset), skipping"
+            exit 0
+          fi
+          apk add --no-cache gettext >/dev/null
+          export MCP_HOST MCP_STUDIO_URL
+          envsubst '$MCP_HOST $MCP_STUDIO_URL' < wrangler.mcp.toml.example > wrangler.mcp.toml
+          # fail-closed: no placeholder may survive (a missing var would leave a literal ${...}).
+          if grep -q '${' wrangler.mcp.toml; then echo "::error::unsubstituted placeholder in wrangler.mcp.toml"; grep -n '${' wrangler.mcp.toml; exit 1; fi
+          echo "Deploying vivijure-studio-mcp to ${MCP_HOST} (studio ${MCP_STUDIO_URL})..."
+          npx wrangler deploy -c wrangler.mcp.toml

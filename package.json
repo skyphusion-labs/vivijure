@@ -9,7 +9,9 @@
   },
   "scripts": {
     "dev": "wrangler dev",
+    "dev:mcp": "wrangler dev -c wrangler.mcp.toml",
     "deploy": "wrangler deploy",
+    "deploy:mcp": "wrangler deploy -c wrangler.mcp.toml",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "test": "vitest run",

@@ -16,6 +16,10 @@ __pycache__/
 # IDs in the public repo. Edit wrangler.toml.example; render locally to work. See docs/deploy-config-injection.md.
 /wrangler.toml
 
+# The MCP Worker's wrangler config is likewise RENDERED from wrangler.mcp.toml.example (host +
+# studio URL injected). Edit the example; render locally to work. See docs/mcp.md.
+/wrangler.mcp.toml
+
 # Real deploy.env holds the operator keys (rendered from deploy.env.example); never commit it.
 /deploy.env
 

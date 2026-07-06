@@ -321,6 +321,17 @@ Motion is backend-agnostic: the same keyframe feeds own-GPU Wan or any cloud i2v
 finish chain runs the same way over whatever clip comes back. The dialogue track is generated per
 shot, drives the lip-sync, and rides through assembly into the final mux.
 
+## Drive it with an MCP
+
+An AI agent (Cursor, Claude Code, or any MCP client) can drive the studio through structured tools
+instead of raw HTTP: plan a storyboard, cast characters, submit a film render, and poll it to done.
+The MCP is a small, bearer-gated Worker that ships in this repo (`src/mcp.ts`, deployed separately
+via `wrangler.mcp.toml`). It proxies to your studio over its normal bearer, so you can point it at
+any Vivijure instance. It exposes curated tools (`studio_modules`, `plan_storyboard`,
+`bundle_storyboard`, `submit_film`, `poll_film`, and more) plus a generic `studio_request` escape
+hatch for the full API. It is opt-in and off by default. Setup, the tool table, and client wiring
+are in [docs/mcp.md](docs/mcp.md).
+
 ## Develop
 
 ```bash
@@ -328,6 +339,8 @@ npm run typecheck     # tsc --noEmit (CI gate -- run before pushing)
 npm test              # vitest
 npm run dev           # wrangler dev
 npm run deploy        # wrangler deploy
+npm run dev:mcp       # wrangler dev for the MCP Worker (see docs/mcp.md)
+npm run deploy:mcp    # wrangler deploy for the MCP Worker
 ```
 
 `account_id` comes from `CLOUDFLARE_ACCOUNT_ID` in the environment, not hardcoded. All bindings

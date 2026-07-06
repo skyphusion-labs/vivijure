@@ -1,0 +1,39 @@
+# Vivijure Studio MCP Worker -- wrangler config (separate deploy from the studio core).
+#
+# This ships a bearer-gated MCP server (src/mcp.ts) that lets AI agents drive the Studio API through
+# structured tools. It is OPT-IN and OPERATOR-SPECIFIC: it is NOT deployed by a default self-host.
+# The real wrangler.mcp.toml is gitignored and rendered from this example (like the core), or copy it
+# by hand and fill the two ${...} placeholders for a local `wrangler deploy -c wrangler.mcp.toml`.
+#
+# account_id is NOT hardcoded; it is read from CLOUDFLARE_ACCOUNT_ID (env / CI secret).
+#
+# SAFETY: this Worker holds NO studio bindings. It reaches the studio only over HTTP with the
+# STUDIO_API_TOKEN secret, and gates itself with the MCP_TOKEN secret. Both are seeded out-of-band:
+#   wrangler secret put STUDIO_API_TOKEN -c wrangler.mcp.toml   # the studio bearer (vivijure #423)
+#   wrangler secret put MCP_TOKEN         -c wrangler.mcp.toml   # the gate for MCP clients
+# Either unset => the Worker fails closed (STUDIO_API_TOKEN unset -> every tool errors; MCP_TOKEN
+# unset -> every /mcp request 401s).
+
+name = "vivijure-studio-mcp"
+main = "src/mcp.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# No preview URLs, no workers.dev: the *.workers.dev hostname is not covered by the MCP bearer gate's
+# intent (machine-to-machine on a known host), so keep the surface to the custom domain only.
+preview_urls = false
+workers_dev = false
+
+[observability]
+enabled = true
+
+[vars]
+# The studio base URL this MCP proxies to. PUBLIC (a hostname, not a secret). Rendered from MCP_STUDIO_URL
+# in CI, or set literally when copying this file by hand (e.g. "https://vivijure.skyphusion.org").
+STUDIO_URL = "${MCP_STUDIO_URL}"
+
+# --- Deploy / routing ---
+# The MCP host. Rendered from MCP_HOST in CI, or set literally by hand (e.g. "studio-mcp.example.com").
+[[routes]]
+pattern = "${MCP_HOST}"
+custom_domain = true
