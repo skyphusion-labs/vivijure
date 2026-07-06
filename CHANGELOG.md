@@ -3,6 +3,19 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.17.2
+
+**The upscale default reverts to animevideov3; x4plus is opt-in until the handler tiles.** PATCH.
+The first S25 exercise render (film-01bfda9c) failed honestly: every shot CUDA-OOM at
+MODULE_UPSCALE ("tried to allocate 45.7 GiB"), because the v0.17.0 default flip to
+RealESRGAN_x4plus (a natively-4x model the container runs untiled) cannot fit a 48fps rife'd 720p
+clip's 4x output on even a 96GB GPU. The default follows the handler's proven memory envelope
+(finish-upscale 0.1.3); the photoreal-texture goal of #585 stands and the default re-flips after
+vivijure-upscale ships tiled x4plus inference (v0.2.9) and it proves out on a real render.
+Validation win worth recording: the failure surfaced END TO END with the real per-shot error (the
+#245/#249 honest-failure doctrine), and the dialogue shots demonstrably ran lipsync BEFORE
+interpolation (#584's order live in prod) before dying at the innocent-bystander upscale step.
+
 ## v0.17.1
 
 **The #583 adoption gate flips: an R2 finish artifact is reused ONLY on a matching provenance
