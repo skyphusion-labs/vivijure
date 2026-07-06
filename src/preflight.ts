@@ -166,6 +166,91 @@ export function checkCastBindingsReady(
   return issues;
 }
 
+// Cast-binding id resolution (#576).
+//
+// The public API projects a cast member's UUID as its `id` (see toPublicCast in
+// cast-db.ts), but checkCastBindingsReady above keys on the INTERNAL numeric row
+// id. A castBindings value can therefore arrive in three honest forms: the UUID
+// the API handed the client, the numeric row id, or a numeric string of one. The
+// preflight ROUTE calls this resolver first so the numeric-keyed pure check stays
+// dependency-free while an agent/MCP client can bind a slot with the id it was
+// actually given. Anything that resolves feeds checkCastBindingsReady; anything
+// that does not becomes a preflight error here, with a message that distinguishes
+// an unknown id (looked up, not found) from a wrong id kind (not a usable id at all).
+
+// The catalog subset the resolver needs: the numeric row id and the public UUID it
+// is exposed as. CastMember (cast-db.ts) is a structural superset of this.
+interface CastIdRow {
+  id: number;
+  public_id?: string | null;
+}
+
+export interface ResolvedCastBindings {
+  // Slots resolved to a numeric row id -- feed this straight to checkCastBindingsReady.
+  resolved: Record<string, number>;
+  // Slots whose value could not be resolved, already shaped as preflight error issues.
+  unresolved: PreflightIssue[];
+}
+
+export function resolveCastBindings(
+  bindings: Record<string, unknown> | null | undefined,
+  catalog: CastIdRow[],
+): ResolvedCastBindings {
+  const resolved: Record<string, number> = {};
+  const unresolved: PreflightIssue[] = [];
+  if (!bindings) return { resolved, unresolved };
+
+  const byNumericId = new Map<number, CastIdRow>(catalog.map((c) => [c.id, c]));
+  const byPublicId = new Map<string, CastIdRow>();
+  for (const c of catalog) {
+    if (typeof c.public_id === "string" && c.public_id) byPublicId.set(c.public_id, c);
+  }
+
+  for (const slot of Object.keys(bindings)) {
+    const value = bindings[slot];
+    const scope = `cast[${slot}]`;
+
+    // Numeric row id, or the numeric-string form of one.
+    if (typeof value === "number" || (typeof value === "string" && /^[0-9]+$/.test(value))) {
+      const numeric = typeof value === "number" ? value : Number(value);
+      if (byNumericId.has(numeric)) {
+        resolved[slot] = numeric;
+      } else {
+        unresolved.push({
+          level: "error",
+          scope,
+          message: `slot ${slot} is bound to unknown cast id ${numeric} (no cast member has this numeric id)`,
+        });
+      }
+      continue;
+    }
+
+    // Public UUID -- the id the API returns to clients.
+    if (typeof value === "string") {
+      const member = byPublicId.get(value);
+      if (member) {
+        resolved[slot] = member.id;
+      } else {
+        unresolved.push({
+          level: "error",
+          scope,
+          message: `slot ${slot} is bound to unknown cast id "${value}" (no cast member has this public id)`,
+        });
+      }
+      continue;
+    }
+
+    // Neither a number nor a string: a wrong id kind, not a lookup miss.
+    unresolved.push({
+      level: "error",
+      scope,
+      message: `slot ${slot} is bound to an invalid cast id (${value === null ? "null" : typeof value}); expected a cast public id or numeric row id`,
+    });
+  }
+
+  return { resolved, unresolved };
+}
+
 export interface PreflightResult {
   ok: boolean;
   counts: { error: number; warning: number; info: number };

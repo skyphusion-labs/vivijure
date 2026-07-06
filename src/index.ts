@@ -70,7 +70,7 @@ import {
   type AudioAnalyzeRequest,
 } from "./runpod-submit";
 import { validateStoryboard, type StoryboardValidated } from "./storyboard-validate";
-import { checkStoryboardShape, checkCastBindingsReady, summarize, type PreflightIssue } from "./preflight";
+import { checkStoryboardShape, checkCastBindingsReady, resolveCastBindings, summarize, type PreflightIssue } from "./preflight";
 import {
   planStoryboard, refineStoryboard, chatComplete,
   type PlanStoryboardArgs, type RefineStoryboardArgs, type ChatCompleteArgs,
@@ -868,7 +868,7 @@ const hPreflight: Handler = async (req, env) => {
   // Shape is valid -> run the semantic + cast-readiness checks.
   const issues: PreflightIssue[] = [...checkStoryboardShape(validated.value)];
   const bindings = (envelope.castBindings && typeof envelope.castBindings === "object")
-    ? (envelope.castBindings as Record<string, number>)
+    ? (envelope.castBindings as Record<string, unknown>)
     : null;
   // Only touch D1 when there are bindings to check.
   if (bindings && Object.keys(bindings).length > 0) {
@@ -881,7 +881,16 @@ const hPreflight: Handler = async (req, env) => {
     );
     const keyframeLabel =
       kfModules.map((m) => m.keyframe_label).find((l) => typeof l === "string" && l.trim()) || "SDXL";
-    issues.push(...checkCastBindingsReady(bindings, await listCast(env), keyframeLabel));
+    // #576: the public API projects a cast member's UUID as its `id`, but the pure
+    // cast-readiness check keys on the internal numeric row id. Resolve every binding
+    // value (UUID the client was given, numeric row id, or a numeric string) to the
+    // numeric id here so an agent/MCP client can bind a slot with the id it received;
+    // unresolved values surface as errors that name whether the id was unknown or the
+    // wrong kind, not the misleading old "cast id <uuid> which no longer exists".
+    const catalog = await listCast(env);
+    const { resolved, unresolved } = resolveCastBindings(bindings, catalog);
+    issues.push(...unresolved);
+    issues.push(...checkCastBindingsReady(resolved, catalog, keyframeLabel));
   }
   return json(summarize(issues), 200);
 };
