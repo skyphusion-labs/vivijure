@@ -35,6 +35,20 @@ vi.mock("../src/bundle-storyboard", async (orig) => {
   return { ...actual, readBundleScenes: vi.fn(async () => h.bundleScenes) };
 });
 
+// #582: stub the cast resolve so a cast_loras arg yields voices without a D1 cast table. Wren's
+// shape: slot A -> a cast member whose voice is asteria.
+vi.mock("../src/cast-loras", async (orig) => {
+  const actual = await orig<typeof import("../src/cast-loras")>();
+  return {
+    ...actual,
+    resolveCastLoras: vi.fn(async (_env: unknown, castLoras: Record<string, unknown> | undefined) =>
+      castLoras && Object.keys(castLoras).length
+        ? { pretrained: {}, voices: { A: "asteria" }, castIds: { A: 4 }, skipped: [], skippedDetail: [] }
+        : { pretrained: {}, voices: {}, castIds: {}, skipped: [], skippedDetail: [] },
+    ),
+  };
+});
+
 import worker from "../src/index";
 import { startFilmJob } from "../src/film-orchestrator";
 import { MODULE_API } from "../src/modules/types";
@@ -154,5 +168,59 @@ describe("POST /api/render/film derives dialogue_lines from the bundle when none
     );
     expect(res.status).toBe(201);
     expect((h.captured as CapturedArgs | null)?.dialogue_lines).toBeUndefined();
+  });
+});
+
+// vivijure #582: explicit dialogue_lines WITHOUT a voice_id must resolve the shot's speaking slot to
+// its cast voice via cast_loras -- not fall to the default while the record and the operator's mental
+// model say the cast member "has a voice" (Wren, asteria, spoke as angus in film-08dd5777).
+describe("POST /api/render/film resolves cast voices for explicit dialogue_lines (#582)", () => {
+  const SCENES = [{ shot_id: "shot_01", prompt: "Wren speaks", seconds: 4 }];
+  const BUNDLE = [{ shot_id: "shot_01", prompt: "x", seconds: 4, dialogue: { slot: "A", text: "storyboard line" } }];
+
+  it("the film-08dd5777 shape: voiceless explicit line + cast_loras -> the CAST voice", async () => {
+    h.captured = null;
+    h.bundleScenes = BUNDLE;
+    const res = await worker.fetch(
+      postFilm({
+        bundle_key: "bundles/wren.tar.gz", scenes: SCENES,
+        cast_loras: { A: "cast-pub-id" },
+        dialogue_lines: [{ shot_id: "shot_01", text: "We move now." }],
+      }),
+      env, ctx,
+    );
+    expect(res.status).toBe(201);
+    expect((h.captured as CapturedArgs | null)?.dialogue_lines).toEqual([
+      { shot_id: "shot_01", text: "We move now.", voice_id: "asteria" },
+    ]);
+  });
+
+  it("an explicit line voice_id still wins over the cast voice", async () => {
+    h.captured = null;
+    h.bundleScenes = BUNDLE;
+    const res = await worker.fetch(
+      postFilm({
+        bundle_key: "bundles/wren.tar.gz", scenes: SCENES,
+        cast_loras: { A: "cast-pub-id" },
+        dialogue_lines: [{ shot_id: "shot_01", text: "x", voice_id: "orion" }],
+      }),
+      env, ctx,
+    );
+    expect(res.status).toBe(201);
+    expect((h.captured as CapturedArgs | null)?.dialogue_lines).toEqual([
+      { shot_id: "shot_01", text: "x", voice_id: "orion" },
+    ]);
+  });
+
+  it("without cast_loras a voiceless explicit line is forwarded untouched (downstream default)", async () => {
+    h.captured = null;
+    h.bundleScenes = BUNDLE;
+    const explicit = [{ shot_id: "shot_01", text: "no cast bound" }];
+    const res = await worker.fetch(
+      postFilm({ bundle_key: "bundles/wren.tar.gz", scenes: SCENES, dialogue_lines: explicit }),
+      env, ctx,
+    );
+    expect(res.status).toBe(201);
+    expect((h.captured as CapturedArgs | null)?.dialogue_lines).toEqual(explicit);
   });
 });

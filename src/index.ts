@@ -53,7 +53,7 @@ import {
 } from "./renders-db";
 import { stageBundleInjectedKeyframes } from "./bundle-keyframes";
 import { readBundleScenes } from "./bundle-storyboard";
-import { dialogueLinesFromBundleScenes } from "./dialogue-lines";
+import { dialogueLinesFromBundleScenes, resolveExplicitLineVoices } from "./dialogue-lines";
 import { readKeyframeDone } from "./render-progress";
 import type { DialogueLine } from "./modules/types";
 import {
@@ -1039,6 +1039,18 @@ const hStartFilm: Handler = async (req, env) => {
     if (bundleScenes.some((s) => s.dialogue)) {
       dialogue_lines = dialogueLinesFromBundleScenes(bundleScenes, resolvedLoras?.voices ?? {});
     }
+  } else if (
+    // #582: EXPLICIT lines used to skip voice resolution entirely, so a line without a voice_id fell
+    // to DEFAULT_VOICE_ID even when the shot's speaking slot is bound to a cast member WITH a voice
+    // (Wren spoke as angus, film-08dd5777). When any line lacks a voice and the caller's cast_loras
+    // resolved to at least one voice, resolve shot -> slot (bundle storyboard) -> cast voice. A line
+    // that CARRIES a voice_id is never touched (explicit always wins); no cast voices -> nothing to
+    // resolve, the downstream default stands.
+    resolvedLoras && Object.keys(resolvedLoras.voices).length &&
+    dialogue_lines.some((l) => !(typeof l.voice_id === "string" && l.voice_id.trim()))
+  ) {
+    const bundleScenes = await readBundleScenes(env, a.bundle_key);
+    dialogue_lines = resolveExplicitLineVoices(dialogue_lines, bundleScenes, resolvedLoras.voices);
   }
   // project is optional; default it from the bundle key (mirrors hSubmitRender) so a caller that
   // only has a bundle (e.g. the Slate bot) lands in the same project namespace the monolith uses.
