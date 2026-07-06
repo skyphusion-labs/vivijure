@@ -26,13 +26,15 @@ export function passthroughOutput(
 
 export interface UpscaleConfig {
   scale: number;   // final factor: 2 | 4
-  model: string;   // realesr-animevideov3 (anime/fast) | RealESRGAN_x4plus (general)
+  model: string;   // RealESRGAN_x4plus (photoreal/general) | realesr-animevideov3 (anime/fast)
 }
 
 const MODELS = ["realesr-animevideov3", "RealESRGAN_x4plus"] as const;
 
+// Default is the photoreal model: the anime-tuned realesr-animevideov3 imposes an illustration-ish
+// texture that reads as cross-shot style divergence on photoreal films (#585). Anime content opts in.
 export function defaultConfig(): UpscaleConfig {
-  return { scale: 2, model: "realesr-animevideov3" };
+  return { scale: 2, model: "RealESRGAN_x4plus" };
 }
 
 export function coerceConfig(cfg: Record<string, unknown>): UpscaleConfig {
