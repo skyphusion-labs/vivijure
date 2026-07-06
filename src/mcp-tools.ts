@@ -362,7 +362,10 @@ export const TOOLS: McpTool[] = [
         },
         path: STR("Studio path starting with '/', e.g. '/api/storyboard/renders/tags'."),
         query: { type: "object", description: "Optional query params (string/number values)." },
-        body: { description: "Optional JSON request body." },
+        // Object is canonical; string stays legal because schema-validating MCP clients serialize an
+        // untyped/union arg as a JSON string (#575) -- build() re-parses it so the studio always
+        // receives the real object, never a JSON-quoted string.
+        body: { type: ["object", "string"], description: "Optional JSON request body (object, or a JSON-encoded string)." },
       },
       ["method", "path"],
     ),
@@ -377,7 +380,17 @@ export const TOOLS: McpTool[] = [
         a.query && typeof a.query === "object"
           ? (a.query as Record<string, string | number | undefined>)
           : undefined;
-      return { method, path, query, body: a.body };
+      // #575: a string body from a schema-validating client is a JSON-encoded object -- unwrap it so
+      // the studio never receives a JSON-quoted string. A non-JSON string is a bad argument, said so.
+      let body = a.body;
+      if (typeof body === "string" && body.trim() !== "") {
+        try {
+          body = JSON.parse(body);
+        } catch {
+          throw new Error("body must be a JSON object (or a JSON-encoded string that parses to one)");
+        }
+      }
+      return { method, path, query, body };
     },
   },
 ];
