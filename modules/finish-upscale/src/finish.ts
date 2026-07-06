@@ -60,6 +60,7 @@ export function buildRunPodBody(input: FinishInput, cfg: UpscaleConfig): { input
       output_key: upscaledKey(input.clip_key),
       scale: cfg.scale,
       model: cfg.model,
+      ...(input.output_hash ? { output_hash: input.output_hash } : {}), // #583: forward verbatim for the sidecar stamp
     },
   };
 }

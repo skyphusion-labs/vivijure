@@ -3,6 +3,7 @@ import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinal
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 import { filmJobToPollView } from "../src/film-render-bridge";
+import { finishStepInputHash } from "../src/finish-hash";
 
 const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
   shot_id: "shot_01", clip_key: "clips/shot_01.mp4", chain: ["MODULE_FINISH_RIFE"], idx: 0,
@@ -1385,6 +1386,10 @@ describe("advanceFilmJob dialogue phase injects audio_key into finish (talking c
     // the finish (lip-sync) module was invoked WITH that audio_key -- the whole point
     expect(finishInputs.length).toBe(1);
     expect((finishInputs[0] as { audio_key?: string }).audio_key).toBe("renders/p/dialogue/shot_01.wav");
+    // #583: the core computed + forwarded the opaque provenance hash (finishStepInputHash) on the invoke
+    // input. This env HEADs null, so the etags are null; the config is undefined (this shot has none).
+    const oh = (finishInputs[0] as { output_hash?: string }).output_hash;
+    expect(oh).toBe(await finishStepInputHash(null, null, undefined));
     // clips_only -> after finish the shard is done
     expect(r?.job.phase).toBe("done");
   });

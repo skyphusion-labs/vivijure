@@ -16,6 +16,7 @@ import {
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { hookOutputViolation } from "./modules/conformance";
+import { finishStepInputHash } from "./finish-hash";
 import { presignR2Get, presignR2Put, FILM_DOWNLOAD_TTL_SECONDS } from "./r2-presign";
 import { readShotDurationsFromBundle } from "./bundle-assembler";
 import { contentValidateDoneClips } from "./clip-content-validate";
@@ -388,6 +389,18 @@ async function advanceFinishPhase(env: Env, job: FilmJob, preModules?: Registere
       context: { project: job.project, job_id: job.film_id },
     };
     if (!fs.poll) {
+      // #583: stamp the step's input provenance so the producer writes `<output_key>.hash`. Compute the
+      // ONE hash (finishStepInputHash) the future adoption gate also uses, over the CURRENT input clip +
+      // audio etags + validated config; pass it as the opaque `output_hash`. HEADs are best-effort (a
+      // null etag still yields a deterministic hash); done only on invoke, never on a re-poll.
+      const audioKey = job.dialogue_audio?.[fs.shot_id];
+      const etagOf = async (key: string | undefined): Promise<string | null> => {
+        if (!key) return null;
+        try { return (await env.R2_RENDERS.head(key))?.etag ?? null; } catch { return null; } // HEAD miss -> null etag -> gate re-runs, never mis-adopts
+      };
+      const [clipEtag, audioEtag] = await Promise.all([etagOf(fs.clip_key), etagOf(audioKey)]);
+      (req.input as FinishInput).output_hash = await finishStepInputHash(
+        clipEtag, audioEtag, fs.configs?.[fs.idx] as Record<string, unknown> | undefined);
       const r = await invokeModule<FinishInput, FinishOutput>(fetcher, req);
       if (!r.ok) { failOrRetry(fs, r.error, false); }
       else if ((r as { pending?: boolean }).pending) { fs.poll = (r as { poll: string }).poll; }

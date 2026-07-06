@@ -63,6 +63,7 @@ export function buildRunPodBody(input: FinishInput, cfg: LipsyncConfig): { input
       output_key: lipsyncedKey(input.clip_key),
       version: cfg.version,
       bbox_shift: cfg.bbox_shift,
+      ...(input.output_hash ? { output_hash: input.output_hash } : {}), // #583: forward verbatim for the sidecar stamp
     },
   };
 }

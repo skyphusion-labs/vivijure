@@ -68,6 +68,10 @@ export interface FinishInput {
   frames?: number;
   width?: number;
   height?: number;
+  // #583 provenance: the core-computed param-hash of this step's inputs, forwarded VERBATIM into the
+  // RunPod job so the container stamps `<output_key>.hash` after the artifact. Opaque here -- never
+  // parse/recompute it. Absent from a legacy core => the container writes no sidecar (safe re-run).
+  output_hash?: string;
 }
 
 export interface FinishOutput {
