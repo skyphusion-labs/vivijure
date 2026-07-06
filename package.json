@@ -1,6 +1,6 @@
 {
   "name": "vivijure-studio",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "Vivijure studio core: a module host for AI film production. A thin Cloudflare Worker that owns project / storyboard / cast / render orchestration and a module registry; every capability beyond that is an opt-in module worker plugged in through a typed hook contract.",
   "license": "AGPL-3.0-only",
   "type": "module",

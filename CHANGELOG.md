@@ -3,6 +3,18 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.17.1
+
+**The #583 adoption gate flips: an R2 finish artifact is reused ONLY on a matching provenance
+sidecar.** PATCH (the final step of the #583 fix; the write-side shipped in v0.17.0). Both adoption
+paths (`adoptFinishStepFromR2` and the reclaim scan) now require the artifact's `<outputKey>.hash`
+sidecar to equal the core-computed `finishStepInputHash` for the CURRENT inputs; a missing sidecar
+(legacy artifact) or a mismatch (different clip / audio / config -- including a prior film's
+abandoned artifact at the shared key, the original #583 race) re-runs the step instead of adopting
+stale output. Same-job #141/#166 recovery still adopts (inputs unchanged -> hash matches). Deployed
+in order: stamped producers first (musetalk :0.1.4, upscale :0.2.8, backend :0.4.8, all
+fresh-worker-verified in prod), core write-side (v0.17.0), then this gate. #583 closed.
+
 ## v0.17.0
 
 **Finish provenance write-side ships, and the last two S23 showcase finds are fixed.** MINOR (the
