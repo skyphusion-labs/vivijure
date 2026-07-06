@@ -182,3 +182,19 @@ export function terminalErrorInOutput(output: unknown): string | null {
   if (o.status === "error") return "backend reported status=error with no error detail";
   return null;
 }
+
+/** Pure: is a job-level FAILED envelope actually the handler's own structured soft-degrade? RunPod
+ *  lifts any top-level `error` key in a handler RETURN into a job-level `status:"FAILED"` envelope,
+ *  so the musetalk soft-degrade ({ok:false, error:"..."}) never arrives as COMPLETED -- the
+ *  COMPLETED ok:false passthrough branch is unreachable for it (#565). The handler's `ok:false`
+ *  survives inside `output`, while a genuine crash (a raise) leaves no structured output there:
+ *  that is the discriminator. Returns the degrade detail ("" when the envelope kept none) for a
+ *  structured soft-degrade, or null for a real failure. */
+export function softDegradeInFailedEnvelope(s: { status?: string; output?: unknown; error?: unknown }): string | null {
+  if (s.status !== "FAILED") return null;
+  if (!s.output || typeof s.output !== "object") return null;
+  if ((s.output as { ok?: unknown }).ok !== false) return null;
+  const nested = (s.output as { error?: unknown }).error;
+  if (typeof nested === "string" && nested.length > 0) return nested.slice(0, 120);
+  return typeof s.error === "string" ? s.error.slice(0, 120) : "";
+}
