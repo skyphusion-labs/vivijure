@@ -37,7 +37,7 @@ interface Env {
 
 export const MANIFEST: ModuleManifest = {
   name: "finish-lipsync",
-  version: "0.1.2",
+  version: "0.1.3",
   api: MODULE_API,
   hooks: ["finish"],
   provides: [
@@ -228,14 +228,18 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<FinishOut
 
   // The endpoint's R2-mode result: { ok, clip_key, applied, ... }. If the handler soft-degraded
   // (e.g. no detectable face), ok is false and clip_key is absent -> pass the original clip through.
-  const o = (s.output ?? {}) as { ok?: unknown; error?: unknown };
+  // The reason arrives as `detail` since musetalk#25 (a top-level `error` would be lifted by RunPod
+  // into a job-level FAILED); `error` is kept as the legacy-handler fallback.
+  const o = (s.output ?? {}) as { ok?: unknown; error?: unknown; detail?: unknown };
   if (o.ok === false) {
+    const reason = typeof o.detail === "string" && o.detail.length > 0 ? o.detail
+      : typeof o.error === "string" && o.error.length > 0 ? o.error : undefined;
     return {
       ok: true,
       output: passthroughOutput(
         { shot_id: st.shotId, clip_key: st.clipKey, src_fps: st.srcFps, frames: st.frames, width: 0, height: 0 },
         "backend-soft-degrade",
-        { detail: typeof o.error === "string" ? o.error.slice(0, 120) : undefined },
+        { detail: reason?.slice(0, 120) },
       ),
     };
   }

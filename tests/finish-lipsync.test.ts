@@ -28,6 +28,11 @@ describe("finish-lipsync: softDegradeInFailedEnvelope (#565)", () => {
     expect(softDegradeInFailedEnvelope(s)).toBe("no face detected in clip");
   });
 
+  it("prefers the musetalk#25 `detail` key over both error fields", () => {
+    const s = { status: "FAILED", error: "lifted", output: { ok: false, error: "legacy", detail: "no usable face region in clip" } };
+    expect(softDegradeInFailedEnvelope(s)).toBe("no usable face region in clip");
+  });
+
   it("returns '' (match, no detail) when the envelope kept ok:false but no error string anywhere", () => {
     expect(softDegradeInFailedEnvelope({ status: "FAILED", output: { ok: false } })).toBe("");
     expect(softDegradeInFailedEnvelope({ status: "FAILED", error: 42, output: { ok: false } })).toBe("");
