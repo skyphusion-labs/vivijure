@@ -342,6 +342,33 @@ async function advanceSpeechPhase(env: Env, job: FilmJob): Promise<void> {
   }
 }
 
+/** R2 object ETag (unquoted) or null if the key is absent / a HEAD fails. Shared by the invoke-time
+ *  provenance stamp and the #583 adoption gate so both hash the same input identity. */
+async function headEtag(env: Env, key: string | undefined): Promise<string | null> {
+  if (!key) return null;
+  try { return (await env.R2_RENDERS.head(key))?.etag ?? null; } catch { return null; } // HEAD miss -> null etag -> gate re-runs, never mis-adopts
+}
+
+/** #583 ADOPTION GATE. Adopt an R2 finish artifact ONLY when its provenance sidecar (`<key>.hash`, written
+ *  by the producer) is present AND matches the current step's recomputed input hash. A MISSING sidecar (a
+ *  legacy/unstamped artifact) or a MISMATCH (a same-project resubmit changed the finish inputs -- the #583
+ *  bug) => do NOT adopt; re-run the step. Uses finishStepInputHash, the SAME function that stamped the
+ *  sidecar at invoke time, so the write and the gate can never drift. */
+async function finishArtifactHashMatches(env: Env, job: FilmJob, fs: FinishShot, artifactKey: string): Promise<boolean> {
+  let stored: string;
+  try {
+    const sc = await env.R2_RENDERS.get(`${artifactKey}.hash`);
+    if (!sc) return false; // no sidecar -> never adopt blind (#583)
+    stored = (await sc.text()).trim();
+  } catch { return false; }
+  const [clipEtag, audioEtag] = await Promise.all([
+    headEtag(env, fs.clip_key),
+    headEtag(env, job.dialogue_audio?.[fs.shot_id]),
+  ]);
+  const expected = await finishStepInputHash(clipEtag, audioEtag, fs.configs?.[fs.idx] as Record<string, unknown> | undefined);
+  return stored === expected;
+}
+
 /** R2-authoritative recovery for a finish step whose RunPod job is GONE (poll 404s, GC'd-after-complete)
  *  or FROZEN (envelope stuck IN_PROGRESS so /poll pends forever, #166) MID-chain: if THIS step's expected
  *  output (finishStepOutputKey) is already in R2, fold it in and advance idx so the next module dispatches
@@ -355,6 +382,9 @@ async function adoptFinishStepFromR2(env: Env, job: FilmJob, fs: FinishShot, pre
   const expected = finishStepOutputKey(job.project, fs, modules);
   if (!expected) return false;
   if ((await env.R2_RENDERS.head(expected)) === null) return false;
+  // #583 gate: a present artifact is adopted only if its provenance sidecar matches this step's inputs;
+  // a missing/mismatched sidecar (legacy artifact, or a resubmit with changed inputs) re-runs the step.
+  if (!(await finishArtifactHashMatches(env, job, fs, expected))) return false;
   // #583: an R2-adopted step is REUSED, not run -- record the marker in `adopted`, never a fake `applied`-run tag.
   adoptFinishStepOutput(fs, expected, finishStepAppliedTag(fs, modules));
   return true;
@@ -393,12 +423,10 @@ async function advanceFinishPhase(env: Env, job: FilmJob, preModules?: Registere
       // ONE hash (finishStepInputHash) the future adoption gate also uses, over the CURRENT input clip +
       // audio etags + validated config; pass it as the opaque `output_hash`. HEADs are best-effort (a
       // null etag still yields a deterministic hash); done only on invoke, never on a re-poll.
-      const audioKey = job.dialogue_audio?.[fs.shot_id];
-      const etagOf = async (key: string | undefined): Promise<string | null> => {
-        if (!key) return null;
-        try { return (await env.R2_RENDERS.head(key))?.etag ?? null; } catch { return null; } // HEAD miss -> null etag -> gate re-runs, never mis-adopts
-      };
-      const [clipEtag, audioEtag] = await Promise.all([etagOf(fs.clip_key), etagOf(audioKey)]);
+      const [clipEtag, audioEtag] = await Promise.all([
+        headEtag(env, fs.clip_key),
+        headEtag(env, job.dialogue_audio?.[fs.shot_id]),
+      ]);
       (req.input as FinishInput).output_hash = await finishStepInputHash(
         clipEtag, audioEtag, fs.configs?.[fs.idx] as Record<string, unknown> | undefined);
       const r = await invokeModule<FinishInput, FinishOutput>(fetcher, req);
@@ -436,7 +464,16 @@ async function advanceFinishPhase(env: Env, job: FilmJob, preModules?: Registere
   const finishShots = job.finish_shots || [];
   if (finishShots.some(finishShotAdoptableFromR2)) {
     const present = await listClipsByShotId(env, job.project, finishShots.map((fs) => fs.shot_id), finishedClipFileMatchesShot);
-    reclaimFinishShotsFromR2(finishShots, present, preModules); // #583: thread modules so the reused marker reconstructs into `adopted`
+    // #583 gate: adopt a present final artifact only when its provenance sidecar matches the shot's current
+    // inputs. A same-job recovery (#141/#166) matches (inputs unchanged) and still adopts; a cross-film
+    // resubmit with changed inputs (or a legacy unstamped artifact) fails the match and re-runs.
+    const verified = new Map<string, string>();
+    for (const fs of finishShots) {
+      if (!finishShotAdoptableFromR2(fs)) continue;
+      const key = present.get(fs.shot_id);
+      if (key && await finishArtifactHashMatches(env, job, fs, key)) verified.set(fs.shot_id, key);
+    }
+    reclaimFinishShotsFromR2(finishShots, verified, preModules); // #583: thread modules so the reused marker reconstructs into `adopted`
   }
   if (finishShots.every((fs) => fs.status !== "pending")) {
     // Fail LOUD on a genuinely-failed finish step. After the bounded transient-retry (failOrRetry)

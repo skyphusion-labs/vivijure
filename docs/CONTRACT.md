@@ -1084,14 +1084,15 @@ extension (`.mp4/.mov/.webm/.mkv`), so a `.hash` object can never be matched (mi
 filter).
 
 **Adoption gate (core).** When the core would reuse a finish artifact already present at its fixed key
-(the R2-presence recovery / reclaim paths), it requires the sidecar to be **present AND its hash to match**
-the current step's recomputed input hash. A **missing sidecar (legacy artifact) or a mismatch = re-run the
-step, never adopt blind.** This makes a changed-input resubmit re-render the affected steps while an
-identical resubmit still reuses.
+(the R2-presence recovery / reclaim paths -- `reclaimFinishShotsFromR2` for the chain's final artifact and
+`adoptFinishStepFromR2` mid-chain), it requires the sidecar to be **present AND its hash to match**
+`finishStepInputHash` recomputed over the shot's current inputs. A **missing sidecar (legacy artifact) or a
+mismatch = re-run the step, never adopt blind.** A same-job recovery (#141 / #166) matches (its inputs are
+unchanged) and still adopts; a cross-film resubmit with changed inputs mismatches and re-renders.
 
-> Rollout note: the gate ships only once the producers emit sidecars in prod; until then the core does not
-> require a sidecar to adopt, to avoid false-failing legacy same-job recovery (#141 / #166). Correctness
-> order: producers first, then the gate.
+> Rollout order (correctness beats sprint boundaries): the producers must emit sidecars in prod BEFORE the
+> gate flips, else a same-project resubmit re-runs finish steps against unstamped legacy artifacts (safe --
+> never ships stale content -- but it spends). The gate is merge-sequenced behind the producer deploys.
 
 **Honest record (`applied` vs `adopted`).** A finish shot's record splits its two channels so it never
 claims work it did not do this pass:
