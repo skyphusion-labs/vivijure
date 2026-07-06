@@ -1,6 +1,6 @@
 // Vivijure studio core: module host, render API router, planner/cast UI server.
 
-import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest, cloudMotionModules, defaultGpuDoorModule, gpuDoorMotionModules, motionBackendPreflightError } from "./modules/registry";
+import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest, cloudMotionModules, defaultGpuDoorModule, gpuDoorMotionModules, motionBackendPreflightError, motionConfigPreflightError } from "./modules/registry";
 import { runLiveConformance, allPass, failures } from "./modules/conformance";
 import { installModuleRow, uninstallModuleRow, setModuleEnabled, listInstalledModules } from "./installed-modules";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
@@ -563,9 +563,15 @@ const hSubmitRender: Handler = async (req, env) => {
   // motion leg, so it is unaffected. (The serving[0] default in pickOneForHook is unchanged, but this
   // preflight makes it unreachable for a full render.)
   if (!b.keyframesOnly) {
-    const explicitMotionBackend = b.motion_backend ?? parseModuleRenderOverrides(b.renderOverrides).motion_backend;
+    const parsedOverrides = parseModuleRenderOverrides(b.renderOverrides);
+    const explicitMotionBackend = b.motion_backend ?? parsedOverrides.motion_backend;
     const motionErr = motionBackendPreflightError(modules, explicitMotionBackend);
     if (motionErr) throw badRequest(motionErr);
+    // #577: judge the RAW per-module override config against the chosen backend's schema at the
+    // door, before keyframe spend. mapRenderOverridesToModuleConfigs below CLAMPS, so a bad value
+    // would otherwise degrade silently; the raw values live in the parsed overrides bag.
+    const cfgErr = motionConfigPreflightError(modules, explicitMotionBackend, parsedOverrides.config?.[(explicitMotionBackend ?? "").trim()]);
+    if (cfgErr) throw badRequest(cfgErr);
   }
 
   // FAIL HARD on any bound character whose cast LoRA is not ready, instead of letting the GPU
@@ -794,11 +800,14 @@ const hScatterRender: Handler = async (req, env) => {
   // EXPLICIT, serving motion.backend at the door -- top-level motion_backend ?? render_overrides.motion_backend,
   // NEVER the door default -- so a bad backend bounces 400 BEFORE any shard/keyframe dispatch.
   const scatterModules = await discoverModules(env as unknown as Record<string, unknown>);
-  const scatterMotionErr = motionBackendPreflightError(
-    scatterModules,
-    b.motion_backend ?? parseModuleRenderOverrides(b.renderOverrides).motion_backend,
-  );
+  const scatterOverrides = parseModuleRenderOverrides(b.renderOverrides);
+  const scatterBackend = b.motion_backend ?? scatterOverrides.motion_backend;
+  const scatterMotionErr = motionBackendPreflightError(scatterModules, scatterBackend);
   if (scatterMotionErr) throw badRequest(scatterMotionErr);
+  // #577: same pre-spend config door as hSubmitRender/hStartFilm -- a scatter render burns keyframes
+  // across every shard before the motion phase would reject a bad config.
+  const scatterCfgErr = motionConfigPreflightError(scatterModules, scatterBackend, scatterOverrides.config?.[(scatterBackend ?? "").trim()]);
+  if (scatterCfgErr) throw badRequest(scatterCfgErr);
   try {
     const job = await startScatterRender(env, {
       project,
@@ -1018,6 +1027,12 @@ const hStartFilm: Handler = async (req, env) => {
   const filmModules = await discoverModules(env as unknown as Record<string, unknown>);
   const filmMotionErr = motionBackendPreflightError(filmModules, a.motion_backend);
   if (filmMotionErr) throw badRequest(filmMotionErr);
+  // #577: judge the RAW motion_config against the chosen backend's schema at the door, BEFORE the
+  // keyframe phase spends GPU time. The invoke-path clamp is forgiving by design, so without this a
+  // bad value silently degrades to the default -- or, when the schema itself over-promises, fails at
+  // the provider ~17min of keyframes later (film-c9c44dcc).
+  const filmCfgErr = motionConfigPreflightError(filmModules, a.motion_backend, a.motion_config);
+  if (filmCfgErr) throw badRequest(filmCfgErr);
 
   // Bundle-only voicing (#313): when the caller passed NO explicit dialogue_lines, derive them from the
   // bundle storyboard's per-shot dialogue (round-tripped by #307), resolving each speaking slot's voice

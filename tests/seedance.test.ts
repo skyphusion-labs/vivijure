@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { clampDuration, buildSeedanceBody, extractVideoUrl, clipKey, encodePoll, decodePoll, runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS } from "../modules/seedance/src/seedance";
+import { clampDuration, buildSeedanceBody, extractVideoUrl, clipKey, encodePoll, decodePoll, runpodJobGone, classifyGoneState, RUNPOD_NOTFOUND_GRACE_MS, RESOLUTIONS, DEFAULT_RESOLUTION } from "../modules/seedance/src/seedance";
+import seedanceWorker from "../modules/seedance/src/index";
 
 describe("seedance pure logic", () => {
   it("clampDuration bounds the shot length into Seedance's [4,12] range (min 4: the endpoint 400s on 3, #279)", () => {
@@ -14,13 +15,13 @@ describe("seedance pure logic", () => {
   it("buildSeedanceBody maps the hook input + config onto the RunPod body", () => {
     const body = buildSeedanceBody(
       { shot_id: "shot_01", keyframe_url: "https://r2/x.png", prompt: "a city at dawn", seconds: 5 },
-      { resolution: "1080p", aspect_ratio: "9:16", camera_fixed: true, generate_audio: true, seed: 42 },
+      { resolution: "480p", aspect_ratio: "9:16", camera_fixed: true, generate_audio: true, seed: 42 },
     );
     expect(body.input).toMatchObject({
       prompt: "a city at dawn",
       image: "https://r2/x.png",
       duration: 5,
-      resolution: "1080p",
+      resolution: "480p",
       aspect_ratio: "9:16",
       camera_fixed: true,
       generate_audio: true,
@@ -34,6 +35,21 @@ describe("seedance pure logic", () => {
       {},
     );
     expect(body.input).toMatchObject({ resolution: "720p", aspect_ratio: "16:9", camera_fixed: false, generate_audio: false, seed: -1, duration: 8 });
+  });
+
+  it("#577: the manifest's resolution enum IS the provider-accepted set (no 1080p over-promise)", async () => {
+    // The provider 400s anything but 480p/720p ("Invalid resolution: '1080p'. Must be '480p' or
+    // '720p'"); an enum value the provider rejects passes the core clamp and fails every shot AFTER
+    // the keyframe spend. The manifest builds its enum from RESOLUTIONS, pinned here.
+    expect(RESOLUTIONS).toEqual(["480p", "720p"]);
+    expect(RESOLUTIONS).toContain(DEFAULT_RESOLUTION);
+    const res = await seedanceWorker.fetch(
+      new Request("https://module/module.json"),
+      {} as unknown as Parameters<typeof seedanceWorker.fetch>[1],
+    );
+    const manifest = (await res.json()) as { config_schema: { resolution: { values: string[]; default: string } } };
+    expect(manifest.config_schema.resolution.values).toEqual(RESOLUTIONS);
+    expect(manifest.config_schema.resolution.default).toBe(DEFAULT_RESOLUTION);
   });
 
   it("extractVideoUrl finds the video url across output shapes", () => {

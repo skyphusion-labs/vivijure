@@ -9,6 +9,13 @@ import type { MotionBackendInput } from "./contract";
 // silent change to the user's timing.
 export const MIN_DURATION = 4;
 export const MAX_DURATION = 12;
+
+// The resolutions the Seedance V1.5 Pro endpoint ACCEPTS. The manifest's config_schema enum is
+// built from this list so schema and provider cannot drift apart again: advertising 1080p while the
+// provider 400s it ("Invalid resolution: '1080p'. Must be '480p' or '720p'") failed every shot of a
+// film AFTER its keyframe spend (#577, film-c9c44dcc).
+export const RESOLUTIONS = ["480p", "720p"];
+export const DEFAULT_RESOLUTION = "720p";
 export function clampDuration(seconds: number): number {
   const n = Math.round(Number(seconds) || 5);
   return Math.max(MIN_DURATION, Math.min(MAX_DURATION, n));
@@ -24,7 +31,7 @@ export function buildSeedanceBody(input: MotionBackendInput, cfg: Record<string,
       image: input.keyframe_url,
       duration: clampDuration(input.seconds),
       aspect_ratio: String(cfg.aspect_ratio ?? "16:9"),
-      resolution: String(cfg.resolution ?? "720p"),
+      resolution: String(cfg.resolution ?? DEFAULT_RESOLUTION),
       camera_fixed: !!cfg.camera_fixed,
       generate_audio: !!cfg.generate_audio,
       seed: typeof cfg.seed === "number" ? cfg.seed : -1,
