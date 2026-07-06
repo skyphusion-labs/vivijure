@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import worker from "../src/index";
 import type { Env } from "../src/env";
-import { checkCastBindingsReady, checkStoryboardShape, summarize } from "../src/preflight";
+import { checkCastBindingsReady, checkStoryboardShape, resolveCastBindings, summarize } from "../src/preflight";
 
 // Regression coverage for #242: /api/storyboard/preflight used to validate the
 // whole request body (so it read `.title`/`.scenes` off the { storyboard,
@@ -128,5 +128,130 @@ describe("preflight.ts pure checks", () => {
     expect(summarize([{ level: "warning", scope: "s", message: "m" }]).ok).toBe(true);
     expect(summarize([{ level: "error", scope: "s", message: "m" }]).ok).toBe(false);
     expect(checkStoryboardShape({ scenes: [] })[0]).toMatchObject({ level: "error", scope: "scenes" });
+  });
+});
+
+
+// #576: castBindings values arrive as the cast PUBLIC id (the UUID the API returns
+// as `id`), the internal numeric row id, or a numeric string. The route resolves all
+// three to the numeric row id before the numeric-keyed cast-readiness check, and an
+// unresolved value gets an error that names WHY (unknown id vs wrong kind) instead of
+// the misleading old "cast id <uuid> which no longer exists".
+describe("POST /api/storyboard/preflight castBindings id resolution (#576)", () => {
+  const readyRow = {
+    id: 7, public_id: "cast-7-uuid", slug: "vex", name: "Detective Vex", bible: "",
+    portrait_key: "vex/portrait.png", portrait_mime: "image/png",
+    ref_keys_json: JSON.stringify([
+      { key: "vex/r1.png", mime: "image/png" },
+      { key: "vex/r2.png", mime: "image/png" },
+      { key: "vex/r3.png", mime: "image/png" },
+      { key: "vex/r4.png", mime: "image/png" },
+    ]),
+    source_keys_json: "[]",
+    created_at: "", updated_at: "",
+    lora_key: null, lora_status: "idle", lora_job_id: null, lora_error: null,
+    lora_trained_at: null, voice_id: null,
+  };
+
+  it("binds a slot by the cast PUBLIC id (UUID) the API handed out", async () => {
+    const res = await worker.fetch(
+      post({ storyboard: validStoryboard, castBindings: { A: "cast-7-uuid" } }),
+      makeEnv([readyRow]),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PreflightResp;
+    // A ready member (portrait + 4 refs) resolved from its UUID -> zero cast errors.
+    expect(body.issues.some((i) => i.scope === "cast[A]")).toBe(false);
+    expect(body.ok).toBe(true);
+  });
+
+  it("binds a slot by the numeric row id (backward compatible)", async () => {
+    const res = await worker.fetch(
+      post({ storyboard: validStoryboard, castBindings: { A: 7 } }),
+      makeEnv([readyRow]),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PreflightResp;
+    expect(body.issues.some((i) => i.scope === "cast[A]")).toBe(false);
+    expect(body.ok).toBe(true);
+  });
+
+  it("an unknown UUID errors as an unknown public id, not 'no longer exists'", async () => {
+    const res = await worker.fetch(
+      post({ storyboard: validStoryboard, castBindings: { A: "cast-nope-uuid" } }),
+      makeEnv([readyRow]),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PreflightResp;
+    const issue = body.issues.find((i) => i.scope === "cast[A]");
+    expect(issue).toBeTruthy();
+    expect(issue!.level).toBe("error");
+    expect(issue!.message).toMatch(/unknown cast id/i);
+    expect(issue!.message).toMatch(/public id/i);
+    expect(issue!.message).not.toMatch(/no longer exists/i);
+  });
+
+  it("an unknown numeric id errors as an unknown numeric id", async () => {
+    const res = await worker.fetch(
+      post({ storyboard: validStoryboard, castBindings: { A: 999 } }),
+      makeEnv([readyRow]),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PreflightResp;
+    const issue = body.issues.find((i) => i.scope === "cast[A]");
+    expect(issue).toBeTruthy();
+    expect(issue!.level).toBe("error");
+    expect(issue!.message).toMatch(/unknown cast id 999/i);
+    expect(issue!.message).toMatch(/numeric id/i);
+    expect(issue!.message).not.toMatch(/no longer exists/i);
+  });
+});
+
+describe("resolveCastBindings pure resolver (#576)", () => {
+  const catalog = [
+    { id: 5, public_id: "u-five" },
+    { id: 6, public_id: "u-six" },
+  ];
+
+  it("null/undefined bindings resolve to empty", () => {
+    expect(resolveCastBindings(null, catalog)).toEqual({ resolved: {}, unresolved: [] });
+    expect(resolveCastBindings(undefined, catalog)).toEqual({ resolved: {}, unresolved: [] });
+  });
+
+  it("resolves a public UUID to its numeric row id", () => {
+    const r = resolveCastBindings({ A: "u-five" }, catalog);
+    expect(r.resolved).toEqual({ A: 5 });
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it("passes a numeric row id through, and a numeric string form of one", () => {
+    expect(resolveCastBindings({ A: 6 }, catalog).resolved).toEqual({ A: 6 });
+    expect(resolveCastBindings({ A: "6" }, catalog).resolved).toEqual({ A: 6 });
+  });
+
+  it("an unknown UUID is an unresolved error naming the public id", () => {
+    const r = resolveCastBindings({ A: "u-missing" }, catalog);
+    expect(r.resolved).toEqual({});
+    expect(r.unresolved[0].level).toBe("error");
+    expect(r.unresolved[0].scope).toBe("cast[A]");
+    expect(r.unresolved[0].message).toMatch(/public id/i);
+  });
+
+  it("an unknown numeric id is an unresolved error naming the numeric id", () => {
+    const r = resolveCastBindings({ A: 42 }, catalog);
+    expect(r.resolved).toEqual({});
+    expect(r.unresolved[0].message).toMatch(/unknown cast id 42/i);
+    expect(r.unresolved[0].message).toMatch(/numeric id/i);
+  });
+
+  it("a non-number, non-string value is a wrong-kind error", () => {
+    const r = resolveCastBindings({ A: true as unknown } as Record<string, unknown>, catalog);
+    expect(r.resolved).toEqual({});
+    expect(r.unresolved[0].message).toMatch(/invalid cast id/i);
+    expect(r.unresolved[0].message).toMatch(/boolean/i);
   });
 });

@@ -499,6 +499,81 @@ export function motionBackendPreflightError(
   return null;
 }
 
+/** Strict schema check for a CALLER-SUPPLIED module config at the submit boundary (#577). The
+ *  invoke-path clamp (validateConfig) is deliberately forgiving -- clamp, never throw -- which is
+ *  right mid-pipeline but hides a caller's mistake at the API door: the bad value silently degrades
+ *  to the field default, or (when the schema itself over-promised, the #577 trigger) sails through
+ *  and fails at the provider only AFTER the keyframe phase has spent GPU time. Returns one
+ *  violation string per bad key, each naming what IS allowed, or [] when the config is clean.
+ *  Absent keys are fine (defaults apply); only what the caller actually sent is judged. */
+export function configPreflightViolations(
+  schema: ConfigSchema | undefined,
+  user: Record<string, unknown> | undefined,
+): string[] {
+  const out: string[] = [];
+  const entries = Object.entries(user ?? {});
+  if (!entries.length) return out;
+  const declared = Object.keys(schema ?? {});
+  for (const [key, v] of entries) {
+    const field = schema?.[key];
+    if (!field) {
+      out.push(
+        declared.length
+          ? `unknown key "${key}" (declared keys: ${declared.join(", ")})`
+          : `unknown key "${key}" (this module declares no config keys)`,
+      );
+      continue;
+    }
+    switch (field.type) {
+      case "int":
+      case "float": {
+        const n = typeof v === "number" ? v : Number(v);
+        if (!Number.isFinite(n)) {
+          out.push(`"${key}": expected a number, got ${JSON.stringify(v)}`);
+        } else if (
+          (typeof field.min === "number" && n < field.min) ||
+          (typeof field.max === "number" && n > field.max)
+        ) {
+          out.push(`"${key}": ${n} is out of range [${field.min ?? "-inf"}, ${field.max ?? "inf"}]`);
+        }
+        break;
+      }
+      case "bool":
+        if (typeof v !== "boolean") out.push(`"${key}": expected true or false, got ${JSON.stringify(v)}`);
+        break;
+      case "enum":
+        if (!field.values.includes(v as string)) {
+          out.push(`"${key}": ${JSON.stringify(v)} is not supported (allowed: ${field.values.join(", ")})`);
+        }
+        break;
+      case "string":
+        if (typeof v !== "string") out.push(`"${key}": expected a string, got ${JSON.stringify(v)}`);
+        break;
+    }
+  }
+  return out;
+}
+
+/** Preflight the caller's raw motion config against the CHOSEN motion.backend's declared schema,
+ *  BEFORE any keyframe dispatch (#577: film-c9c44dcc burned ~17min of final-tier keyframes before
+ *  the motion phase rejected its resolution). Runs only when the backend name resolves -- an
+ *  unresolved name is motionBackendPreflightError's problem, not this check's. Returns a
+ *  novice-readable 400 message naming the module and every violation, or null when clean. */
+export function motionConfigPreflightError(
+  modules: RegisteredModule[],
+  backendName: string | undefined,
+  userConfig: Record<string, unknown> | undefined,
+): string | null {
+  const name = (backendName ?? "").trim();
+  if (!name) return null;
+  const module = servingForHook(modules, "motion.backend").find((m) => m.name === name);
+  if (!module) return null;
+  const violations = configPreflightViolations(module.config_schema, userConfig);
+  return violations.length
+    ? `motion_config rejected by "${name}" before any GPU spend: ${violations.join("; ")}.`
+    : null;
+}
+
 /** A short label for a module's transport, for error/log messages that must name it without leaking to
  *  the wire (these strings stay core-side, in the pipeline's degrade log). */
 function transportLabel(module: RegisteredModule): string {

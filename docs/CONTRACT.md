@@ -466,7 +466,11 @@ Pre-render validation. A storyboard with problems is **data**, not an HTTP error
 with `ok:false` + the issues so the panel renders the reasons.
 
 **Request body (envelope):** `{ storyboard (req), castBindings?, bundleKey?, audioKey? }`.
-`castBindings` is `{ [slot]: cast_id }`.
+`castBindings` is `{ [slot]: cast_id }`. A `cast_id` may be the cast member's **public id** (the
+`id` value `GET /api/cast` returns), the internal **numeric row id**, or a numeric string of one;
+the route resolves all three to the row id before the cast-readiness check (#576). A value that
+resolves to no cast member is a `level:"error"` issue whose message names whether the id was unknown
+(looked up, not found) or the wrong kind (not a usable id at all).
 
 **Response 200** (`PreflightResult`):
 
@@ -674,6 +678,21 @@ a full job: keyframe -> clips -> (dialogue/speech) -> finish -> assemble -> (mas
 | `finish_config` | `{ [moduleName]: object }` | no | -- | Per-finish-module config. |
 | `audio_key` | string | no | -- | Staged audio bed (score/narration) to mux after assemble; absent => silent film. |
 | `film_titles` | `{ title?: { text, subtitle? }, credits?: { lines: string[] } }` | no | -- | Title / credit card text for the `film.finish` chain; absent => no cards. |
+| `dialogue_lines` | `DialogueLine[]` | no | derived from the bundle | Explicit spoken lines for TTS + captions: `{ shot_id, text, voice_id? }[]`. |
+| `cast_loras` | `{ [slot]: castId }` | no | -- | Binds storyboard character slots (A, B, ...) to cast ids. Drives the keyframe LoRAs AND per-slot voice resolution. |
+
+**Dialogue voicing precedence (#582), one rule, both paths:**
+
+1. **Explicit `dialogue_lines` always win** over bundle-derived dialogue.
+2. A line's own **`voice_id` always wins** and is never overwritten.
+3. A line **without** a `voice_id` speaks with its shot's **cast voice** when the shot's speaking
+   slot (from the bundle storyboard's per-shot dialogue) resolves through `cast_loras` to a cast
+   member with a voice.
+4. Only when there is genuinely no mapping (no `cast_loras`, no slot dialogue for the shot, or a
+   cast member without a voice) does the line fall to the studio default voice.
+
+Bundle-derived lines (the no-`dialogue_lines` path, #313) already resolved cast voices the same way;
+before #582 the explicit path skipped steps 3-4 and every voiceless line defaulted.
 
 Identity: none. The studio is single-operator, so the core sends no identity to the `notify` hook; the
 notify-email module holds its recipient address in its own config (the identity strip).

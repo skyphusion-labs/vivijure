@@ -54,6 +54,30 @@ export function buildDialogueLines(
 }
 
 
+/** Cast voicing for EXPLICIT dialogue_lines (#582): a caller-supplied line without a voice_id used
+ *  to fall straight to DEFAULT_VOICE_ID -- even when the shot's speaking slot is bound to a cast
+ *  member with a voice (Wren, voice asteria, spoke as angus in film-08dd5777). Resolve each
+ *  voiceless line's shot to its speaking slot via the bundle storyboard's per-shot dialogue, then
+ *  the slot to its cast voice via `voices` (slot -> voice_id, from resolveCastLoras). The default
+ *  applies ONLY when there is genuinely no mapping (no scene dialogue for the shot, or a slot whose
+ *  cast has no voice). An explicit line voice_id always wins -- it is never overwritten. Pure. */
+export function resolveExplicitLineVoices(
+  lines: DialogueLine[],
+  scenes: ParsedBundleScene[],
+  voices: Record<string, string>,
+): DialogueLine[] {
+  const slotByShot = new Map<string, string>();
+  for (const s of scenes) {
+    if (s.dialogue && typeof s.dialogue.slot === "string") slotByShot.set(s.shot_id, s.dialogue.slot);
+  }
+  return lines.map((line) => {
+    if (typeof line.voice_id === "string" && line.voice_id.trim()) return line;
+    const slot = slotByShot.get(line.shot_id);
+    const voice = (slot !== undefined ? coerceVoiceId(voices[slot]) : undefined) ?? DEFAULT_VOICE_ID;
+    return { ...line, voice_id: voice };
+  });
+}
+
 /** Bundle-only voicing (#313): build the per-shot dialogue batch from the dialogue carried in a
  *  bundle's storyboard.yaml (parsed by parseStoryboardScenes), resolving each speaking slot's voice
  *  from `voices` (slot -> voice_id; empty on a bundle-only render with no cast) and defaulting
