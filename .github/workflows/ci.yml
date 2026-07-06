@@ -230,8 +230,10 @@ jobs:
           R2_S3_BUCKET="${R2_S3_BUCKET:-vivijure}"; export R2_S3_BUCKET
           VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN $R2_S3_ENDPOINT $R2_S3_BUCKET'
           envsubst "$VARS" < wrangler.toml.example > wrangler.toml
-          # fail-closed: no placeholder may survive (a missing secret would leave a literal ${...}).
-          if grep -q '${' wrangler.toml; then echo "::error::unsubstituted placeholder in wrangler.toml"; grep -n '${' wrangler.toml; exit 1; fi
+          # fail-closed: no placeholder may survive OUTSIDE comments (a missing secret would leave a
+          # literal ${...}); comment-prose mentioning ${...} is fine, and -F keeps the pattern
+          # literal on every grep (the v0.16.2 MCP-guard lesson: '${' as a regex is grep-dependent).
+          if grep -v '^[[:space:]]*#' wrangler.toml | grep -qF '${'; then echo "::error::unsubstituted placeholder in wrangler.toml"; grep -nF '${' wrangler.toml | grep -v ':[[:space:]]*#'; exit 1; fi
           # Auth guard (mode-aware since #423): AUTH_MODE must render non-empty, and access mode
           # additionally needs the armed Access vars NON-EMPTY (a blank would unarm -> DENY 503).
           grep -Eq 'AUTH_MODE = ".+"' wrangler.toml || { echo "::error::AUTH_MODE empty after render"; exit 1; }
@@ -380,7 +382,11 @@ jobs:
           apk add --no-cache gettext >/dev/null
           export MCP_HOST MCP_STUDIO_URL
           envsubst '$MCP_HOST $MCP_STUDIO_URL' < wrangler.mcp.toml.example > wrangler.mcp.toml
-          # fail-closed: no placeholder may survive (a missing var would leave a literal ${...}).
-          if grep -q '${' wrangler.mcp.toml; then echo "::error::unsubstituted placeholder in wrangler.mcp.toml"; grep -n '${' wrangler.mcp.toml; exit 1; fi
+          # fail-closed: no placeholder may survive OUTSIDE comments (a missing var would leave a
+          # literal ${...}). Comment lines are excluded: the template's own prose mentions ${...},
+          # which envsubst correctly leaves alone (this grep failed every tag deploy at v0.16.2).
+          # -F throughout: the pattern '${' is grep-dependent as a regex (busybox matches it
+          # literally, GNU treats $ as an anchor and matches NOTHING -> guard silently disarmed).
+          if grep -v '^[[:space:]]*#' wrangler.mcp.toml | grep -qF '${'; then echo "::error::unsubstituted placeholder in wrangler.mcp.toml"; grep -nF '${' wrangler.mcp.toml | grep -v ':[[:space:]]*#'; exit 1; fi
           echo "Deploying vivijure-studio-mcp to ${MCP_HOST} (studio ${MCP_STUDIO_URL})..."
           npx wrangler deploy -c wrangler.mcp.toml
