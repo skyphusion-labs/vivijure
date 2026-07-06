@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 import { filmJobToPollView } from "../src/film-render-bridge";
@@ -485,6 +485,43 @@ describe("coerceSceneIds (scene-id seam: caller ids -> bundle's canonical shot_N
   });
   it("handles empty input", () => {
     expect(coerceSceneIds([])).toEqual([]);
+  });
+});
+
+// Issue #563: dialogue_lines must ride the SAME id coercion as the scenes. startFilmJob coerced
+// scene ids (s1 -> shot_01) but stored dialogue_lines verbatim, so the TTS map was keyed s1 while
+// the lip-sync finish step and buildCaptionCues joined on shot_01: the film shipped silent and
+// uncaptioned (noop:no-dialogue on every shot) even though the dialogue stage ran and paid.
+describe("coerceDialogueLineIds (dialogue joins the coerced scene ids, issue #563)", () => {
+  const scenes = [
+    { shot_id: "s1", prompt: "a", seconds: 5 },
+    { shot_id: "s2", prompt: "b", seconds: 5 },
+  ];
+  it("remaps caller ids positionally, exactly like coerceSceneIds", () => {
+    const out = coerceDialogueLineIds(scenes, [
+      { shot_id: "s1", text: "They said no one would come." },
+      { shot_id: "s2", text: "But the light finds someone.", voice_id: "orion" },
+    ]);
+    expect(out).toEqual([
+      { shot_id: "shot_01", text: "They said no one would come." },
+      { shot_id: "shot_02", text: "But the light finds someone.", voice_id: "orion" },
+    ]);
+  });
+  it("no-ops on already-canonical ids (planner UI / scatter path unchanged)", () => {
+    const canonical = [
+      { shot_id: "shot_01", prompt: "a", seconds: 5 },
+      { shot_id: "shot_02", prompt: "b", seconds: 5 },
+    ];
+    const lines = [{ shot_id: "shot_02", text: "hi" }];
+    expect(coerceDialogueLineIds(canonical, lines)).toEqual(lines);
+  });
+  it("passes a line matching no scene through unchanged (fail-soft, like the dialogue stage)", () => {
+    const lines = [{ shot_id: "narrator", text: "meanwhile..." }];
+    expect(coerceDialogueLineIds(scenes, lines)).toEqual(lines);
+  });
+  it("preserves undefined / empty lines", () => {
+    expect(coerceDialogueLineIds(scenes, undefined)).toBeUndefined();
+    expect(coerceDialogueLineIds(scenes, [])).toEqual([]);
   });
 });
 
