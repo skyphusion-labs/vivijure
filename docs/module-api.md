@@ -164,6 +164,33 @@ Leave it out when the model is not a single fixed name (e.g. a user-selectable m
 undeclared label is honest, and the fallback covers the copy. `keyframe_label` is OPTIONAL and
 additive (no MODULE_API bump); present-but-empty-or-non-string REJECTS the manifest at registration.
 
+### Dialogue-aware finish order (`finish_consumes_audio`, optional + additive)
+
+A `finish` module MAY declare `finish_consumes_audio: true` to say it drives its output from the
+shot dialogue audio (`FinishInput.audio_key`) and is calibrated to the SOURCE frame rate, i.e. it
+lip-syncs. The core reads this (never a module name) to run such a module FIRST in the finish chain
+for a shot that HAS a dialogue line, so it lip-syncs the native-fps clip BEFORE any interpolation.
+Without it, a lip-sync run on already-interpolated footage smears the mouth shapes across the doubled
+frames (the breathy look, vivijure #584).
+
+The rule is a STABLE partition of the chain: audio-consuming modules move ahead of the rest, `ui.order`
+preserved within each group. With `finish-rife` (order 10), `finish-lipsync` (order 15,
+`finish_consumes_audio`), and `finish-upscale` (order 20):
+
+- a shot WITH a dialogue line runs `finish-lipsync` -> `finish-rife` -> `finish-upscale`;
+- a shot with NO line keeps the plain `ui.order` (`finish-rife` -> `finish-lipsync` -> `finish-upscale`),
+  where lip-sync no-ops because it has no `audio_key`.
+
+```jsonc
+{ "hooks": ["finish"], "ui": { "order": 15 }, "finish_consumes_audio": true }
+```
+
+The module declares only its OWN nature; the cross-module ordering policy lives in the core. Because
+the reorder changes each step INPUT clip, the `#583` step-input provenance hash
+(`finishStepInputHash`, CONTRACT.md 3.3.1) differs across the two orderings on its own, with no
+special-case. `finish_consumes_audio` is OPTIONAL and additive (no MODULE_API bump); absent/false =>
+the chain folds purely in `ui.order`.
+
 ## Worked example: the `finish` hook
 
 This is the whole contract for one hook, end to end. It is also the first real module.
@@ -237,7 +264,7 @@ trustworthy: implementing the interface is not enough, you have to pass the cont
 On boot, the core reads each bound module's `module.json` and indexes them by hook. Then:
 
 - **Pipeline:** at each hook, the core invokes the installed module(s). `pick one` hooks use the
-  user's choice; `chain` hooks fold every module in `ui.order`.
+  user's choice; `chain` hooks fold every module in `ui.order` (the `finish` chain applies one dialogue-aware exception -- see `finish_consumes_audio` above).
 - **Frontend:** the core serves `GET /api/modules` (the merged manifests). The studio UI renders
   ONLY the sections, controls, and providers that are actually installed. A bare deploy is a lean
   studio; installing `finish-rife` makes the "Smooth motion" control appear, nowhere hardcoded.

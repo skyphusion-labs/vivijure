@@ -34,6 +34,12 @@ export interface ModuleManifest {
   config_schema?: ConfigSchema;
   ui?: ModuleUi;
   finish_artifacts?: FinishArtifactsDecl;
+  /** OPTIONAL, additive: this finish module drives its output from the shot dialogue audio
+   *  (`FinishInput.audio_key`) and is calibrated to the source frame rate, so the core runs it on the
+   *  native-fps clip BEFORE any interpolation for a shot that has a dialogue line (vivijure #584). The
+   *  module declares only its own nature; the ordering policy lives in the core. See the core
+   *  src/modules/types.ts for the full contract text. */
+  finish_consumes_audio?: boolean;
 }
 
 export interface InvokeContext { project: string; job_id: string; }
