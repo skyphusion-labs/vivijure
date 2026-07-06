@@ -241,7 +241,12 @@ export const TOOLS: McpTool[] = [
     inputSchema: OBJ(
       {
         storyboard: { type: "object", description: "The storyboard to validate." },
-        castBindings: { type: "object", description: "{ [slot]: cast_id } bindings." },
+        castBindings: {
+          type: "object",
+          description:
+            "{ [slot]: cast_id } bindings. cast_id is the cast member's public id (the `id` " +
+            "returned by list_cast / get_cast); the internal numeric row id also works.",
+        },
         bundleKey: STR("An assembled bundle key, if validating one."),
         audioKey: STR("A staged audio bed key, if any."),
       },

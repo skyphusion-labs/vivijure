@@ -466,7 +466,11 @@ Pre-render validation. A storyboard with problems is **data**, not an HTTP error
 with `ok:false` + the issues so the panel renders the reasons.
 
 **Request body (envelope):** `{ storyboard (req), castBindings?, bundleKey?, audioKey? }`.
-`castBindings` is `{ [slot]: cast_id }`.
+`castBindings` is `{ [slot]: cast_id }`. A `cast_id` may be the cast member's **public id** (the
+`id` value `GET /api/cast` returns), the internal **numeric row id**, or a numeric string of one;
+the route resolves all three to the row id before the cast-readiness check (#576). A value that
+resolves to no cast member is a `level:"error"` issue whose message names whether the id was unknown
+(looked up, not found) or the wrong kind (not a usable id at all).
 
 **Response 200** (`PreflightResult`):
 
