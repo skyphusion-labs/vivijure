@@ -16,10 +16,10 @@ const SAMPLE_INPUT: FinishInput = {
 };
 
 describe("finish-upscale: coerceConfig", () => {
-  it("returns sane defaults for an empty config (photoreal model, #585)", () => {
+  it("returns sane defaults for an empty config (animevideov3: x4plus OOMs untiled, #585)", () => {
     const c = coerceConfig({});
     expect(c.scale).toBe(2);
-    expect(c.model).toBe("RealESRGAN_x4plus");
+    expect(c.model).toBe("realesr-animevideov3");
   });
 
   it("clamps scale to the integer factors 2 or 4 (>=4 -> 4, else 2)", () => {
@@ -31,7 +31,7 @@ describe("finish-upscale: coerceConfig", () => {
   });
 
   it("rejects unknown models and falls back to the default", () => {
-    expect(coerceConfig({ model: "nope" }).model).toBe("RealESRGAN_x4plus");
+    expect(coerceConfig({ model: "nope" }).model).toBe("realesr-animevideov3");
     expect(coerceConfig({ model: "RealESRGAN_x4plus" }).model).toBe("RealESRGAN_x4plus");
     expect(coerceConfig({ model: "realesr-animevideov3" }).model).toBe("realesr-animevideov3");
   });
@@ -106,7 +106,7 @@ describe("finish-upscale: manifest conformance", () => {
     provides: [{ id: "upscale", label: "Upscale resolution (Real-ESRGAN)" }],
     config_schema: {
       scale: { type: "int",  default: 2, min: 2, max: 4 },
-      model: { type: "enum", values: ["realesr-animevideov3", "RealESRGAN_x4plus"], default: "RealESRGAN_x4plus" },
+      model: { type: "enum", values: ["realesr-animevideov3", "RealESRGAN_x4plus"], default: "realesr-animevideov3" },
     },
   };
   it("passes the conformance manifest checker", () => {
