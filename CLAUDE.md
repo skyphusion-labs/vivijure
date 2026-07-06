@@ -40,6 +40,7 @@ of these areas, update the matching doc.
 - `docs/module-api.md` -- the typed hook contract (`vivijure-module/1`); read FIRST. A module builds to this.
 - `docs/module-authoring.md` -- how to author a new module worker against the contract.
 - `docs/CONTRACT.md` -- the core <-> backend render contract (bundle in, artifacts out).
+- `docs/mcp.md` -- the Studio MCP Worker (`src/mcp.ts`): drive the studio API from an agent; opt-in, deploys separately.
 - `docs/observability.md` -- the structured event/tail channel for tracing a render.
 - `docs/DEPLOYMENT.md` + `docs/deploy-runbook.md` + `docs/deploy-config-injection.md` -- deploy, env, `account_id` injection.
 - `docs/dev-modbound.md` -- run the core + every module worker as one local dev so `/api/modules` returns the REAL catalog (no GPU, no prod data). The dev-parity env for driving planner/module flows locally.
