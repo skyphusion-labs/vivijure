@@ -31,10 +31,14 @@ export interface UpscaleConfig {
 
 const MODELS = ["realesr-animevideov3", "RealESRGAN_x4plus"] as const;
 
-// Default is the photoreal model: the anime-tuned realesr-animevideov3 imposes an illustration-ish
-// texture that reads as cross-shot style divergence on photoreal films (#585). Anime content opts in.
+// Default REVERTED to animevideov3: the #585 flip to RealESRGAN_x4plus CUDA-OOM'd every real
+// finish job ("tried to allocate 45.7 GiB" -- the natively-4x RRDB model on a 48fps rife'd 720p
+// clip; film-01bfda9c, all 5 shots). x4plus stays an explicit opt-in until the vivijure-upscale
+// handler gains tiled inference for it (upscale v0.2.9 work); re-flip only after that proves out
+// on a real render. The photoreal-texture rationale of #585 still stands -- the default follows
+// the handler's proven memory envelope, not the wish.
 export function defaultConfig(): UpscaleConfig {
-  return { scale: 2, model: "RealESRGAN_x4plus" };
+  return { scale: 2, model: "realesr-animevideov3" };
 }
 
 export function coerceConfig(cfg: Record<string, unknown>): UpscaleConfig {

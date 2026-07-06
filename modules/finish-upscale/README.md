@@ -41,7 +41,7 @@ Config options (the planner-projected `config_schema`; the core clamps each agai
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `scale` | int (2..4) | `2` | upscale factor (`2` = 2x, `4` = 4x) |
-| `model` | enum `realesr-animevideov3` / `RealESRGAN_x4plus` | `RealESRGAN_x4plus` | Real-ESRGAN model; the default is the photoreal/general model, pick `realesr-animevideov3` for anime content (#585) |
+| `model` | enum `realesr-animevideov3` / `RealESRGAN_x4plus` | `realesr-animevideov3` | Real-ESRGAN model. `RealESRGAN_x4plus` (photoreal texture, #585) is an explicit opt-in and currently CUDA-OOMs on long/high-fps clips until the handler gains tiled inference (upscale v0.2.9) |
 
 To self-host (service `vivijure-module-finish-upscale`, bound into the core as `MODULE_UPSCALE`):
 
