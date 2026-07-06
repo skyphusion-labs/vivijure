@@ -738,6 +738,42 @@ describe("listProjectKeyframes (#129 R2 adoption)", () => {
   it("returns empty when no keyframes are in R2 yet", async () => {
     expect(await listProjectKeyframes(r2ListEnv([]), "neon", sc)).toEqual([]);
   });
+  it("ignores .hash param-hash sidecars (backend #112): the PNG wins, never the sidecar (#578)", async () => {
+    // .hash sorts BEFORE .png lexicographically; pre-#578 the first-seen dedupe adopted the sidecar
+    // and the motion backend was handed a 16-byte hash file as its start image.
+    const env = r2ListEnv([
+      "renders/neon/keyframes/shot_01.hash",
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.hash",
+      "renders/neon/keyframes/shot_02.png",
+    ]);
+    const out = await listProjectKeyframes(env, "neon", sc);
+    expect(out).toEqual([
+      { shot_id: "shot_01", keyframe_key: "renders/neon/keyframes/shot_01.png" },
+      { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.png" },
+    ]);
+  });
+  it("a shot with ONLY a sidecar (no image) is not adopted -- absent, not poisoned (#578)", async () => {
+    const env = r2ListEnv([
+      "renders/neon/keyframes/shot_01.hash",
+      "renders/neon/keyframes/shot_02.png",
+    ]);
+    const out = await listProjectKeyframes(env, "neon", sc);
+    expect(out).toEqual([
+      { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.png" },
+    ]);
+  });
+  it("accepts jpg/jpeg/webp keyframes, case-insensitive", async () => {
+    const env = r2ListEnv([
+      "renders/neon/keyframes/shot_01.JPG",
+      "renders/neon/keyframes/shot_02.webp",
+    ]);
+    const out = await listProjectKeyframes(env, "neon", sc);
+    expect(out).toEqual([
+      { shot_id: "shot_01", keyframe_key: "renders/neon/keyframes/shot_01.JPG" },
+      { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.webp" },
+    ]);
+  });
 });
 
 // keyframe phase: adopt on a *pending* poll only when the FULL set is in R2 (envelope-freeze, mirrors

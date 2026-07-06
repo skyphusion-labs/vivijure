@@ -1305,6 +1305,10 @@ export async function listProjectKeyframes(env: Env, project: string, scenes: Fi
     const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
     for (const o of listed.objects) {
       const file = o.key.slice(prefix.length);
+      // Images only: the backend also writes a `<shot_id>.hash` param-hash sidecar per keyframe
+      // (backend #112, reuse-vs-regen). Without this filter the sidecar shares the shot_id, sorts
+      // before .png, and the first-seen dedupe below adopts the 16-byte hash as the keyframe (#578).
+      if (!/\.(png|jpe?g|webp)$/i.test(file)) continue;
       const shot_id = file.replace(/\.[^.]+$/, ""); // drop the extension (.png)
       if (shot_id && wanted.has(shot_id)) out.push({ shot_id, keyframe_key: o.key });
     }
