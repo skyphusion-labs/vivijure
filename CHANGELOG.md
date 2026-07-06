@@ -3,6 +3,26 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.16.2
+
+**Voiced films on faceless shots stop hard-failing at lip-sync (#565).** PATCH. RunPod lifts the
+musetalk handler's soft-degrade return ({ok:false, error}) into a job-level FAILED envelope, so the
+finish-lipsync passthrough branch was unreachable: a legitimate no-face shot failed the whole film
+after full keyframe + i2v spend. The module now recognizes the handler's structured ok:false inside
+a FAILED envelope (a genuine crash leaves none) and passes the original clip through, recorded as
+passthrough:backend-soft-degrade per #77; a real crash still fails loud. Module 0.1.2; first
+dedicated finish-lipsync test file. Satellite envelope + early no-face exit tracked in
+vivijure-musetalk#24.
+
+## v0.16.1
+
+**The Studio MCP driver ships, and API dialogue actually reaches the film (#563).** PATCH
+(retro-added entry; tagged 2026-07-06). `src/mcp.ts` exposes the studio as MCP tools
+(projects / cast / storyboard / bundle / preflight / submit + poll film). startFilmJob now remaps
+`dialogue_lines` shot ids through the same positional coercion as the scenes (#564), so an API
+caller with its own id scheme (s1/s2: Slate, the Studio MCP) no longer ships a silent, uncaptioned
+film after paying for TTS.
+
 ## v0.16.0
 
 **The studio stops trusting its clips: output validation lands at both layers (#523).** MINOR.
