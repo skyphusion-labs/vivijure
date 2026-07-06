@@ -717,7 +717,7 @@ Advances the job one tick and returns its summary; keeps the history row in sync
 | `phase` | FilmPhase | One of `keyframe, clips, dialogue, speech, finish, assemble, master, mux, done, failed` (section 6). |
 | `error` | string \| undefined | Set when `phase === "failed"`. |
 | `clips` | `JobSummary` \| undefined | `{ total, done, failed, pending, complete }`, when a clips job exists. |
-| `finish` | `{ total, done, failed, pending }` \| undefined | Finish-chain progress, when finish shots exist. |
+| `finish` | `{ total, done, failed, pending, adopted }` \| undefined | Finish-chain progress, when finish shots exist. `adopted` = count of shots with >=1 finish step REUSED from a prior same-project render's R2 artifact rather than run this pass (#583). |
 | `film_key` | string \| undefined | R2 key of the assembled film, present once `phase === "done"`. |
 | `download_url` | string \| undefined | Presigned GET of the finished film (24h TTL), added only when `phase === "done"` and `film_key` is set. |
 
@@ -994,6 +994,59 @@ Post-process a clip (interpolation / upscale / face restore). Honest soft-degrad
 | `frames` | number | yes | Output frame count (duration is invariant). |
 | `applied` | string[] | yes | e.g. `["interpolate:2x","face_restore:gfpgan"]`; or `["passthrough:<reason>"]` / `["noop:nothing-enabled"]`. |
 | `degraded?` | string | no | Set ONLY when the clip was passed through because the finish could not run; carries the reason. A real degrade is never silent (#77). |
+
+#### 3.3.1 Finish-artifact keys, param-hash sidecars, and same-project reuse (#583)
+
+Finish modules write their output to **fixed, project-scoped R2 keys** derived from the shot id and the
+step convention (declared per module in `finish_artifacts`, section 5; the shipped conventions are RIFE
+`renders/<project>/clips/<shot>_finished.mp4`, lip-sync append `_ls`, upscale append `_up`). These keys
+are **shared by every film rendered in the same project** -- they do NOT carry a film id. That sharing is
+deliberate: an identical resubmit reuses the finished artifacts instead of re-paying GPU. But because the
+key is presence-addressable, a resubmit with **changed finish-relevant inputs** (a new dialogue voice, a
+changed interpolation factor, ...) must NOT ship the prior take's artifact.
+
+**Provenance sidecar (producer-written, atomic with the artifact).** Every finish producer writes a
+param-hash sidecar next to each artifact it produces, at key **`<outputKey>.hash`** (e.g.
+`renders/<project>/clips/shot_02_finished_ls.mp4.hash`), **in the same write as the artifact**. This
+mirrors the keyframe backend's param-hash sidecar (backend #112). The sidecar body is a hash of the
+step's identity-determining inputs:
+
+- the **input clip** identity (its R2 object etag),
+- the **audio_key** identity (its R2 object etag) for a step that consumes audio (lip-sync); absent
+  otherwise,
+- the **resolved step config** (the validated `config_schema` object the module received).
+
+Presence is not provenance: only the producer can stamp the sidecar atomically with the artifact, so the
+sidecar is authored **by the producer, never by the core** (a core-written sidecar would race the shared
+key and could not cover a GC'd/frozen-poll recovery). The `.hash` sidecar is an internal provenance
+record; it is **never** an artifact the core lists or adopts as a clip -- the clip listers require a video
+extension (`.mp4/.mov/.webm/.mkv`), so a `.hash` object can never be matched (mirror of the #578 keyframe
+filter).
+
+**Adoption gate (core).** When the core would reuse a finish artifact already present at its fixed key
+(the R2-presence recovery / reclaim paths), it requires the sidecar to be **present AND its hash to match**
+the current step's recomputed input hash. A **missing sidecar (legacy artifact) or a mismatch = re-run the
+step, never adopt blind.** This makes a changed-input resubmit re-render the affected steps while an
+identical resubmit still reuses.
+
+> Rollout note: the gate ships only once the producers emit sidecars in prod; until then the core does not
+> require a sidecar to adopt, to avoid false-failing legacy same-job recovery (#141 / #166). Correctness
+> order: producers first, then the gate.
+
+**Honest record (`applied` vs `adopted`).** A finish shot's record splits its two channels so it never
+claims work it did not do this pass:
+
+- `applied` = step markers for steps **actually RUN this pass** (e.g. `lipsync:v15`, `upscale:2x`).
+- `adopted` = step markers **REUSED from R2 this pass** (not run). An adopted step is recorded ONLY here
+  and never fabricates an `applied`-run tag.
+- The **union** (`applied` + `adopted`) is the set of transforms present in the output clip; a verifier
+  that wants "what transforms are in this clip" reads the union.
+
+**Operator workaround (until the sidecar rollout lands).** To force a from-scratch re-finish in an
+existing project after changing a finish-relevant input (dialogue voice, interpolation, ...), delete the
+stale finish artifacts before resubmitting: remove `renders/<project>/clips/*_finished*` (both the
+`_finished.mp4` and the `_ls`/`_up` suffixed outputs). Alternatively resubmit under a fresh project (which
+re-pays keyframes + motion).
 
 ### 3.4 score (chain)
 

@@ -24,6 +24,10 @@ export interface FinishShot {
   status: "pending" | "done" | "failed";
   poll?: string;
   applied: string[];
+  // #583 honesty: the step markers this shot REUSED from R2 this pass (adopted, NOT run this pass).
+  // Parallel to `applied` (steps actually RUN this pass); the union is the transforms present in the
+  // output clip. An adopted step never fabricates an `applied`-run tag -- the reuse is disclosed here.
+  adopted?: string[];
   error?: string;
   // Transient-retry counter for the CURRENT chain step (reset when the step advances). A transient
   // invocation blip (the module worker momentarily unreachable / 5xx -- the musetalk cold-start race
@@ -206,7 +210,7 @@ export function joinKeyframesToScenes(
   return { matched, missing };
 }
 
-export interface FinishSummary { total: number; done: number; failed: number; pending: number; }
+export interface FinishSummary { total: number; done: number; failed: number; pending: number; adopted: number; }
 export interface FilmSummary {
   film_id: string;
   phase: FilmJob["phase"];
@@ -229,6 +233,7 @@ export function summarizeFinish(shots: FinishShot[]): FinishSummary {
     done: shots.filter((s) => s.status === "done").length,
     failed: shots.filter((s) => s.status === "failed").length,
     pending: shots.filter((s) => s.status === "pending").length,
+    adopted: shots.filter((s) => (s.adopted?.length ?? 0) > 0).length, // #583: shots with >=1 finish step reused from R2
   };
 }
 export function summarizeFilm(job: FilmJob, clipJob: ClipJob | null): FilmSummary {
@@ -267,6 +272,19 @@ export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
   fs.poll = undefined;
   fs.attempts = 0; // a step succeeded -> the next step gets a fresh transient-retry budget
   if (fs.idx >= fs.chain.length) fs.status = "done"; // else stays pending; next advance submits chain[idx]
+}
+
+/** Pure: fold an ADOPTED (reused-from-R2, NOT run this pass) finish-step artifact into the shot. Same
+ *  chain advance as applyFinishOutput, but the step marker lands in `adopted` (the honest reuse channel)
+ *  and is NEVER pushed into `applied` -- the record must not claim a run that did not happen (#583).
+ *  `clip_key` is the adopted artifact key; `tag` is the reconstructed step marker (finishStepAppliedTag). */
+export function adoptFinishStepOutput(fs: FinishShot, clip_key: string, tag: string): void {
+  fs.clip_key = clip_key;
+  (fs.adopted ??= []).push(tag);
+  fs.idx += 1;
+  fs.poll = undefined;
+  fs.attempts = 0; // a step advanced -> the next step gets a fresh transient-retry budget
+  if (fs.idx >= fs.chain.length) fs.status = "done";
 }
 
 /** Pure: fold one speech module's output into the shot. On a REAL enhancement (no `degraded`), thread the
@@ -357,7 +375,7 @@ export function finishShotAdoptableFromR2(fs: FinishShot): boolean {
 /** Pure: adopt every adoptable finish shot whose finished clip is present in R2 (the artifact overrides
  *  the module's verdict / a stuck envelope). Mutates `finishShots`, returns the number adopted. Mirrors
  *  reclaimClipsFromR2 on the clips leg so the two phases recover symmetrically. */
-export function reclaimFinishShotsFromR2(finishShots: FinishShot[], present: Map<string, string>): number {
+export function reclaimFinishShotsFromR2(finishShots: FinishShot[], present: Map<string, string>, modules?: RegisteredModule[]): number {
   let adopted = 0;
   for (const fs of finishShots) {
     if (finishShotAdoptableFromR2(fs) && present.has(fs.shot_id)) {
@@ -365,6 +383,10 @@ export function reclaimFinishShotsFromR2(finishShots: FinishShot[], present: Map
       fs.status = "done";
       fs.poll = undefined;
       fs.error = undefined; // the finished artifact in R2 is the source of truth
+      // #583 honesty: this shot's FINAL step was REUSED from R2, not run this pass -- disclose it in
+      // `adopted` (never a fake `applied`-run tag). finishShotAdoptableFromR2 guarantees idx === last,
+      // so the reused marker is the last chain step's tag.
+      (fs.adopted ??= []).push(finishStepAppliedTag(fs, modules));
       adopted += 1;
     }
   }
