@@ -165,6 +165,76 @@ describe("vivijure MCP tool dispatch", () => {
     expect(calls[0].init.method).toBe("GET");
   });
 
+  it("studio_request unwraps a JSON-encoded string body so the studio receives the object (#575)", async () => {
+    // Schema-validating MCP clients serialize a loosely-typed arg as a JSON string; pre-#575 the
+    // studio received a JSON-quoted string and every body-carrying escape-hatch call 400'd.
+    stubFetch({ ok: true }, 200);
+    await worker.fetch(
+      mcpRequest(
+        {
+          jsonrpc: "2.0",
+          id: 14,
+          method: "tools/call",
+          params: {
+            name: "studio_request",
+            arguments: {
+              method: "POST",
+              path: "/api/storyboard/score-bed",
+              body: '{"kind":"music","prompt":"warm piano","seconds":36}',
+            },
+          },
+        },
+        AUTH,
+      ),
+      ENV,
+    );
+    const sent = JSON.parse(calls[0].init.body as string);
+    expect(sent).toEqual({ kind: "music", prompt: "warm piano", seconds: 36 });
+  });
+
+  it("studio_request still forwards an object body verbatim", async () => {
+    stubFetch({ ok: true }, 200);
+    await worker.fetch(
+      mcpRequest(
+        {
+          jsonrpc: "2.0",
+          id: 15,
+          method: "tools/call",
+          params: {
+            name: "studio_request",
+            arguments: { method: "POST", path: "/api/x", body: { a: 1, nested: { b: "c" } } },
+          },
+        },
+        AUTH,
+      ),
+      ENV,
+    );
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({ a: 1, nested: { b: "c" } });
+  });
+
+  it("studio_request rejects a non-JSON string body as a bad argument, studio never called (#575)", async () => {
+    stubFetch({}, 200);
+    const res = await worker.fetch(
+      mcpRequest(
+        {
+          jsonrpc: "2.0",
+          id: 16,
+          method: "tools/call",
+          params: {
+            name: "studio_request",
+            arguments: { method: "POST", path: "/api/x", body: "not json at all" },
+          },
+        },
+        AUTH,
+      ),
+      ENV,
+    );
+    const body = (await res.json()) as { result: { isError: boolean; content: { text: string }[] } };
+    expect(body.result.isError).toBe(true);
+    expect(body.result.content[0].text).toContain("JSON");
+    expect(calls).toHaveLength(0);
+  });
+
   it("studio_request rejects a path without a leading slash", async () => {
     stubFetch({}, 200);
     const res = await worker.fetch(
