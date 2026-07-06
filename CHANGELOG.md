@@ -3,6 +3,19 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.16.4
+
+**Keyframe adoption stops feeding the motion backend a hash file (#578), and the MCP escape hatch
+works from real clients (#575).** PATCH. Both found live in the S23 showcase component sweep.
+The backend's `.hash` param-hash sidecars (backend #112) sort before `.png` in R2, so every ADOPTED
+keyframe set (recovery / same-project reuse) handed the motion backend the 16-byte sidecar as its
+start image and the whole film failed with a provider image-parse error; `listProjectKeyframes` now
+filters to image extensions before shot-id extraction. `studio_request`'s untyped `body` param made
+schema-validating MCP clients send a JSON-quoted string (every body-carrying escape-hatch call
+400'd); the param is now typed `[object, string]` and a string body is unwrapped before forwarding.
+Also this sweep, docs/mcp.md was rewritten to the house docs standard (#570) and the seedance
+schema-vs-provider 1080p mismatch was filed (#577, open).
+
 ## v0.16.3
 
 **The lipsync degrade reason survives the new backend envelope (#569), and tag deploys stop
