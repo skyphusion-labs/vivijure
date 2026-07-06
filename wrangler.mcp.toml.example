@@ -3,7 +3,8 @@
 # This ships a bearer-gated MCP server (src/mcp.ts) that lets AI agents drive the Studio API through
 # structured tools. It is OPT-IN and OPERATOR-SPECIFIC: it is NOT deployed by a default self-host.
 # The real wrangler.mcp.toml is gitignored and rendered from this example (like the core), or copy it
-# by hand and fill the two ${...} placeholders for a local `wrangler deploy -c wrangler.mcp.toml`.
+# by hand and fill the two placeholder values (MCP_STUDIO_URL, MCP_HOST) for a local
+# `wrangler deploy -c wrangler.mcp.toml`.
 #
 # account_id is NOT hardcoded; it is read from CLOUDFLARE_ACCOUNT_ID (env / CI secret).
 #
