@@ -3,6 +3,15 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.16.3
+
+**The lipsync degrade reason survives the new backend envelope (#569), and tag deploys stop
+tripping on their own guard (#568).** PATCH. musetalk v0.1.2/v0.1.3 (satellite #24: the full
+faceless taxonomy -- import-path regression, false-positive bboxes, zero-detection crashes) returns
+soft-degrades as `{ok:false, detail}`; finish-lipsync (0.1.3) now records that detail, with `error`
+kept as the legacy fallback. CI placeholder guards are comment-aware and use fixed-string grep (the
+regex form silently matched nothing on GNU grep).
+
 ## v0.16.2
 
 **Voiced films on faceless shots stop hard-failing at lip-sync (#565).** PATCH. RunPod lifts the
