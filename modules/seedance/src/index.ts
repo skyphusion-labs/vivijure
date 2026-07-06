@@ -18,7 +18,7 @@ import {
   type MotionBackendInput,
   type MotionBackendOutput,
 } from "./contract";
-import { buildSeedanceBody, extractVideoUrl, clipKey, clampDuration, MIN_DURATION, MAX_DURATION, encodePoll, decodePoll, runpodJobGone, classifyGoneState, workersStillCold, terminalErrorInOutput, RUNPOD_COLD_GRACE_MS } from "./seedance";
+import { buildSeedanceBody, extractVideoUrl, clipKey, clampDuration, MIN_DURATION, MAX_DURATION, RESOLUTIONS, DEFAULT_RESOLUTION, encodePoll, decodePoll, runpodJobGone, classifyGoneState, workersStillCold, terminalErrorInOutput, RUNPOD_COLD_GRACE_MS } from "./seedance";
 
 interface Env {
   RUNPOD_API_KEY: SecretsStoreSecret;
@@ -30,12 +30,15 @@ const OUT_FPS = 24;
 
 const MANIFEST: ModuleManifest = {
   name: "seedance",
-  version: "0.2.1",
+  version: "0.2.2",
   api: MODULE_API,
   hooks: ["motion.backend"],
   provides: [{ id: "i2v-cloud", label: "Seedance V1.5 Pro (cloud i2v)" }],
   config_schema: {
-    resolution: { type: "enum", values: ["480p", "720p", "1080p"], default: "720p", label: "resolution" },
+    // values MUST stay = what the provider accepts (RESOLUTIONS, single source of truth): an
+    // over-promising enum passes the core clamp and fails every shot at the provider after the
+    // keyframe spend (#577).
+    resolution: { type: "enum", values: RESOLUTIONS, default: DEFAULT_RESOLUTION, label: "resolution" },
     aspect_ratio: { type: "enum", values: ["16:9", "9:16", "1:1"], default: "16:9", label: "aspect ratio" },
     camera_fixed: { type: "bool", default: false, label: "lock camera" },
     generate_audio: { type: "bool", default: false, label: "generate audio" },
