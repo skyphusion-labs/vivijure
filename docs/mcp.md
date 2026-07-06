@@ -295,6 +295,9 @@ There is no undo; treat every call like clicking a "charge my account" button.
   `studio_modules`).
 - `motion_config`: motion module config (knobs per that module's `config_schema`).
 - `finish_config`: `{ [moduleName]: config }` for finish modules (upscale, lipsync, audio).
+  Upscale model guidance (#585): the default `RealESRGAN_x4plus` is the photoreal/general model;
+  set `{ "finish-upscale": { "model": "realesr-animevideov3" } }` only for anime-styled films
+  (the anime model imposes an illustration-ish texture on photoreal shots, visible at cuts).
 - `audio_key`: a staged audio bed to mux in after assemble.
 - `film_titles`: `{ title?: { text, subtitle? }, credits?: { lines } }` title cards.
 - `dialogue_lines`: `[{ shot_id, text, voice_id? }]` spoken lines for TTS + captions. A line's

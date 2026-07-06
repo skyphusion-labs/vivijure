@@ -35,7 +35,7 @@ interface Env {
 
 const MANIFEST: ModuleManifest = {
   name: "finish-upscale",
-  version: "0.1.1",
+  version: "0.1.2",
   api: MODULE_API,
   hooks: ["finish"],
   provides: [
@@ -43,7 +43,7 @@ const MANIFEST: ModuleManifest = {
   ],
   config_schema: {
     scale: { type: "int",  default: 2, min: 2, max: 4, label: "upscale factor", enum_labels: { "2": "2x", "4": "4x" } },
-    model: { type: "enum", values: ["realesr-animevideov3", "RealESRGAN_x4plus"], default: "realesr-animevideov3", label: "model" },
+    model: { type: "enum", values: ["realesr-animevideov3", "RealESRGAN_x4plus"], default: "RealESRGAN_x4plus", label: "model" },
   },
   ui: { section: "finish", icon: "expand", order: 20 },
   // Declared artifact conventions (S6): the Real-ESRGAN container appends _up to the input clip key.
