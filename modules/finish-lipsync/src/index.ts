@@ -37,7 +37,7 @@ interface Env {
 
 export const MANIFEST: ModuleManifest = {
   name: "finish-lipsync",
-  version: "0.1.3",
+  version: "0.1.4",
   api: MODULE_API,
   hooks: ["finish"],
   provides: [
@@ -54,6 +54,10 @@ export const MANIFEST: ModuleManifest = {
     output_key: { kind: "append_suffix", suffix: "_ls" },
     applied: [{ tag: "lipsync:{version|v15}" }],
   },
+  // #584: lip-sync drives the mouth from the shot dialogue audio (audio_key) and is calibrated to the
+  // SOURCE frame rate, so the core must run it on the native-fps clip before any interpolation. This
+  // flag (not the module name) is how the core hoists it ahead of RIFE for a shot that has a line.
+  finish_consumes_audio: true,
 };
 
 function json(body: unknown, status = 200): Response {

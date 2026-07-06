@@ -175,6 +175,18 @@ export interface ModuleManifest {
    *  projects inline instead of hardcoding a model name. Distinct from provides[].label, which is
    *  the section-title-length label ("GPU Keyframe (SDXL on RunPod)"); this is the short inline noun. */
   keyframe_label?: string;
+  /** OPTIONAL, additive (no MODULE_API bump, same pattern as `cancelable`). A finish module sets this
+   *  true when it drives its output from the shot dialogue audio (`FinishInput.audio_key`), i.e. it
+   *  lip-syncs. It carries TWO facts the core needs: (a) this finish step CONSUMES the shot dialogue
+   *  audio, and (b) it MUST therefore run on the NATIVE-fps clip, before any finish step that resamples
+   *  time (interpolation). A lip-sync model maps audio to mouth shapes calibrated to the source frame
+   *  rate, so lip-syncing already-interpolated footage smears the mouth shapes across the doubled
+   *  frames (vivijure #584). The core uses this to run audio-consuming finish modules FIRST in the
+   *  chain for a shot that HAS a dialogue line, preserving `ui.order` among the rest; a shot with no
+   *  line keeps the plain `ui.order` (such a module no-ops there, having no `audio_key`). Absent/false
+   *  means ordered purely by `ui.order` (the legacy behavior). The module declares only its OWN nature;
+   *  the cross-module ordering policy stays in the core. */
+  finish_consumes_audio?: boolean;
 }
 
 // --------------------------------------------------------------------------- invocation

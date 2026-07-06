@@ -169,6 +169,20 @@ async function advanceToClips(env: Env, job: FilmJob, kfOut: KeyframeOutput, pre
 const putFilm = (env: Env, job: FilmJob) =>
   env.R2_RENDERS.put(filmKey(job.film_id), JSON.stringify(job), { httpMetadata: { contentType: "application/json" } });
 
+/** #584 dialogue-aware finish order. A finish module that CONSUMES the shot dialogue audio
+ *  (`finish_consumes_audio`, i.e. lip-sync) is calibrated to the SOURCE frame rate, so it must run on
+ *  the native-fps clip BEFORE any finish step that resamples time (interpolation); otherwise its
+ *  audio->mouth mapping smears across the interpolated frames (the breathy look). For a shot that HAS a
+ *  dialogue line, stable-partition `serving` so audio-consuming modules run first, preserving ui.order
+ *  within each group (`serving` is already ui.order-sorted and Array.filter keeps order): rife 10 ->
+ *  lipsync 15 -> upscale 20 becomes lipsync -> rife -> upscale. A shot with NO line keeps the plain
+ *  ui.order unchanged, where such a module no-ops (no audio_key). The reorder changes each step INPUT
+ *  clip, so the #583 finishStepInputHash differs on its own -- no special-case. */
+export function finishChainForShot(serving: RegisteredModule[], isDialogueShot: boolean): RegisteredModule[] {
+  if (!isDialogueShot) return serving;
+  return [...serving.filter((m) => m.finish_consumes_audio), ...serving.filter((m) => !m.finish_consumes_audio)];
+}
+
 /** Internal: clips done -> set up the finish chain (one FinishShot per done clip). No finish modules
  *  installed -> skip straight to assemble (the raw clips). No clips rendered at all -> fail (nothing
  *  to assemble). */
@@ -188,17 +202,30 @@ async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob, preMod
   }
   const modules = preModules ?? await discoverModules(env as unknown as Record<string, unknown>);
   const serving = servingForHook(modules, "finish"); // ui.order; the full finish chain
-  const chain = serving.map((m) => m.binding);
-  const configs = resolveFinishConfigs(serving, job.finish_config);
   const doneClips = clipJob.shots.filter((s) => s.status === "done" && s.clip_key);
   if (!doneClips.length) { job.phase = "failed"; job.error = "no clips rendered to assemble"; return; }
-  if (!chain.length) {
+  if (!serving.length) {
     job.phase = job.clips_only ? "done" : "assemble";
     return;
   }
-  job.finish_shots = doneClips.map((s) => ({
-    shot_id: s.shot_id, clip_key: s.clip_key as string, chain, configs, idx: 0, status: "pending" as const, applied: [],
-  }));
+  // #584 dialogue-aware finish order: an audio-consuming finish module (lip-sync) runs FIRST on the
+  // native-fps clip for a shot that HAS a dialogue line; a shot with no line keeps the plain ui.order.
+  // See finishChainForShot. Known here because job.dialogue_lines is set before this phase.
+  const dialogueShotIds = new Set(
+    (job.dialogue_lines ?? []).filter((l) => l.shot_id && (l.text ?? "").trim().length > 0).map((l) => l.shot_id),
+  );
+  job.finish_shots = doneClips.map((s) => {
+    const ordered = finishChainForShot(serving, dialogueShotIds.has(s.shot_id));
+    return {
+      shot_id: s.shot_id,
+      clip_key: s.clip_key as string,
+      chain: ordered.map((m) => m.binding),
+      configs: resolveFinishConfigs(ordered, job.finish_config),
+      idx: 0,
+      status: "pending" as const,
+      applied: [],
+    };
+  });
   // finish_shots are built; interpose the dialogue phase (synthesize per-shot speech) before finish so
   // a lip-sync finish module has the audio to drive the mouth. No dialogue -> straight to finish.
   await enterDialogueOrFinish(env, job, preModules);
