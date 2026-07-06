@@ -72,7 +72,14 @@ To self-host (service `vivijure-module-finish-lipsync`, bound into the core as `
 No `audio_key` is a legitimate NO-OP (`noop:no-dialogue`, not a degrade). A missing endpoint, a submit
 failure, or a backend soft-degrade (e.g. no detectable face) passes the **input** `clip_key` through
 unchanged with `degraded` set to the honest reason, so the chain always has a clip. The two cases are
-never indistinguishable. The only hard `ok:false` is malformed input or a bad poll token.
+never indistinguishable. The only hard `ok:false` is malformed input, a bad poll token, or a genuine
+backend crash.
+
+A backend soft-degrade can arrive in TWO envelope shapes (#565): the handler's return
+(`COMPLETED` with `output.ok === false`), or, because RunPod lifts a top-level `error` key out of a
+handler return into a job-level failure, `FAILED` with the handler's `ok: false` still inside
+`output`. Both pass through. A `FAILED` envelope **without** that structured `ok: false` (a raise in
+the handler) is a real crash and fails the shot loud.
 
 ## License
 

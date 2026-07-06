@@ -26,7 +26,8 @@ import {
 } from "./contract";
 import {
   coerceConfig, buildRunPodBody, encodePoll, decodePoll, parseBackendOutput, passthroughOutput,
-  runpodJobGone, classifyGoneState, workersStillCold, terminalErrorInOutput, RUNPOD_COLD_GRACE_MS,
+  runpodJobGone, classifyGoneState, workersStillCold, terminalErrorInOutput,
+  softDegradeInFailedEnvelope, RUNPOD_COLD_GRACE_MS,
 } from "./lipsync";
 
 interface Env {
@@ -34,9 +35,9 @@ interface Env {
   RUNPOD_ENDPOINT_ID: SecretsStoreSecret;
 }
 
-const MANIFEST: ModuleManifest = {
+export const MANIFEST: ModuleManifest = {
   name: "finish-lipsync",
-  version: "0.1.1",
+  version: "0.1.2",
   api: MODULE_API,
   hooks: ["finish"],
   provides: [
@@ -194,7 +195,25 @@ async function poll(env: Env, body: PollRequest): Promise<PollResponse<FinishOut
     }
     return { ok: true, pending: true };
   }
-  if (s.status === "FAILED") return { ok: false, error: "finish-lipsync job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
+  if (s.status === "FAILED") {
+    // #565: RunPod lifts the handler's top-level `error` into a job-level FAILED, so the backend's
+    // structured soft-degrade ({ok:false} kept in output) arrives here, never at the COMPLETED
+    // branch below. Pass the original clip through (recorded, #77) instead of failing the shot; a
+    // genuine crash (raise -> no structured output) still fails loud.
+    const degrade = softDegradeInFailedEnvelope(s);
+    if (degrade !== null) {
+      console.warn(`finish-lipsync: poll passthrough (backend-soft-degrade) shot=${st.shotId}`);
+      return {
+        ok: true,
+        output: passthroughOutput(
+          { shot_id: st.shotId, clip_key: st.clipKey, src_fps: st.srcFps, frames: st.frames, width: 0, height: 0 },
+          "backend-soft-degrade",
+          { detail: degrade || undefined },
+        ),
+      };
+    }
+    return { ok: false, error: "finish-lipsync job failed: " + JSON.stringify(s.error ?? s).slice(0, 200) };
+  }
   if (s.status !== "COMPLETED") {
     // F17: a backend whose error path RETURNS (instead of raising) leaves the RunPod job IN_PROGRESS
     // forever -- holding and billing the worker -- while `output` already carries the structured
