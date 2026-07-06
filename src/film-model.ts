@@ -564,6 +564,26 @@ export function coerceSceneIds(scenes: FilmScene[]): FilmScene[] {
   return (scenes || []).map((s, i) => ({ ...s, shot_id: coerceShotId(s.shot_id, i) }));
 }
 
+/** Pure: remap dialogue-line shot ids through the SAME positional coercion coerceSceneIds applies to
+ *  the scenes, keyed off the ORIGINAL (pre-coercion) scene ids. Without this a caller that supplies
+ *  its own scene ids (`s1`/`s2`) plus dialogue_lines gets a film whose dialogue map is keyed `s1`
+ *  while every consumer joins on the coerced `shot_01`: the lip-sync finish step reads no audio_key
+ *  (noop:no-dialogue), buildCaptionCues yields zero cues, and the film ships silent + uncaptioned
+ *  even though the TTS ran. A line whose id matches no scene is passed through unchanged (same
+ *  fail-soft posture as the dialogue stage). Canonical `shot_NN` ids survive coerceShotId, so this
+ *  is a no-op for the planner UI / scatter paths. */
+export function coerceDialogueLineIds(originalScenes: FilmScene[], lines: DialogueLine[] | undefined): DialogueLine[] | undefined {
+  if (!lines || !lines.length) return lines;
+  const map = new Map<string, string>();
+  (originalScenes || []).forEach((s, i) => {
+    if (s && typeof s.shot_id === "string" && s.shot_id.trim()) map.set(s.shot_id.trim(), coerceShotId(s.shot_id, i));
+  });
+  return lines.map((l) => {
+    const mapped = l && typeof l.shot_id === "string" ? map.get(l.shot_id.trim()) : undefined;
+    return mapped && mapped !== l.shot_id ? { ...l, shot_id: mapped } : l;
+  });
+}
+
 // --------------------------------------------------------------------------- stall recovery (#129)
 
 // How long a phase may sit without progress before the driver tries to recover it, and the absolute

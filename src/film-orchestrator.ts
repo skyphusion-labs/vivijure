@@ -39,7 +39,7 @@ import {
   classifyAssembleTransport,
   MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, filmSeconds, masteredBedKey, applyMasterOutput,
   degradeMasterStep, masterChainDone,
-  coerceSceneIds,
+  coerceSceneIds, coerceDialogueLineIds,
   KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, POLLABLE_PHASES, phaseAgeSeconds, filmProgressMarker,
 } from "./film-model";
 
@@ -1210,6 +1210,9 @@ export async function startFilmJob(
   preModules?: RegisteredModule[],
 ): Promise<FilmJob> {
   const scenes = coerceSceneIds(args.scenes ?? []);
+  // Dialogue lines must join on the SAME coerced ids as the scenes, or a caller-supplied id scheme
+  // (`s1`/`s2`) strands the TTS audio under keys no consumer reads (silent + uncaptioned film, #563).
+  const dialogueLines = coerceDialogueLineIds(args.scenes ?? [], args.dialogue_lines);
   const stagedAudio = args.clips_only ? undefined : await resolveStagedAudioKey(env, args.audio_key);
   const envRec = env as unknown as Record<string, unknown>;
   const modules = preModules ?? await discoverModules(envRec);
@@ -1232,7 +1235,7 @@ export async function startFilmJob(
     film_titles: args.film_titles,
     keyframe_binding: kf ? kf.binding : null, phase: "keyframe", created_at: Date.now(),
     phase_started_at: Date.now(),
-    dialogue_lines: args.dialogue_lines && args.dialogue_lines.length ? args.dialogue_lines : undefined,
+    dialogue_lines: dialogueLines && dialogueLines.length ? dialogueLines : undefined,
     cast_loras: args.cast_loras && Object.keys(args.cast_loras).length ? args.cast_loras : undefined,
   };
   const fetcher = kf ? resolveFetcher(envRec, kf.binding) : null;
