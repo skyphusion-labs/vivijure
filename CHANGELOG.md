@@ -3,6 +3,31 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.16.5
+
+**The S24 sweep burn: every open S23 showcase find fixed in core.** PATCH. Four fixes:
+
+- **Bad clip config bounces BEFORE keyframe spend (#577).** The seedance manifest advertised
+  `resolution: 1080p` while the provider accepts only 480p/720p, so a schema-legal value passed the
+  clamp and failed every shot after ~17 min of final-tier keyframes. The enum now builds from a
+  provider-accepted single source of truth (seedance 0.2.2, pinned by a manifest test), and all
+  three keyframe-burning submit doors (film / storyboard render / scatter) judge the RAW caller
+  motion_config strictly against the module schema -- unknown key, out-of-set enum, out-of-range
+  number, wrong type -- and 400 naming what IS allowed, before any GPU dispatch.
+- **Preflight accepts the cast id the API actually gave you (#576).** `castBindings` values resolve
+  from the public UUID, the numeric row id, or a numeric string; unresolved values get errors that
+  distinguish unknown-id from wrong-id-kind (the misleading "which no longer exists" is gone).
+- **Cast voices reach explicit dialogue_lines (#582).** A line without a `voice_id` now resolves
+  shot -> speaking slot (bundle storyboard) -> cast voice (cast_loras); an explicit voice_id always
+  wins; the default applies only when nothing maps. `cast_loras` joined the MCP submit_film schema,
+  and the voicing precedence is documented once (CONTRACT.md 2.20 + docs/mcp.md).
+- **The finish record stops claiming adopted work ran (#583, step 1 of the fix).** A finish step
+  reused from a prior same-project render's R2 artifact is now recorded in a new `adopted` channel,
+  never as a fake `applied`-run tag; the poll summary exposes an `adopted` count. CONTRACT.md 3.3.1
+  specifies the producer-written `<outputKey>.hash` param-hash sidecar contract (backend #112
+  template) that the satellites/backend implement next; the core adoption gate flips only after
+  those producers ship (correctness order: producers first, then the gate).
+
 ## v0.16.4
 
 **Keyframe adoption stops feeding the motion backend a hash file (#578), and the MCP escape hatch
