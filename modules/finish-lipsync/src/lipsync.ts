@@ -194,7 +194,8 @@ export function softDegradeInFailedEnvelope(s: { status?: string; output?: unkno
   if (s.status !== "FAILED") return null;
   if (!s.output || typeof s.output !== "object") return null;
   if ((s.output as { ok?: unknown }).ok !== false) return null;
-  const nested = (s.output as { error?: unknown }).error;
-  if (typeof nested === "string" && nested.length > 0) return nested.slice(0, 120);
+  const o = s.output as { error?: unknown; detail?: unknown };
+  if (typeof o.detail === "string" && o.detail.length > 0) return o.detail.slice(0, 120);
+  if (typeof o.error === "string" && o.error.length > 0) return o.error.slice(0, 120);
   return typeof s.error === "string" ? s.error.slice(0, 120) : "";
 }
