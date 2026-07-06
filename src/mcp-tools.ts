@@ -309,9 +309,12 @@ export const TOOLS: McpTool[] = [
       "POST /api/render/film. START A FILM RENDER (this SPENDS: GPU / cloud i2v). Body: { bundle_key " +
       "(req, from bundle_storyboard), scenes (req: [{ shot_id, prompt, seconds }]), project?, " +
       "motion_backend?, keyframe_config?, motion_config?, finish_config?, audio_key?, film_titles?, " +
-      "dialogue_lines? }. Returns { film_id, phase }. Then POLL poll_film until phase is done/failed. " +
-      "Set motion_backend explicitly (a name from studio_modules hooks['motion.backend']); an omitted " +
-      "backend can pick a non-operational door.",
+      "dialogue_lines?, cast_loras? }. Returns { film_id, phase }. Then POLL poll_film until phase is " +
+      "done/failed. Set motion_backend explicitly (a name from studio_modules hooks['motion.backend']); " +
+      "an omitted backend can pick a non-operational door. VOICES: pass cast_loras so dialogue speaks " +
+      "with each cast member's voice; explicit dialogue_lines win over bundle-derived ones, and a " +
+      "line's own voice_id wins over the cast voice. Without cast_loras or voice_id, dialogue falls " +
+      "to the studio default voice.",
     inputSchema: OBJ(
       {
         bundle_key: STR("The bundleKey from bundle_storyboard."),
@@ -323,7 +326,18 @@ export const TOOLS: McpTool[] = [
         finish_config: { type: "object", description: "{ [moduleName]: config } for finish modules." },
         audio_key: STR("Staged audio bed to mux after assemble."),
         film_titles: { type: "object", description: "{ title?: { text, subtitle? }, credits?: { lines } }." },
-        dialogue_lines: ARR("[{ shot_id, text }] spoken lines for TTS + captions."),
+        dialogue_lines: ARR(
+          "[{ shot_id, text, voice_id? }] spoken lines for TTS + captions. voice_id (a name from the " +
+          "voices tool) overrides the speaker's cast voice; omit it and pass cast_loras to use the " +
+          "cast member's own voice.",
+        ),
+        cast_loras: {
+          type: "object",
+          description:
+            "{ [slot]: castId } -- bind storyboard character slots (A, B, ...) to cast ids (from " +
+            "list_cast). Drives the keyframe LoRAs AND each speaking slot's voice; without it, " +
+            "dialogue voices fall to the default.",
+        },
       },
       ["bundle_key", "scenes"],
     ),

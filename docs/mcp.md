@@ -297,7 +297,17 @@ There is no undo; treat every call like clicking a "charge my account" button.
 - `finish_config`: `{ [moduleName]: config }` for finish modules (upscale, lipsync, audio).
 - `audio_key`: a staged audio bed to mux in after assemble.
 - `film_titles`: `{ title?: { text, subtitle? }, credits?: { lines } }` title cards.
-- `dialogue_lines`: `[{ shot_id, text }]` spoken lines for TTS + captions.
+- `dialogue_lines`: `[{ shot_id, text, voice_id? }]` spoken lines for TTS + captions. A line's
+  `voice_id` (a name from the `voices` tool) always wins; omit it and pass `cast_loras` to speak
+  with the cast member's own voice.
+- `cast_loras`: `{ [slot]: castId }` -- bind storyboard character slots (`A`, `B`, ...) to cast ids
+  from `list_cast`. This drives BOTH the keyframe LoRAs (the character's face) and each speaking
+  slot's voice.
+
+**Voices, in one rule:** explicit `dialogue_lines` win over bundle-derived dialogue; a line's own
+`voice_id` wins over the cast voice; a voiceless line uses the cast voice of its shot's speaking
+slot (via `cast_loras`); only when nothing maps does it fall to the studio default voice. If your
+cast member "has a voice in the UI" but the film speaks with the default, you forgot `cast_loras`.
 
 Returns `{ film_id, phase }`. Nothing renders any further unless you poll.
 
