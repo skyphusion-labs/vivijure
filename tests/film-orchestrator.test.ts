@@ -298,7 +298,7 @@ describe("finish-step R2 advance (FIX C: a MID-chain step GC'd/frozen with its o
     created_at: Date.now(),
   });
 
-  function wedgeEnv(job: FilmJob, opts: { rifePoll: "pending" | "404"; rifeOutputInR2: boolean }) {
+  function wedgeEnv(job: FilmJob, opts: { rifePoll: "pending" | "404"; rifeOutputInR2: boolean }, sidecars: Record<string, string> = {}) {
     const filmDoc = filmJobDocKey(job.film_id);
     let stored = JSON.stringify(job);
     const present = new Set<string>();
@@ -306,7 +306,7 @@ describe("finish-step R2 advance (FIX C: a MID-chain step GC'd/frozen with its o
     let lipsyncInvoked = false;
     const env = {
       R2_RENDERS: {
-        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : (k in sidecars ? { text: async () => sidecars[k] } : null)),
         put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
         list: async () => ({ objects: [], truncated: false }),
         head: async (k: string) => (present.has(k) ? { key: k } : null),
@@ -329,7 +329,9 @@ describe("finish-step R2 advance (FIX C: a MID-chain step GC'd/frozen with its o
   }
 
   it("frozen-pending RIFE + its output in R2 -> adopts the step, advances idx, then dispatches lip-sync", async () => {
-    const { env, read, lipsyncInvoked } = wedgeEnv(wedgeFilm(), { rifePoll: "pending", rifeOutputInR2: true });
+    const scHash = await finishStepInputHash(null, null, { interpolation_factor: 2 }); // #583 gate: matching sidecar
+    const { env, read, lipsyncInvoked } = wedgeEnv(wedgeFilm(), { rifePoll: "pending", rifeOutputInR2: true },
+      { "renders/neon/clips/shot_01_finished.mp4.hash": scHash });
     await advanceFilmJob(env, "film-fixc");
     const a = read().finish_shots![0];
     expect(a.idx).toBe(1);                                              // advanced off the RIFE step...
@@ -1147,12 +1149,12 @@ describe("advanceFinishPhase R2 reclaim (#141: finish output in R2 beats a finis
     created_at: Date.now(),
   });
 
-  function finishEnv(job: FilmJob, r2Keys: string[]) {
+  function finishEnv(job: FilmJob, r2Keys: string[], sidecars: Record<string, string> = {}) {
     const filmDoc = filmJobDocKey(job.film_id);
     let stored = JSON.stringify(job);
     const env = {
       R2_RENDERS: {
-        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : (k in sidecars ? { text: async () => sidecars[k] } : null)),
         put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
         list: async ({ prefix }: { prefix: string }) => ({
           objects: r2Keys.filter((x) => x.startsWith(prefix)).map((x) => ({ key: x })),
@@ -1164,10 +1166,11 @@ describe("advanceFinishPhase R2 reclaim (#141: finish output in R2 beats a finis
   }
 
   it("reclaims a finish shot whose _finished output is in R2 -> done, then advances", async () => {
+    const scHash = await finishStepInputHash(null, null, {}); // #583 gate: matching sidecar for the reclaimed shot
     const { env, read } = finishEnv(finishFilm(), [
       "renders/neon/clips/shot_01_finished.mp4",
       "renders/neon/clips/shot_02_finished.mp4", // the failed shot's finish output IS present
-    ]);
+    ], { "renders/neon/clips/shot_02_finished.mp4.hash": scHash });
     const r = await advanceFilmJob(env, "film-finish-reclaim");
     const fs2 = read().finish_shots?.find((f) => f.shot_id === "shot_02");
     expect(fs2?.status).toBe("done");
@@ -1176,6 +1179,24 @@ describe("advanceFinishPhase R2 reclaim (#141: finish output in R2 beats a finis
     expect(fs2?.applied).toEqual([]);                 // #583: reclaimed from R2, not run this pass
     expect(fs2?.adopted).toEqual(["interpolate:2x"]); // the reuse is disclosed in `adopted`, never faked into applied
     expect(r?.job.phase).not.toBe("finish"); // advanced (clips_only -> done)
+  });
+
+  it("#583 gate: does NOT reclaim a present artifact with NO sidecar (legacy) -- re-runs, never adopts blind", async () => {
+    const { env, read } = finishEnv(finishFilm(), [
+      "renders/neon/clips/shot_01_finished.mp4",
+      "renders/neon/clips/shot_02_finished.mp4",
+    ]); // no sidecars -> unstamped legacy artifact
+    await advanceFilmJob(env, "film-finish-reclaim");
+    expect(read().finish_shots?.find((f) => f.shot_id === "shot_02")?.status).toBe("failed"); // NOT adopted
+  });
+
+  it("#583 gate: does NOT reclaim when the sidecar MISMATCHES the current inputs (a changed-voice/param resubmit)", async () => {
+    const { env, read } = finishEnv(finishFilm(), [
+      "renders/neon/clips/shot_01_finished.mp4",
+      "renders/neon/clips/shot_02_finished.mp4",
+    ], { "renders/neon/clips/shot_02_finished.mp4.hash": "0".repeat(64) }); // a prior take's stale hash
+    await advanceFilmJob(env, "film-finish-reclaim");
+    expect(read().finish_shots?.find((f) => f.shot_id === "shot_02")?.status).toBe("failed"); // NOT adopted -> re-run/fail-loud, never ships stale
   });
 
   it("leaves the finish shot FAILED when its _finished output is NOT in R2", async () => {
@@ -1813,12 +1834,12 @@ describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 inc
     created_at: Date.now(),
   });
 
-  function env209(job: FilmJob, headPresent: Set<string>) {
+  function env209(job: FilmJob, headPresent: Set<string>, sidecars: Record<string, string> = {}) {
     const filmDoc = filmJobDocKey(job.film_id);
     let stored = JSON.stringify(job);
     const env = {
       R2_RENDERS: {
-        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : null),
+        get: async (k: string) => (k === filmDoc ? { text: async () => stored } : (k in sidecars ? { text: async () => sidecars[k] } : null)),
         put: async (k: string, b: string) => { if (k === filmDoc) stored = b; },
         head: async (k: string) => (headPresent.has(k) ? { key: k } : null),
         list: async () => ({ objects: [], truncated: false }),
@@ -1835,7 +1856,9 @@ describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 inc
   }
 
   it("adopts the RIFE intermediate from R2 and advances idx (does NOT hang on a frozen envelope)", async () => {
-    const { env, read } = env209(midChainFilm(), new Set(["renders/fac/clips/shot_03_finished.mp4"]));
+    const scHash = await finishStepInputHash(null, null, {}); // #583 gate: matching sidecar
+    const { env, read } = env209(midChainFilm(), new Set(["renders/fac/clips/shot_03_finished.mp4"]),
+      { "renders/fac/clips/shot_03_finished.mp4.hash": scHash });
     await advanceFilmJob(env, "film-209");
     const fs = read().finish_shots?.find((f) => f.shot_id === "shot_03");
     expect(fs?.idx).toBe(1); // advanced off RIFE -> text-overlay
@@ -1844,6 +1867,23 @@ describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 inc
     expect(fs?.applied ?? []).not.toContain("interpolate:2x"); // #583: adopted, NOT run -> never a fake applied-run tag
     expect(fs?.adopted).toContain("interpolate:2x"); // RIFE's reconstructed tag, disclosed in the `adopted` channel
     expect(fs?.status).toBe("pending"); // still pending: text-overlay (idx 1) has yet to run
+  });
+
+  it("#583 gate: does NOT adopt the mid-chain artifact with NO sidecar -- stays pending, never advances on a legacy artifact", async () => {
+    const { env, read } = env209(midChainFilm(), new Set(["renders/fac/clips/shot_03_finished.mp4"])); // no sidecar
+    await advanceFilmJob(env, "film-209");
+    const fs = read().finish_shots?.find((f) => f.shot_id === "shot_03");
+    expect(fs?.idx).toBe(0);            // NOT advanced off RIFE
+    expect(fs?.status).toBe("pending"); // stays pending (frozen poll), never adopts an unstamped artifact
+  });
+
+  it("#583 gate: does NOT adopt the mid-chain artifact when the sidecar MISMATCHES the current inputs", async () => {
+    const { env, read } = env209(midChainFilm(), new Set(["renders/fac/clips/shot_03_finished.mp4"]),
+      { "renders/fac/clips/shot_03_finished.mp4.hash": "0".repeat(64) }); // stale hash
+    await advanceFilmJob(env, "film-209");
+    const fs = read().finish_shots?.find((f) => f.shot_id === "shot_03");
+    expect(fs?.idx).toBe(0);
+    expect(fs?.status).toBe("pending");
   });
 
   it("stays pending (does NOT adopt) when the RIFE intermediate is NOT in R2 -- no phantom advance", async () => {
