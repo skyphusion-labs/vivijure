@@ -786,7 +786,7 @@ async function runFilmFinishStep(
   inKey: string,
   outKey: string,
   captions: FilmFinishInput["captions"],
-): Promise<{ ok: boolean; applied: string[]; errors: string[]; steps?: string[]; degraded?: string }> {
+): Promise<{ film_key: string; applied: string[]; errors: string[]; steps?: string[]; degraded?: string }> {
   const envRec = env as unknown as Record<string, unknown>;
   const sidecarKey = outKey.replace(/\.mp4$/i, "") + ".srt";
   const [videoUrl, outputUrl, sidecarUrl] = await Promise.all([
@@ -825,10 +825,13 @@ async function runFilmFinishStep(
     if (v) { degradeParts.push(v); out = null; }
   }
   const degraded = degradeParts.length > 0 ? degradeParts.join("; ") : undefined;
-  // ok = the module ran AND did not degrade or violate, so it wrote a real carded film at outKey that we
-  // can thread forward and adopt next tick.
-  const ok = result.applied.length > 0 && degradeParts.length === 0;
-  return { ok, applied: result.applied, errors: result.errors, steps: out?.applied, degraded };
+  // Follow the MODULE contract: the film lives at out.film_key -- the deterministic outKey on a REAL
+  // write, but the INPUT key on a noop (subtitle enabled=false -> "noop:no-cards") or a passthrough
+  // degrade, neither of which writes outKey. Falling back to inKey keeps the chain reading a real file
+  // (a bare outKey would 404 the next step`s GET). Adoption stays honest by construction: only a real
+  // write leaves an artifact at the deterministic outKey, so only real steps are ever adopted.
+  const film_key = typeof out?.film_key === "string" && out.film_key.length > 0 ? out.film_key : inKey;
+  return { film_key, applied: result.applied, errors: result.errors, steps: out?.applied, degraded };
 }
 
 /** Run the film.finish chain (subtitle / title / credit cards) on an assembled+muxed film. Reused by the
@@ -898,14 +901,16 @@ export async function runFilmFinish(
     // (the #583 artifact-first crash-safety instinct); the cost is one stale-window wait if it dies.
     await opts?.persistDispatch?.(outKey, now);
     const r = await runFilmFinishStep(env, input, module, curKey, outKey, captions);
+    // The dispatch RETURNED, so this step is NOT in flight -- clear its guard marker. A step that DIED
+    // mid-encode never reaches here, so its marker persists and guards the next tick. A returned step is
+    // handled by adoption (real write -> outKey present) or by a cheap re-run (noop -> outKey absent, no
+    // encode), so a lingering marker on a noop must not stall the chain for a full window.
+    if (opts?.dispatched) delete opts.dispatched[outKey];
     errors.push(...r.errors);
     applied.push(...r.applied);              // a module that invoked ok is recorded even on a degrade (#207)
     if (r.steps) lastSteps = r.steps;        // keep the last step output detail (applied / passthrough / noop)
     if (r.degraded) degradeParts.push(r.degraded);
-    if (r.ok) curKey = outKey;               // advance the film ONLY on a real carded output at outKey
-    // On not-ok (unreachable / degrade / violation) curKey stays the prior good film so the next step
-    // still reads a valid input (fail-safe); outKey is absent, so a transient miss re-runs this step next
-    // tick rather than adopting a partial.
+    curKey = r.film_key;                     // follow the module key: outKey on a real write, inKey on noop/degrade
   }
   const degraded = degradeParts.length > 0 ? degradeParts.join("; ") : undefined;
   return { ran: true, film_key: curKey, applied, adopted, errors, steps: lastSteps, degraded, complete };

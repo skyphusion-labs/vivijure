@@ -3,6 +3,7 @@ import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinal
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 import { filmJobToPollView } from "../src/film-render-bridge";
+import { _resetModuleDiscoveryCache } from "../src/modules/registry";
 import { finishStepInputHash } from "../src/finish-hash";
 
 const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
@@ -1324,9 +1325,9 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     expect(r?.job.film_finish?.applied).toEqual(["film-titles"]);
     expect(r?.job.film_finish?.adopted).toEqual([]); // ran this attempt, not adopted
     expect(r?.job.film_finish?.degraded).toBeUndefined();
-    // #600: the film lands at the DETERMINISTIC step key (base-ff0.mp4, the presigned output_url), NOT
-    // whatever the module echoes back -- that determinism is what makes it adoptable next tick.
-    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-ff0.mp4");
+    // The film follows the module contract out.film_key (a real module writes to the presigned outKey and
+    // echoes it; adoption HEADs the deterministic outKey, so real writes are what become adoptable).
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-titled-abc.mp4");
   });
 
   it("#600: a completed step already in R2 is ADOPTED (not re-encoded), recorded as adopted not applied", async () => {
@@ -1366,6 +1367,54 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     expect(r?.job.phase).toBe("done");
     expect(r?.job.film_finish?.applied).toEqual(["film-titles"]); // re-dispatched + completed
     expect(r?.job.film_key).toBe(FF0_KEY);
+  });
+
+  it("#600 a NOOP step passes the ORIGINAL film to the next step and does not poison adoption", async () => {
+    // Chain [subtitle (noop, enabled=false), film-titles]. The noop returns ok WITHOUT writing its
+    // deterministic key, echoing the INPUT key. titles must therefore read the ORIGINAL assembled film,
+    // not the noop nonexistent -ff0 key, and the noop must not become an adoptable artifact.
+    _resetModuleDiscoveryCache(); // this test installs its own 2-module set; drop any cached discovery
+    const filmId = "film-noop-chain";
+    const assembled = "renders/" + filmId + "/film-audio.mp4";
+    const titledKey = "renders/" + filmId + "/film-audio-ff1.mp4";
+    const manifest = (name: string, order: number) => ({
+      name, version: "0.1.0", api: "vivijure-module/2", hooks: ["film.finish"],
+      provides: [{ id: name, label: name }], config_schema: {}, ui: { section: "film.finish", order },
+    });
+    const job = {
+      film_id: filmId, project: "p", scenes: [{ shot_id: "s1", prompt: "x", seconds: 3 }],
+      phase: "mux" as const, silent_film_key: "renders/" + filmId + "/film-silent.mp4",
+      audio_key: "renders/" + filmId + "/audio.mp4", mux_output_key: assembled,
+      film_titles: { title: { text: "NEON" } }, created_at: 0,
+    };
+    let stored = JSON.stringify(job);
+    const received: Record<string, string> = {};
+    const jsonResp = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    const moduleFetch = (m: { name: string }, response: unknown) => async (input: Request | string, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.endsWith("/module.json")) return jsonResp(m.name === "subtitle" ? manifest("subtitle", 5) : manifest("film-titles", 10));
+      const body = JSON.parse((init?.body as string) ?? "{}") as { input?: { film_key?: string } };
+      if (body.input?.film_key) received[m.name] = body.input.film_key; // capture what each step read
+      return jsonResp(response);
+    };
+    const env = {
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey(filmId) ? { text: async () => stored } : null),
+        head: async () => null, // no pre-existing artifacts
+        put: async (key: string, val: string) => { if (key === filmJobDocKey(filmId)) stored = val; },
+      },
+      VIDEO_FINISH_VPC: { fetch: async () => jsonResp({ ok: true, key: assembled }) },
+      R2_S3_ACCESS_KEY_ID: "t", R2_S3_SECRET_ACCESS_KEY: "t",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+      MODULE_SUBTITLE: { fetch: moduleFetch({ name: "subtitle" }, { ok: true, output: { film_key: assembled, applied: ["noop:no-cards"] } }) },
+      MODULE_FILM_TITLES: { fetch: moduleFetch({ name: "film-titles" }, { ok: true, output: { film_key: titledKey, applied: ["film-titles"] } }) },
+    } as unknown as Env;
+    const r = await advanceFilmJob(env, filmId);
+    expect(r?.job.phase).toBe("done");
+    expect(received["subtitle"]).toBe(assembled);   // noop read the assembled film
+    expect(received["film-titles"]).toBe(assembled); // CRUX: titles read the ORIGINAL, not the noop -ff0
+    expect(r?.job.film_key).toBe(titledKey);         // final film is the titles output
+    expect(r?.job.film_finish?.applied).toContain("film-titles");
   });
 
   it("records a chain error (no film_finish drop) when the module invoke fails", async () => {
