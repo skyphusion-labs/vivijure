@@ -21,6 +21,7 @@ export interface ScatterJob {
   film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   film_finish_config?: Record<string, Record<string, unknown>>;
   film_finish?: { applied: string[]; adopted?: string[]; errors: string[]; steps?: string[]; degraded?: string };
+  film_finish_dispatched?: Record<string, number>; // #600 in-flight guard (see FilmJob)
   // #289 (atomic submit / self-heal): the doc is written to R2 BEFORE the D1 render rows, so the
   // poll path can reconstruct a missing UI-list row entirely from the doc (project_id is the FK to
   // storyboard_projects; render_overrides round-trips the submit knobs). Optional / back-compat.

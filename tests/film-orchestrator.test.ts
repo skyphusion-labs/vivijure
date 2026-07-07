@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, FILM_FINISH_INFLIGHT_WINDOW_SECONDS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 import { filmJobToPollView } from "../src/film-render-bridge";
@@ -1340,6 +1340,32 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     expect(r?.job.film_finish?.applied).toEqual([]);              // NOT run this attempt (no fake applied, #583)
     expect(r?.job.film_finish?.degraded).toBeUndefined();
     expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-ff0.mp4"); // threaded to the adopted artifact
+  });
+
+  const FF0_KEY = "renders/film-finish-obs/film-audio-ff0.mp4";
+
+  it("#600 in-flight guard: a step dispatched within the window (key still absent) is NOT re-dispatched", async () => {
+    // The deterministic key is absent (still encoding) but was dispatched moments ago. The guard must
+    // stop the chain WITHOUT firing a duplicate encode: no finalize, film_key stays the assembled key.
+    const ok = { ok: true, output: { film_key: FF0_KEY, applied: ["film-titles"] } };
+    const { env } = filmFinishEnv(muxJob({ film_finish_dispatched: { [FF0_KEY]: Date.now() } }), ok);
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).not.toBe("done");                 // NOT finalized -- resumes next tick
+    expect(r?.job.film_finish?.applied).toEqual([]);       // the module was NOT dispatched (no re-burn)
+    expect(r?.job.film_finish?.adopted).toEqual([]);
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio.mp4"); // assembled key kept (stable base)
+  });
+
+  it("#600 in-flight guard: a STALE dispatch (past the window) IS re-dispatched", async () => {
+    // Last dispatch is older than the window: the encode is presumed dead, so the step re-dispatches and
+    // (in this stub) completes -> the film finalizes.
+    const ok = { ok: true, output: { film_key: FF0_KEY, applied: ["film-titles"] } };
+    const stale = Date.now() - (FILM_FINISH_INFLIGHT_WINDOW_SECONDS + 60) * 1000;
+    const { env } = filmFinishEnv(muxJob({ film_finish_dispatched: { [FF0_KEY]: stale } }), ok);
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_finish?.applied).toEqual(["film-titles"]); // re-dispatched + completed
+    expect(r?.job.film_key).toBe(FF0_KEY);
   });
 
   it("records a chain error (no film_finish drop) when the module invoke fails", async () => {

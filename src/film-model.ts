@@ -131,6 +131,11 @@ export interface FilmJob {
     // (#122/#141); the existing idempotent assemble re-entry drives the per-tick resume.
     adopted?: string[];  // steps folded from a pre-existing R2 artifact (reuse, never a fake applied run, #583)
   };
+  // #600 in-flight guard: deterministic film.finish step key -> the ts it was dispatched (persisted
+  // BEFORE the dispatch, crash-safe). A step still inside the in-flight window (key not yet in R2) is
+  // NOT re-dispatched, so a killed leaseholder + the 300s advance-lease TTL (shorter than an ~8-min
+  // encode) + the fail-open advance path cannot fire a DUPLICATE encode of the same step each tick.
+  film_finish_dispatched?: Record<string, number>;
   // Loud, structured degrade when the video-finish tier (VIDEO_FINISH_VPC) is UNAVAILABLE at
   // assemble/mux -- the binding is unbound, or the container/tunnel was unreachable after the bounded
   // retry. The film COMPLETES (never hard-fails after the GPU spend, #519) delivering what was rendered:

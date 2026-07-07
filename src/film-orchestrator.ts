@@ -670,6 +670,12 @@ const filmOutKey = (filmId: string) => `renders/${filmId}/film.mp4`;
 // Cap on across-polls assemble re-attempts before a transient failure goes terminal (issue #82).
 const MAX_ASSEMBLE_ATTEMPTS = 6;
 
+// #600 film.finish in-flight window (s): a deterministic step key still absent from R2 whose last
+// dispatch is within this window is treated as STILL ENCODING and is NOT re-dispatched (no duplicate
+// encode). Set above the longest single film.finish encode; the driver 90-min phase deadline is the
+// ultimate backstop, so a genuinely dead encode retries after at most one stale window.
+export const FILM_FINISH_INFLIGHT_WINDOW_SECONDS = 1200;
+
 
 /** Internal: the assemble leg. Gather the final clips (in scene order), presign each as a fetchable
  *  GET + presign the film output as a PUT, and hand them to the video-finish container, which ffmpeg-
@@ -713,8 +719,9 @@ async function fireNotify(env: Env, job: FilmJob, preModules?: RegisteredModule[
  *  then mark done + notify. FAIL-SAFE: no film.finish module, no title/credits, or ANY error -> the
  *  film keeps its original key. A film.finish step must never drop a fully-rendered film. (#190) */
 async function transitionToDone(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
+  let complete = true;
   try {
-    await applyFilmFinish(env, job, preModules);
+    complete = await applyFilmFinish(env, job, preModules);
   } catch (e) {
     // A swallowed throw must not ship as a silent green: record it on the job so the degraded outcome is
     // observable. The film keeps its original (uncarded) key -- a finish step never drops the film. (#190)
@@ -726,7 +733,12 @@ async function transitionToDone(env: Env, job: FilmJob, preModules?: RegisteredM
       degraded: job.film_finish?.degraded ?? `threw: ${msg}`,
     };
     console.warn(`film.finish failed for ${job.film_id}: ${msg}; keeping the original film`);
+    complete = true; // a THROW is terminal fail-safe: ship the uncarded film, never loop on it
   }
+  // #600: an in-flight film.finish step is still encoding -- do NOT finalize. Leave the phase
+  // (assemble / mux) so the existing idempotent re-entry resumes next tick and adopts the step when its
+  // deterministic artifact lands; the in-flight guard stops a duplicate encode meanwhile.
+  if (!complete) return;
   job.phase = "done";
   await fireNotify(env, job, preModules);
 }
@@ -758,6 +770,8 @@ export interface RunFilmFinishResult {
   errors: string[];
   steps?: string[];
   degraded?: string;
+  complete: boolean; // #600: false when the chain STOPPED at an in-flight step (still encoding) -- the
+                     // caller must NOT finalize (keep phase re-enterable + keep the assembled film_key)
 }
 
 /** Dispatch ONE film.finish module against DETERMINISTIC keys: read inKey, write outKey (plus its .srt).
@@ -829,12 +843,24 @@ async function runFilmFinishStep(
  *  the incomplete one, instead of re-burning the whole chain under a fresh random key (the film-374268a2
  *  loop). R2 presence IS the persisted progress (#122 / #141). FAIL-SAFE: a step soft-degrade / failure
  *  passes the film through (recorded in degraded), never drops it (#190). */
-export async function runFilmFinish(env: Env, input: RunFilmFinishInput, preModules?: RegisteredModule[]): Promise<RunFilmFinishResult> {
+export async function runFilmFinish(
+  env: Env,
+  input: RunFilmFinishInput,
+  preModules?: RegisteredModule[],
+  opts?: {
+    // #600 in-flight guard: the job`s persisted dispatch map (deterministic key -> ts) and a callback
+    // that records + PERSISTS a dispatch BEFORE it fires (crash-safe). Absent => no guard (unit tests /
+    // callers that do not persist per tick). `now` is injectable for tests.
+    dispatched?: Record<string, number>;
+    persistDispatch?: (key: string, ts: number) => Promise<void>;
+    now?: number;
+  },
+): Promise<RunFilmFinishResult> {
   const envRec = env as unknown as Record<string, unknown>;
   const modules = preModules ?? await discoverModules(envRec);
   const steps = servingForHook(modules, "film.finish");
   if (steps.length === 0) {
-    return { ran: false, film_key: input.film_key, applied: [], adopted: [], errors: [] }; // nothing installed -> no-op
+    return { ran: false, film_key: input.film_key, applied: [], adopted: [], errors: [], complete: true }; // nothing installed -> no-op
   }
   // Time-synced dialogue captions for the subtitle module (empty means it no-ops); computed once, reused
   // by every step (film-titles ignores them). See src/captions.ts.
@@ -847,6 +873,8 @@ export async function runFilmFinish(env: Env, input: RunFilmFinishInput, preModu
   const errors: string[] = [];
   const degradeParts: string[] = [];
   let lastSteps: string[] | undefined;
+  const now = opts?.now ?? Date.now();
+  let complete = true;
   for (let n = 0; n < steps.length; n++) {
     const module = steps[n];
     const outKey = base + "-ff" + n + ".mp4";
@@ -857,6 +885,18 @@ export async function runFilmFinish(env: Env, input: RunFilmFinishInput, preModu
       curKey = outKey;
       continue;
     }
+    // #600 in-flight guard: the key is NOT in R2. If a prior tick dispatched this step within the window,
+    // it is still encoding -- do NOT re-dispatch (the advance lease TTL 300s < an ~8-min encode and the
+    // advance can fail open, so an unguarded re-entry would fire a DUPLICATE encode). Stop the chain (the
+    // next step needs this one`s output); resume next tick, adopting once the encode lands.
+    const lastTs = opts?.dispatched?.[outKey];
+    if (lastTs !== undefined && now - lastTs < FILM_FINISH_INFLIGHT_WINDOW_SECONDS * 1000) {
+      complete = false;
+      break;
+    }
+    // Persist the dispatch BEFORE firing it, so a request killed mid-encode still leaves the guard set
+    // (the #583 artifact-first crash-safety instinct); the cost is one stale-window wait if it dies.
+    await opts?.persistDispatch?.(outKey, now);
     const r = await runFilmFinishStep(env, input, module, curKey, outKey, captions);
     errors.push(...r.errors);
     applied.push(...r.applied);              // a module that invoked ok is recorded even on a degrade (#207)
@@ -868,13 +908,14 @@ export async function runFilmFinish(env: Env, input: RunFilmFinishInput, preModu
     // tick rather than adopting a partial.
   }
   const degraded = degradeParts.length > 0 ? degradeParts.join("; ") : undefined;
-  return { ran: true, film_key: curKey, applied, adopted, errors, steps: lastSteps, degraded };
+  return { ran: true, film_key: curKey, applied, adopted, errors, steps: lastSteps, degraded, complete };
 }
 
 /** Single-film film.finish: thin wrapper over runFilmFinish that folds the outcome back onto the job
  *  (behavior-identical to the pre-refactor inline version -- no-op leaves the job untouched). */
-async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<void> {
-  if (!job.film_key) return;
+async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<boolean> {
+  if (!job.film_key) return true; // nothing to card -> complete
+  job.film_finish_dispatched ??= {};
   const r = await runFilmFinish(env, {
     film_key: job.film_key,
     scenes: job.scenes,
@@ -884,8 +925,11 @@ async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredMo
     bundle_key: job.bundle_key,
     project: job.project,
     job_id: job.film_id,
-  }, preModules);
-  if (!r.ran) return; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
+  }, preModules, {
+    dispatched: job.film_finish_dispatched,
+    persistDispatch: async (key, ts) => { job.film_finish_dispatched![key] = ts; await putFilm(env, job); },
+  });
+  if (!r.ran) return true; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
   if (r.errors.length > 0) {
     console.warn(`film.finish errors for ${job.film_id}: ${r.errors.join("; ")}`);
   }
@@ -896,7 +940,10 @@ async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredMo
     console.log(`film.finish adopted ${r.adopted.length} completed step(s) from R2 for ${job.film_id}: ${r.adopted.join(", ")}`);
   }
   job.film_finish = { applied: r.applied, adopted: r.adopted, errors: r.errors, steps: r.steps, degraded: r.degraded };
-  job.film_key = r.film_key;
+  // #600: advance the film key ONLY when the chain COMPLETED. On an in-flight stop, keep the assembled
+  // key so the deterministic step base stays stable across re-entries (a shifted base would re-burn).
+  if (r.complete) job.film_key = r.film_key;
+  return r.complete;
 }
 
 /** Emit the loud, structured degrade event when the video-finish tier is UNAVAILABLE (VIDEO_FINISH_VPC
