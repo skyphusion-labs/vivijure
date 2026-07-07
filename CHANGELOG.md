@@ -3,6 +3,23 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.17.3
+
+**film.finish survives films bigger than one invocation budget (#600).** PATCH. The second S25
+exercise find: a 1440p48 film's title/caption passes (~8 min CPU each) exceed any single
+invocation budget, and the chain minted a RANDOM output key per attempt -- so the every-minute
+cron re-encoded the subtitle pass forever (the #122 presence self-heal could never find a prior
+success) and film-374268a2 wedged in assemble. Now each film.finish step writes a DETERMINISTIC
+key (`<film>-ff<n>.mp4`) and is HEAD-adopted from R2 on re-entry (adoption recorded in the honest
+`adopted` channel, #583 discipline); a persisted per-step dispatch marker (in-flight window
+1200s) prevents duplicate encodes while one is still running, since the advance-lease TTL (300s)
+expires mid-encode and the claim fails open; a step's `curKey` follows the MODULE's reported
+film_key, so a noop (subtitle with no dialogue) threads the real film forward instead of a
+never-written key. The chain finalizes only on `complete`; an in-flight stop resumes on the next
+tick. Fixes the single-film AND scatter paths; the wedged film self-heals on deploy with no
+intervention. Follow-up #602: async job+poll for a single step that alone exceeds the budget
+(bounded today by the 90-min phase deadline).
+
 ## v0.17.2
 
 **The upscale default reverts to animevideov3; x4plus is opt-in until the handler tiles.** PATCH.
