@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, FILM_FINISH_INFLIGHT_WINDOW_SECONDS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 import { filmJobToPollView } from "../src/film-render-bridge";
+import { _resetModuleDiscoveryCache } from "../src/modules/registry";
 import { finishStepInputHash } from "../src/finish-hash";
 
 const finishShot = (over: Partial<FinishShot> = {}): FinishShot => ({
@@ -1262,7 +1263,7 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     ui: { section: "film.finish", order: 10 },
   };
 
-  function filmFinishEnv(job: object, invokeResponse: unknown, opts: { withModule?: boolean } = {}) {
+  function filmFinishEnv(job: object, invokeResponse: unknown, opts: { withModule?: boolean; presentKeys?: string[] } = {}) {
     const filmId = (job as { film_id: string }).film_id;
     let stored = JSON.stringify(job);
     const jsonResp = (b: unknown) =>
@@ -1270,7 +1271,7 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     const env: Record<string, unknown> = {
       R2_RENDERS: {
         get: async (key: string) => (key === filmJobDocKey(filmId) ? { text: async () => stored } : null),
-        head: async () => null,
+        head: async (key: string) => (opts.presentKeys?.includes(key) ? ({ size: 1 } as unknown) : null),
         put: async (key: string, val: string) => { if (key === filmJobDocKey(filmId)) stored = val; },
       },
       // mux container (callVideoFinish) -- returns the muxed film key
@@ -1316,14 +1317,104 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     expect(read().film_finish?.degraded).toBe("film-titles: passthrough:container-unreachable"); // persisted
   });
 
-  it("records applied + swaps to the carded film when the module succeeds", async () => {
+  it("records applied + swaps to the DETERMINISTIC carded film when the module succeeds (#600)", async () => {
     const ok = { ok: true, output: { film_key: "renders/film-finish-obs/film-audio-titled-abc.mp4", applied: ["film-titles"] } };
     const { env } = filmFinishEnv(muxJob(), ok);
     const r = await advanceFilmJob(env, "film-finish-obs");
     expect(r?.job.phase).toBe("done");
     expect(r?.job.film_finish?.applied).toEqual(["film-titles"]);
+    expect(r?.job.film_finish?.adopted).toEqual([]); // ran this attempt, not adopted
     expect(r?.job.film_finish?.degraded).toBeUndefined();
+    // The film follows the module contract out.film_key (a real module writes to the presigned outKey and
+    // echoes it; adoption HEADs the deterministic outKey, so real writes are what become adoptable).
     expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-titled-abc.mp4");
+  });
+
+  it("#600: a completed step already in R2 is ADOPTED (not re-encoded), recorded as adopted not applied", async () => {
+    // The deterministic step key is already present (a prior attempt finished it after its request timed
+    // out). The chain must adopt it -- no re-dispatch -- so a big film stops re-burning the media stack.
+    const ok = { ok: true, output: { film_key: "renders/film-finish-obs/film-audio-ff0.mp4", applied: ["film-titles"] } };
+    const { env } = filmFinishEnv(muxJob(), ok, { presentKeys: ["renders/film-finish-obs/film-audio-ff0.mp4"] });
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_finish?.adopted).toEqual(["film-titles"]); // reused from R2
+    expect(r?.job.film_finish?.applied).toEqual([]);              // NOT run this attempt (no fake applied, #583)
+    expect(r?.job.film_finish?.degraded).toBeUndefined();
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-ff0.mp4"); // threaded to the adopted artifact
+  });
+
+  const FF0_KEY = "renders/film-finish-obs/film-audio-ff0.mp4";
+
+  it("#600 in-flight guard: a step dispatched within the window (key still absent) is NOT re-dispatched", async () => {
+    // The deterministic key is absent (still encoding) but was dispatched moments ago. The guard must
+    // stop the chain WITHOUT firing a duplicate encode: no finalize, film_key stays the assembled key.
+    const ok = { ok: true, output: { film_key: FF0_KEY, applied: ["film-titles"] } };
+    const { env } = filmFinishEnv(muxJob({ film_finish_dispatched: { [FF0_KEY]: Date.now() } }), ok);
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).not.toBe("done");                 // NOT finalized -- resumes next tick
+    expect(r?.job.film_finish?.applied).toEqual([]);       // the module was NOT dispatched (no re-burn)
+    expect(r?.job.film_finish?.adopted).toEqual([]);
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio.mp4"); // assembled key kept (stable base)
+  });
+
+  it("#600 in-flight guard: a STALE dispatch (past the window) IS re-dispatched", async () => {
+    // Last dispatch is older than the window: the encode is presumed dead, so the step re-dispatches and
+    // (in this stub) completes -> the film finalizes.
+    const ok = { ok: true, output: { film_key: FF0_KEY, applied: ["film-titles"] } };
+    const stale = Date.now() - (FILM_FINISH_INFLIGHT_WINDOW_SECONDS + 60) * 1000;
+    const { env } = filmFinishEnv(muxJob({ film_finish_dispatched: { [FF0_KEY]: stale } }), ok);
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_finish?.applied).toEqual(["film-titles"]); // re-dispatched + completed
+    expect(r?.job.film_key).toBe(FF0_KEY);
+  });
+
+  it("#600 a NOOP step passes the ORIGINAL film to the next step and does not poison adoption", async () => {
+    // Chain [subtitle (noop, enabled=false), film-titles]. The noop returns ok WITHOUT writing its
+    // deterministic key, echoing the INPUT key. titles must therefore read the ORIGINAL assembled film,
+    // not the noop nonexistent -ff0 key, and the noop must not become an adoptable artifact.
+    _resetModuleDiscoveryCache(); // this test installs its own 2-module set; drop any cached discovery
+    const filmId = "film-noop-chain";
+    const assembled = "renders/" + filmId + "/film-audio.mp4";
+    const titledKey = "renders/" + filmId + "/film-audio-ff1.mp4";
+    const manifest = (name: string, order: number) => ({
+      name, version: "0.1.0", api: "vivijure-module/2", hooks: ["film.finish"],
+      provides: [{ id: name, label: name }], config_schema: {}, ui: { section: "film.finish", order },
+    });
+    const job = {
+      film_id: filmId, project: "p", scenes: [{ shot_id: "s1", prompt: "x", seconds: 3 }],
+      phase: "mux" as const, silent_film_key: "renders/" + filmId + "/film-silent.mp4",
+      audio_key: "renders/" + filmId + "/audio.mp4", mux_output_key: assembled,
+      film_titles: { title: { text: "NEON" } }, created_at: 0,
+    };
+    let stored = JSON.stringify(job);
+    const received: Record<string, string> = {};
+    const jsonResp = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    const moduleFetch = (m: { name: string }, response: unknown) => async (input: Request | string, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.endsWith("/module.json")) return jsonResp(m.name === "subtitle" ? manifest("subtitle", 5) : manifest("film-titles", 10));
+      const body = JSON.parse((init?.body as string) ?? "{}") as { input?: { film_key?: string } };
+      if (body.input?.film_key) received[m.name] = body.input.film_key; // capture what each step read
+      return jsonResp(response);
+    };
+    const env = {
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey(filmId) ? { text: async () => stored } : null),
+        head: async () => null, // no pre-existing artifacts
+        put: async (key: string, val: string) => { if (key === filmJobDocKey(filmId)) stored = val; },
+      },
+      VIDEO_FINISH_VPC: { fetch: async () => jsonResp({ ok: true, key: assembled }) },
+      R2_S3_ACCESS_KEY_ID: "t", R2_S3_SECRET_ACCESS_KEY: "t",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+      MODULE_SUBTITLE: { fetch: moduleFetch({ name: "subtitle" }, { ok: true, output: { film_key: assembled, applied: ["noop:no-cards"] } }) },
+      MODULE_FILM_TITLES: { fetch: moduleFetch({ name: "film-titles" }, { ok: true, output: { film_key: titledKey, applied: ["film-titles"] } }) },
+    } as unknown as Env;
+    const r = await advanceFilmJob(env, filmId);
+    expect(r?.job.phase).toBe("done");
+    expect(received["subtitle"]).toBe(assembled);   // noop read the assembled film
+    expect(received["film-titles"]).toBe(assembled); // CRUX: titles read the ORIGINAL, not the noop -ff0
+    expect(r?.job.film_key).toBe(titledKey);         // final film is the titles output
+    expect(r?.job.film_finish?.applied).toContain("film-titles");
   });
 
   it("records a chain error (no film_finish drop) when the module invoke fails", async () => {

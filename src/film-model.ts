@@ -124,7 +124,18 @@ export interface FilmJob {
     errors: string[];    // chain-level errors: a skipped (unbound) or failed (ok:false) module
     steps?: string[];    // last output detail: ["film-titles"] applied, or ["passthrough:..."]/["noop:no-cards"] degraded
     degraded?: string;   // set when the film was passed through UNCARDED; the reason (cards NOT applied)
+    // #600: film.finish steps write DETERMINISTIC per-step keys (renders/<film>-ff<n>.mp4), so a step
+    // that completed inside a request that then timed out is ADOPTED from R2 on the next tick instead of
+    // re-encoded. Before this the keys were random per attempt, so a big film re-burned ~8 min of
+    // media-stack CPU every cron tick and never finished. R2 presence IS the persisted progress
+    // (#122/#141); the existing idempotent assemble re-entry drives the per-tick resume.
+    adopted?: string[];  // steps folded from a pre-existing R2 artifact (reuse, never a fake applied run, #583)
   };
+  // #600 in-flight guard: deterministic film.finish step key -> the ts it was dispatched (persisted
+  // BEFORE the dispatch, crash-safe). A step still inside the in-flight window (key not yet in R2) is
+  // NOT re-dispatched, so a killed leaseholder + the 300s advance-lease TTL (shorter than an ~8-min
+  // encode) + the fail-open advance path cannot fire a DUPLICATE encode of the same step each tick.
+  film_finish_dispatched?: Record<string, number>;
   // Loud, structured degrade when the video-finish tier (VIDEO_FINISH_VPC) is UNAVAILABLE at
   // assemble/mux -- the binding is unbound, or the container/tunnel was unreachable after the bounded
   // retry. The film COMPLETES (never hard-fails after the GPU spend, #519) delivering what was rendered:

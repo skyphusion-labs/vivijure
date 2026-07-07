@@ -318,6 +318,7 @@ async function maybeFinalizeScatter(env: Env, job: ScatterJob): Promise<void> {
  *  double-runs, and runFilmFinish soft-degrades (a card miss never drops the assembled film). */
 async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
   if (job.film_finish || !job.film_key) return; // already run (or nothing to card)
+  job.film_finish_dispatched ??= {};
   const r = await runFilmFinish(env, {
     film_key: job.film_key,
     // Caption scenes in the SAME order the gather assembles the clips (expected_shot_ids), NOT bundle
@@ -329,11 +330,17 @@ async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
     bundle_key: job.bundle_key,
     project: job.project,
     job_id: job.scatter_id,
+  }, undefined, {
+    // #600 in-flight guard: persist a dispatch BEFORE it fires so a killed tick cannot re-dispatch a
+    // duplicate encode of the same step.
+    dispatched: job.film_finish_dispatched,
+    persistDispatch: async (key, ts) => { job.film_finish_dispatched![key] = ts; await saveScatterJob(env, job); },
   });
   if (!r.ran) { job.film_finish = { applied: [], errors: [] }; return; } // no film.finish module -> mark + skip
   if (r.errors.length > 0) console.warn(`scatter film.finish errors for ${job.scatter_id}: ${r.errors.join("; ")}`);
   if (r.degraded) console.warn(`scatter film.finish degraded for ${job.scatter_id}: ${r.degraded} -- film shipped WITHOUT cards`);
-  job.film_finish = { applied: r.applied, errors: r.errors, steps: r.steps, degraded: r.degraded };
+  if (!r.complete) { await saveScatterJob(env, job); return; } // #600 in-flight: leave film_finish UNSET so the next gather tick resumes; dispatched map already persisted
+  job.film_finish = { applied: r.applied, adopted: r.adopted, errors: r.errors, steps: r.steps, degraded: r.degraded };
   job.film_key = r.film_key;
   await saveScatterJob(env, job); // persist carded key + outcome before finalize records it
 }
