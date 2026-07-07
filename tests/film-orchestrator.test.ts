@@ -1262,7 +1262,7 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     ui: { section: "film.finish", order: 10 },
   };
 
-  function filmFinishEnv(job: object, invokeResponse: unknown, opts: { withModule?: boolean } = {}) {
+  function filmFinishEnv(job: object, invokeResponse: unknown, opts: { withModule?: boolean; presentKeys?: string[] } = {}) {
     const filmId = (job as { film_id: string }).film_id;
     let stored = JSON.stringify(job);
     const jsonResp = (b: unknown) =>
@@ -1270,7 +1270,7 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     const env: Record<string, unknown> = {
       R2_RENDERS: {
         get: async (key: string) => (key === filmJobDocKey(filmId) ? { text: async () => stored } : null),
-        head: async () => null,
+        head: async (key: string) => (opts.presentKeys?.includes(key) ? ({ size: 1 } as unknown) : null),
         put: async (key: string, val: string) => { if (key === filmJobDocKey(filmId)) stored = val; },
       },
       // mux container (callVideoFinish) -- returns the muxed film key
@@ -1316,14 +1316,30 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     expect(read().film_finish?.degraded).toBe("film-titles: passthrough:container-unreachable"); // persisted
   });
 
-  it("records applied + swaps to the carded film when the module succeeds", async () => {
+  it("records applied + swaps to the DETERMINISTIC carded film when the module succeeds (#600)", async () => {
     const ok = { ok: true, output: { film_key: "renders/film-finish-obs/film-audio-titled-abc.mp4", applied: ["film-titles"] } };
     const { env } = filmFinishEnv(muxJob(), ok);
     const r = await advanceFilmJob(env, "film-finish-obs");
     expect(r?.job.phase).toBe("done");
     expect(r?.job.film_finish?.applied).toEqual(["film-titles"]);
+    expect(r?.job.film_finish?.adopted).toEqual([]); // ran this attempt, not adopted
     expect(r?.job.film_finish?.degraded).toBeUndefined();
-    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-titled-abc.mp4");
+    // #600: the film lands at the DETERMINISTIC step key (base-ff0.mp4, the presigned output_url), NOT
+    // whatever the module echoes back -- that determinism is what makes it adoptable next tick.
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-ff0.mp4");
+  });
+
+  it("#600: a completed step already in R2 is ADOPTED (not re-encoded), recorded as adopted not applied", async () => {
+    // The deterministic step key is already present (a prior attempt finished it after its request timed
+    // out). The chain must adopt it -- no re-dispatch -- so a big film stops re-burning the media stack.
+    const ok = { ok: true, output: { film_key: "renders/film-finish-obs/film-audio-ff0.mp4", applied: ["film-titles"] } };
+    const { env } = filmFinishEnv(muxJob(), ok, { presentKeys: ["renders/film-finish-obs/film-audio-ff0.mp4"] });
+    const r = await advanceFilmJob(env, "film-finish-obs");
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_finish?.adopted).toEqual(["film-titles"]); // reused from R2
+    expect(r?.job.film_finish?.applied).toEqual([]);              // NOT run this attempt (no fake applied, #583)
+    expect(r?.job.film_finish?.degraded).toBeUndefined();
+    expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio-ff0.mp4"); // threaded to the adopted artifact
   });
 
   it("records a chain error (no film_finish drop) when the module invoke fails", async () => {
