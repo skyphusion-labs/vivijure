@@ -3,8 +3,8 @@
 // leaving fetch() funnels through applyResponseSecurity -- not just the HTML pages. Coverage by class:
 //
 //   studio pages (/, /planner, /cast, /modules, /settings)  -> strict studio CSP + companions
-//   /welcome                                                 -> welcome CSP (+ analytics beacon if a
-//                                                               valid token is set) + companions
+//   /welcome                                                 -> welcome CSP (+ Umami script if a
+//                                                               valid UMAMI_WEBSITE_ID is set) + companions
 //   everything else (api/json, non-HTML assets, redirects,   -> baseline companions + a LOCKED CSP
 //     the 429, and any non-page HTML)                           (default-src 'none')
 //
@@ -16,14 +16,14 @@
 
 import type { Env } from "./env";
 
-// --------------------------------------------------------------------------- analytics token gate
+// --------------------------------------------------------------------------- Umami analytics gate
 
-/** A Cloudflare Web Analytics token is a 32-char hex id. ONE gate drives both the beacon injection
- *  and the analytics CSP delta, so a self-hoster (no/invalid token) gets neither and they can never
- *  disagree. An empty OR malformed value is rejected (fail-safe to zero analytics). */
-const CF_ANALYTICS_TOKEN = /^[a-f0-9]{32}$/i;
-export function analyticsTokenValid(token: string | undefined): boolean {
-  return CF_ANALYTICS_TOKEN.test((token || "").trim());
+export const UMAMI_ANALYTICS_HOST = "https://analytics.skyphusion.org";
+
+/** Umami website UUID. ONE gate drives both the script injection and the analytics CSP delta. */
+const UMAMI_WEBSITE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function umamiWebsiteIdValid(id: string | undefined): boolean {
+  return UMAMI_WEBSITE_ID.test((id || "").trim());
 }
 
 // --------------------------------------------------------------------------- CSP policies (literal)
@@ -40,13 +40,15 @@ export const STUDIO_CSP =
 export const LOCKED_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
 
 /** CSP for /welcome. BASE (analyticsOn=false) is the self-hoster policy (no analytics origins).
- *  analyticsOn=true adds EXACTLY static.cloudflareinsights.com on script-src and cloudflareinsights.com
- *  on connect-src, gated on analyticsTokenValid -- the same check the beacon injection uses.
- *  'unsafe-inline' is on style-src only (welcome has one inline <style> block + inline style= attrs;
- *  a hash cannot cover attributes); scripts stay strict 'self'. */
+ *  analyticsOn=true adds EXACTLY analytics.skyphusion.org on script-src and connect-src, gated on
+ *  umamiWebsiteIdValid -- the same check the Umami script injection uses. */
 export function welcomeCsp(analyticsOn: boolean): string {
-  const scriptSrc = analyticsOn ? "script-src 'self' https://static.cloudflareinsights.com" : "script-src 'self'";
-  const connectSrc = analyticsOn ? "connect-src 'self' https://cloudflareinsights.com" : "connect-src 'self'";
+  const scriptSrc = analyticsOn
+    ? `script-src 'self' ${UMAMI_ANALYTICS_HOST}`
+    : "script-src 'self'";
+  const connectSrc = analyticsOn
+    ? `connect-src 'self' ${UMAMI_ANALYTICS_HOST}`
+    : "connect-src 'self'";
   return (
     `default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; ` +
     "img-src 'self' data: https://assets.skyphusion.net; media-src 'self' https://assets.skyphusion.net; " +
@@ -90,24 +92,24 @@ function baselineHeaders(h: Headers): Headers {
   return h;
 }
 
-// --------------------------------------------------------------------------- analytics beacon
+// --------------------------------------------------------------------------- Umami analytics script
 
-function beaconTag(token: string): string {
+function umamiScriptTag(websiteId: string): string {
   return (
-    `<script defer src="https://static.cloudflareinsights.com/beacon.min.js" ` +
-    `data-cf-beacon='${JSON.stringify({ token })}'></script>`
+    `<script defer src="${UMAMI_ANALYTICS_HOST}/script.js" ` +
+    `data-website-id="${websiteId.trim()}"></script>`
   );
 }
 
-/** Inject the analytics beacon into a welcome-page HTML string, before </head>. Pure + testable.
- *  A blank or non-well-formed token is a NO-OP (the default self-host posture is zero analytics).
- *  Idempotent: if a beacon for this script src is already present, do nothing. */
-export function injectWelcomeBeacon(html: string, token: string): string {
-  if (!analyticsTokenValid(token)) return html;
-  if (html.includes("static.cloudflareinsights.com/beacon.min.js")) return html;
+/** Inject the Umami tracker into a welcome-page HTML string, before </head>. Pure + testable.
+ *  A blank or non-UUID website id is a NO-OP (default self-host posture is zero analytics).
+ *  Idempotent: if the Umami script is already present, do nothing. */
+export function injectWelcomeUmami(html: string, websiteId: string): string {
+  if (!umamiWebsiteIdValid(websiteId)) return html;
+  if (html.includes(`${UMAMI_ANALYTICS_HOST}/script.js`)) return html;
   const idx = html.lastIndexOf("</head>");
-  if (idx === -1) return html; // no head to inject into; leave the page untouched
-  return html.slice(0, idx) + `  ${beaconTag(token.trim())}\n` + html.slice(idx);
+  if (idx === -1) return html;
+  return html.slice(0, idx) + `  ${umamiScriptTag(websiteId.trim())}\n` + html.slice(idx);
 }
 
 // --------------------------------------------------------------------------- page classification
@@ -145,11 +147,11 @@ export async function applyResponseSecurity(res: Response, request: Request, env
   const cls = ct.includes("text/html") ? pageClass(new URL(request.url).pathname) : null;
 
   if (cls === "welcome") {
-    const analyticsOn = analyticsTokenValid(env.WEB_ANALYTICS_TOKEN);
+    const analyticsOn = umamiWebsiteIdValid(env.UMAMI_WEBSITE_ID);
     const csp = welcomeCsp(analyticsOn);
     if (analyticsOn) {
       const original = await res.text();
-      const injected = injectWelcomeBeacon(original, (env.WEB_ANALYTICS_TOKEN || "").trim());
+      const injected = injectWelcomeUmami(original, (env.UMAMI_WEBSITE_ID || "").trim());
       const h = pageHeaders(new Headers(res.headers), csp);
       h.delete("content-length"); // body grew; let the runtime recompute
       h.delete("etag");           // body changed; the asset ETag no longer matches

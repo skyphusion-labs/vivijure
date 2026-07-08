@@ -72,7 +72,7 @@ into `${NAME}` tokens. What is parameterized here, and why each is a value not s
 | `${VPC_VIDEO_FINISH_ID}` / `${VPC_IMAGE_PREP_ID}` / `${VPC_AUDIO_BEAT_SYNC_ID}` / `${VPC_AUDIO_MIX_ID}` | Workers-VPC service IDs |
 | `${SPEND_RATE_LIMITER_NS_ID}` | the rate-limit namespace id |
 | `${AUTH_MODE}` | the #423 auth-gate mode: `token` (the default, including our prod) or `access` (optional hardening) |
-| `${WEB_ANALYTICS_TOKEN}` | optional CF Web Analytics beacon token for `/welcome`; blank = no beacon ships |
+| `${UMAMI_WEBSITE_ID}` | optional Umami website UUID for `/welcome`; blank = no tracker ships |
 
 `account_id` is **not** in the file at all -- wrangler reads it from `CLOUDFLARE_ACCOUNT_ID` (already a
 CI secret), the cleaner mechanism. Binding names, bucket names, the route pattern, and the module
@@ -109,12 +109,12 @@ gh secret list --repo skyphusion-labs/vivijure        # names only; values are n
     AUTH_MODE:          ${{ vars.AUTH_MODE }}    # a VARIABLE, not a secret; unset -> render FAILS LOUD (see below)
     ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
     ACCESS_AUD:         ${{ secrets.ACCESS_AUD }}
-    # ... the rest (D1 / VPC / rate-limit ids, WEB_ANALYTICS_TOKEN)
+    # ... the rest (D1 / VPC / rate-limit ids, UMAMI_WEBSITE_ID)
   run: |
     set -eu
     apk add --no-cache gettext >/dev/null          # node:22-alpine has no envsubst; gettext provides it
     if [ -z "${AUTH_MODE:-}" ]; then echo "::error::AUTH_MODE unset"; exit 1; fi; export AUTH_MODE   # fail loud, no default (#423): a silent 'access' default would mis-posture prod (Access app removed)
-    VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
+    VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $UMAMI_WEBSITE_ID'
     envsubst "$VARS" < wrangler.toml.example > wrangler.toml
     grep -q '${' wrangler.toml && { echo "::error::unsubstituted placeholder"; exit 1; } || true
     # mode-aware auth guard (#423): AUTH_MODE guaranteed non-empty by the fail-loud check above; access mode also needs armed vars.
@@ -163,8 +163,8 @@ redeploy prod or unset F2. Releases are deliberate: `git tag v0.x.y && git push 
 A fresh clone has no `wrangler.toml`. Render it once:
 ```
 export AUTH_MODE=token D1_DATABASE_ID=...        # ids from your store; token mode needs no ACCESS_*
-export ACCESS_TEAM_DOMAIN= ACCESS_AUD= WEB_ANALYTICS_TOKEN=
-VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $WEB_ANALYTICS_TOKEN'
+export ACCESS_TEAM_DOMAIN= ACCESS_AUD= UMAMI_WEBSITE_ID=
+VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $UMAMI_WEBSITE_ID'
 envsubst "$VARS" < wrangler.toml.example > wrangler.toml
 ```
 

@@ -110,7 +110,7 @@ esac
 R2_S3_BUCKET="${R2_S3_BUCKET:-vivijure}"
 R2_S3_ENDPOINT="${R2_S3_ENDPOINT:-https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com}"
 SPEND_RATE_LIMITER_NS_ID="${SPEND_RATE_LIMITER_NS_ID:-1001}"
-WEB_ANALYTICS_TOKEN="${WEB_ANALYTICS_TOKEN:-}"
+UMAMI_WEBSITE_ID="${UMAMI_WEBSITE_ID:-}"
 
 export CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
 
@@ -367,10 +367,10 @@ info "media stack: tunnel + 5 VPC services ready; token -> containers/tunnel.env
 # ---- 5. render wrangler.toml from the template ------------------------------
 say "Step 5/9: render wrangler.toml ($VIVIJURE_PROFILE profile)"
 command -v envsubst >/dev/null || die "envsubst not found -- install gettext (apt-get install gettext-base)"
-export AUTH_MODE ACCESS_TEAM_DOMAIN ACCESS_AUD D1_DATABASE_ID WEB_ANALYTICS_TOKEN SPEND_RATE_LIMITER_NS_ID
+export AUTH_MODE ACCESS_TEAM_DOMAIN ACCESS_AUD D1_DATABASE_ID UMAMI_WEBSITE_ID SPEND_RATE_LIMITER_NS_ID
 export R2_S3_ENDPOINT R2_S3_BUCKET   # #238 follow-up: now rendered into [vars], not put as secrets
 # VPC_* ids are already exported by step 4 (the media stack is provisioned before this render).
-VARS="\$AUTH_MODE \$ACCESS_TEAM_DOMAIN \$ACCESS_AUD \$D1_DATABASE_ID \$VPC_VIDEO_FINISH_ID \$VPC_IMAGE_PREP_ID \$VPC_AUDIO_BEAT_SYNC_ID \$VPC_AUDIO_MIX_ID \$SPEND_RATE_LIMITER_NS_ID \$WEB_ANALYTICS_TOKEN \$R2_S3_ENDPOINT \$R2_S3_BUCKET"
+VARS="\$AUTH_MODE \$ACCESS_TEAM_DOMAIN \$ACCESS_AUD \$D1_DATABASE_ID \$VPC_VIDEO_FINISH_ID \$VPC_IMAGE_PREP_ID \$VPC_AUDIO_BEAT_SYNC_ID \$VPC_AUDIO_MIX_ID \$SPEND_RATE_LIMITER_NS_ID \$UMAMI_WEBSITE_ID \$R2_S3_ENDPOINT \$R2_S3_BUCKET"
 
 # Strip the wrangler.toml.example blocks this deploy does not want, then envsubst the rest:
 #   SELFHOST-SKIP -- OUR-fleet-only (e.g. the vivijure-tail consumer); ALWAYS stripped for a self-host.
