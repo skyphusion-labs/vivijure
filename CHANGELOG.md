@@ -3,6 +3,15 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.17.4
+
+**Welcome page SEO: canonical storefront defers to vivijure.com (#604).** PATCH. `/welcome` now
+declares `rel=canonical` and `og:url` at `https://vivijure.com/`, uses the branded
+`vivijure.com/og-image.png` for OG/Twitter cards, adds `twitter:site` / `twitter:creator`
+(`@skyphusion`), reciprocal `rel=me` identity links, and footer cross-links to the Skyphusion
+property mesh. Static HTML only; no Worker logic or schema changes. Ship via tag deploy to refresh
+the bundled assets and run the post-deploy `/welcome` edge purge.
+
 ## v0.17.3
 
 **film.finish survives films bigger than one invocation budget (#600).** PATCH. The second S25
