@@ -9,22 +9,33 @@
          which a public visitor cannot fetch. Keeping the page to a single public /welcome
          path is worth more than a favicon here. -->
     <meta name="theme-color" content="#0E1730" />
+    <link rel="canonical" href="https://vivijure.com/" />
+    <link rel="me" href="https://vivijure.com" />
+    <link rel="me" href="https://skyphusion.org" />
+    <link rel="me" href="https://skyphusion.net" />
+    <link rel="me" href="https://github.com/skyphusion-labs" />
+    <link rel="me" href="https://github.com/skyphusion" />
+    <link rel="me" href="https://github.skyphusion.org" />
+    <link rel="me" href="https://github.skyphusion.net" />
+    <link rel="me" href="https://x.com/skyphusion" />
     <meta property="og:title" content="Vivijure: a self-hosted AI film studio" />
     <meta property="og:description" content="Write a storyboard, render it to video on your own GPU. Bring your own GPU and keys, own every artifact, no subscription, no lock-in." />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.jpg" />
+    <meta property="og:url" content="https://vivijure.com/" />
+    <meta property="og:image" content="https://vivijure.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
     <meta property="og:video" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.mp4" />
     <meta property="og:site_name" content="Vivijure" />
-    <meta property="og:image:alt" content="A still from the Vivijure speaks showcase film: a self-hosted AI film studio." />
-    <!-- Twitter / X card. Mirrors the OG showcase so a shared /welcome link renders a large media card. -->
+    <meta property="og:image:alt" content="Vivijure: make films with AI, on your own terms. The self-hosted, AGPL-3.0 AI film studio." />
+    <!-- Twitter / X card. Canonical storefront is vivijure.com; this welcome route is the public demo path. -->
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@skyphusion" />
+    <meta name="twitter:creator" content="@skyphusion" />
     <meta name="twitter:title" content="Vivijure: a self-hosted AI film studio" />
     <meta name="twitter:description" content="Write a storyboard, render it to video on your own GPU. Bring your own GPU and keys, own every artifact, no subscription, no lock-in." />
-    <meta name="twitter:image" content="https://assets.skyphusion.net/vivijure/showcase/vivijure-speaks.jpg" />
-    <meta name="twitter:image:alt" content="A still from the Vivijure speaks showcase film." />
-    <!-- The storefront is meant to be discoverable: /welcome is the public route (open in every
-         auth mode) and the project showcase. No og:url / <link rel=canonical> on purpose: those would bake one
-         deploy host into the shipped artifact; the canonical host is a per-deploy value. -->
+    <meta name="twitter:image" content="https://vivijure.com/og-image.png" />
+    <meta name="twitter:image:alt" content="Vivijure: make films with AI, on your own terms." />
     <meta name="robots" content="index, follow" />
     <!-- Styles are inlined on purpose: the page is one self-contained file so the only
          vivijure-domain path that is publicly reachable is /welcome itself. The
@@ -444,8 +455,12 @@
       </main>
 
       <footer>
+        <a href="https://vivijure.com">vivijure.com</a>
         <a href="/planner">Open the studio</a>
         <a href="https://github.com/skyphusion-labs/vivijure">GitHub</a>
+        <a href="https://skyphusion.org">Skyphusion Labs</a>
+        <a href="https://github.skyphusion.org">Labs on GitHub</a>
+        <a href="https://github.skyphusion.net">Conrad on GitHub</a>
         <a href="https://skyphusion.net/blog/vivijure-first-run/">Read the first-run writeup</a>
         <a href="https://github.com/skyphusion-labs/vivijure/blob/main/docs/legal/TERMS.md">Terms</a>
         <a href="https://github.com/skyphusion-labs/vivijure/blob/main/docs/legal/PRIVACY.md">Privacy</a>
