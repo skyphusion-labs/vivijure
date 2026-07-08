@@ -19,11 +19,11 @@
     "conformance": "vitest run tests/conformance.test.ts tests/conformance.live.test.ts"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260606.1",
+    "@cloudflare/workers-types": "^5.20260708.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.9",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
-    "wrangler": "^4.102.0"
+    "wrangler": "^4.108.0"
   }
 }
