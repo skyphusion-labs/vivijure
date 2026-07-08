@@ -52,7 +52,7 @@ ACCESS_AUD = "${ACCESS_AUD}"
 # Cloudflare Web Analytics token, deploy-injected into /welcome by the Worker (src/asset-response.ts).
 # PUBLIC, not a secret -- but DEFAULT EMPTY: a self-hosted deploy that leaves it unset ships NO beacon,
 # so /welcome visitors phone home to NO ONE. Set it ONLY on your own deploy to keep your own analytics.
-WEB_ANALYTICS_TOKEN = "${WEB_ANALYTICS_TOKEN}"
+UMAMI_WEBSITE_ID = "${UMAMI_WEBSITE_ID}"
 # R2 S3-API presign identifiers (src/r2-presign.ts). NOT secrets: R2_S3_ENDPOINT is the public
 # account-scoped R2 S3 host (https://<account-id>.r2.cloudflarestorage.com), R2_S3_BUCKET is the
 # same `vivijure` bucket bound as R2_RENDERS below. Both are deploy-injected (ci.yml / deploy.sh)

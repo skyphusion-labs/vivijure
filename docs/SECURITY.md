@@ -382,12 +382,12 @@ never receives the permissive page policy.
 |---|---|---|---|---|---|
 | Studio pages (`/`, `/planner`, `/cast`, `/modules`, `/settings`) | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'` | `nosniff` | `DENY` | `same-origin` | `camera=(), microphone=(), geolocation=()` |
 | `/welcome` (BASE, self-host) | as studio, but `style-src 'self' 'unsafe-inline'`, `img-src`/`media-src` add `https://assets.skyphusion.net` | `nosniff` | `DENY` | `same-origin` | same |
-| `/welcome` (analytics ON: `WEB_ANALYTICS_TOKEN` set + 32-hex valid) | BASE plus `https://static.cloudflareinsights.com` on `script-src` and `https://cloudflareinsights.com` on `connect-src` | `nosniff` | `DENY` | `same-origin` | same |
+| `/welcome` (analytics ON: `UMAMI_WEBSITE_ID` set + valid UUID) | BASE plus `https://analytics.skyphusion.org` on `script-src` and `connect-src` | `nosniff` | `DENY` | `same-origin` | same |
 | Everything else (API/JSON, assets, redirects, 429, non-page HTML) | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'` | `nosniff` | `DENY` | `same-origin` | (none -- document-only) |
 
 `frame-ancestors 'none'` supersedes `X-Frame-Options`; the latter is kept for pre-CSP agents.
 `Permissions-Policy` is document-only, so it is set on pages, not on JSON/asset responses. The
-`/welcome` analytics CSP delta and the analytics beacon injection share ONE gate (`analyticsTokenValid`),
+`/welcome` analytics CSP delta and the Umami script injection share ONE gate (`umamiWebsiteIdValid`),
 so a self-hoster with no token gets neither and the two can never disagree (#363). A downstream
 deployer who re-enables a CDN/proxy header layer should keep it OFF for this origin, or reconcile it
 with this matrix, to preserve the single-source-of-truth property.
