@@ -7,6 +7,12 @@ Vivijure is a self-hosted AI film studio built on Cloudflare Workers. It runs fr
 Workers free tier and connects to whatever GPU backend you attach -- RunPod, your own box, or
 a cloud motion API. You own every artifact.
 
+## Who this is for
+
+Filmmakers, homelab builders, and creative technologists who want an AI film studio they own: your GPU, your keys, your films. No subscription wall.
+
+**Live:** https://vivijure.com · **Welcome demo:** https://vivijure.skyphusion.org/welcome · **Skyphusion Labs:** https://skyphusion.org
+
 ## Quick start
 
 Fill in your keys once, run one script:
