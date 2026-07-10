@@ -795,7 +795,7 @@ Returned by the storyboard render submit + this route + the regen/scatter submit
 | `jobId` | string | The `film-<...>` / `scatter-<...>` job id. |
 | `status` | `"IN_PROGRESS"\|"COMPLETED"\|"FAILED"\|"CANCELLED"` | Folded from the job phase. |
 | `statusRaw` | string | The raw phase (or `"CANCELLED"`). |
-| `output` | object \| undefined | On COMPLETED: `{ output_key, project, mode }` (+ `keyframes`/`scenes` for keyframes-only, + `clips`/`model` for derived animation). While IN_PROGRESS: phase progress `{ phase, scene_index, scene_total, project, progress?, last_progress_at, stalled?, stall_seconds? }`. |
+| `output` | object \| undefined | On COMPLETED: `{ output_key, project, mode }` (+ `keyframes`/`scenes` for keyframes-only, + `clips`/`model` for derived animation, + `sidecar_key` when a soft `.srt` subtitle sidecar was produced). While IN_PROGRESS: phase progress `{ phase, scene_index, scene_total, project, progress?, last_progress_at, stalled?, stall_seconds? }`. |
 | `error` | string \| undefined | Set on FAILED. |
 | `executionTimeMs` | number | Wall-clock since job creation. |
 
