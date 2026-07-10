@@ -78,6 +78,11 @@ only forwards the SRT + style spec). See `wrangler.toml`.
 - **Hook**: `film.finish` (cardinality `chain`). **Provides**: `subtitle`, "Time-synced dialogue
   captions (burned-in + .srt)". `ui { section: "film.finish", order: 5 }`.
 
+- **Async job+poll (#602)**: an SRT burn is a full re-encode; on a LONG film it can outlast a Worker
+  request budget, so `/invoke` submits to the container's `/async/subtitle` route and returns
+  `{ ok, pending, poll }`; the core polls `/poll` across ticks. It FALLS BACK to the synchronous
+  `/subtitle` route on a pre-#602 container, so an old container keeps working unchanged.
+
 ## Soft-degrade
 
 A polish step never fails the chain. Nothing to caption is an intentional no-op

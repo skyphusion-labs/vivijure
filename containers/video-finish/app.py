@@ -20,6 +20,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
+import uuid
 
 from aiohttp import ClientSession, ClientTimeout, web
 
@@ -36,6 +38,93 @@ MAX_KEYFRAME_BYTES = 32 * 1024 * 1024   # keyframe PNG for content-inspect (#523
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("video-finish")
+
+
+# ---------------------------------------------------------------------------
+# Async job+poll mode (#602). A film.finish encode (subtitle burn / title cards)
+# on a long film can outlast a single Worker request budget; the synchronous
+# route then dies before the container PUTs, so the film.finish step never
+# completes. The async layer mirrors the GPU-satellite job+poll shape: submit
+# returns 202 + a job id immediately, the work runs in a background task and
+# PUTs the finished MP4 to the presigned R2 URL on completion, and a status
+# route reports pending / completed / failed. The synchronous routes stay
+# unchanged for back-compat (an old core / an old module still uses them).
+#
+# Jobs live in-process (no external store): a container restart drops them, at
+# which point /async/status/<id> answers not_found and the CORE re-submits
+# (its output key is deterministic, so a re-run is idempotent) or adopts the R2
+# artifact if the encode had finished -- the same R2-authoritative recovery the
+# synchronous #600 path already relies on.
+
+# Reap a finished job this long after completion so a crashed/abandoned poller
+# cannot leak memory; the core polls far more often than this.
+JOB_TTL_S = 3600
+JOBS = {}  # job_id -> {"status": "pending"|"completed"|"failed", "result"?, "error"?, "at": monotonic}
+
+
+class _JobError(Exception):
+    """A work coroutine failure carrying the HTTP status the SYNC route should
+    return; the ASYNC path records .message as the job error. Keeps both paths on
+    one validation/error body."""
+
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def _reap_jobs(now):
+    stale = [k for k, v in JOBS.items()
+             if v.get("status") in ("completed", "failed") and now - v.get("at", now) > JOB_TTL_S]
+    for k in stale:
+        JOBS.pop(k, None)
+
+
+async def _run_job(job_id, work_coro):
+    try:
+        result = await work_coro
+        JOBS[job_id] = {"status": "completed", "result": result, "at": time.monotonic()}
+    except _JobError as e:
+        log.warning("async job %s failed: %s", job_id, e.message)
+        JOBS[job_id] = {"status": "failed", "error": e.message, "at": time.monotonic()}
+    except Exception as e:  # noqa: BLE001
+        log.exception("async job %s crashed", job_id)
+        JOBS[job_id] = {"status": "failed", "error": str(e), "at": time.monotonic()}
+
+
+async def async_submit(req):
+    # POST /async/<route> -- accept a film.finish job and run it in the background.
+    route = req.match_info.get("route", "")
+    work = ASYNC_WORKS.get(route)
+    if work is None:
+        return web.json_response({"ok": False, "error": f"unknown async route {route!r}"}, status=404)
+    try:
+        body = await req.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+    now = time.monotonic()
+    _reap_jobs(now)
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = {"status": "pending", "at": now}
+    asyncio.create_task(_run_job(job_id, work(body)))
+    log.info("/async/%s accepted job=%s", route, job_id)
+    return web.json_response({"ok": True, "jobId": job_id, "status": "pending"}, status=202)
+
+
+async def async_status(req):
+    # GET /async/status/<jobId> -- report a background job. not_found (HTTP 404)
+    # means the container never had (or has since dropped) this job; the core
+    # decides whether to adopt an R2 artifact or re-submit.
+    job_id = req.match_info.get("jobId", "")
+    j = JOBS.get(job_id)
+    if j is None:
+        return web.json_response({"ok": True, "status": "not_found"}, status=404)
+    if j["status"] == "pending":
+        return web.json_response({"ok": True, "status": "pending"})
+    if j["status"] == "completed":
+        return web.json_response({"ok": True, "status": "completed", "result": j["result"]})
+    return web.json_response({"ok": True, "status": "failed", "error": j.get("error", "job failed")})
+
 
 
 async def health(_req):
@@ -663,28 +752,10 @@ def _assemble_film_titles(work, film_path, title_spec, credits_spec,
     return out, _probe_duration(out)
 
 
-async def film_titles(req):
-    """POST /film-titles -- prepend a title card and/or append a credits card.
-
-    JSON body (presigned URLs; bytes never touch the Worker):
-      videoUrl   string  presigned GET URL for the assembled film
-      outputUrl  string  presigned PUT URL for the result
-      outputKey  string  R2 key label (logged; unused by this endpoint)
-      title      object  optional {text, subtitle?, seconds?}
-      credits    object  optional {lines:[string], seconds?}
-      width      int     output width  (default 1920)
-      height     int     output height (default 1080)
-      fps        int     frame rate    (default 24)
-      crf        int     libx264 CRF   (default 18)
-      preset     string  libx264 preset (default "medium")
-
-    Returns: {ok, key, bytes, durationSeconds}
-    """
-    try:
-        body = await req.json()
-    except Exception:
-        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
-
+async def _film_titles_work(body):
+    """The /film-titles work: validate, download the film, prepend/append cards,
+    PUT the result. Shared by the synchronous route and the async job runner.
+    Raises _JobError(status, message) on any failure; returns the result dict."""
     video_url = body.get("videoUrl")
     output_url = body.get("outputUrl")
     output_key = body.get("outputKey", "")
@@ -692,15 +763,14 @@ async def film_titles(req):
     credits_spec = body.get("credits") if isinstance(body.get("credits"), dict) else None
 
     if not video_url:
-        return web.json_response({"ok": False, "error": "videoUrl required"}, status=400)
+        raise _JobError(400, "videoUrl required")
     if not output_url:
-        return web.json_response({"ok": False, "error": "outputUrl required"}, status=400)
+        raise _JobError(400, "outputUrl required")
     ok, why = validate_fetch_url(output_url)
     if not ok:
-        return web.json_response({"ok": False, "error": f"outputUrl blocked: {why}"}, status=400)
+        raise _JobError(400, f"outputUrl blocked: {why}")
     if not title_spec and not credits_spec:
-        return web.json_response(
-            {"ok": False, "error": "at least one of title or credits is required"}, status=400)
+        raise _JobError(400, "at least one of title or credits is required")
 
     try:
         width = int(body.get("width", 1920))
@@ -708,7 +778,7 @@ async def film_titles(req):
         fps = int(body.get("fps", 24))
         crf = int(body.get("crf", 18))
     except (TypeError, ValueError):
-        return web.json_response({"ok": False, "error": "bad numeric input"}, status=400)
+        raise _JobError(400, "bad numeric input")
     preset = str(body.get("preset", "medium"))
 
     work = tempfile.mkdtemp(prefix="vftitles-")
@@ -718,7 +788,7 @@ async def film_titles(req):
             ok, info = await _download(s, video_url, film_path, MAX_CLIP_BYTES)
             if not ok:
                 sc = 413 if info == "too large" else (400 if info.startswith("blocked:") else 502)
-                return web.json_response({"ok": False, "error": f"film {info}"}, status=sc)
+                raise _JobError(sc, f"film {info}")
 
         loop = asyncio.get_running_loop()
         try:
@@ -729,10 +799,10 @@ async def film_titles(req):
             )
         except subprocess.CalledProcessError as e:
             log.exception("ffmpeg failed in /film-titles")
-            return web.json_response({"ok": False, "error": f"ffmpeg failed: {e}"}, status=500)
+            raise _JobError(500, f"ffmpeg failed: {e}")
         except Exception as e:  # noqa: BLE001
             log.exception("/film-titles assemble failed")
-            return web.json_response({"ok": False, "error": str(e)}, status=500)
+            raise _JobError(500, str(e))
 
         with open(out_path, "rb") as f:
             out_bytes = f.read()
@@ -741,18 +811,32 @@ async def film_titles(req):
             async with s.put(output_url, data=out_bytes,
                              headers={"content-type": "video/mp4"}) as r:
                 if r.status not in (200, 201, 204):
-                    return web.json_response(
-                        {"ok": False, "error": f"output put {r.status}"}, status=502)
+                    raise _JobError(502, f"output put {r.status}")
 
         log.info("/film-titles ok key=%s bytes=%d dur=%.3f", output_key, len(out_bytes), secs)
-        return web.json_response({
+        return {
             "ok": True,
             "key": output_key,
             "bytes": len(out_bytes),
             "durationSeconds": round(secs, 3),
-        })
+        }
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+async def film_titles(req):
+    """POST /film-titles -- synchronous: prepend a title card and/or append a
+    credits card. Body + behavior unchanged; the work lives in _film_titles_work
+    so the async job runner shares it. See _film_titles_work for the body schema."""
+    try:
+        body = await req.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+    try:
+        return web.json_response(await _film_titles_work(body))
+    except _JobError as e:
+        return web.json_response({"ok": False, "error": e.message}, status=e.status)
+
 
 # ---------------------------------------------------------------------------
 # /subtitle: burn a time-synced SRT onto the assembled film (and/or write a
@@ -854,29 +938,10 @@ def _burn_subtitles(src, dst, vf_filter, crf=18, preset="medium"):
     _run(cmd)
 
 
-async def subtitle(req):
-    """POST /subtitle -- burn a time-synced SRT onto the film and/or write a soft .srt sidecar.
-
-    JSON body (presigned URLs; bytes never touch the Worker):
-      srt         string  the already-formatted SubRip document (required)
-      mode        string  "burn" (default), "sidecar", or "both"
-      videoUrl    string  presigned GET URL for the assembled film (required for burn)
-      outputUrl   string  presigned PUT URL for the burned result (required for burn)
-      outputKey   string  R2 key label for the burned result (returned on burn)
-      sidecarUrl  string  presigned PUT URL for the .srt (required for sidecar/both)
-      sidecarKey  string  R2 key label for the sidecar (returned on sidecar write)
-      style       object  {font, fontSize, color, position, box, marginV}
-      width/height/fps    output geometry hints (unused by the burn; kept for parity)
-      crf         int     libx264 CRF   (default 18)
-      preset      string  libx264 preset (default "medium")
-
-    Returns: {ok, key, burned, sidecar, sidecarKey, durationSeconds}
-    """
-    try:
-        body = await req.json()
-    except Exception:
-        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
-
+async def _subtitle_work(body):
+    """The /subtitle work: burn a time-synced SRT onto the film and/or write a
+    soft .srt sidecar. Shared by the synchronous route and the async job runner.
+    Raises _JobError(status, message) on failure; returns the result dict."""
     srt_text = body.get("srt")
     mode = str(body.get("mode", "burn"))
     video_url = body.get("videoUrl")
@@ -887,34 +952,34 @@ async def subtitle(req):
     style = body.get("style") if isinstance(body.get("style"), dict) else {}
 
     if not isinstance(srt_text, str) or not srt_text.strip():
-        return web.json_response({"ok": False, "error": "srt required"}, status=400)
+        raise _JobError(400, "srt required")
     if len(srt_text.encode("utf-8")) > MAX_SRT_BYTES:
-        return web.json_response({"ok": False, "error": "srt too large"}, status=413)
+        raise _JobError(413, "srt too large")
     if mode not in ("burn", "sidecar", "both"):
-        return web.json_response({"ok": False, "error": "mode must be burn|sidecar|both"}, status=400)
+        raise _JobError(400, "mode must be burn|sidecar|both")
 
     want_burn = mode in ("burn", "both")
     want_sidecar = mode in ("sidecar", "both")
 
     if want_burn:
         if not video_url:
-            return web.json_response({"ok": False, "error": "videoUrl required for burn"}, status=400)
+            raise _JobError(400, "videoUrl required for burn")
         if not output_url:
-            return web.json_response({"ok": False, "error": "outputUrl required for burn"}, status=400)
+            raise _JobError(400, "outputUrl required for burn")
         ok, why = validate_fetch_url(output_url)
         if not ok:
-            return web.json_response({"ok": False, "error": f"outputUrl blocked: {why}"}, status=400)
+            raise _JobError(400, f"outputUrl blocked: {why}")
     if want_sidecar:
         if not sidecar_url:
-            return web.json_response({"ok": False, "error": "sidecarUrl required for sidecar mode"}, status=400)
+            raise _JobError(400, "sidecarUrl required for sidecar mode")
         ok, why = validate_fetch_url(sidecar_url)
         if not ok:
-            return web.json_response({"ok": False, "error": f"sidecarUrl blocked: {why}"}, status=400)
+            raise _JobError(400, f"sidecarUrl blocked: {why}")
 
     try:
         crf = int(body.get("crf", 18))
     except (TypeError, ValueError):
-        return web.json_response({"ok": False, "error": "bad numeric input"}, status=400)
+        raise _JobError(400, "bad numeric input")
     preset = str(body.get("preset", "medium"))
 
     work = tempfile.mkdtemp(prefix="vfsubs-")
@@ -930,7 +995,7 @@ async def subtitle(req):
                 async with s.put(sidecar_url, data=srt_text.encode("utf-8"),
                                  headers={"content-type": "application/x-subrip"}) as r:
                     if r.status not in (200, 201, 204):
-                        return web.json_response({"ok": False, "error": f"sidecar put {r.status}"}, status=502)
+                        raise _JobError(502, f"sidecar put {r.status}")
             sidecar_done = True
 
         burned = False
@@ -941,7 +1006,7 @@ async def subtitle(req):
                 ok, info = await _download(s, video_url, film_path, MAX_CLIP_BYTES)
                 if not ok:
                     sc = 413 if info == "too large" else (400 if info.startswith("blocked:") else 502)
-                    return web.json_response({"ok": False, "error": f"film {info}"}, status=sc)
+                    raise _JobError(sc, f"film {info}")
 
             vf = _subtitle_filter(srt_path, style)
             out_path = os.path.join(work, "subbed.mp4")
@@ -950,10 +1015,10 @@ async def subtitle(req):
                 await loop.run_in_executor(None, _burn_subtitles, film_path, out_path, vf, crf, preset)
             except subprocess.CalledProcessError as e:
                 log.exception("ffmpeg subtitles burn failed key=%s", output_key)
-                return web.json_response({"ok": False, "error": f"ffmpeg failed: {e}"}, status=500)
+                raise _JobError(500, f"ffmpeg failed: {e}")
             except Exception as e:  # noqa: BLE001
                 log.exception("/subtitle burn failed")
-                return web.json_response({"ok": False, "error": str(e)}, status=500)
+                raise _JobError(500, str(e))
 
             with open(out_path, "rb") as f:
                 out_bytes = f.read()
@@ -961,23 +1026,36 @@ async def subtitle(req):
                 async with s.put(output_url, data=out_bytes,
                                  headers={"content-type": "video/mp4"}) as r:
                     if r.status not in (200, 201, 204):
-                        return web.json_response({"ok": False, "error": f"output put {r.status}"}, status=502)
+                        raise _JobError(502, f"output put {r.status}")
             burned = True
             out_secs = _probe_duration(out_path)
 
         log.info("/subtitle ok key=%s burned=%s sidecar=%s dur=%.3f",
                  output_key, burned, sidecar_done, out_secs)
-        return web.json_response({
+        return {
             "ok": True,
             "key": output_key if burned else "",
             "burned": burned,
             "sidecar": sidecar_done,
             "sidecarKey": sidecar_key if sidecar_done else "",
             "durationSeconds": round(out_secs, 3),
-        })
+        }
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
+
+async def subtitle(req):
+    """POST /subtitle -- synchronous: burn a time-synced SRT and/or write a soft
+    .srt sidecar. Body + behavior unchanged; the work lives in _subtitle_work so
+    the async job runner shares it. See _subtitle_work for the body schema."""
+    try:
+        body = await req.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+    try:
+        return web.json_response(await _subtitle_work(body))
+    except _JobError as e:
+        return web.json_response({"ok": False, "error": e.message}, status=e.status)
 
 
 # ---------------------------------------------------------------------------
@@ -1028,6 +1106,14 @@ async def inspect(req):
         shutil.rmtree(work, ignore_errors=True)
 
 
+# The film.finish routes exposed for async job+poll (#602). Assemble/mux (/finish),
+# /overlay and /inspect stay synchronous -- they are not the single-step-exceeds-budget
+# film.finish class this addresses.
+ASYNC_WORKS = {
+    "film-titles": _film_titles_work,
+    "subtitle": _subtitle_work,
+}
+
 app = web.Application(client_max_size=1024 * 1024)  # JSON bodies are small (URLs + a short SRT)
 app.router.add_get("/health", health)
 app.router.add_post("/finish", finish)
@@ -1035,6 +1121,8 @@ app.router.add_post("/overlay", overlay)
 app.router.add_post("/film-titles", film_titles)
 app.router.add_post("/subtitle", subtitle)
 app.router.add_post("/inspect", inspect)
+app.router.add_post("/async/{route}", async_submit)
+app.router.add_get("/async/status/{jobId}", async_status)
 
 if __name__ == "__main__":
     log.info("video-finish listening on 0.0.0.0:%d", PORT)

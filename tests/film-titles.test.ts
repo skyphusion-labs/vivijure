@@ -64,20 +64,37 @@ describe("film-titles pure logic", () => {
 });
 
 
-// Module invoke path (default export). Guards the bug where a BARE "/film-titles" URL throws in the
-// Workers runtime, gets masked as "container-unreachable", and ships the film UNCARDED at phase=done.
-describe("film-titles module invoke (#207 regression)", () => {
-  function vpcEnv(over: { status?: number; body?: unknown; throws?: boolean } = {}) {
+// Module invoke path (default export). #602: the module is ASYNC-FIRST -- it submits to the container's
+// /async/film-titles route and returns a poll token; the core drives submit+poll across ticks. It FALLS
+// BACK to the synchronous /film-titles route on a pre-#602 container. Both use ABSOLUTE URLs (the #207
+// bare-path bug: a bare "/film-titles" throws in the Workers runtime, masked as "container-unreachable").
+describe("film-titles module invoke (#602 async + #207 regression)", () => {
+  function vpcEnv(over: {
+    asyncSupported?: boolean;
+    statusResult?: { status: string; result?: unknown; error?: string };
+    syncStatus?: number;
+    syncBody?: unknown;
+    throws?: boolean;
+  } = {}) {
     const calls: string[] = [];
+    const asyncSupported = over.asyncSupported ?? true;
+    const j = (b: unknown, status = 200) =>
+      new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
     const env = {
       VIDEO_FINISH_VPC: {
         async fetch(input: Request | string) {
-          calls.push(typeof input === "string" ? input : input.url);
+          const url = typeof input === "string" ? input : input.url;
+          calls.push(url);
           if (over.throws) throw new TypeError("Invalid URL");
-          return new Response(JSON.stringify(over.body ?? { ok: true, key: "renders/film-x/film_titled.mp4" }), {
-            status: over.status ?? 200,
-            headers: { "content-type": "application/json" },
-          });
+          const path = new URL(url).pathname;
+          if (path.startsWith("/async/status/")) {
+            const st = over.statusResult ?? { status: "completed", result: { ok: true, key: "renders/film-x/film_titled.mp4" } };
+            return j(st, st.status === "not_found" ? 404 : 200);
+          }
+          if (path.startsWith("/async/")) {
+            return asyncSupported ? j({ ok: true, jobId: "job-abc", status: "pending" }, 202) : j({ ok: false, error: "unknown async route" }, 404);
+          }
+          return j(over.syncBody ?? { ok: true, key: "renders/film-x/film_titled.mp4" }, over.syncStatus ?? 200);
         },
       },
     } as unknown as Parameters<typeof worker.fetch>[1];
@@ -90,19 +107,61 @@ describe("film-titles module invoke (#207 regression)", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ hook: "film.finish", input, config: {}, context: {} }),
     });
+  const pollReq = (token: string) =>
+    new Request("https://module/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ poll: token }),
+    });
 
-  it("calls the container with an ABSOLUTE url and applies the cards (not degraded)", async () => {
+  it("submits async and returns a poll token (absolute /async URL, #207)", async () => {
     const { env, calls } = vpcEnv();
     const res = await worker.fetch(invoke(baseInput({ title: { text: "NEON HALFLIFE" } })), env);
-    const json = (await res.json()) as { ok: boolean; output: { film_key: string; applied: string[]; degraded?: string } };
-    // The whole bug: a bare path threw. Assert a parseable absolute URL with the right path.
+    const json = (await res.json()) as { ok: boolean; pending?: boolean; poll?: string };
     expect(calls).toHaveLength(1);
     expect(() => new URL(calls[0])).not.toThrow();
-    expect(new URL(calls[0]).pathname).toBe("/film-titles");
+    expect(new URL(calls[0]).pathname).toBe("/async/film-titles");
+    expect(json.ok).toBe(true);
+    expect(json.pending).toBe(true);
+    expect(typeof json.poll).toBe("string");
+  });
+
+  it("polls to the DETERMINISTIC carded film on completion (not degraded)", async () => {
+    const { env } = vpcEnv();
+    const sub = (await (await worker.fetch(invoke(baseInput({ title: { text: "NEON HALFLIFE" } })), env)).json()) as { poll: string };
+    const res = await worker.fetch(pollReq(sub.poll), env);
+    const json = (await res.json()) as { ok: boolean; output: { film_key: string; applied: string[]; degraded?: string } };
     expect(json.ok).toBe(true);
     expect(json.output.film_key).toBe("renders/film-x/film_titled.mp4"); // the carded film, not the original
     expect(json.output.applied).toEqual(["film-titles"]);
     expect(json.output.degraded).toBeUndefined();
+  });
+
+  it("falls back to the SYNCHRONOUS route on a pre-#602 container (absolute URLs)", async () => {
+    const { env, calls } = vpcEnv({ asyncSupported: false });
+    const res = await worker.fetch(invoke(baseInput({ title: { text: "NEON HALFLIFE" } })), env);
+    const json = (await res.json()) as { ok: boolean; output: { film_key: string; applied: string[] } };
+    expect(calls.map((c) => new URL(c).pathname)).toEqual(["/async/film-titles", "/film-titles"]);
+    expect(json.ok).toBe(true);
+    expect(json.output.film_key).toBe("renders/film-x/film_titled.mp4");
+    expect(json.output.applied).toEqual(["film-titles"]);
+  });
+
+  it("poll surfaces a container job FAILURE (ok:false -> the core soft-degrades, fail-safe)", async () => {
+    const { env } = vpcEnv({ statusResult: { status: "failed", error: "ffmpeg boom" } });
+    const sub = (await (await worker.fetch(invoke(baseInput({ title: { text: "X" } })), env)).json()) as { poll: string };
+    const res = await worker.fetch(pollReq(sub.poll), env);
+    const json = (await res.json()) as { ok: boolean; error?: string };
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain("container job failed");
+  });
+
+  it("poll stays pending while the container job is still running", async () => {
+    const { env } = vpcEnv({ statusResult: { status: "pending" } });
+    const sub = (await (await worker.fetch(invoke(baseInput({ title: { text: "X" } })), env)).json()) as { poll: string };
+    const json = (await (await worker.fetch(pollReq(sub.poll), env)).json()) as { ok: boolean; pending?: boolean };
+    expect(json.ok).toBe(true);
+    expect(json.pending).toBe(true);
   });
 
   it("soft-degrades (fail-safe) when the container is unreachable, keeping the original film", async () => {

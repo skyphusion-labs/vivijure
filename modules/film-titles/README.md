@@ -54,6 +54,10 @@ secrets (it only forwards the card spec). See `wrangler.toml`.
 
 - **Hook**: `film.finish` (cardinality `chain`). **Provides**: `film-titles`,
   "Title + credit cards on the finished film". `ui { section: "film.finish", order: 10 }`.
+- **Async job+poll (#602)**: card generation on a LONG film can outlast a Worker request budget, so
+  `/invoke` submits to the container's `/async/film-titles` route and returns `{ ok, pending, poll }`;
+  the core polls `/poll` across ticks. It FALLS BACK to the synchronous `/film-titles` route when the
+  container has no async support (a pre-#602 container), so an old container keeps working unchanged.
 
 ## Soft-degrade
 

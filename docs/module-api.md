@@ -122,6 +122,11 @@ and cancels with its own creds. Without `/cancel`, a cancelled render or a stall
 ORPHANS the GPU job (it keeps billing after the work is satisfied); the core honest-degrade-logs that
 orphan rather than hide it (#327 / #328). Full envelope spec in CONTRACT.md section 4.
 
+This is NOT just for GPU hooks: a CPU-container `film.finish` module (subtitle burn, title cards)
+whose encode outlasts a request budget on a long film ALSO answers `pending` + `poll`, so the core
+drives submit+poll across ticks and no single request holds the encode open (#602). Such a module
+stays FAIL-SAFE -- a poll failure soft-degrades (ships the film uncarded), it never fails the render.
+
 ### Declared finish artifacts (`finish_artifacts`, optional + additive)
 
 A `finish` module SHOULD declare its artifact conventions in the manifest so the core's

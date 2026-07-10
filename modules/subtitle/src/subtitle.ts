@@ -139,3 +139,49 @@ export function passthroughOutput(input: FilmFinishInput, reason: string, opts: 
     ...(opts.degraded ? { degraded: reason } : {}),
   };
 }
+
+// --- async job+poll (#602) ---------------------------------------------------------------------
+// A subtitle burn is a full libx264 re-encode; on a long film it can outlast a Worker request budget.
+// The module submits to the video-finish container's async route and returns a poll token, so the CORE
+// drives submit+poll across ticks (mirroring the GPU finish satellites). The token is opaque to the
+// core and decoded only here.
+
+export interface FinishPoll {
+  jobId: string;       // the container's background job id
+  filmKey: string;     // the input film key (the sidecar-only / passthrough result key)
+  outputKey: string;   // the deterministic key the container writes the burned film to
+  submittedAt: number; // epoch ms; measures the container "job not found" (restart) grace window
+}
+
+export function encodePoll(s: FinishPoll): string {
+  return btoa(JSON.stringify(s));
+}
+
+export function decodePoll(token: string): FinishPoll | null {
+  try {
+    const o = JSON.parse(atob(token)) as FinishPoll;
+    if (o && typeof o.jobId === "string" && typeof o.filmKey === "string" && typeof o.outputKey === "string") {
+      return { jobId: o.jobId, filmKey: o.filmKey, outputKey: o.outputKey, submittedAt: typeof o.submittedAt === "number" ? o.submittedAt : 0 };
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+// How long after submit a container "job not found" is a restart race (keep polling) vs a real drop
+// (fail, so the core re-dispatches or degrades). The container job store is in-process.
+export const CONTAINER_NOTFOUND_GRACE_MS = 30_000;
+
+/** Map the container's completed /subtitle result to a FilmFinishOutput, composing an HONEST `applied`:
+ *  "subtitle" only when captions were actually burned (film_key then points at the burned film),
+ *  "subtitle:sidecar" when a .srt was written. A sidecar-only run burns nothing, so film_key stays the
+ *  original -- no fake burn tag (the #77 honest-degrade discipline). */
+export function completedOutput(result: { key?: string; burned?: boolean; sidecar?: boolean } | null, st: FinishPoll): FilmFinishOutput {
+  const applied: string[] = [];
+  if (result?.burned) applied.push("subtitle");
+  if (result?.sidecar) applied.push("subtitle:sidecar");
+  if (!applied.length) applied.push("noop:no-dialogue");
+  const filmKey = result?.burned
+    ? (typeof result.key === "string" && result.key.length > 0 ? result.key : st.outputKey)
+    : st.filmKey;
+  return { film_key: filmKey, applied };
+}
