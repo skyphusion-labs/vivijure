@@ -82,14 +82,42 @@ ACCESS_AUD = ""          # AUTH_MODE=access only: the studio Access application 
 #   from the user's input:   RUNPOD_API_KEY
 #   minted/derived here:      RUNPOD_ENDPOINT_ID (from RunPod step), GATEWAY_ID (from the AI Gateway),
 #                             R2_S3_ACCESS_KEY_ID / R2_S3_SECRET_ACCESS_KEY (scoped R2 token), etc.
-STORE_BINDING_NAMES = (  # binding NAMES only (never values) -- the store keys the workers read
+# The store keys are the UNION of every `secret_name` the deployed workers bind across
+# wrangler.toml.example + all modules/*/wrangler.toml (test_secret_map.py asserts this manifest stays
+# in sync with the tomls). NOTE the store key is the `secret_name`, NOT the in-code binding var: e.g.
+# finish-lipsync binds var RUNPOD_ENDPOINT_ID FROM store secret MUSETALK_RUNPOD_ENDPOINT_ID. The old
+# seed set (a bare RUNPOD_ENDPOINT_ID) was read by NOTHING -- the core binds BACKEND_RUNPOD_ENDPOINT_ID
+# and the satellites bind their own per-endpoint names (#658). Grouped by how the value is sourced.
+SECRET_SOURCE_AUTO = (       # the installer resolves + seeds these (user key / RunPod ids / CF derived)
     "RUNPOD_API_KEY",
-    "RUNPOD_ENDPOINT_ID",
+    "BACKEND_RUNPOD_ENDPOINT_ID",
+    "VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID",
+    "MUSETALK_RUNPOD_ENDPOINT_ID",
+    "AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID",
     "GATEWAY_ID",
     "R2_S3_ACCESS_KEY_ID",
     "R2_S3_SECRET_ACCESS_KEY",
-    "R2_S3_ENDPOINT",
 )
+SECRET_SOURCE_OPERATOR = (   # the operator supplies these post-install; seeded as a MARKED placeholder
+    "CF_AIG_TOKEN",              #   so the module deploy resolves (else 10182), then flagged to replace.
+    "PLAN_ENHANCE_CF_AIG_TOKEN",
+    "LOCAL_BACKEND_URL",
+    "LOCAL_BACKEND_TOKEN",
+)
+STORE_BINDING_NAMES = SECRET_SOURCE_AUTO + SECRET_SOURCE_OPERATOR
+
+# Which RunPod endpoint id seeds which store secret name (the core + each finish satellite read a
+# DISTINCT per-endpoint store key). Keys MUST equal RUNPOD_ENDPOINTS.
+ENDPOINT_SECRET_NAMES = {
+    "vivijure-backend": "BACKEND_RUNPOD_ENDPOINT_ID",
+    "vivijure-upscale": "VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID",
+    "vivijure-musetalk": "MUSETALK_RUNPOD_ENDPOINT_ID",
+    "vivijure-audio-upscale": "AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID",
+}
+
+# Seeded for the operator-supplied class so the module deploy resolves; the operator replaces it
+# post-install (finalize prints the checklist). Deliberately obvious + non-functional.
+OPERATOR_PLACEHOLDER = "REPLACE_ME__vivijure-deploy-operator-secret"
 
 # RunPod serverless endpoints to stand up (each is an id the studio needs). Each finish satellite runs
 # its OWN container image (see runpod_images()); a satellite templated with the backend image fails
@@ -127,6 +155,13 @@ def state_file_name() -> str:
     leading dot of the hidden file is preserved; the prefix goes after it)."""
     p = DEPLOY_PREFIX.strip()
     return f".{p}-vivijure-deploy.json" if p else STATE_FILE
+
+
+def token_file_name() -> str:
+    """The 0600 file the operator STUDIO_API_TOKEN is written to under --noninteractive (#681), beside
+    the state file. Prefixed like the state file so two instances stay disjoint."""
+    p = DEPLOY_PREFIX.strip()
+    return f".{p}-vivijure-studio-token" if p else ".vivijure-studio-token"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -205,9 +240,19 @@ def die(msg: str, code: int = 1) -> "None":
     sys.exit(code)
 
 
-def http_json(method: str, url: str, token: str, body: dict | None = None) -> dict:
+class DeployHTTPError(Exception):
+    """A non-2xx / network failure surfaced to a caller that wants to RECOVER (the RunPod
+    create-500-after-success flake, #675, or a delete-on-missing, #682) rather than die(). Carries the
+    status code only -- never the request body (which may hold a secret). URL is path-only."""
+    def __init__(self, method: str, url: str, code):
+        self.method, self.url, self.code = method, url.split("?")[0], code
+        super().__init__(f"{method} {self.url} -> HTTP {code}")
+
+
+def http_json(method: str, url: str, token: str, body: dict | None = None, *, raise_on_error: bool = False) -> dict:
     """A minimal stdlib HTTPS call returning parsed JSON. The bearer token rides in the header (never
-    in the URL or argv). Used for the Cloudflare + RunPod REST APIs. Raises on non-2xx."""
+    in the URL or argv). Used for the Cloudflare + RunPod REST APIs. Non-2xx die()s by default;
+    raise_on_error=True raises DeployHTTPError instead so a caller can recover (#675/#682)."""
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("authorization", f"Bearer {token}")
@@ -218,8 +263,12 @@ def http_json(method: str, url: str, token: str, body: dict | None = None) -> di
             return json.loads(raw)
     except urllib.error.HTTPError as e:
         # Surface the status, NOT the request body (which may carry a secret).
+        if raise_on_error:
+            raise DeployHTTPError(method, url, e.code)
         die(f"{method} {url.split('?')[0]} -> HTTP {e.code}")
     except urllib.error.URLError as e:
+        if raise_on_error:
+            raise DeployHTTPError(method, url, None)  # network-level: no HTTP status
         die(f"{method} {url.split('?')[0]} -> network error: {e.reason}")
     return {}
 
@@ -458,6 +507,13 @@ class State:
         self.data[key] = value
         self.save()
 
+    def remove(self, key: str) -> None:
+        """Drop a state entry after its resource is deleted (down) or invalidated (mint-lost heal), so
+        state always reflects live reality and a re-run is idempotent (#682/#680)."""
+        if key in self.data:
+            del self.data[key]
+            self.save()
+
 
 # --------------------------------------------------------------------------------------------------
 # The provisioning spine. ORDER MATTERS -- the comments encode the #244 cross-wiring constraints.
@@ -608,21 +664,29 @@ def runpod_images() -> dict:
     }
 
 
-def rp_api(method: str, path: str, key: str, body: dict | None = None):
+def rp_api(method: str, path: str, key: str, body: dict | None = None, *, raise_on_error: bool = False):
     """RunPod REST v1 call (plain JSON, no envelope; Bearer key in the header)."""
-    return http_json(method, RUNPOD_API + path, key, body)
+    return http_json(method, RUNPOD_API + path, key, body, raise_on_error=raise_on_error)
+
+
+def _rp_items(listed) -> list:
+    """Normalize a RunPod list response to a plain list (top-level array, or data/endpoints/templates)."""
+    if isinstance(listed, list):
+        return listed
+    if isinstance(listed, dict):
+        return listed.get("data") or listed.get("endpoints") or listed.get("templates") or []
+    return []
 
 
 def rp_reconcile(*, kind: str, key: str, list_path: str, create_path: str, create_body: dict,
                  name: str, name_key: str = "name", id_key: str = "id", known_id: str | None = None) -> ReconcileResult:
     """Idempotent reconcile by NAME against the RunPod REST API -> returns the resource id. Same
     no-silent-adopt guard as create_if_absent (#244): a same-name resource this instance did not create
-    dies unless `up --adopt`."""
-    listed = rp_api("GET", list_path, key)
-    items = listed if isinstance(listed, list) else (
-        (listed.get("data") or listed.get("endpoints") or listed.get("templates") or [])
-        if isinstance(listed, dict) else [])
-    for it in items:
+    dies unless `up --adopt`. Create is #675-tolerant: RunPod intermittently returns 5xx AFTER creating
+    the resource server-side ("unexpected end of JSON input"), so on a create error we RE-LIST before
+    giving up -- a same-name resource that was absent pre-create is one we just made; record it rather
+    than orphan it (and rather than die telling the user to --adopt a resource we created)."""
+    for it in _rp_items(rp_api("GET", list_path, key)):
         if isinstance(it, dict) and it.get(name_key) == name:
             rid = str(it.get(id_key, ""))
             if known_id is not None and str(known_id) == rid:
@@ -633,7 +697,20 @@ def rp_reconcile(*, kind: str, key: str, list_path: str, create_path: str, creat
                 return ReconcileResult(rid, adopted=True)
             die(f"refusing to adopt pre-existing RunPod {kind} '{name}' ({rid}): this instance did not "
                 f"create it (not in {state_file_name()}). Re-run `up --adopt` to reuse it, or rename via DEPLOY_PREFIX.")
-    created = rp_api("POST", create_path, key, create_body)
+    # No same-name resource pre-existed -> create it.
+    try:
+        created = rp_api("POST", create_path, key, create_body, raise_on_error=True)
+    except DeployHTTPError as e:
+        # #675: the create may have SUCCEEDED server-side despite the error. Re-list; a same-name
+        # resource now present (absent pre-create above) is ours -- record it, do not orphan or die.
+        match = next((it for it in _rp_items(rp_api("GET", list_path, key))
+                      if isinstance(it, dict) and it.get(name_key) == name), None)
+        if match:
+            rid = str(match.get(id_key, ""))
+            log(f"  RunPod {kind} '{name}' create returned HTTP {e.code} but the resource EXISTS on "
+                f"re-list ({rid}) -- recording as created-by-this-instance (#675)")
+            return ReconcileResult(rid, adopted=False)
+        die(f"RunPod {kind} '{name}' create failed ({e}) and no same-name resource exists on re-list")
     rid = str(created.get(id_key, "")) if isinstance(created, dict) else ""
     log(f"  RunPod {kind} '{name}' created ({rid})")
     return ReconcileResult(rid, adopted=False)
@@ -693,6 +770,7 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
                 "env": backend_env,
                 **({"containerRegistryAuthId": registry_auth_id} if registry_auth_id else {}),
             }, name=f"{ep}-tmpl", known_id=st.resource_id(f"runpod_template_{ep}"))
+        st.put_resource(f"runpod_template_{ep}", tmpl.rid, adopted=tmpl.adopted)  # persist NOW (RunPod-phase parity)
         # No network volume (#676): the baked image ships the weights in-layer, so a volume only pins the
         # endpoint to one datacenter (shrinking the schedulable GPU pool) + bills ~$7/mo for nothing.
         # Prod runs volume-less; this mirrors it.
@@ -704,9 +782,8 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
                 # scaler/idle/timeout tuning (scalerType / scalerValue / idleTimeout / executionTimeoutMs)
                 # is optional; confirm the exact fields against the live /v1/openapi.json before tuning.
             }, name=ep, known_id=st.resource_id(f"runpod_endpoint_{ep}"))
+        st.put_resource(f"runpod_endpoint_{ep}", ep_res.rid, adopted=ep_res.adopted)  # persist NOW
         endpoints[ep] = ep_res.rid
-        st.put_resource(f"runpod_endpoint_{ep}", ep_res.rid, adopted=ep_res.adopted)
-        st.put_resource(f"runpod_template_{ep}", tmpl.rid, adopted=tmpl.adopted)
 
     # Weights ship IN the baked image (backend >= 0.3.0), and the backend also self-preloads any
     # additional weights from R2 on the first cold start -- there is nothing to pre-seed (the old
@@ -744,11 +821,36 @@ def restore_store_id_placeholder(repo: Path, store_id: str) -> None:
         log(f"  restored the store_id placeholder in {n} module wrangler.toml(s) (working tree left clean)")
 
 
-def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_endpoints: dict) -> None:
+def resolved_secret_values(runpod_api_key: str, cf_derived: dict, runpod_endpoints: dict) -> dict:
+    """The AUTO-sourced store secret values (store secret_name -> value). Operator-class names are NOT
+    here (they seed as placeholders). Pure -- unit tested. Keys == SECRET_SOURCE_AUTO."""
+    vals = {
+        "RUNPOD_API_KEY": runpod_api_key,
+        "GATEWAY_ID": cf_derived.get("GATEWAY_ID", ""),
+        "R2_S3_ACCESS_KEY_ID": cf_derived.get("R2_S3_ACCESS_KEY_ID", ""),
+        "R2_S3_SECRET_ACCESS_KEY": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", ""),
+    }
+    for ep, secname in ENDPOINT_SECRET_NAMES.items():
+        vals[secname] = runpod_endpoints.get(ep, "")
+    return vals
+
+
+def _r2_mint_lost(*, token_id_in_state: bool, secret_value: str, secret_in_store: bool) -> bool:
+    """#680: the R2 token id is recorded but its derived secret is GONE (a prior run died between mint
+    and seed; CF returns the secret once) AND the store has no R2_S3_SECRET_ACCESS_KEY. That state
+    perma-fails the core deploy (10182) and no re-run heals it -- so re-mint. A HEALTHY re-run (secret
+    present in the store) is NOT mint-lost: the skip-empty guard keeps the seeded value as-is."""
+    return token_id_in_state and not secret_value and not secret_in_store
+
+
+def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_endpoints: dict) -> list:
     """Step 3. CRITICAL ORDER: seed the Secrets Store BEFORE deploying the workers. A module worker's
     secrets_store_secrets binding references a store secret by name; `wrangler deploy` FAILS if that
-    secret does not yet exist (#237). Values flow from: the user's RUNPOD_API_KEY, RUNPOD_ENDPOINT_ID
-    (step 2), GATEWAY_ID + the scoped R2 S3 creds (step 1).
+    secret does not yet exist (#237). Values flow from: the user's RUNPOD_API_KEY, the per-endpoint
+    RunPod ids under their own store names (BACKEND_/VIDEO_UPSCALE_/MUSETALK_/AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID,
+    step 2), GATEWAY_ID + the scoped R2 S3 creds (step 1). Operator-supplied secrets (CF AI Gateway
+    tokens, a local-backend URL/token) seed as MARKED placeholders so the module deploy resolves; the
+    operator replaces them post-install (finalize prints the checklist). Returns the placeholder names.
 
     Secret VALUES are sent in the HTTPS request body of the Secrets Store API (never on argv, never
     logged) -- the non-interactive analogue of wrangler's hidden prompt. Re-run reseeds rotated values."""
@@ -763,20 +865,39 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
     st.put_resource("store_id", store_id, adopted=store.adopted)
     replace_store_id_placeholder(repo, store_id)  # so the deploy's bindings resolve
 
-    values = {
-        "RUNPOD_API_KEY": s.runpod_api_key,
-        "RUNPOD_ENDPOINT_ID": runpod_endpoints.get("vivijure-backend", ""),
-        "GATEWAY_ID": cf_derived.get("GATEWAY_ID", ""),
-        "R2_S3_ACCESS_KEY_ID": cf_derived.get("R2_S3_ACCESS_KEY_ID", ""),
-        "R2_S3_SECRET_ACCESS_KEY": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", ""),
-        "R2_S3_ENDPOINT": cf_derived.get("R2_S3_ENDPOINT", ""),
-    }
     base = f"/accounts/{acct}/secrets_store/stores/{store_id}/secrets"
     existing = {x.get("name"): x.get("id") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict) and x.get("name")}
-    # COUPLING NOTE: on a re-run, mint_r2_s3_token returns an EMPTY R2 secret (CF returns the token
-    # value only once). The skip-empty guard below is what protects the already-seeded R2 secret from
-    # being overwritten with a blank on a reconcile -- do NOT "fix" it to seed empty values.
+
+    # #680 mint-lost heal: token id recorded but its secret is gone AND the store has no
+    # R2_S3_SECRET_ACCESS_KEY -> revoke the stale token, re-mint, seed the fresh pair (else the core
+    # deploy perma-fails 10182 with no re-run healing it). The healthy re-run does NOT heal.
+    if _r2_mint_lost(token_id_in_state=bool(st.resource_id("r2_token_id")),
+                     secret_value=cf_derived.get("R2_S3_SECRET_ACCESS_KEY", ""),
+                     secret_in_store="R2_S3_SECRET_ACCESS_KEY" in existing):
+        old_id = st.resource_id("r2_token_id")
+        log("  R2 S3 secret mint-lost (token id in state, secret absent from store) -- revoking + re-minting (#680)")
+        cf_api("DELETE", f"/accounts/{acct}/tokens/{old_id}", tok)
+        st.remove("r2_token_id")                       # clear so mint_r2_s3_token re-mints for real
+        cf_derived.update(mint_r2_s3_token(acct, tok, st))
+
+    values = resolved_secret_values(s.runpod_api_key, cf_derived, runpod_endpoints)
+    # COUPLING NOTE: on a healthy re-run, mint_r2_s3_token returns an EMPTY R2 secret (CF returns the
+    # token value only once). The skip-empty guard below protects the already-seeded R2 secret from
+    # being overwritten with a blank -- do NOT "fix" it to seed empty values (#680 heals the distinct
+    # crashed-between case above).
+    pending_operator: list = []
     for name in STORE_BINDING_NAMES:
+        if name in SECRET_SOURCE_OPERATOR:
+            # Operator supplies these post-install; the store secret MUST exist or the module deploy
+            # fails 10182, but we have no value -> seed a MARKED placeholder + flag it. Never clobber a
+            # real value the operator already set on a prior run.
+            if name in existing:
+                log(f"  {name}: operator-supplied, already in store -- left as-is")
+                continue
+            cf_api("POST", base, tok, [{"name": name, "value": OPERATOR_PLACEHOLDER, "scopes": ["workers"]}])
+            pending_operator.append(name)
+            log(f"  seeded {name} = <placeholder> (operator MUST replace post-install)")
+            continue
         v = values.get(name, "")
         if not v:
             log(f"  skip {name}: no value this run (already seeded, or not yet resolved) -- left as-is")
@@ -787,6 +908,7 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
             # The Secrets Store create API takes a BULK ARRAY body (a single object is invalid_json_body).
             cf_api("POST", base, tok, [{"name": name, "value": v, "scopes": ["workers"]}])
         log(f"  seeded {name}")  # name only, never the value
+    return pending_operator
 
 
 def run_migrations(repo: Path, s: Secrets) -> None:
@@ -867,7 +989,7 @@ def _core_secret_present(repo: Path, s: "Secrets", name: str) -> bool:
     return f'"{name}"' in (proc.stdout or "")
 
 
-def set_studio_api_token(repo: Path, s: "Secrets", rotate: bool) -> None:
+def set_studio_api_token(repo: Path, s: "Secrets", rotate: bool, noninteractive: bool = False) -> None:
     """Token mode only, AFTER deploy (a worker secret is safe to set post-deploy, applied live). Mint
     the operator STUDIO_API_TOKEN and store it as a WORKER SECRET via `wrangler secret put` (piped on
     STDIN, never argv) -- the SAME path deploy.sh uses, not a second mint. F18-lite: a re-run KEEPS the
@@ -880,6 +1002,17 @@ def set_studio_api_token(repo: Path, s: "Secrets", rotate: bool) -> None:
         return
     token = _mint_studio_token()
     wrangler(["secret", "put", "STUDIO_API_TOKEN"], cwd=repo, cf_env=cf_env_for(s), secret_stdin=token)
+    if noninteractive:
+        # #681: under --noninteractive stdout is typically piped/tee'd (CI logs), so do NOT print the
+        # value. Write it to a 0600 file beside the state file; print only the path.
+        tpath = repo / token_file_name()
+        fd = os.open(str(tpath), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(token + "\n")
+        os.chmod(tpath, 0o600)  # tighten even if the file pre-existed with a looser mode
+        print(f"\n  Operator STUDIO_API_TOKEN written to {tpath} (mode 0600). The VALUE is not printed.")
+        print("  API callers send it as  Authorization: Bearer <token>. Re-run --rotate-token to replace it.\n")
+        return
     # The one INTENTIONAL secret-to-terminal: the operator's login on their OWN deploy, shown once,
     # stored nowhere else (mirrors deploy.sh's SAVE-THIS-NOW banner).
     print("\n  ============================= SAVE THIS NOW =============================")
@@ -907,10 +1040,17 @@ def bring_up_containers(repo: Path) -> None:
     log("(phase 2) CPU containers + VPC services -- skipped in phase 1")
 
 
-def finalize(repo: Path, st: State) -> None:
+def finalize(repo: Path, st: State, pending_operator=()) -> None:
     # Honesty rider: a degrade is NEVER silent -- the installer says the media stack was not provisioned.
     log("MEDIA STACK NOT PROVISIONED (installer phase-2 is roadmap): the studio is running in its "
         "documented media-less mode -- clips render, no final concat / title cards.")
+    if pending_operator:
+        log("POST-INSTALL: these store secrets were seeded as PLACEHOLDERS and must be replaced with your")
+        log("  real values before the modules that use them work (all are optional enhance/finish paths):")
+        for name in pending_operator:
+            log(f"    - {name}")
+        log("  Replace each in the Cloudflare Secrets Store (dashboard or API) under the 'vivijure' store")
+        log("  this installer created; leaving a placeholder just disables that one module.")
     log("done. studio URL + recorded resource ids are in " + str(repo / state_file_name()))
 
 
@@ -953,22 +1093,34 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
     preflight(repo, s)
     cf_derived = provision_cloudflare_infra(repo, s, st)
     runpod_endpoints = provision_runpod(repo, s, st, cf_derived)
-    seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
+    pending_operator = seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
     render_and_write_core_toml(repo, s, st)  # F1: wrangler.toml must exist for migrations + deploy
     run_migrations(repo, s)
     deploy_workers(repo, s, st)
     if AUTH_MODE == "token":
-        set_studio_api_token(repo, s, rotate_token)  # operator login (worker secret, safe post-deploy)
+        set_studio_api_token(repo, s, rotate_token, noninteractive)  # operator login (worker secret, safe post-deploy)
     restore_store_id_placeholder(repo, st.resource_id("store_id"))  # leave the working tree clean post-deploy
     bring_up_containers(repo)
-    finalize(repo, st)
+    finalize(repo, st, pending_operator)
 
 
-def wrangler_delete_tolerant(args: list, *, cwd: Path, cf_env: dict, label: str) -> None:
+def deployed_worker_ids(acct: str, tok: str) -> set:
+    """The set of Worker script names currently deployed on the account (CF API). Used to gate the
+    teardown WARN on reality (#682): `wrangler delete` exits 1 even on a SUCCESSFUL delete."""
+    res = cf_api("GET", f"/accounts/{acct}/workers/scripts", tok)
+    return {x.get("id") for x in (res or []) if isinstance(x, dict) and x.get("id")}
+
+
+def wrangler_delete_tolerant(args: list, *, cwd: Path, cf_env: dict, label: str, verify_gone=None) -> None:
     """`wrangler delete` for teardown that TOLERATES a worker that was never deployed (F4). A partial /
     failed `up` MUST still be teardownable -- that is half of what `down` is for. A worker that does not
     exist (CF code 10007) is a SKIP + note, never an abort, so teardown always reaches the D1 / bucket /
-    Secrets Store cleanup."""
+    Secrets Store cleanup.
+
+    #682: `wrangler delete` exits 1 even on a SUCCESSFUL delete (its post-delete confirmation /
+    references flow), which floods a clean teardown with false 'delete failed' WARNs and would drown a
+    real failure. So on a non-zero exit that is not the known already-gone case, gate the WARN on
+    REALITY via verify_gone() -- if the worker actually vanished, the delete succeeded."""
     child_env = dict(os.environ)
     if cf_env:
         child_env.update(cf_env)
@@ -977,10 +1129,18 @@ def wrangler_delete_tolerant(args: list, *, cwd: Path, cf_env: dict, label: str)
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode == 0:
         log(f"  deleted {label}")
-    elif "does not exist" in out or "10007" in out:
+        return
+    if "does not exist" in out or "10007" in out:
         log(f"  skip {label}: not deployed (already gone)")
-    else:
-        log(f"  WARN {label}: delete failed (exit {proc.returncode}); continuing teardown")
+        return
+    if verify_gone is not None:
+        try:
+            if verify_gone():
+                log(f"  deleted {label} (wrangler exited {proc.returncode}, but the worker is gone -- verified via API)")
+                return
+        except Exception:
+            pass  # verification itself failed -> fall through to the honest WARN
+    log(f"  WARN {label}: delete failed (exit {proc.returncode}); continuing teardown")
 
 
 def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, include_adopted: bool = False) -> None:
@@ -997,27 +1157,27 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
     # before delete; surface the API error rather than force.
     key = s.runpod_api_key
     for ep in RUNPOD_ENDPOINTS:
-        eid = st.resource_id(f"runpod_endpoint_{ep}")
-        if eid:
-            if st.is_adopted(f"runpod_endpoint_{ep}") and not include_adopted:
-                log(f"  skipping adopted RunPod endpoint {eid}")
-            else:
-                rp_api("DELETE", f"/endpoints/{eid}", key)
-                log(f"  deleted RunPod endpoint {ep} ({eid})")
-        vid = st.resource_id(f"runpod_volume_{ep}")
-        if vid:
-            if st.is_adopted(f"runpod_volume_{ep}") and not include_adopted:
-                log(f"  skipping adopted RunPod volume {vid}")
-            else:
-                rp_api("DELETE", f"/networkvolumes/{vid}", key)
-                log(f"  deleted RunPod volume {ep} ({vid})")
-        tid = st.resource_id(f"runpod_template_{ep}")
-        if tid:
-            if st.is_adopted(f"runpod_template_{ep}") and not include_adopted:
-                log(f"  skipping adopted RunPod template {tid}")
-            else:
-                rp_api("DELETE", f"/templates/{tid}", key)
-                log(f"  deleted RunPod template {ep} ({tid})")
+        for kind, skey, url in (
+            ("endpoint", f"runpod_endpoint_{ep}", "/endpoints"),
+            ("volume", f"runpod_volume_{ep}", "/networkvolumes"),     # legacy state (installer is volume-less now)
+            ("template", f"runpod_template_{ep}", "/templates"),
+        ):
+            rid = st.resource_id(skey)
+            if not rid:
+                continue
+            if st.is_adopted(skey) and not include_adopted:
+                log(f"  skipping adopted RunPod {kind} {rid}")
+                continue
+            try:
+                rp_api("DELETE", f"{url}/{rid}", key, raise_on_error=True)
+                log(f"  deleted RunPod {kind} {ep} ({rid})")
+            except DeployHTTPError as e:
+                # #682: RunPod returns 404 OR 500 for a missing resource -- both mean already-gone.
+                if e.code in (404, 500):
+                    log(f"  RunPod {kind} {ep} ({rid}): already absent (HTTP {e.code}) -- skipping")
+                else:
+                    die(f"RunPod delete {kind} {ep} failed: {e}")
+            st.remove(skey)  # state reflects reality -> a re-run does not re-attempt this delete
 
     # CF teardown by recorded id, in dependency-safe order. The minted R2 API TOKEN is the security
     # footgun -- it must NOT survive a `down`. A delete error surfaces loud (cf_api dies), never silent.
@@ -1027,12 +1187,17 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
     # Workers (modules + core) via `wrangler delete`. wrangler may prompt for confirmation depending on
     # version; that surfaces (it is not silently skipped).
     isolate = bool(DEPLOY_PREFIX.strip())
+    live = lambda: deployed_worker_ids(acct, tok)  # fresh each call (teardown mutates the account)
     for m in module_dirs(repo):
-        extra = ["--name", prefixed(module_worker_name(repo, m))] if isolate else []
+        wname = prefixed(module_worker_name(repo, m))
+        extra = ["--name", wname] if isolate else []
         wrangler_delete_tolerant(["delete", "-c", f"modules/{m}/wrangler.toml", *extra],
-                                 cwd=repo, cf_env=cf_env_for(s), label=f"worker {m}")
-    wrangler_delete_tolerant(["delete", *(["--name", prefixed(core_worker_name(repo))] if isolate else [])],
-                             cwd=repo, cf_env=cf_env_for(s), label="core worker")
+                                 cwd=repo, cf_env=cf_env_for(s), label=f"worker {m}",
+                                 verify_gone=(lambda n=wname: n not in live()))
+    core_extra = ["--name", prefixed(core_worker_name(repo))] if isolate else []
+    wrangler_delete_tolerant(["delete", *core_extra],
+                             cwd=repo, cf_env=cf_env_for(s), label="core worker",
+                             verify_gone=(lambda: prefixed(core_worker_name(repo)) not in live()))
     removed.append("workers (modules + core)")
 
     sid = st.resource_id("store_id")
@@ -1045,6 +1210,7 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
                 cf_api("DELETE", f"{base}/{sec_id}", tok)
             cf_api("DELETE", f"/accounts/{acct}/secrets_store/stores/{sid}", tok)
             removed.append("Secrets Store (store + secrets)")
+            st.remove("store_id")
     aid = st.resource_id("access_app_id")
     if aid:
         if st.is_adopted("access_app_id") and not include_adopted:
@@ -1052,6 +1218,7 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
         else:
             cf_api("DELETE", f"/accounts/{acct}/access/apps/{aid}", tok)
             removed.append("Access app")
+            st.remove("access_app_id")
     gw = st.resource_id("gateway_id")
     if gw:
         if st.is_adopted("gateway_id") and not include_adopted:
@@ -1059,6 +1226,7 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
         else:
             cf_api("DELETE", f"/accounts/{acct}/ai-gateway/gateways/{gw}", tok)
             removed.append("AI Gateway")
+            st.remove("gateway_id")
     rt = st.resource_id("r2_token_id")
     if rt:
         if st.is_adopted("r2_token_id") and not include_adopted:
@@ -1066,6 +1234,7 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
         else:
             cf_api("DELETE", f"/accounts/{acct}/tokens/{rt}", tok)
             removed.append("R2 API token")
+            st.remove("r2_token_id")
 
     log("CF removed by id: " + (", ".join(removed) if removed else "(nothing was recorded in state)"))
 
@@ -1079,6 +1248,7 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
                 continue
             cf_api("DELETE", f"/accounts/{acct}/r2/buckets/{b}", tok)
             log(f"  deleted R2 bucket {b}")
+            st.remove(bkey)
         d1 = st.resource_id("d1_id")
         if d1:
             if st.is_adopted("d1_id") and not include_adopted:
@@ -1086,6 +1256,7 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
             else:
                 cf_api("DELETE", f"/accounts/{acct}/d1/database/{d1}", tok)
                 log("  deleted D1 database")
+                st.remove("d1_id")
 
 
 def main(argv: list[str] | None = None) -> None:
