@@ -649,7 +649,7 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
     GOTCHA encoded: for a PUBLIC GHCR image, leave containerRegistryAuthId UNSET. A stale/blank-but-
     present auth makes RunPod attempt auth and abort even a public pull."""
     key = s.runpod_api_key
-    log("provisioning RunPod (registry-auth?, templates, volumes, endpoints) ...")
+    log("provisioning RunPod (registry-auth?, per-endpoint serverless templates, endpoints; volume-less) ...")
 
     # Required config -- die loud rather than POST an empty/unpinned value (relying on a remote 400).
     images = runpod_images()
@@ -708,11 +708,11 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
         st.put_resource(f"runpod_endpoint_{ep}", ep_res.rid, adopted=ep_res.adopted)
         st.put_resource(f"runpod_template_{ep}", tmpl.rid, adopted=tmpl.adopted)
 
-    # Model seeding: the backend image self-preloads weights from R2 on first cold start (the
-    # R2-mirror-on-cold-start model), so it is not blocking; optionally pre-seed each volume via the
-    # RunPod S3 API (boto3, no pod) to avoid a slow first job.
-    log("  NOTE: model-seeding via the RunPod volume S3 API (boto3) is an optional follow-up; the image "
-        "self-preloads from R2 on first job otherwise.")
+    # Weights ship IN the baked image (backend >= 0.3.0), and the backend also self-preloads any
+    # additional weights from R2 on the first cold start -- there is nothing to pre-seed (the old
+    # volume-S3 pre-seed path is gone with the volume, #676).
+    log("  NOTE: no model pre-seed step -- weights are baked into the image and self-preload from R2 on "
+        "the first job.")
     return endpoints
 
 
