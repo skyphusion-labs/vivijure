@@ -3,6 +3,43 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.19.1
+
+**Fix sprint: four adoption / delivery correctness fixes across the render + deploy paths.** PATCH.
+
+- **R2 adoption guarded by object freshness -- reusing a project name can no longer ship stale content
+  (#661).** Keyframe/clip adoption matched candidates by (project prefix, shot_id) name only, so reusing
+  a project name (the planner always emits `shot_01..NN`) let a prior render's leftover keyframes/clips at
+  the identical paths look like a complete set: the pending-poll fast path adopted the stale set on tick
+  one, cancelled the live producer (#327), and the film completed silently with wrong content (the
+  #245/#249 silent-wrong-delivery class; prod repro film-f7453b84). Adoption candidates are now filtered
+  by R2 object age -- any object uploaded before the job's `created_at` is skipped -- in the shared listers
+  (`listProjectKeyframes`, `listClipsByShotId`), so every caller (keyframe fast path, stall backstop,
+  ceiling path, `listProjectClips`, clip reclaim) inherits it. This-run orphans always upload after the
+  job starts, so all legitimate recovery semantics survive.
+- **Adopted finish-shot ledger reconciled 1:1 to its chain (#662).** Audit verdict: a bookkeeping
+  channel-split, not a skip. A shot counted in `finish.adopted` showed `applied[]` missing exactly the one
+  chain-module tag that was ADOPTED (RIFE for a no-dialogue chain, LIPSYNC for a dialogue chain) -- the
+  step's RunPod job was GC'd or froze after writing its output, so a later tick recovered it via the #583
+  hash-gated adopt path (the transform genuinely ran and is present in the delivered clip; a dialogue shot
+  is NOT unsynced). The tag was correctly routed to the `adopted` channel, so reading `applied[]` in
+  isolation under-reported by one. Adds a per-step honesty ledger (`FinishShot.ledger`) that reconciles
+  1:1 to the chain (a reused step is PRESENT, `reused:true`, never dropped) and logs loud if a done shot
+  fails to reconcile, keeping the disjoint applied/adopted channels intact. No silent wrong delivery.
+- **Subtitle `.srt` sidecar re-timed for the title-card prepend (#663).** The subtitle module (film.finish
+  `ui.order` 5) writes its soft `.srt` sidecar against the pre-card, 0-based assembled film; film-titles
+  (`ui.order` 10) then prepends a title card, so every sidecar cue ran early against the final film (the
+  burned captions were correct -- they ride the video through the prepend). film-titles now reports the
+  prepend as `prepend_seconds` (OPTIONAL + additive on `FilmFinishOutput`, no `MODULE_API` bump; the
+  subtitle module is unchanged); after the chain completes the core reads the raw per-step sidecar, shifts
+  every cue by that offset, and writes the final `.srt` next to the final film, surfaced on the summary as
+  `film_finish.sidecar_key` (previously discoverable only by key convention). The offset is persisted per
+  step so it survives cross-tick adoption of the prepending step. The film-titles module needs this tag's
+  redeploy to emit `prepend_seconds`.
+- **`deploy.py` records adopt provenance and skips adopted resources on `down` (#659).** State entries
+  from `up --adopt` carry `adopted: true` (legacy plain-string entries stay treated as created); `down`
+  skips adopted CF/RunPod resources by default, with `--include-adopted` to force deletion with a warning.
+
 ## v0.19.0
 
 **film.finish survives a single step over budget: async job+poll for the video-finish container
