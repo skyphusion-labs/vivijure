@@ -38,9 +38,15 @@ A few non-secret values must be set (constants at the top of `vivijure_deploy.py
 if any is missing, rather than POSTing an empty value):
 
 Always:
-- `DATACENTER_ID` -- an available RunPod data-center id (`GET /datacenters`) for the network volumes.
-- `BACKEND_IMAGE_TAG` -- an explicit released backend tag (e.g. `0.3.3`); never `latest`.
 - `GPU_TYPE_IDS` -- the endpoint GPU type id(s) (`GET /gputypes`).
+
+Optional (each defaults to that satellite's current released tag; override to pin another):
+- `BACKEND_IMAGE_TAG` / `UPSCALE_IMAGE_TAG` / `MUSETALK_IMAGE_TAG` / `AUDIO_UPSCALE_IMAGE_TAG` -- the
+  per-endpoint GHCR image tags (BARE semver, never `latest`).
+
+There is **no `DATACENTER_ID`**: the installer no longer provisions a network volume (the baked images
+ship the weights in-layer), so endpoints schedule across the whole GPU pool for `GPU_TYPE_IDS` instead
+of being pinned to one datacenter.
 
 `AUTH_MODE` defaults to `token` and needs nothing else. For `AUTH_MODE=access` ALSO set:
 - `DEPLOY_DOMAIN` -- the studio hostname behind CF Access (match the core worker's route).
@@ -83,8 +89,11 @@ The pieces are mutually dependent, so the order is load-bearing:
    scoped R2 S3 token for the GPU backend. The CF Access app is created here ONLY in `AUTH_MODE=access`
    (token mode skips it).
 2. **RunPod** -- registry-auth (only if the image is private; leave it UNSET for the public GHCR
-   image, or a stale auth aborts even a public pull), template (pins the image), network volume,
-   endpoints. Captures `RUNPOD_ENDPOINT_ID`(s). Must precede step 3.
+   image, or a stale auth aborts even a public pull), then a **serverless template per endpoint**
+   (each pins that endpoint's OWN image) and the endpoints. **No network volume** -- the baked images
+   ship the weights in-layer, so a volume would only pin the pool to one datacenter and bill for
+   nothing. Four endpoints: backend + upscale + musetalk + audio-upscale. Captures the endpoint ids
+   (seeded under the per-satellite secret names in step 3). Must precede step 3.
 3. **Seed the Cloudflare Secrets Store** -- `RUNPOD_API_KEY` (yours), `RUNPOD_ENDPOINT_ID` (step 2),
    `GATEWAY_ID` (step 1), `R2_S3_*` (step 1). **This MUST happen before the deploy:** a module
    worker's `secrets_store_secrets` binding fails at `wrangler deploy` if the store secret does not
