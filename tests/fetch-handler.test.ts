@@ -182,3 +182,53 @@ describe("whoami + user prefs", () => {
     expect(await res.json()).toEqual({ renders: [] });
   });
 });
+
+// #670: GET /api/storyboard/renders with no `limit` returned exactly 1 row. Number(null)/Number("") are
+// both 0 (finite), so coercing first slipped `limit=0` past the finite guard and the listRendersForUser
+// clamp raised 0 to 1. These assert the LIMIT bound to the D1 query for the four cases the fix must cover.
+describe("GET /api/storyboard/renders limit default (#670)", () => {
+  // Capture the LIMIT bound to the (unfiltered) renders query; the last bound arg is the clamped cap.
+  function renderLimitEnv() {
+    const limitBinds: unknown[] = [];
+    const env = {
+      ALLOW_UNAUTHENTICATED: "true",
+      ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
+      DB: {
+        prepare(sql: string) {
+          let bound: unknown[] = [];
+          const stmt = {
+            bind(...args: unknown[]) { bound = args; if (/LIMIT \?/.test(sql)) limitBinds.push(args.at(-1)); return stmt; },
+            async all() { return { results: [] }; },
+          };
+          return stmt;
+        },
+      },
+    } as unknown as Env;
+    return { env, lastLimit: () => limitBinds.at(-1) };
+  }
+
+  it("absent ?limit -> the default (50) rows, NOT 1", async () => {
+    const { env, lastLimit } = renderLimitEnv();
+    const res = await worker.fetch(req("/api/storyboard/renders"), env, ctx);
+    expect(res.status).toBe(200);
+    expect(lastLimit()).toBe(50);
+  });
+
+  it("?limit= (empty string) -> the default (50)", async () => {
+    const { env, lastLimit } = renderLimitEnv();
+    await worker.fetch(req("/api/storyboard/renders?limit="), env, ctx);
+    expect(lastLimit()).toBe(50);
+  });
+
+  it("?limit=abc (garbage) -> the default (50) via the finite guard", async () => {
+    const { env, lastLimit } = renderLimitEnv();
+    await worker.fetch(req("/api/storyboard/renders?limit=abc"), env, ctx);
+    expect(lastLimit()).toBe(50);
+  });
+
+  it("?limit=5 (explicit) -> 5", async () => {
+    const { env, lastLimit } = renderLimitEnv();
+    await worker.fetch(req("/api/storyboard/renders?limit=5"), env, ctx);
+    expect(lastLimit()).toBe(5);
+  });
+});

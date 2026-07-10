@@ -53,7 +53,7 @@ import { chatImage, type ChatImageArgs } from "./chat-image";
 import { findModel } from "./models";
 import { isSafeBundleKey, isSafeRelKey, parseByteRange } from "./shared";
 import {
-  insertRender, updateRenderFromView, getRenderByIdForUser, listRendersForUser, listUserTags,
+  insertRender, updateRenderFromView, getRenderByIdForUser, listRendersForUser, DEFAULT_RENDERS_LIMIT, listUserTags,
   setRenderLabel, setRenderLockedShots, setRenderFolder, setRenderTags, deleteRenderRow,
   normalizeLockedShots, normalizeFolderPath, normalizeTags,
   setCloudAnimateProgress, setHybridProgress, getRenderIdByPublicId, toPublicRenderRow,
@@ -429,8 +429,13 @@ const hListRenders: Handler = async (req, env) => {
   const url = new URL(req.url);
   // ?project_id is now the opaque project public id; resolve to the internal int (null = unfiltered).
   const projectId = await resolveProjectRef(env, url.searchParams.get("project_id"));
-  const limitRaw = Number(url.searchParams.get("limit"));
-  const limit = Number.isFinite(limitRaw) ? limitRaw : 100;
+  // #670: an ABSENT or empty `limit` must use the default -- Number(null) and Number("") are both 0
+  // (finite!), so coercing first made `limit=0` slip past the finite guard and the listRendersForUser
+  // clamp raised it to 1 (an absent-limit call silently returned ONE row). Resolve absent/empty to the
+  // default BEFORE coercing; keep the finite guard for a garbage string (?limit=abc -> NaN -> default).
+  const limitParam = url.searchParams.get("limit");
+  const limitNum = limitParam === null || limitParam.trim() === "" ? DEFAULT_RENDERS_LIMIT : Number(limitParam);
+  const limit = Number.isFinite(limitNum) ? limitNum : DEFAULT_RENDERS_LIMIT;
   const renders = await listRendersForUser(env, limit, projectId);
   return json({ renders: renders.map(toPublicRenderRow) });
 };
