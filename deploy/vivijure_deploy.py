@@ -240,7 +240,7 @@ def cf_api(method: str, path: str, token: str, body: dict | None = None):
 
 def create_if_absent(*, kind: str, account: str, token: str, list_path: str, create_path: str,
                      create_body: dict, name: str, name_key: str, id_key: str,
-                     list_unwrap: str | None = None, known_id: str | None = None) -> str:
+                     list_unwrap: str | None = None, known_id: str | None = None) -> "ReconcileResult":
     """Idempotent reconcile by NAME -> returns the resource id. Lists existing, matches name_key, else
     POSTs create_body. list_unwrap handles nested list results (e.g. R2 buckets under 'buckets').
 
@@ -255,17 +255,17 @@ def create_if_absent(*, kind: str, account: str, token: str, list_path: str, cre
             rid = str(it.get(id_key, name))
             if known_id is not None and str(known_id) == rid:
                 log(f"  {kind} '{name}' exists ({rid}) [created by this instance]")
-                return rid
+                return ReconcileResult(rid, adopted=False)
             if _ADOPT:
                 log(f"  {kind} '{name}' exists ({rid}) -- ADOPTING (--adopt)")
-                return rid
+                return ReconcileResult(rid, adopted=True)
             die(f"refusing to adopt pre-existing {kind} '{name}' ({rid}): this instance did not create it "
                 f"(not recorded in {state_file_name()}). It may belong to another deployment on this "
                 f"account. Re-run `up --adopt` to reuse it deliberately, or set DEPLOY_PREFIX to isolate.")
     created = cf_api("POST", create_path.format(acct=account), token, create_body)
     rid = str(created.get(id_key, name)) if isinstance(created, dict) else name
     log(f"  {kind} '{name}' created ({rid})")
-    return rid
+    return ReconcileResult(rid, adopted=False)
 
 
 def cf_env_for(s: "Secrets") -> dict:
@@ -391,8 +391,14 @@ def render_module_toml(text: str) -> str:
 
 # --------------------------------------------------------------------------------------------------
 # State: idempotent reconcile. Records resource ids (NEVER secrets) so a re-run reconciles and a
-# teardown can delete by id.
+# teardown can delete by id. Provenance (#659): adopted resources are flagged so `down` skips them.
 # --------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class ReconcileResult:
+    rid: str
+    adopted: bool = False
 
 
 @dataclass
@@ -415,6 +421,33 @@ class State:
 
     def get(self, key: str):
         return self.data.get(key)
+
+    def resource_id(self, key: str) -> str | None:
+        """Return a resource id from state. Legacy plain-string entries are treated as created."""
+        v = self.data.get(key)
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            rid = v.get("id")
+            return str(rid) if rid is not None else None
+        return str(v)
+
+    def is_adopted(self, key: str) -> bool:
+        """True when this run adopted a pre-existing resource (--adopt). Missing flag = created."""
+        v = self.data.get(key)
+        if isinstance(v, dict):
+            return bool(v.get("adopted"))
+        return False
+
+    def put_resource(self, key: str, rid, *, adopted: bool = False) -> None:
+        """Record a resource id with provenance. Created resources stay plain strings (backward compat)."""
+        if any(h in key.lower() for h in self._SECRET_KEY_HINTS):
+            die(f"refusing to write '{key}' to the state file -- it looks like a secret value (state holds ids only)")
+        if adopted:
+            self.data[key] = {"id": rid, "adopted": True}
+        else:
+            self.data[key] = rid
+        self.save()
 
     def put(self, key: str, value) -> None:
         # Real guard (not just a comment): refuse to persist a key whose name implies a secret VALUE.
@@ -456,7 +489,7 @@ def provision_access_app(account: str, token: str, st: State) -> None:
         return
     if not DEPLOY_DOMAIN or not OPERATOR_EMAIL:
         die("AUTH_MODE=access needs DEPLOY_DOMAIN + OPERATOR_EMAIL (the edge Access app host + operator email) -- refusing to deploy an ungated studio")
-    app_id = create_if_absent(kind="Access app", account=account, token=token,
+    app = create_if_absent(kind="Access app", account=account, token=token,
         list_path="/accounts/{acct}/access/apps", create_path="/accounts/{acct}/access/apps",
         create_body={
             "name": "Vivijure Studio",
@@ -468,8 +501,8 @@ def provision_access_app(account: str, token: str, st: State) -> None:
                 "include": [{"email": {"email": OPERATOR_EMAIL}}],
             }],
         },
-        name=DEPLOY_DOMAIN, name_key="domain", id_key="id", known_id=st.get("access_app_id"))
-    st.put("access_app_id", app_id)
+        name=DEPLOY_DOMAIN, name_key="domain", id_key="id", known_id=st.resource_id("access_app_id"))
+    st.put_resource("access_app_id", app.rid, adopted=app.adopted)
 
 
 def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
@@ -481,9 +514,9 @@ def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
     is NEVER written to state. NOT cleanly idempotent (CF returns the value once), so a state flag skips
     a re-mint on re-run -- the secret was already seeded into the store on the first run."""
     endpoint = f"https://{account}.r2.cloudflarestorage.com"
-    if st.get("r2_token_id"):
+    if st.resource_id("r2_token_id"):
         log("  R2 S3 token already minted (id in state) -- skipping re-mint (secret already seeded)")
-        return {"R2_S3_ACCESS_KEY_ID": st.get("r2_token_id"), "R2_S3_SECRET_ACCESS_KEY": "", "R2_S3_ENDPOINT": endpoint}
+        return {"R2_S3_ACCESS_KEY_ID": st.resource_id("r2_token_id"), "R2_S3_SECRET_ACCESS_KEY": "", "R2_S3_ENDPOINT": endpoint}
     groups = cf_api("GET", f"/accounts/{account}/tokens/permission_groups", token) or []
     pg = next((g for g in groups if isinstance(g, dict) and g.get("name") == "Workers R2 Storage Write"), None)
     if not pg:
@@ -518,19 +551,19 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     acct, tok = s.cf_account_id, s.cf_api_token
     log("provisioning Cloudflare infra (D1, R2 x2, AI Gateway; Access app only when AUTH_MODE=access) ...")
 
-    d1_id = create_if_absent(kind="D1 database", account=acct, token=tok,
+    d1 = create_if_absent(kind="D1 database", account=acct, token=tok,
         list_path="/accounts/{acct}/d1/database", create_path="/accounts/{acct}/d1/database",
         create_body={"name": prefixed(D1_DATABASE)}, name=prefixed(D1_DATABASE), name_key="name",
-        id_key="uuid", known_id=st.get("d1_id"))
-    st.put("d1_id", d1_id)
+        id_key="uuid", known_id=st.resource_id("d1_id"))
+    st.put_resource("d1_id", d1.rid, adopted=d1.adopted)
 
     prefixed_buckets = [prefixed(b) for b in R2_BUCKETS]
     for nb in prefixed_buckets:
-        create_if_absent(kind="R2 bucket", account=acct, token=tok,
+        bucket = create_if_absent(kind="R2 bucket", account=acct, token=tok,
             list_path="/accounts/{acct}/r2/buckets", create_path="/accounts/{acct}/r2/buckets",
             create_body={"name": nb}, name=nb, name_key="name", id_key="name", list_unwrap="buckets",
-            known_id=st.get(f"r2_bucket_{nb}"))
-        st.put(f"r2_bucket_{nb}", nb)
+            known_id=st.resource_id(f"r2_bucket_{nb}"))
+        st.put_resource(f"r2_bucket_{nb}", bucket.rid, adopted=bucket.adopted)
     st.put("r2_buckets", prefixed_buckets)
 
     gw_slug = prefixed(AI_GATEWAY_ID)
@@ -538,8 +571,8 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
         list_path="/accounts/{acct}/ai-gateway/gateways", create_path="/accounts/{acct}/ai-gateway/gateways",
         create_body={"id": gw_slug, "cache_ttl": 0, "cache_invalidate_on_update": False, "collect_logs": True,
                      "rate_limiting_interval": 0, "rate_limiting_limit": 0, "rate_limiting_technique": "fixed"},
-        name=gw_slug, name_key="id", id_key="id", known_id=st.get("gateway_id"))
-    st.put("gateway_id", gateway)  # an identifier (the slug), not a secret -- safe in state
+        name=gw_slug, name_key="id", id_key="id", known_id=st.resource_id("gateway_id"))
+    st.put_resource("gateway_id", gateway.rid, adopted=gateway.adopted)
 
     # Scoped R2 S3 token: mint + derive (Access Key ID = token id; Secret = SHA-256(token value)).
     # CF returns the secret ONCE; it is held in memory for the seed step, never written to state.
@@ -547,7 +580,7 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     # Access app + self-only policy gating the single-tenant studio (shapes confirmed against the CF
     # Access API docs). No-op with a warn if DEPLOY_DOMAIN / OPERATOR_EMAIL are unset.
     provision_access_app(acct, tok, st)
-    return {"GATEWAY_ID": gateway, **r2}
+    return {"GATEWAY_ID": gateway.rid, **r2}
 
 
 RUNPOD_API = "https://rest.runpod.io/v1"  # the current REST API (Bearer key; OpenAPI at /v1/openapi.json)
@@ -562,7 +595,7 @@ def rp_api(method: str, path: str, key: str, body: dict | None = None):
 
 
 def rp_reconcile(*, kind: str, key: str, list_path: str, create_path: str, create_body: dict,
-                 name: str, name_key: str = "name", id_key: str = "id", known_id: str | None = None) -> str:
+                 name: str, name_key: str = "name", id_key: str = "id", known_id: str | None = None) -> ReconcileResult:
     """Idempotent reconcile by NAME against the RunPod REST API -> returns the resource id. Same
     no-silent-adopt guard as create_if_absent (#244): a same-name resource this instance did not create
     dies unless `up --adopt`."""
@@ -575,16 +608,16 @@ def rp_reconcile(*, kind: str, key: str, list_path: str, create_path: str, creat
             rid = str(it.get(id_key, ""))
             if known_id is not None and str(known_id) == rid:
                 log(f"  RunPod {kind} '{name}' exists ({rid}) [created by this instance]")
-                return rid
+                return ReconcileResult(rid, adopted=False)
             if _ADOPT:
                 log(f"  RunPod {kind} '{name}' exists ({rid}) -- ADOPTING (--adopt)")
-                return rid
+                return ReconcileResult(rid, adopted=True)
             die(f"refusing to adopt pre-existing RunPod {kind} '{name}' ({rid}): this instance did not "
                 f"create it (not in {state_file_name()}). Re-run `up --adopt` to reuse it, or rename via DEPLOY_PREFIX.")
     created = rp_api("POST", create_path, key, create_body)
     rid = str(created.get(id_key, "")) if isinstance(created, dict) else ""
     log(f"  RunPod {kind} '{name}' created ({rid})")
-    return rid
+    return ReconcileResult(rid, adopted=False)
 
 
 def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dict:
@@ -624,32 +657,32 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
 
     endpoints: dict = {}
     for ep in RUNPOD_ENDPOINTS:
-        tmpl_id = rp_reconcile(kind="template", key=key, list_path="/templates", create_path="/templates",
+        tmpl = rp_reconcile(kind="template", key=key, list_path="/templates", create_path="/templates",
             create_body={
                 "name": f"{ep}-tmpl",
                 "imageName": f"{GHCR_IMAGE}:{BACKEND_IMAGE_TAG}",
                 "containerDiskInGb": 500,
                 "env": backend_env,
                 **({"containerRegistryAuthId": registry_auth_id} if registry_auth_id else {}),
-            }, name=f"{ep}-tmpl", known_id=st.get(f"runpod_template_{ep}"))
+            }, name=f"{ep}-tmpl", known_id=st.resource_id(f"runpod_template_{ep}"))
         # Network volume for the model weights (warm cache between jobs). dataCenterId is REQUIRED +
         # region-specific (confirmed against the v1 OpenAPI); checked + die-loud at the top of this fn.
-        vol_id = rp_reconcile(kind="network volume", key=key, list_path="/networkvolumes",
+        vol = rp_reconcile(kind="network volume", key=key, list_path="/networkvolumes",
             create_path="/networkvolumes",
             create_body={"name": f"{ep}-vol", "size": 100, "dataCenterId": DATACENTER_ID},  # size in GB
-            name=f"{ep}-vol", known_id=st.get(f"runpod_volume_{ep}"))
-        ep_id = rp_reconcile(kind="endpoint", key=key, list_path="/endpoints", create_path="/endpoints",
+            name=f"{ep}-vol", known_id=st.resource_id(f"runpod_volume_{ep}"))
+        ep_res = rp_reconcile(kind="endpoint", key=key, list_path="/endpoints", create_path="/endpoints",
             create_body={
-                "name": ep, "templateId": tmpl_id, "networkVolumeId": vol_id,
+                "name": ep, "templateId": tmpl.rid, "networkVolumeId": vol.rid,
                 "gpuTypeIds": GPU_TYPE_IDS,
                 "workersMin": 0, "workersMax": 1,
                 # scaler/idle/timeout tuning (scalerType / scalerValue / idleTimeout / executionTimeoutMs)
                 # is optional; confirm the exact fields against the live /v1/openapi.json before tuning.
-            }, name=ep, known_id=st.get(f"runpod_endpoint_{ep}"))
-        endpoints[ep] = ep_id
-        st.put(f"runpod_endpoint_{ep}", ep_id)
-        st.put(f"runpod_template_{ep}", tmpl_id)
-        st.put(f"runpod_volume_{ep}", vol_id)
+            }, name=ep, known_id=st.resource_id(f"runpod_endpoint_{ep}"))
+        endpoints[ep] = ep_res.rid
+        st.put_resource(f"runpod_endpoint_{ep}", ep_res.rid, adopted=ep_res.adopted)
+        st.put_resource(f"runpod_template_{ep}", tmpl.rid, adopted=tmpl.adopted)
+        st.put_resource(f"runpod_volume_{ep}", vol.rid, adopted=vol.adopted)
 
     # Model seeding: the backend image self-preloads weights from R2 on first cold start (the
     # R2-mirror-on-cold-start model), so it is not blocking; optionally pre-seed each volume via the
@@ -698,11 +731,12 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
     acct, tok = s.cf_account_id, s.cf_api_token
     log("seeding the Cloudflare Secrets Store (BEFORE deploy) ...")
 
-    store_id = create_if_absent(kind="Secrets Store", account=acct, token=tok,
+    store = create_if_absent(kind="Secrets Store", account=acct, token=tok,
         list_path="/accounts/{acct}/secrets_store/stores", create_path="/accounts/{acct}/secrets_store/stores",
         create_body={"name": prefixed(STORE_NAME)}, name=prefixed(STORE_NAME), name_key="name",
-        id_key="id", known_id=st.get("store_id"))
-    st.put("store_id", store_id)
+        id_key="id", known_id=st.resource_id("store_id"))
+    store_id = store.rid
+    st.put_resource("store_id", store_id, adopted=store.adopted)
     replace_store_id_placeholder(repo, store_id)  # so the deploy's bindings resolve
 
     values = {
@@ -744,7 +778,7 @@ def render_and_write_core_toml(repo: Path, s: Secrets, st: State) -> None:
     base install (VPC / tail / routes / DO-migration blocks stripped -- see render_core_toml)."""
     mods = module_dirs(repo)
     rendered = render_core_toml((repo / "wrangler.toml.example").read_text(),
-        account_id=s.cf_account_id, d1_id=str(st.get("d1_id") or ""), store_id=str(st.get("store_id") or ""),
+        account_id=s.cf_account_id, d1_id=str(st.resource_id("d1_id") or ""), store_id=str(st.resource_id("store_id") or ""),
         primary_bucket=R2_BUCKETS[0], prefix=DEPLOY_PREFIX.strip(),
         module_service_names=[module_worker_name(repo, m) for m in mods])
     (repo / "wrangler.toml").write_text(rendered)
@@ -762,7 +796,7 @@ def deploy_workers(repo: Path, s: Secrets, st: State) -> None:
     log(f"deploying {len(mods)} module workers, then the core (media-less base install)"
         f"{' (isolated: ' + DEPLOY_PREFIX.strip() + ')' if isolate else ''} ...")
     env = cf_env_for(s)
-    acct, d1_id, store_id = s.cf_account_id, str(st.get("d1_id") or ""), str(st.get("store_id") or "")
+    acct, d1_id, store_id = s.cf_account_id, str(st.resource_id("d1_id") or ""), str(st.resource_id("store_id") or "")
     for m in mods:
         mp = repo / "modules" / m / "wrangler.toml"
         text = mp.read_text()
@@ -901,7 +935,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
     deploy_workers(repo, s, st)
     if AUTH_MODE == "token":
         set_studio_api_token(repo, s, rotate_token)  # operator login (worker secret, safe post-deploy)
-    restore_store_id_placeholder(repo, st.get("store_id"))  # leave the working tree clean post-deploy
+    restore_store_id_placeholder(repo, st.resource_id("store_id"))  # leave the working tree clean post-deploy
     bring_up_containers(repo)
     finalize(repo, st)
 
@@ -925,29 +959,41 @@ def wrangler_delete_tolerant(args: list, *, cwd: Path, cf_env: dict, label: str)
         log(f"  WARN {label}: delete failed (exit {proc.returncode}); continuing teardown")
 
 
-def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False) -> None:
+def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, include_adopted: bool = False) -> None:
     """Teardown in reverse dependency order, by recorded id. R2 buckets + D1 hold user data and are
-    LEFT in place unless --delete-data is given."""
+    LEFT in place unless --delete-data is given. Adopted resources (--adopt) are skipped unless
+    --include-adopted is passed (#659)."""
     st = State.load(repo)
     s = collect_secrets(noninteractive_env=noninteractive)  # F3: env-cred path (like up), else hidden prompts
     log("teardown (reverse dependency order, by recorded id) ...")
+    if include_adopted:
+        log("WARNING: --include-adopted will DELETE adopted resources (pre-existing before this deploy)")
 
-    # RunPod first (endpoint -> volume -> template). An endpoint with live workers may need scaling to 0
+    # RunPod first
     # before delete; surface the API error rather than force.
     key = s.runpod_api_key
     for ep in RUNPOD_ENDPOINTS:
-        eid = st.get(f"runpod_endpoint_{ep}")
+        eid = st.resource_id(f"runpod_endpoint_{ep}")
         if eid:
-            rp_api("DELETE", f"/endpoints/{eid}", key)
-            log(f"  deleted RunPod endpoint {ep} ({eid})")
-        vid = st.get(f"runpod_volume_{ep}")
+            if st.is_adopted(f"runpod_endpoint_{ep}") and not include_adopted:
+                log(f"  skipping adopted RunPod endpoint {eid}")
+            else:
+                rp_api("DELETE", f"/endpoints/{eid}", key)
+                log(f"  deleted RunPod endpoint {ep} ({eid})")
+        vid = st.resource_id(f"runpod_volume_{ep}")
         if vid:
-            rp_api("DELETE", f"/networkvolumes/{vid}", key)
-            log(f"  deleted RunPod volume {ep}")
-        tid = st.get(f"runpod_template_{ep}")
+            if st.is_adopted(f"runpod_volume_{ep}") and not include_adopted:
+                log(f"  skipping adopted RunPod volume {vid}")
+            else:
+                rp_api("DELETE", f"/networkvolumes/{vid}", key)
+                log(f"  deleted RunPod volume {ep} ({vid})")
+        tid = st.resource_id(f"runpod_template_{ep}")
         if tid:
-            rp_api("DELETE", f"/templates/{tid}", key)
-            log(f"  deleted RunPod template {ep}")
+            if st.is_adopted(f"runpod_template_{ep}") and not include_adopted:
+                log(f"  skipping adopted RunPod template {tid}")
+            else:
+                rp_api("DELETE", f"/templates/{tid}", key)
+                log(f"  deleted RunPod template {ep} ({tid})")
 
     # CF teardown by recorded id, in dependency-safe order. The minted R2 API TOKEN is the security
     # footgun -- it must NOT survive a `down`. A delete error surfaces loud (cf_api dies), never silent.
@@ -965,22 +1011,37 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False) -> Non
                              cwd=repo, cf_env=cf_env_for(s), label="core worker")
     removed.append("workers (modules + core)")
 
-    sid = st.get("store_id")
+    sid = st.resource_id("store_id")
     if sid:
-        base = f"/accounts/{acct}/secrets_store/stores/{sid}/secrets"
-        for sec_id in {x.get("id") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict) and x.get("id")}:
-            cf_api("DELETE", f"{base}/{sec_id}", tok)
-        cf_api("DELETE", f"/accounts/{acct}/secrets_store/stores/{sid}", tok)
-        removed.append("Secrets Store (store + secrets)")
-    aid = st.get("access_app_id")
+        if st.is_adopted("store_id") and not include_adopted:
+            log(f"  skipping adopted Secrets Store {sid}")
+        else:
+            base = f"/accounts/{acct}/secrets_store/stores/{sid}/secrets"
+            for sec_id in {x.get("id") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict) and x.get("id")}:
+                cf_api("DELETE", f"{base}/{sec_id}", tok)
+            cf_api("DELETE", f"/accounts/{acct}/secrets_store/stores/{sid}", tok)
+            removed.append("Secrets Store (store + secrets)")
+    aid = st.resource_id("access_app_id")
     if aid:
-        cf_api("DELETE", f"/accounts/{acct}/access/apps/{aid}", tok); removed.append("Access app")
-    gw = st.get("gateway_id")
+        if st.is_adopted("access_app_id") and not include_adopted:
+            log(f"  skipping adopted Access app {aid}")
+        else:
+            cf_api("DELETE", f"/accounts/{acct}/access/apps/{aid}", tok)
+            removed.append("Access app")
+    gw = st.resource_id("gateway_id")
     if gw:
-        cf_api("DELETE", f"/accounts/{acct}/ai-gateway/gateways/{gw}", tok); removed.append("AI Gateway")
-    rt = st.get("r2_token_id")
+        if st.is_adopted("gateway_id") and not include_adopted:
+            log(f"  skipping adopted AI Gateway {gw}")
+        else:
+            cf_api("DELETE", f"/accounts/{acct}/ai-gateway/gateways/{gw}", tok)
+            removed.append("AI Gateway")
+    rt = st.resource_id("r2_token_id")
     if rt:
-        cf_api("DELETE", f"/accounts/{acct}/tokens/{rt}", tok); removed.append("R2 API token")
+        if st.is_adopted("r2_token_id") and not include_adopted:
+            log(f"  skipping adopted R2 API token {rt}")
+        else:
+            cf_api("DELETE", f"/accounts/{acct}/tokens/{rt}", tok)
+            removed.append("R2 API token")
 
     log("CF removed by id: " + (", ".join(removed) if removed else "(nothing was recorded in state)"))
 
@@ -988,12 +1049,19 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False) -> Non
         log("NOTE: R2 buckets + D1 (your DATA) left intact. Re-run with --delete-data to remove them.")
     else:
         for b in (st.get("r2_buckets") or []):
+            bkey = f"r2_bucket_{b}"
+            if st.is_adopted(bkey) and not include_adopted:
+                log(f"  skipping adopted R2 bucket {b}")
+                continue
             cf_api("DELETE", f"/accounts/{acct}/r2/buckets/{b}", tok)
             log(f"  deleted R2 bucket {b}")
-        d1 = st.get("d1_id")
+        d1 = st.resource_id("d1_id")
         if d1:
-            cf_api("DELETE", f"/accounts/{acct}/d1/database/{d1}", tok)
-            log("  deleted D1 database")
+            if st.is_adopted("d1_id") and not include_adopted:
+                log(f"  skipping adopted D1 database {d1}")
+            else:
+                cf_api("DELETE", f"/accounts/{acct}/d1/database/{d1}", tok)
+                log("  deleted D1 database")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -1014,6 +1082,8 @@ def main(argv: list[str] | None = None) -> None:
     down = sub.add_parser("down", help="teardown by recorded id")
     down.add_argument("--delete-data", action="store_true", help="ALSO delete R2 buckets + D1 (your data)")
     down.add_argument("--noninteractive", action="store_true", help="read creds from env (CI/headless), never argv")
+    down.add_argument("--include-adopted", action="store_true",
+                      help="also delete adopted resources (pre-existing before --adopt); destructive")
 
     args = ap.parse_args(argv)
     repo = Path.cwd()
@@ -1024,7 +1094,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "plan":
         cmd_up(repo, dry_run=True, noninteractive=False)
     elif args.cmd == "down":
-        cmd_down(repo, delete_data=args.delete_data, noninteractive=args.noninteractive)
+        cmd_down(repo, delete_data=args.delete_data, noninteractive=args.noninteractive,
+                 include_adopted=args.include_adopted)
 
 
 if __name__ == "__main__":

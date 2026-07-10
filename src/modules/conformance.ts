@@ -199,6 +199,7 @@ const HOOK_OUTPUT_CHECKS: Record<HookName, (o: Record<string, unknown>) => strin
     // state unchecked (film-orchestrator records it verbatim).
     if (o.applied !== undefined && !isStrArr(o.applied)) return "film.finish applied, when present, must be a string[]";
     if (o.degraded !== undefined && !isStr(o.degraded)) return "film.finish degraded, when present, must be a string (the uncarded reason)";
+    if (o.prepend_seconds !== undefined && (typeof o.prepend_seconds !== "number" || !Number.isFinite(o.prepend_seconds) || o.prepend_seconds < 0)) return "film.finish prepend_seconds, when present, must be a non-negative finite number";
     return null;
   },
 };

@@ -166,7 +166,7 @@ def test_recorded_reconciles(monkeypatch):
     monkeypatch.setattr(vd, "cf_api", _fake_cf_api([{"name": "vivijure-studio", "uuid": "ours"}]))
     assert vd.create_if_absent(kind="D1", account="a", token="t", list_path="/x", create_path="/x",
         create_body={"name": "vivijure-studio"}, name="vivijure-studio", name_key="name",
-        id_key="uuid", known_id="ours") == "ours"
+        id_key="uuid", known_id="ours").rid == "ours"
 
 
 def test_adopt_flag_allows(monkeypatch):
@@ -174,11 +174,11 @@ def test_adopt_flag_allows(monkeypatch):
     monkeypatch.setattr(vd, "cf_api", _fake_cf_api([{"name": "vivijure-studio", "uuid": "foreign"}]))
     assert vd.create_if_absent(kind="D1", account="a", token="t", list_path="/x", create_path="/x",
         create_body={"name": "vivijure-studio"}, name="vivijure-studio", name_key="name",
-        id_key="uuid", known_id=None) == "foreign"
+        id_key="uuid", known_id=None).rid == "foreign"
 
 
 def test_absent_is_created(monkeypatch):
     monkeypatch.setattr(vd, "cf_api", _fake_cf_api([]))
     assert vd.create_if_absent(kind="D1", account="a", token="t", list_path="/x", create_path="/x",
         create_body={"name": "vivijure-studio"}, name="vivijure-studio", name_key="name",
-        id_key="uuid", known_id=None) == "newly-created"
+        id_key="uuid", known_id=None).rid == "newly-created"

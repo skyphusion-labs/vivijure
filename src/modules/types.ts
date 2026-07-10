@@ -561,6 +561,13 @@ export interface FilmFinishOutput {
                       // Conformance enforces the TYPE when present (string[]); requiring it outright is
                       // queued for the next genuine api bump.
   degraded?: string;  // set ONLY when the film was passed through UNCARDED, carrying the reason (#207)
+  // Seconds this module PREPENDED to the FRONT of the film (an opening title card). The core shifts any
+  // .srt sidecar written by an EARLIER film.finish step (the subtitle module, ui.order 5, runs before
+  // film-titles at 10) forward by this so the soft subtitles line up with the FINAL film, not the
+  // pre-card timeline (#663). Absent / 0 => no front prepend: credits are appended at the END, so they
+  // never shift cues, and a passthrough / noop applied no card. OPTIONAL + additive (no api bump): a
+  // module that does not prepend simply omits it, and conformance enforces the type only when present.
+  prepend_seconds?: number;
 }
 
 // --------------------------------------------------------------------------- registry view

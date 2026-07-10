@@ -142,6 +142,10 @@ export interface FilmJob {
     // media-stack CPU every cron tick and never finished. R2 presence IS the persisted progress
     // (#122/#141); the existing idempotent assemble re-entry drives the per-tick resume.
     adopted?: string[];  // steps folded from a pre-existing R2 artifact (reuse, never a fake applied run, #583)
+    // #663: R2 key of the FINAL .srt subtitle sidecar (re-timed for any title-card prepend, named next to
+    // the final film). Surfaced on FilmSummary so the sidecar is discoverable via the API, not only by key
+    // convention. Absent when no sidecar was written (burn-only, or a silent / dialogue-free film).
+    sidecar_key?: string;
   };
   // #600 in-flight guard: deterministic film.finish step key -> the ts it was dispatched (persisted
   // BEFORE the dispatch, crash-safe). A step still inside the in-flight window (key not yet in R2) is
@@ -157,6 +161,10 @@ export interface FilmJob {
   // step key stays authoritative on completion (adopt), exactly as the #600 synchronous path.
   film_finish_polls?: Record<string, string>;
   film_finish_attempts?: Record<string, number>;
+  // #663: deterministic film.finish step key -> seconds a title card prepended at that step. Persisted so
+  // the post-chain .srt sidecar re-time recovers the offset even when the prepending step is adopted (not
+  // re-folded) on a later poll tick.
+  film_finish_prepend?: Record<string, number>;
   // Loud, structured degrade when the video-finish tier (VIDEO_FINISH_VPC) is UNAVAILABLE at
   // assemble/mux -- the binding is unbound, or the container/tunnel was unreachable after the bounded
   // retry. The film COMPLETES (never hard-fails after the GPU spend, #519) delivering what was rendered:

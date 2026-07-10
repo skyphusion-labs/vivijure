@@ -1769,6 +1769,132 @@ describe("applyFilmFinish observability (#207: degraded film.finish must not shi
     expect(r?.job.film_key).toBe("renders/film-finish-obs/film-audio.mp4"); // film survives
   });
 
+  it("#663: re-times the .srt sidecar by the title-card prepend + surfaces the sidecar_key on the summary", async () => {
+    // Chain [subtitle (order 5, burn+sidecar), film-titles (order 10, 3s title card)]. The subtitle
+    // container wrote its sidecar to the deterministic per-step key `<base>-ff0.srt`, timed to the
+    // pre-card 0-based film. film-titles then prepends a 3s title card, shifting the final film. The core
+    // must re-time the sidecar by +3s, write it next to the FINAL film, and surface that key.
+    _resetModuleDiscoveryCache();
+    const filmId = "film-srt-663";
+    const base = `renders/${filmId}/film-audio`;
+    const assembled = `${base}.mp4`;
+    const ff0 = `${base}-ff0.mp4`;
+    const ff1 = `${base}-ff1.mp4`;
+    const rawSidecar = `${base}-ff0.srt`;   // what the subtitle step wrote (pre-card timing)
+    const finalSidecar = `${base}-ff1.srt`; // next to the final (carded) film
+    const rawSrt = "1\n00:00:00,000 --> 00:00:03,000\nHello there\n\n2\n00:00:03,000 --> 00:00:05,000\nGoodbye\n";
+
+    const manifest = (name: string, order: number) => ({
+      name, version: "0.2.0", api: "vivijure-module/2", hooks: ["film.finish"],
+      provides: [{ id: name, label: name }], config_schema: {}, ui: { section: "film.finish", order },
+    });
+    const job = {
+      film_id: filmId, project: "p",
+      scenes: [{ shot_id: "s1", prompt: "x", seconds: 3 }, { shot_id: "s2", prompt: "y", seconds: 2 }],
+      dialogue_lines: [{ shot_id: "s1", text: "Hello there" }, { shot_id: "s2", text: "Goodbye" }],
+      phase: "mux" as const, silent_film_key: `renders/${filmId}/film-silent.mp4`,
+      audio_key: `renders/${filmId}/audio.mp4`, mux_output_key: assembled,
+      film_titles: { title: { text: "NEON HALFLIFE" } }, created_at: 0,
+    };
+    let stored = JSON.stringify(job);
+    const puts: Record<string, string> = {};
+    const jsonResp = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    const moduleFetch = (name: string, response: unknown) => async (input: Request | string) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.endsWith("/module.json")) return jsonResp(manifest(name, name === "subtitle" ? 5 : 10));
+      return jsonResp(response); // /invoke
+    };
+    const env = {
+      R2_RENDERS: {
+        get: async (key: string) => {
+          if (key === filmJobDocKey(filmId)) return { text: async () => stored };
+          if (key === rawSidecar) return { text: async () => rawSrt }; // subtitle wrote it (pre-card)
+          if (key in puts) return { text: async () => puts[key] };
+          return null;
+        },
+        head: async (key: string) => (key === rawSidecar ? ({ size: rawSrt.length } as unknown) : null),
+        put: async (key: string, val: string) => { puts[key] = val; if (key === filmJobDocKey(filmId)) stored = val; },
+      },
+      VIDEO_FINISH_VPC: { fetch: async () => jsonResp({ ok: true, key: assembled }) },
+      R2_S3_ACCESS_KEY_ID: "t", R2_S3_SECRET_ACCESS_KEY: "t",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+      // subtitle burns + writes a sidecar; film-titles applies a 3s title card and REPORTS prepend_seconds.
+      MODULE_SUBTITLE: { fetch: moduleFetch("subtitle", { ok: true, output: { film_key: ff0, applied: ["subtitle", "subtitle:sidecar"] } }) },
+      MODULE_FILM_TITLES: { fetch: moduleFetch("film-titles", { ok: true, output: { film_key: ff1, applied: ["film-titles"], prepend_seconds: 3 } }) },
+    } as unknown as Env;
+
+    const r = await advanceFilmJob(env, filmId);
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_key).toBe(ff1);
+    // the sidecar was re-timed by +3s and written next to the final film
+    expect(puts[finalSidecar]).toBeDefined();
+    expect(puts[finalSidecar]).toContain("00:00:03,000 --> 00:00:06,000"); // cue 1 shifted +3
+    expect(puts[finalSidecar]).toContain("00:00:06,000 --> 00:00:08,000"); // cue 2 shifted +3
+    expect(puts[finalSidecar]).toContain("Hello there");
+    // the raw pre-card sidecar is never mutated in place
+    expect(puts[rawSidecar]).toBeUndefined();
+    // the final sidecar key is surfaced on the job + the summary (not only discoverable by convention)
+    expect(r?.job.film_finish?.sidecar_key).toBe(finalSidecar);
+    const summary = summarizeFilm(r!.job, null);
+    expect(summary.film_finish?.sidecar_key).toBe(finalSidecar);
+  });
+
+  it("#663: a credits-only finish (no title card) copies the sidecar unshifted next to the final film", async () => {
+    _resetModuleDiscoveryCache();
+    const filmId = "film-srt-663-credits";
+    const base = `renders/${filmId}/film-audio`;
+    const assembled = `${base}.mp4`;
+    const ff0 = `${base}-ff0.mp4`;
+    const ff1 = `${base}-ff1.mp4`;
+    const rawSidecar = `${base}-ff0.srt`;
+    const finalSidecar = `${base}-ff1.srt`;
+    const rawSrt = "1\n00:00:00,000 --> 00:00:03,000\nHello there\n";
+    const manifest = (name: string, order: number) => ({
+      name, version: "0.2.0", api: "vivijure-module/2", hooks: ["film.finish"],
+      provides: [{ id: name, label: name }], config_schema: {}, ui: { section: "film.finish", order },
+    });
+    const job = {
+      film_id: filmId, project: "p",
+      scenes: [{ shot_id: "s1", prompt: "x", seconds: 3 }],
+      dialogue_lines: [{ shot_id: "s1", text: "Hello there" }],
+      phase: "mux" as const, silent_film_key: `renders/${filmId}/film-silent.mp4`,
+      audio_key: `renders/${filmId}/audio.mp4`, mux_output_key: assembled,
+      film_titles: { credits: { lines: ["directed by you"] } }, created_at: 0,
+    };
+    let stored = JSON.stringify(job);
+    const puts: Record<string, string> = {};
+    const jsonResp = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    const moduleFetch = (name: string, response: unknown) => async (input: Request | string) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.endsWith("/module.json")) return jsonResp(manifest(name, name === "subtitle" ? 5 : 10));
+      return jsonResp(response);
+    };
+    const env = {
+      R2_RENDERS: {
+        get: async (key: string) => {
+          if (key === filmJobDocKey(filmId)) return { text: async () => stored };
+          if (key === rawSidecar) return { text: async () => rawSrt };
+          if (key in puts) return { text: async () => puts[key] };
+          return null;
+        },
+        head: async (key: string) => (key === rawSidecar ? ({ size: rawSrt.length } as unknown) : null),
+        put: async (key: string, val: string) => { puts[key] = val; if (key === filmJobDocKey(filmId)) stored = val; },
+      },
+      VIDEO_FINISH_VPC: { fetch: async () => jsonResp({ ok: true, key: assembled }) },
+      R2_S3_ACCESS_KEY_ID: "t", R2_S3_SECRET_ACCESS_KEY: "t",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+      MODULE_SUBTITLE: { fetch: moduleFetch("subtitle", { ok: true, output: { film_key: ff0, applied: ["subtitle", "subtitle:sidecar"] } }) },
+      // credits-only: film-titles applies a credit card (no title) -> NO prepend_seconds reported
+      MODULE_FILM_TITLES: { fetch: moduleFetch("film-titles", { ok: true, output: { film_key: ff1, applied: ["film-titles"] } }) },
+    } as unknown as Env;
+
+    const r = await advanceFilmJob(env, filmId);
+    expect(r?.job.phase).toBe("done");
+    // unshifted copy next to the final film -- cue times unchanged (credits append at the end)
+    expect(puts[finalSidecar]).toBe(rawSrt);
+    expect(r?.job.film_finish?.sidecar_key).toBe(finalSidecar);
+  });
+
   it("leaves film_finish unset when no film.finish module is installed (no-op)", async () => {
     const { env } = filmFinishEnv(muxJob(), {}, { withModule: false });
     const r = await advanceFilmJob(env, "film-finish-obs");

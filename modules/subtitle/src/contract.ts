@@ -75,4 +75,7 @@ export interface FilmFinishOutput {
   film_key: string;
   applied: string[];
   degraded?: string;
+  // Seconds this module prepended to the FRONT of the film (a title card); the core shifts an earlier
+  // film.finish .srt sidecar by this so soft subtitles match the final film (#663). Absent / 0 => none.
+  prepend_seconds?: number;
 }

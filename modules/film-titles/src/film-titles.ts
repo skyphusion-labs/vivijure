@@ -35,6 +35,13 @@ export function hasCards(input: FilmFinishInput): boolean {
   return titled || credited;
 }
 
+/** True when there is a non-empty opening TITLE card specifically (credits are appended at the END and
+ *  never shift the timeline). This is the ONLY card that prepends the film, so it is what the core needs
+ *  to re-time an .srt sidecar by (#663). */
+export function hasTitleCard(input: FilmFinishInput): boolean {
+  return !!(input.title && typeof input.title.text === "string" && input.title.text.trim().length > 0);
+}
+
 /** The JSON body POSTed to the video-finish container's /film-titles route. Presigned URLs come from
  *  the core (the module is credentialless); the container downloads the film, generates the cards,
  *  concats [title?, film, credits?], and uploads the result to output_url. */
@@ -80,6 +87,8 @@ export interface FinishPoll {
   filmKey: string;     // the input film key (the fallback result key)
   outputKey: string;   // the deterministic key the container writes the carded film to
   submittedAt: number; // epoch ms; measures the container "job not found" (restart) grace window
+  titleSeconds: number; // seconds prepended by the opening title card (0 = none); reported back to the
+                        // core as prepend_seconds so it can re-time the .srt sidecar (#663)
 }
 
 export function encodePoll(s: FinishPoll): string {
@@ -90,7 +99,7 @@ export function decodePoll(token: string): FinishPoll | null {
   try {
     const o = JSON.parse(atob(token)) as FinishPoll;
     if (o && typeof o.jobId === "string" && typeof o.filmKey === "string" && typeof o.outputKey === "string") {
-      return { jobId: o.jobId, filmKey: o.filmKey, outputKey: o.outputKey, submittedAt: typeof o.submittedAt === "number" ? o.submittedAt : 0 };
+      return { jobId: o.jobId, filmKey: o.filmKey, outputKey: o.outputKey, submittedAt: typeof o.submittedAt === "number" ? o.submittedAt : 0, titleSeconds: typeof o.titleSeconds === "number" && Number.isFinite(o.titleSeconds) && o.titleSeconds > 0 ? o.titleSeconds : 0 };
     }
   } catch { /* fall through */ }
   return null;
@@ -106,5 +115,5 @@ export const CONTAINER_NOTFOUND_GRACE_MS = 30_000;
  *  outputKey the core presigned, never the raw input (a card WAS applied). */
 export function completedOutput(result: { key?: string } | null, st: FinishPoll): FilmFinishOutput {
   const filmKey = result && typeof result.key === "string" && result.key.length > 0 ? result.key : st.outputKey;
-  return { film_key: filmKey, applied: ["film-titles"] };
+  return { film_key: filmKey, applied: ["film-titles"], ...(st.titleSeconds > 0 ? { prepend_seconds: st.titleSeconds } : {}) };
 }
