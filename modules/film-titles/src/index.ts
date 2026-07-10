@@ -27,7 +27,7 @@ import {
   type FilmFinishOutput,
 } from "./contract";
 import {
-  coerceConfig, hasCards, buildContainerSpec, passthroughOutput,
+  coerceConfig, hasCards, hasTitleCard, buildContainerSpec, passthroughOutput,
   encodePoll, decodePoll, completedOutput, CONTAINER_NOTFOUND_GRACE_MS,
 } from "./film-titles";
 
@@ -82,7 +82,7 @@ async function submitAsync(env: Env, spec: Record<string, unknown>): Promise<str
 }
 
 /** Synchronous fallback: the pre-#602 behavior, unchanged. Used when the container has no async route. */
-async function invokeSync(env: Env, input: FilmFinishInput, spec: Record<string, unknown>): Promise<InvokeResponse<FilmFinishOutput>> {
+async function invokeSync(env: Env, input: FilmFinishInput, spec: Record<string, unknown>, titleSeconds: number): Promise<InvokeResponse<FilmFinishOutput>> {
   let resp: Response;
   try {
     resp = await env.VIDEO_FINISH_VPC.fetch("http://video-finish/film-titles", {
@@ -99,7 +99,10 @@ async function invokeSync(env: Env, input: FilmFinishInput, spec: Record<string,
     return passthrough(input, "passthrough:container-bad-response", true);
   }
   if (!body.ok) return passthrough(input, "passthrough:container-failed", true);
-  return { ok: true, output: { film_key: body.key || input.output_key, applied: ["film-titles"] } };
+  // Report prepend_seconds only when an opening TITLE card was actually rendered (it shifts the final
+  // film`s timeline); credits are appended at the end and never shift cues (#663). titleSeconds is 0 when
+  // there is no title card, so this passes through as no prepend.
+  return { ok: true, output: { film_key: body.key || input.output_key, applied: ["film-titles"], ...(titleSeconds > 0 ? { prepend_seconds: titleSeconds } : {}) } };
 }
 
 async function invoke(env: Env, req: InvokeRequest<FilmFinishInput>): Promise<InvokeResponse<FilmFinishOutput>> {
@@ -115,11 +118,12 @@ async function invoke(env: Env, req: InvokeRequest<FilmFinishInput>): Promise<In
 
   // Prefer async so a long encode survives across request budgets; fall back to sync for a pre-#602
   // container (back-compat). A sync fallback that itself fails soft-degrades (#190), never drops the film.
+  const titleSeconds = hasTitleCard(input) ? cfg.title_seconds : 0; // #663: shifts the final timeline
   const jobId = await submitAsync(env, spec);
   if (jobId) {
-    return { ok: true, pending: true, poll: encodePoll({ jobId, filmKey: input.film_key, outputKey: input.output_key, submittedAt: Date.now() }) };
+    return { ok: true, pending: true, poll: encodePoll({ jobId, filmKey: input.film_key, outputKey: input.output_key, submittedAt: Date.now(), titleSeconds }) };
   }
-  return invokeSync(env, input, spec);
+  return invokeSync(env, input, spec, titleSeconds);
 }
 
 async function poll(env: Env, body: PollRequest): Promise<PollResponse<FilmFinishOutput>> {

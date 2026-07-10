@@ -2,12 +2,18 @@ import { describe, it, expect } from "vitest";
 import {
   coerceConfig,
   hasCards,
+  hasTitleCard,
   buildContainerSpec,
   passthroughOutput,
+  completedOutput,
+  encodePoll,
+  decodePoll,
   type TitlesConfig,
+  type FinishPoll,
 } from "../modules/film-titles/src/film-titles";
 import type { FilmFinishInput } from "../modules/film-titles/src/contract";
 import worker from "../modules/film-titles/src/index";
+import { checkHookOutput } from "../src/modules/conformance";
 
 const baseInput = (over: Partial<FilmFinishInput> = {}): FilmFinishInput => ({
   film_key: "renders/film-x/film.mp4",
@@ -180,5 +186,102 @@ describe("film-titles module invoke (#602 async + #207 regression)", () => {
     expect(calls).toHaveLength(0);
     expect(json.ok).toBe(true);
     expect(json.output.degraded).toBeUndefined();
+  });
+});
+
+
+// #663: film-titles PREPENDS an opening title card, shifting the FINAL film`s timeline. It reports the
+// prepend duration as `prepend_seconds` so the core can re-time the subtitle .srt sidecar to match. Only a
+// real TITLE card counts -- credits append at the END and never shift cues.
+describe("film-titles prepend_seconds reporting (#663)", () => {
+  function vpcEnv(over: { asyncSupported?: boolean } = {}) {
+    const asyncSupported = over.asyncSupported ?? true;
+    const j = (b: unknown, status = 200) =>
+      new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+    const env = {
+      VIDEO_FINISH_VPC: {
+        async fetch(input: Request | string) {
+          const path = new URL(typeof input === "string" ? input : input.url).pathname;
+          if (path.startsWith("/async/status/")) return j({ status: "completed", result: { ok: true, key: "renders/film-x/film_titled.mp4" } });
+          if (path.startsWith("/async/")) return asyncSupported ? j({ ok: true, jobId: "job-abc" }, 202) : j({ ok: false }, 404);
+          return j({ ok: true, key: "renders/film-x/film_titled.mp4" });
+        },
+      },
+    } as unknown as Parameters<typeof worker.fetch>[1];
+    return { env };
+  }
+  const invokeCfg = (input: FilmFinishInput, config: Record<string, unknown>) =>
+    new Request("https://module/invoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hook: "film.finish", input, config, context: {} }),
+    });
+  const pollReq = (token: string) =>
+    new Request("https://module/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ poll: token }),
+    });
+  const withTitle = (over: Partial<FilmFinishInput> = {}): FilmFinishInput => ({
+    film_key: "renders/film-x/film.mp4",
+    video_url: "https://r2/get",
+    output_url: "https://r2/put",
+    output_key: "renders/film-x/film_titled.mp4",
+    width: 1920,
+    height: 1080,
+    fps: 24,
+    title: { text: "NEON HALFLIFE" },
+    ...over,
+  });
+
+  it("hasTitleCard is true ONLY for a non-empty opening title (credits do not count)", () => {
+    expect(hasTitleCard(withTitle())).toBe(true);
+    expect(hasTitleCard(withTitle({ title: { text: "   " } }))).toBe(false);
+    expect(hasTitleCard(withTitle({ title: undefined, credits: { lines: ["directed by you"] } }))).toBe(false);
+  });
+
+  it("completedOutput reports prepend_seconds = the title card duration, omits it when there is no title", () => {
+    const st: FinishPoll = { jobId: "j", filmKey: "renders/film-x/film.mp4", outputKey: "renders/film-x/film-ff1.mp4", submittedAt: 0, titleSeconds: 3 };
+    const out = completedOutput({ key: "renders/film-x/film-ff1.mp4" }, st);
+    expect(out.prepend_seconds).toBe(3);
+    // credits-only / no title -> titleSeconds 0 -> field omitted (no prepend)
+    const outNoTitle = completedOutput({ key: "renders/film-x/film-ff1.mp4" }, { ...st, titleSeconds: 0 });
+    expect(outNoTitle.prepend_seconds).toBeUndefined();
+  });
+
+  it("the async poll token carries titleSeconds (survives encode/decode; legacy tokens default to 0)", () => {
+    const token = encodePoll({ jobId: "j", filmKey: "f", outputKey: "o", submittedAt: 10, titleSeconds: 8 });
+    expect(decodePoll(token)?.titleSeconds).toBe(8);
+    // a pre-#663 token with no titleSeconds decodes to 0 (no prepend reported)
+    const legacy = btoa(JSON.stringify({ jobId: "j", filmKey: "f", outputKey: "o", submittedAt: 10 }));
+    expect(decodePoll(legacy)?.titleSeconds).toBe(0);
+  });
+
+  it("async invoke -> poll surfaces prepend_seconds = clamped title_seconds when a title card renders", async () => {
+    const { env } = vpcEnv();
+    const sub = (await (await worker.fetch(invokeCfg(withTitle(), { title_seconds: 8 }), env)).json()) as { poll: string };
+    const out = (await (await worker.fetch(pollReq(sub.poll), env)).json()) as { output: { prepend_seconds?: number } };
+    expect(out.output.prepend_seconds).toBe(8);
+  });
+
+  it("async credits-only invoke reports NO prepend_seconds (credits append at the end)", async () => {
+    const { env } = vpcEnv();
+    const creditsOnly = withTitle({ title: undefined, credits: { lines: ["directed by you"] } });
+    const sub = (await (await worker.fetch(invokeCfg(creditsOnly, {}), env)).json()) as { poll: string };
+    const out = (await (await worker.fetch(pollReq(sub.poll), env)).json()) as { output: { prepend_seconds?: number } };
+    expect(out.output.prepend_seconds).toBeUndefined();
+  });
+
+  it("the SYNC fallback also reports prepend_seconds with a title card", async () => {
+    const { env } = vpcEnv({ asyncSupported: false });
+    const out = (await (await worker.fetch(invokeCfg(withTitle(), {}), env)).json()) as { output: { prepend_seconds?: number; applied: string[] } };
+    expect(out.output.applied).toEqual(["film-titles"]);
+    expect(out.output.prepend_seconds).toBe(3); // default title_seconds
+  });
+
+  it("prepend_seconds passes the film.finish conformance output check", () => {
+    expect(checkHookOutput("film.finish", { film_key: "k", applied: ["film-titles"], prepend_seconds: 3 }).pass).toBe(true);
+    expect(checkHookOutput("film.finish", { film_key: "k", applied: ["film-titles"], prepend_seconds: -1 }).pass).toBe(false);
+    expect(checkHookOutput("film.finish", { film_key: "k", applied: ["film-titles"], prepend_seconds: Number.NaN }).pass).toBe(false);
   });
 });

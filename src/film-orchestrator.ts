@@ -9,6 +9,7 @@
 
 import type { Env } from "./env";
 import { discoverModules, invokeModule, pollModule, cancelModule, resolveFetcher, servingForHook, validateConfig, dispatchChain } from "./modules/registry";
+import { retimeSrt } from "./srt";
 import { loadInstallConfig } from "./operator-config";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput, RegisteredModule } from "./modules/types";
 import {
@@ -789,6 +790,10 @@ export interface RunFilmFinishResult {
   degraded?: string;
   complete: boolean; // #600: false when the chain STOPPED at an in-flight step (still encoding) -- the
                      // caller must NOT finalize (keep phase re-enterable + keep the assembled film_key)
+  // #663: R2 key of the FINAL .srt subtitle sidecar (re-timed for any title-card prepend, named next to
+  // the final film), so the summary/API can surface it instead of it being discoverable only by
+  // convention. Absent when no subtitle sidecar was written (burn-only, or a silent / dialogue-free film).
+  sidecar_key?: string;
 }
 
 // #602 async job+poll: a film.finish step whose encode outlasts a request budget is submitted ONCE and
@@ -844,7 +849,7 @@ async function runFilmFinishStep(
   inKey: string,
   outKey: string,
   captions: FilmFinishInput["captions"],
-): Promise<{ film_key: string; applied: string[]; errors: string[]; steps?: string[]; degraded?: string }> {
+): Promise<{ film_key: string; applied: string[]; errors: string[]; steps?: string[]; degraded?: string; prepend_seconds?: number }> {
   const envRec = env as unknown as Record<string, unknown>;
   const seed = await filmFinishSeed(env, input, inKey, outKey, captions);
   // Single-element chain: dispatchChain gives the config-clamp + degrade/error handling for free;
@@ -873,7 +878,53 @@ async function runFilmFinishStep(
   // (a bare outKey would 404 the next step`s GET). Adoption stays honest by construction: only a real
   // write leaves an artifact at the deterministic outKey, so only real steps are ever adopted.
   const film_key = typeof out?.film_key === "string" && out.film_key.length > 0 ? out.film_key : inKey;
-  return { film_key, applied: result.applied, errors: result.errors, steps: out?.applied, degraded };
+  const prepend_seconds = typeof out?.prepend_seconds === "number" && Number.isFinite(out.prepend_seconds) && out.prepend_seconds > 0 ? out.prepend_seconds : undefined;
+  return { film_key, applied: result.applied, errors: result.errors, steps: out?.applied, degraded, prepend_seconds };
+}
+
+/** #663: after the film.finish chain, produce the FINAL .srt subtitle sidecar. The subtitle module
+ *  (ui.order 5) writes its sidecar timed to the pre-card assembled film; a later film-titles step
+ *  (ui.order 10) prepends a title card, shifting the FINAL film. This reads the raw per-step sidecar
+ *  (never mutated), shifts every cue by the total prepend that ran AFTER it, and writes the result to a
+ *  key named next to the FINAL film (discoverable + idempotent). Returns the final sidecar key, or
+ *  undefined when no sidecar exists (burn-only mode, or a silent / dialogue-free film). A zero offset
+ *  (no title card / credits-only) is a straight copy so the surfaced key stays consistent. */
+async function finalizeSidecar(
+  env: Env,
+  base: string,
+  finalFilmKey: string,
+  stepCount: number,
+  prepends: Record<string, number>,
+  captions: FilmFinishInput["captions"],
+): Promise<string | undefined> {
+  // A sidecar can only exist when there was dialogue to caption; skip the R2 probes on a silent film.
+  if (!captions.some((c) => typeof c.text === "string" && c.text.trim().length > 0)) return undefined;
+  // Locate the raw sidecar a subtitle step wrote by its deterministic per-step key. First present wins
+  // (only the subtitle module writes one, and it runs before any card step).
+  let rawKey: string | undefined;
+  let rawIndex = -1;
+  for (let n = 0; n < stepCount; n++) {
+    const k = `${base}-ff${n}.srt`;
+    if (await r2ObjectExists(env, k)) { rawKey = k; rawIndex = n; break; }
+  }
+  if (!rawKey) return undefined; // burn-only, or the subtitle module wrote no sidecar
+  const finalKey = finalFilmKey.replace(/\.mp4$/i, "") + ".srt";
+  // Subtitle was the terminal step (no later card): its sidecar is already aligned to the final film and
+  // already lives at the final key -- surface it as-is, never rewrite the raw artifact in place.
+  if (finalKey === rawKey) return rawKey;
+  // Sum the prepend of every step AFTER the one that wrote the sidecar (a title card shifts the timeline;
+  // credits append at the end and record 0).
+  let shift = 0;
+  for (let n = rawIndex + 1; n < stepCount; n++) {
+    const sec = prepends[`${base}-ff${n}.mp4`];
+    if (typeof sec === "number" && sec > 0) shift += sec;
+  }
+  const obj = await env.R2_RENDERS.get(rawKey);
+  if (!obj) return undefined; // vanished between HEAD and GET (GC race); nothing to re-time
+  const rawText = await obj.text();
+  const finalText = shift > 0 ? retimeSrt(rawText, shift) : rawText;
+  await env.R2_RENDERS.put(finalKey, finalText, { httpMetadata: { contentType: "application/x-subrip; charset=utf-8" } });
+  return finalKey;
 }
 
 /** Run the film.finish chain (subtitle / title / credit cards) on an assembled+muxed film. Reused by the
@@ -905,6 +956,11 @@ export async function runFilmFinish(
     polls?: Record<string, string>;
     attempts?: Record<string, number>;
     persistPoll?: (key: string, token: string | null) => Promise<void>;
+    // #663: the job`s persisted per-step prepend map (deterministic step outKey -> seconds a title card
+    // prepended) + a persist callback. Lets the post-chain .srt re-time recover the offset even when the
+    // prepending step is ADOPTED (not re-folded) on a later tick. Absent => in-memory only (single-tick).
+    prepends?: Record<string, number>;
+    persistPrepend?: (key: string, seconds: number) => Promise<void>;
     now?: number;
   },
 ): Promise<RunFilmFinishResult> {
@@ -930,6 +986,13 @@ export async function runFilmFinish(
   // across ticks). Absent => the synchronous dispatchChain step (behavior-identical to pre-#602).
   const asyncDrive = !!opts?.persistPoll;
   let complete = true;
+  // #663: title-card prepend offsets keyed by the prepending step`s deterministic outKey. Bound to the
+  // persisted job map when the caller persists (survives cross-tick adoption), else in-memory (single tick).
+  const prepends: Record<string, number> = opts?.prepends ?? {};
+  const recordPrepend = async (key: string, seconds: number): Promise<void> => {
+    prepends[key] = seconds;
+    await opts?.persistPrepend?.(key, seconds);
+  };
 
   // Soft-degrade ONE step (ship the film uncarded, #190) without failing the render: record the reason,
   // forget any in-flight token, and let the chain continue from the CURRENT (uncarded) key.
@@ -942,12 +1005,16 @@ export async function runFilmFinish(
   // Fold a completed film.finish output into the chain (advance to the carded key, record what ran).
   // Returns false when the output VIOLATES the contract (the caller soft-degrades instead of folding a
   // malformed key forward -- a bare/absent key would 404 the next step`s GET).
-  const foldOutput = (module: RegisteredModule, out: FilmFinishOutput, outKey: string): boolean => {
+  const foldOutput = async (module: RegisteredModule, out: FilmFinishOutput, outKey: string): Promise<boolean> => {
     if (hookOutputViolation(module.name, "film.finish", out)) return false;
     applied.push(module.name);
     if (Array.isArray(out.applied)) lastSteps = out.applied;
     if (typeof out.degraded === "string" && out.degraded.length > 0) degradeParts.push(`${module.name}: ${out.degraded}`);
     curKey = typeof out.film_key === "string" && out.film_key.length > 0 ? out.film_key : outKey;
+    // #663: a title card this step prepended shifts the final timeline; record it so the post-chain .srt
+    // re-time (and a later-tick resume that only ADOPTS this step) can offset any earlier sidecar.
+    const pp = typeof out.prepend_seconds === "number" && Number.isFinite(out.prepend_seconds) && out.prepend_seconds > 0 ? out.prepend_seconds : 0;
+    if (pp > 0) await recordPrepend(outKey, pp);
     return true;
   };
 
@@ -979,6 +1046,7 @@ export async function runFilmFinish(
       if (r.steps) lastSteps = r.steps;
       if (r.degraded) degradeParts.push(r.degraded);
       curKey = r.film_key;
+      if (r.prepend_seconds && r.prepend_seconds > 0) await recordPrepend(outKey, r.prepend_seconds);
       continue;
     }
 
@@ -994,7 +1062,7 @@ export async function runFilmFinish(
       const p = await pollModule<FilmFinishOutput>(fetcher, { poll: token });
       if (p.ok && !(p as { pending?: boolean }).pending) {
         const out = (p as { output: FilmFinishOutput }).output;
-        if (!foldOutput(module, out, outKey)) { await softDegradeStep(outKey, `${module.name}: ${hookOutputViolation(module.name, "film.finish", out)}`); continue; }
+        if (!(await foldOutput(module, out, outKey))) { await softDegradeStep(outKey, `${module.name}: ${hookOutputViolation(module.name, "film.finish", out)}`); continue; }
         if (opts?.dispatched) delete opts.dispatched[outKey];
         if (opts?.attempts) delete opts.attempts[outKey];
         await opts!.persistPoll!(outKey, null);
@@ -1032,14 +1100,17 @@ export async function runFilmFinish(
     if (opts?.dispatched) delete opts.dispatched[outKey];
     if (r.ok && "output" in r) {
       const out = (r as { output: FilmFinishOutput }).output;
-      if (!foldOutput(module, out, outKey)) await softDegradeStep(outKey, `${module.name}: ${hookOutputViolation(module.name, "film.finish", out)}`);
+      if (!(await foldOutput(module, out, outKey))) await softDegradeStep(outKey, `${module.name}: ${hookOutputViolation(module.name, "film.finish", out)}`);
       continue;
     }
     // Submit ok:false (a deterministic input/config reject): soft-degrade this step (#190).
     await softDegradeStep(outKey, `${module.name}: ${(r as { error?: string }).error ?? "invoke failed"}`);
   }
   const degraded = degradeParts.length > 0 ? degradeParts.join("; ") : undefined;
-  return { ran: true, film_key: curKey, applied, adopted, errors, steps: lastSteps, degraded, complete };
+  // #663: once the chain COMPLETES, materialize the final subtitle sidecar next to the final film,
+  // re-timed for any title-card prepend. Skipped on an in-flight stop (produced next tick when complete).
+  const sidecar_key = complete ? await finalizeSidecar(env, base, curKey, steps.length, prepends, captions) : undefined;
+  return { ran: true, film_key: curKey, applied, adopted, errors, steps: lastSteps, degraded, complete, sidecar_key };
 }
 
 /** Single-film film.finish: thin wrapper over runFilmFinish that folds the outcome back onto the job
@@ -1049,6 +1120,7 @@ async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredMo
   job.film_finish_dispatched ??= {};
   job.film_finish_polls ??= {};
   job.film_finish_attempts ??= {};
+  job.film_finish_prepend ??= {};
   const r = await runFilmFinish(env, {
     film_key: job.film_key,
     scenes: job.scenes,
@@ -1070,6 +1142,10 @@ async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredMo
       else job.film_finish_polls![key] = token;
       await putFilm(env, job);
     },
+    // #663: persist title-card prepend offsets so the post-chain .srt re-time recovers them even when the
+    // prepending step is adopted (not re-folded) on a later poll tick.
+    prepends: job.film_finish_prepend,
+    persistPrepend: async (key, seconds) => { job.film_finish_prepend![key] = seconds; await putFilm(env, job); },
   });
   if (!r.ran) return true; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
   if (r.errors.length > 0) {
@@ -1081,7 +1157,7 @@ async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredMo
   if (r.adopted.length > 0) {
     console.log(`film.finish adopted ${r.adopted.length} completed step(s) from R2 for ${job.film_id}: ${r.adopted.join(", ")}`);
   }
-  job.film_finish = { applied: r.applied, adopted: r.adopted, errors: r.errors, steps: r.steps, degraded: r.degraded };
+  job.film_finish = { applied: r.applied, adopted: r.adopted, errors: r.errors, steps: r.steps, degraded: r.degraded, sidecar_key: r.sidecar_key };
   // #600: advance the film key ONLY when the chain COMPLETED. On an in-flight stop, keep the assembled
   // key so the deterministic step base stays stable across re-entries (a shifted base would re-burn).
   if (r.complete) job.film_key = r.film_key;

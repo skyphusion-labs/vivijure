@@ -321,6 +321,7 @@ async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
   job.film_finish_dispatched ??= {};
   job.film_finish_polls ??= {};
   job.film_finish_attempts ??= {};
+  job.film_finish_prepend ??= {};
   const r = await runFilmFinish(env, {
     film_key: job.film_key,
     // Caption scenes in the SAME order the gather assembles the clips (expected_shot_ids), NOT bundle
@@ -346,12 +347,16 @@ async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
       else job.film_finish_polls![key] = token;
       await saveScatterJob(env, job);
     },
+    // #663: persist title-card prepend offsets across gather ticks so the post-chain .srt re-time recovers
+    // them even when the prepending step is adopted (not re-folded) on a later tick.
+    prepends: job.film_finish_prepend,
+    persistPrepend: async (key, seconds) => { job.film_finish_prepend![key] = seconds; await saveScatterJob(env, job); },
   });
   if (!r.ran) { job.film_finish = { applied: [], errors: [] }; return; } // no film.finish module -> mark + skip
   if (r.errors.length > 0) console.warn(`scatter film.finish errors for ${job.scatter_id}: ${r.errors.join("; ")}`);
   if (r.degraded) console.warn(`scatter film.finish degraded for ${job.scatter_id}: ${r.degraded} -- film shipped WITHOUT cards`);
   if (!r.complete) { await saveScatterJob(env, job); return; } // #600 in-flight: leave film_finish UNSET so the next gather tick resumes; dispatched map already persisted
-  job.film_finish = { applied: r.applied, adopted: r.adopted, errors: r.errors, steps: r.steps, degraded: r.degraded };
+  job.film_finish = { applied: r.applied, adopted: r.adopted, errors: r.errors, steps: r.steps, degraded: r.degraded, sidecar_key: r.sidecar_key };
   job.film_key = r.film_key;
   await saveScatterJob(env, job); // persist carded key + outcome before finalize records it
 }

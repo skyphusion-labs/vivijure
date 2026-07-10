@@ -20,9 +20,10 @@ export interface ScatterJob {
   dialogue_lines?: { shot_id: string; text: string; voice_id?: string }[];
   film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } };
   film_finish_config?: Record<string, Record<string, unknown>>;
-  film_finish?: { applied: string[]; adopted?: string[]; errors: string[]; steps?: string[]; degraded?: string };
+  film_finish?: { applied: string[]; adopted?: string[]; errors: string[]; steps?: string[]; degraded?: string; sidecar_key?: string }; // sidecar_key #663
   film_finish_dispatched?: Record<string, number>; // #600 in-flight guard (see FilmJob)
   film_finish_polls?: Record<string, string>;        // #602 async job+poll token map (see FilmJob)
+  film_finish_prepend?: Record<string, number>;      // #663 title-card prepend offsets (see FilmJob)
   film_finish_attempts?: Record<string, number>;      // #602 async job+poll terminal-failure count
   // #289 (atomic submit / self-heal): the doc is written to R2 BEFORE the D1 render rows, so the
   // poll path can reconstruct a missing UI-list row entirely from the doc (project_id is the FK to

@@ -916,6 +916,15 @@ soft-degrade (`output.degraded`) is recorded centrally in `degraded`. For `film.
 `nextInput` presigns a FRESH GET (of the prior step's film) + PUT (to a new key) + sidecar PUT, so
 step N+1 reads what step N wrote (#14).
 
+**Subtitle sidecar re-time (#663).** The `subtitle` module (`ui.order` 5) writes its soft `.srt` sidecar
+timed to the pre-card, 0-based assembled film; a later `film-titles` step (`ui.order` 10) PREPENDS an
+opening title card, shifting the final film. The burned captions ride the video through the prepend, but
+the `.srt` sidecar is a separate artifact, so `film-titles` reports the prepend duration on its output as
+`prepend_seconds` (a title card only; credits append at the END and never shift cues). After the chain
+COMPLETES, the core re-times the sidecar by that offset and writes the final `.srt` next to the FINAL
+film, surfaced on the film summary as `film_finish.sidecar_key` (previously discoverable only by key
+convention). `prepend_seconds` is OPTIONAL + additive on `FilmFinishOutput` (no `MODULE_API` bump).
+
 ```mermaid
 flowchart LR
   SEED[seed input] --> M1[module 1<br/>ui.order asc]
