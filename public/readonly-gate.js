@@ -14,6 +14,10 @@
 // The server-side AUTH_MODE=demo gate is authoritative; this is the honest UX layer on top of it.
 (function () {
   var ANNOTATION = "Demo studio: read-only. Run your own to render.";
+  // AGPL-3.0 section 13: a public network deployment must offer its source to users. The demo is
+  // the studio running over a network, so every demo page carries this offer in the banner. Plain
+  // repo link (no per-deploy tag to go stale); the frontend has no cheap studio-version signal.
+  var REPO_URL = "https://github.com/skyphusion-labs/vivijure";
   var SAFE = { GET: 1, HEAD: 1, OPTIONS: 1 };
 
   // readonly: null until GET /api/modules resolves, then a fixed boolean. A mutation issued while
@@ -89,6 +93,13 @@
       msg.textContent = ANNOTATION;
       bar.appendChild(dot);
       bar.appendChild(msg);
+      var src = document.createElement("a");
+      src.className = "readonly-source";
+      src.href = REPO_URL;
+      src.target = "_blank";
+      src.rel = "noopener noreferrer";
+      src.textContent = "Source: github.com/skyphusion-labs/vivijure (AGPL-3.0)";
+      bar.appendChild(src);
       document.body.insertBefore(bar, document.body.firstChild);
       bannerEl = bar;
     };
