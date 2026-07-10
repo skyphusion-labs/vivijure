@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   applyResponseSecurity,
+  STUDIO_DEMO_CSP,
   LOCKED_CSP,
   STUDIO_CSP,
 } from "../src/asset-response";
@@ -11,6 +12,30 @@ function htmlResponse(body: string): Response {
 function req(path: string): Request {
   return new Request("https://vivijure.skyphusion.org" + path);
 }
+
+describe("applyResponseSecurity -- demo media-src (#625)", () => {
+  it("a studio page on a DEMO deploy gets STUDIO_DEMO_CSP (media-src admits exactly the showcase host)", () => {
+    const out = applyResponseSecurity(htmlResponse("<html></html>"), req("/planner"), { AUTH_MODE: "demo" } as any);
+    const csp = out.headers.get("content-security-policy")!;
+    expect(csp).toBe(STUDIO_DEMO_CSP);
+    expect(csp).toContain("media-src 'self' https://assets.skyphusion.net");
+    // every other directive byte-identical to prod
+    expect(csp.startsWith(STUDIO_CSP)).toBe(true);
+  });
+  it("a NON-demo env (token mode) gets STUDIO_CSP byte-identical -- no media-src", () => {
+    const out = applyResponseSecurity(htmlResponse("<html></html>"), req("/planner"), { AUTH_MODE: "token" } as any);
+    expect(out.headers.get("content-security-policy")).toBe(STUDIO_CSP);
+  });
+  it("env omitted (every existing call/test shape) is never demo", () => {
+    const out = applyResponseSecurity(htmlResponse("<html></html>"), req("/planner"));
+    expect(out.headers.get("content-security-policy")).toBe(STUDIO_CSP);
+  });
+  it("a demo NON-page response stays LOCKED (media-src is a page policy, nothing else widens)", () => {
+    const j = new Response("{}", { headers: { "content-type": "application/json" } });
+    const out = applyResponseSecurity(j, req("/api/modules"), { AUTH_MODE: "demo" } as any);
+    expect(out.headers.get("content-security-policy")).toBe(LOCKED_CSP);
+  });
+});
 
 describe("applyResponseSecurity (the single header chokepoint)", () => {
   it("studio page: strict CSP + companions, body unchanged", async () => {

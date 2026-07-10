@@ -13,6 +13,9 @@
 // original body unchanged (#617 removed the only body-rewriting path, the /welcome Umami inject:
 // the marketing page moved to the vivijure.com storefront).
 
+import { isDemoMode } from "./auth-gate";
+import type { Env } from "./env";
+
 // --------------------------------------------------------------------------- CSP policies (literal)
 
 /** Strict CSP for every studio page (verified: zero inline scripts/styles/on*= handlers). */
@@ -20,6 +23,16 @@ export const STUDIO_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; " +
   "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; " +
   "frame-ancestors 'none'; form-action 'self'";
+
+/** The ONE external origin the public demo studio (#625) plays media from: the S23 showcase films.
+ *  Host-pinned (no wildcard) so the demo CSP admits exactly our asset host and nothing else. */
+export const DEMO_MEDIA_ORIGIN = "https://assets.skyphusion.net";
+
+/** Demo-studio page CSP: STUDIO_CSP + a media-src admitting the showcase host. Media has no explicit
+ *  directive in STUDIO_CSP (it falls back to default-src 'self'), so this ADDS media-src rather than
+ *  widening anything else -- every other directive is byte-identical to prod. Applied ONLY when the
+ *  deploy is demo mode; a prod/self-host deploy never serves this policy. */
+export const STUDIO_DEMO_CSP = STUDIO_CSP + "; media-src 'self' " + DEMO_MEDIA_ORIGIN;
 
 /** Locked CSP for every NON-page response (api/json, assets, redirects, the 429, unknown HTML). A
  *  JSON/asset/redirect response is not a document, so it should load nothing; if such a response is
@@ -87,12 +100,15 @@ function rebuild(res: Response, headers: Headers, body: BodyInit | null): Respon
 
 /** Stamp the correct security headers on a response by its class. Called ONCE on every response that
  *  leaves fetch(), so the worker is the complete header authority with CF's managed transforms off. */
-export function applyResponseSecurity(res: Response, request: Request): Response {
+export function applyResponseSecurity(res: Response, request: Request, env?: Env): Response {
   const ct = res.headers.get("content-type") || "";
   const cls = ct.includes("text/html") ? pageClass(new URL(request.url).pathname) : null;
 
   if (cls === "studio") {
-    return rebuild(res, pageHeaders(new Headers(res.headers), STUDIO_CSP), res.body);
+    // Demo deploys (#625) get the one-directive-wider policy so the showcase films play; everyone
+    // else gets STUDIO_CSP byte-identical to before (env omitted -> never demo).
+    const csp = env && isDemoMode(env) ? STUDIO_DEMO_CSP : STUDIO_CSP;
+    return rebuild(res, pageHeaders(new Headers(res.headers), csp), res.body);
   }
   // Non-page: api/json, non-HTML assets, redirects (incl. the /welcome 301), the 429, or any HTML
   // that is NOT a known studio page route (locked down -- never the permissive page CSP).

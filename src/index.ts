@@ -1393,7 +1393,7 @@ export default {
   // Single security-header chokepoint: EVERY response routeRequest returns is stamped with the right
   // headers for its class (CF's zone-wide managed transform is off; the worker owns headers, #370).
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    return applyResponseSecurity(await routeRequest(request, env, ctx), request);
+    return applyResponseSecurity(await routeRequest(request, env, ctx), request, env);
   },
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sweepUnresolvedJobs(env, ctx));
