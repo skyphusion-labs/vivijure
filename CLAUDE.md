@@ -43,6 +43,7 @@ of these areas, update the matching doc.
 - `docs/mcp.md` -- the Studio MCP Worker (`src/mcp.ts`): drive the studio API from an agent; opt-in, deploys separately.
 - `docs/observability.md` -- the structured event/tail channel for tracing a render.
 - `docs/DEPLOYMENT.md` + `docs/deploy-runbook.md` + `docs/deploy-config-injection.md` -- deploy, env, `account_id` injection.
+- `docs/demo-studio.md` -- the public, read-only, zero-spend demo studio (`demo.vivijure.com`, `AUTH_MODE=demo`): the binding-absence rule, D1 seed procedure, and live-verify list.
 - `docs/dev-modbound.md` -- run the core + every module worker as one local dev so `/api/modules` returns the REAL catalog (no GPU, no prod data). The dev-parity env for driving planner/module flows locally.
 - `docs/SECURITY.md` + `docs/legal/` -- security posture and the public-facing legal/AUP framing.
 
