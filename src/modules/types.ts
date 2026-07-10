@@ -613,8 +613,11 @@ export interface ModulesResponse {
   render: RenderConfigProjection;              // core-owned render config (tiers); additive (#projection)
   /** What TRANSPORTS this host offers, the CORE describing ITSELF -- orthogonal to `api` (which is the
    *  module contract version, unchanged by dispatch). `dispatch: true` means this deployment speaks
-   *  Workers-for-Platforms dynamic dispatch (a module can be installed without a core redeploy). A
-   *  module never reads this; an operator / the studio UI / a health probe does. OPTIONAL + additive:
+   *  Workers-for-Platforms dynamic dispatch (a module can be installed without a core redeploy).
+   *  `readonly: true` (#625) means this deployment accepts no mutations (the public demo studio,
+   *  AUTH_MODE=demo): the frontend disables mutation affordances off this ONE projected capability
+   *  instead of growing per-feature demo branches; omitted everywhere else. A module never reads
+   *  this; an operator / the studio UI / a health probe does. OPTIONAL + additive:
    *  a deploy without WfP omits it, and NO MODULE_API bump (docs/module-dispatch.md section 5.3). */
-  host?: { dispatch: boolean };
+  host?: { dispatch: boolean; readonly?: boolean };
 }
