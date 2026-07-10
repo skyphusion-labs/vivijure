@@ -173,8 +173,10 @@ async function markFailed(db: D1Like, id: string, error: string, now: number): P
   await db.prepare("UPDATE demo_render_queue SET status = 'failed', error = ?, updated_at = ? WHERE id = ?").bind(error.slice(0, 300), now, id).run();
 }
 
-/** Honest position = jobs strictly ahead in line (queued before this one) + (1 if a job is running). */
+/** Honest position: 0 for the running job (it is AT the front, not waiting); for a queued job, the
+ *  jobs strictly ahead in line (queued before it) + (1 if a job is running). */
 export async function queuePosition(db: D1Like, row: DemoQueueRow): Promise<number> {
+  if (row.status === "running") return 0;
   const ahead = await db
     .prepare("SELECT COUNT(*) AS n FROM demo_render_queue WHERE status = 'queued' AND (created_at < ? OR (created_at = ? AND id < ?))")
     .bind(row.created_at, row.created_at, row.id)

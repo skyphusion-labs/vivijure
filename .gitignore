@@ -40,3 +40,6 @@ report.[0-9]*.json
 # The public demo studio config is likewise RENDERED from wrangler.demo.toml.example (demo D1 id
 # injected). Edit the example; render locally to deploy. See docs/demo-studio.md.
 /wrangler.demo.toml
+
+# Rendered demo-scoped local-gpu worker config (#631); rendered from its .example, holds no secrets.
+/modules/local-gpu/wrangler.demo.toml
