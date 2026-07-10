@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, FILM_FINISH_INFLIGHT_WINDOW_SECONDS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, adoptFinishStepOutput, finishShotLedgerReconciles, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, FILM_FINISH_INFLIGHT_WINDOW_SECONDS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 import { filmJobToPollView } from "../src/film-render-bridge";
@@ -132,6 +132,102 @@ describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifa
     const adopted = reclaimFinishShotsFromR2([stuck], new Map());
     expect(adopted).toBe(0);
     expect(stuck.status).toBe("pending");
+  });
+});
+
+// #662: an ADOPTED finish step's tag lives in `adopted`, not `applied` (the #583 disjoint honesty channel),
+// so reading `applied` alone makes an adopted shot look like it dropped exactly one chain module's tag (the
+// 3/3-films prod symptom). The VERDICT is a bookkeeping channel-split, NOT a skip: the step ran (its output
+// is #583-provenance-gated in R2) and its transform is present. The `ledger` records one entry PER chain
+// step (run OR reused) so the per-shot honesty ledger reconciles 1:1 to the chain -- the reused step is
+// PRESENT (reused:true), never dropped.
+describe("finish shot ledger reconciles 1:1 to its chain (#662, adopted-shot bookkeeping)", () => {
+  const finishOut = (clip_key: string, applied: string[]) =>
+    ({ shot_id: "s", clip_key, out_fps: 32, frames: 160, applied }) as unknown as Parameters<typeof applyFinishOutput>[1];
+
+  it("no-dialogue chain, RIFE(idx0) reused mid-chain: applied MISSING rife, but the ledger reconciles + discloses it reused", () => {
+    const fs = finishShot({
+      shot_id: "shot_03",
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      configs: [{ interpolation_factor: 2 }, {}, { scale: 2 }, {}],
+    });
+    // idx0 RIFE: its RunPod job GC'd after writing _finished.mp4 -> adopted from R2 (tag reconstructed).
+    adoptFinishStepOutput(fs, "clips/shot_03_finished.mp4", finishStepAppliedTag(fs));
+    // idx1..3 run: no-dialogue lip-sync no-ops, upscale, no-overlays text.
+    applyFinishOutput(fs, finishOut("clips/shot_03_finished.mp4", ["noop:no-dialogue"]));
+    applyFinishOutput(fs, finishOut("clips/shot_03_finished_up.mp4", ["upscale:2x"]));
+    applyFinishOutput(fs, finishOut("clips/shot_03_finished_up.mp4", ["noop:no-overlays"]));
+
+    expect(fs.status).toBe("done");
+    expect(fs.applied).toEqual(["noop:no-dialogue", "upscale:2x", "noop:no-overlays"]); // the exact prod symptom: applied has no rife tag
+    expect(fs.adopted).toEqual(["interpolate:2x"]);                                      // ...because RIFE was REUSED, disclosed here (#583)
+    expect(finishShotLedgerReconciles(fs)).toBe(true);                                   // #662: the LEDGER reconciles 1:1 to the chain
+    expect(fs.ledger?.map((r) => r.binding)).toEqual(fs.chain);                          // one record per step, in chain order
+    expect(fs.ledger?.[0]).toEqual({ binding: "MODULE_FINISH_RIFE", tags: ["interpolate:2x"], reused: true }); // RIFE PRESENT as reused, not dropped
+    expect(fs.ledger?.filter((r) => r.reused).map((r) => r.binding)).toEqual(["MODULE_FINISH_RIFE"]);
+  });
+
+  it("dialogue chain, LIPSYNC(idx0) reused mid-chain: applied MISSING lipsync, but the ledger reconciles + discloses it reused", () => {
+    const fs = finishShot({
+      shot_id: "shot_02",
+      chain: ["MODULE_FINISH_LIPSYNC", "MODULE_FINISH_RIFE", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      configs: [{ version: "v15" }, { interpolation_factor: 2 }, { scale: 2 }, {}],
+    });
+    // idx0 LIPSYNC: reused from R2 (its _ls artifact + matching #583 provenance sidecar) -> mouth IS synced.
+    adoptFinishStepOutput(fs, "clips/shot_02_ls.mp4", finishStepAppliedTag(fs));
+    applyFinishOutput(fs, finishOut("clips/shot_02_ls_rife.mp4", ["interpolate:2x"]));
+    applyFinishOutput(fs, finishOut("clips/shot_02_ls_rife_up.mp4", ["upscale:2x"]));
+    applyFinishOutput(fs, finishOut("clips/shot_02_ls_rife_up.mp4", ["noop:no-overlays"]));
+
+    expect(fs.status).toBe("done");
+    expect(fs.applied).toEqual(["interpolate:2x", "upscale:2x", "noop:no-overlays"]); // the prod symptom: no lipsync tag at all in applied
+    expect(fs.adopted).toEqual(["lipsync:v15"]);                                       // ...reused, disclosed here (NOT unsynced)
+    expect(finishShotLedgerReconciles(fs)).toBe(true);
+    expect(fs.ledger?.map((r) => r.binding)).toEqual(fs.chain);
+    expect(fs.ledger?.[0]).toEqual({ binding: "MODULE_FINISH_LIPSYNC", tags: ["lipsync:v15"], reused: true });
+  });
+
+  it("FINAL step reused via reclaimFinishShotsFromR2 (idx===last): the ledger still reconciles 1:1", () => {
+    const fs = finishShot({
+      shot_id: "shot_01",
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      configs: [{ interpolation_factor: 2 }, {}, { scale: 2 }, {}],
+    });
+    applyFinishOutput(fs, finishOut("clips/shot_01_finished.mp4", ["interpolate:2x"]));  // idx0
+    applyFinishOutput(fs, finishOut("clips/shot_01_finished.mp4", ["noop:no-dialogue"])); // idx1
+    applyFinishOutput(fs, finishOut("clips/shot_01_finished_up.mp4", ["upscale:2x"]));    // idx2 -> now at last step, still pending
+    expect(fs.idx).toBe(3);
+    expect(fs.status).toBe("pending");
+    fs.poll = "frozen"; // last-chain pending with a poll token -> adoptable (RUN #29 frozen-envelope path)
+    const n = reclaimFinishShotsFromR2([fs], new Map([[fs.shot_id, "clips/shot_01_finished_up.mp4"]]));
+    expect(n).toBe(1);
+    expect(fs.status).toBe("done");
+    expect(finishShotLedgerReconciles(fs)).toBe(true);
+    expect(fs.ledger?.length).toBe(4);
+    expect(fs.ledger?.[3]).toEqual({ binding: "MODULE_TEXT_OVERLAY", tags: ["MODULE_TEXT_OVERLAY:r2-adopted"], reused: true });
+  });
+
+  it("guard catches a REAL drop: a DONE shot whose ledger is SHORTER than its chain does NOT reconcile", () => {
+    const fs = finishShot({ chain: ["A", "B", "C"], status: "done", ledger: [
+      { binding: "A", tags: ["x"], reused: false }, { binding: "B", tags: ["y"], reused: false },
+    ] });
+    expect(finishShotLedgerReconciles(fs)).toBe(false);
+  });
+
+  it("guard catches an OUT-OF-ORDER ledger: bindings must match the chain positionally", () => {
+    const fs = finishShot({ chain: ["A", "B"], status: "done", ledger: [
+      { binding: "B", tags: ["y"], reused: false }, { binding: "A", tags: ["x"], reused: false },
+    ] });
+    expect(finishShotLedgerReconciles(fs)).toBe(false);
+  });
+
+  it("a pre-#662 DONE shot with NO ledger is not asserted (back-compat: reconciles vacuously)", () => {
+    expect(finishShotLedgerReconciles(finishShot({ chain: ["A", "B"], status: "done" }))).toBe(true);
+  });
+
+  it("a still-advancing (pending) shot is not asserted, even with a partial ledger", () => {
+    const fs = finishShot({ chain: ["A", "B"], status: "pending", ledger: [{ binding: "A", tags: ["x"], reused: false }] });
+    expect(finishShotLedgerReconciles(fs)).toBe(true);
   });
 });
 

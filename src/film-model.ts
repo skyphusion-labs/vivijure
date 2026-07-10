@@ -15,6 +15,12 @@ export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
  *  ui.order; `idx` walks through them, each consuming the previous module's output clip. `configs` is
  *  the validated config for each chain step (parallel to `chain`), so each module gets its
  *  config_schema defaults -- without it a module receives `{}` and no-ops (see issue #75). */
+/** #662: one finish CHAIN STEP's honest outcome, recorded as the step resolves. `binding` is the chain
+ *  ref (chain[idx]); `tags` is what the step contributed to the output clip (the module's applied markers
+ *  on a run, the reconstructed marker on a reuse); `reused` is true when the step was adopted from an R2
+ *  artifact (#583) rather than run this pass. The ordered list of these reconciles 1:1 to the shot chain. */
+export interface FinishStepRecord { binding: string; tags: string[]; reused: boolean; }
+
 export interface FinishShot {
   shot_id: string;
   clip_key: string;   // current clip key (updated as each finish module completes)
@@ -28,6 +34,12 @@ export interface FinishShot {
   // Parallel to `applied` (steps actually RUN this pass); the union is the transforms present in the
   // output clip. An adopted step never fabricates an `applied`-run tag -- the reuse is disclosed here.
   adopted?: string[];
+  // #662 honesty reconciliation: ONE record per chain step as it resolves (run OR reused-from-R2), in
+  // chain order. For a `done` shot ledger.length === chain.length and ledger[i].binding === chain[i], so
+  // the per-shot ledger reconciles 1:1 to the chain. A reused step is PRESENT here (reused:true), never
+  // dropped -- so reading the ledger never looks like a missing step the way `applied` alone can (a reused
+  // step's tag lives in `adopted`, not `applied`). Optional: pre-#662 job docs predate it.
+  ledger?: FinishStepRecord[];
   error?: string;
   // Transient-retry counter for the CURRENT chain step (reset when the step advances). A transient
   // invocation blip (the module worker momentarily unreachable / 5xx -- the musetalk cold-start race
@@ -303,7 +315,12 @@ export function orderFinalClips(
  *  record what it applied, advance the chain index; status -> done when the chain is exhausted. */
 export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
   fs.clip_key = out.clip_key;
-  fs.applied.push(...(out.applied || []));
+  const tags = out.applied || [];
+  fs.applied.push(...tags);
+  // #662: account THIS run step in the per-step ledger (chain order), so a done shot's ledger covers the
+  // whole chain 1:1. `tags` may be empty (a step that ran but reported no marker); the record still
+  // accounts the step -- coverage is per-record, not per-tag.
+  (fs.ledger ??= []).push({ binding: fs.chain[fs.idx] ?? "", tags: [...tags], reused: false });
   fs.idx += 1;
   fs.poll = undefined;
   fs.attempts = 0; // a step succeeded -> the next step gets a fresh transient-retry budget
@@ -317,6 +334,9 @@ export function applyFinishOutput(fs: FinishShot, out: FinishOutput): void {
 export function adoptFinishStepOutput(fs: FinishShot, clip_key: string, tag: string): void {
   fs.clip_key = clip_key;
   (fs.adopted ??= []).push(tag);
+  // #662: account THIS reused step in the per-step ledger (reused:true), so it is PRESENT in the ledger
+  // even though its tag lives in `adopted`, not `applied` -- the fix for the "applied drops one tag" report.
+  (fs.ledger ??= []).push({ binding: fs.chain[fs.idx] ?? "", tags: [tag], reused: true });
   fs.idx += 1;
   fs.poll = undefined;
   fs.attempts = 0; // a step advanced -> the next step gets a fresh transient-retry budget
@@ -422,11 +442,25 @@ export function reclaimFinishShotsFromR2(finishShots: FinishShot[], present: Map
       // #583 honesty: this shot's FINAL step was REUSED from R2, not run this pass -- disclose it in
       // `adopted` (never a fake `applied`-run tag). finishShotAdoptableFromR2 guarantees idx === last,
       // so the reused marker is the last chain step's tag.
-      (fs.adopted ??= []).push(finishStepAppliedTag(fs, modules));
+      const tag = finishStepAppliedTag(fs, modules);
+      (fs.adopted ??= []).push(tag);
+      // #662: account the reused FINAL step (idx === last) in the per-step ledger, completing it to
+      // chain.length so the adopted shot's ledger reconciles 1:1 to its chain.
+      (fs.ledger ??= []).push({ binding: fs.chain[fs.idx] ?? "", tags: [tag], reused: true });
       adopted += 1;
     }
   }
   return adopted;
+}
+
+/** #662 honesty invariant: does this finish shot's per-step ledger reconcile 1:1 to its chain? True unless
+ *  a DONE shot has a ledger that fails to cover every chain step in order. Absent ledger (a pre-#662 job
+ *  doc) or a non-done shot (still advancing, or failed mid-chain with a partial ledger) is NOT asserted.
+ *  The invariant a DONE shot must hold: every chain step is accounted for exactly once (run or reused), so
+ *  an adopted shot's ledger never looks like it dropped a step (the #245/#249 honesty-ledger discipline). */
+export function finishShotLedgerReconciles(fs: FinishShot): boolean {
+  if (fs.status !== "done" || !fs.ledger) return true;
+  return fs.ledger.length === fs.chain.length && fs.ledger.every((r, i) => r.binding === fs.chain[i]);
 }
 
 /** Pure: the R2 key the CURRENT finish step (fs.chain[fs.idx]) is expected to write, given its input
