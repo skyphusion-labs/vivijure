@@ -200,6 +200,11 @@ export function filmJobToPollView(job: FilmJob, clipJob: ClipJob | null, keyfram
     output = phaseProgress(job, clipJob, keyframeDone);
   }
 
+  // #619: keyframe stall recovery hit the ceiling with a PARTIAL set -- the film delivers only the
+  // scenes that rendered. Surface the loud degrade on EVERY poll (not just at done), so the planner/
+  // UI shows "N of M scenes, dropped [...]" instead of a plain green over the rebased shot total.
+  if (job.keyframes_incomplete && output) output.keyframes_incomplete = job.keyframes_incomplete;
+
   return {
     jobId: job.film_id,
     status,

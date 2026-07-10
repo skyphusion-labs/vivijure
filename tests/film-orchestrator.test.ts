@@ -887,6 +887,100 @@ describe("advanceFilmJob keyframe stall recovery (#129)", () => {
   });
 });
 
+// Env double for the #619 partial-keyframe recovery: round-trips the film doc, serves a GROWABLE keyframe
+// listing (addKeys mutates the same array a later sweep re-lists), and binds MODULE_KEYFRAME to a /poll
+// stub that stays pending -- so a HELD partial phase stays "keyframe" exactly as it does in prod (an
+// unbound module would instead fail the Phase-1 leg, masking the hold).
+function kfRecoveryEnv(job: FilmJob, keyframeKeys: string[]) {
+  const filmDoc = filmJobDocKey(job.film_id);
+  let stored = JSON.stringify(job);
+  const env = {
+    R2_RENDERS: {
+      get: async (key: string) => (key === filmDoc ? { text: async () => stored } : null),
+      put: async (key: string, body: string) => { if (key === filmDoc) stored = body; },
+      list: async ({ prefix }: { prefix: string }) => ({
+        objects: keyframeKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        truncated: false,
+      }),
+    },
+    MODULE_KEYFRAME: { fetch: async () => new Response(JSON.stringify({ ok: true, pending: true }), { headers: { "content-type": "application/json" } }) },
+  } as unknown as Env;
+  return { env, read: () => JSON.parse(stored) as FilmJob, addKeys: (...k: string[]) => keyframeKeys.push(...k) };
+}
+
+describe("advanceFilmJob partial keyframe recovery (#619)", () => {
+  const scenes4: FilmScene[] = [
+    { shot_id: "shot_01", prompt: "a", seconds: 7 },
+    { shot_id: "shot_02", prompt: "b", seconds: 7 },
+    { shot_id: "shot_03", prompt: "c", seconds: 7 },
+    { shot_id: "shot_04", prompt: "d", seconds: 7 },
+  ];
+  // keyframes_only so the adopted path completes WITHOUT touching motion modules / presign.
+  const kfJob = (over: Partial<FilmJob> = {}): FilmJob => ({
+    film_id: "film-619",
+    project: "neon",
+    bundle_key: "bundles/neon.json",
+    scenes: scenes4,
+    motion_backend: null,
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: "MODULE_KEYFRAME",
+    phase: "keyframe",
+    keyframe_poll: "phantom-token",
+    keyframes_only: true,
+    created_at: Date.now() - (KEYFRAME_STALL_SECONDS + 60) * 1000, // stale, below the hard ceiling
+    phase_started_at: Date.now() - (KEYFRAME_STALL_SECONDS + 60) * 1000,
+    ...over,
+  });
+
+  it("HOLDS a partial set below the ceiling: does NOT advance, cancel, or degrade (#619)", async () => {
+    // The exact prod bug: 2 of 4 keyframes in R2 on a stale poll. The old code adopted the 2, cancelled
+    // the live job, and shipped a silent half-film. It must now HOLD in "keyframe" for the rest to land.
+    const { env, read } = kfRecoveryEnv(kfJob(), [
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.png",
+    ]);
+    const r = await advanceFilmJob(env, "film-619");
+    expect(r?.job.phase).toBe("keyframe");            // did NOT advance to clips/done
+    expect(r?.job.keyframe_recovered).toBeUndefined(); // no one-shot gate set on a partial pass
+    expect(r?.job.keyframes_incomplete).toBeUndefined();
+    expect(read().phase).toBe("keyframe");            // persisted, still holding
+  });
+
+  it("advances with ALL scenes once the full set lands on a later sweep (#619)", async () => {
+    const { env, addKeys } = kfRecoveryEnv(kfJob(), [
+      "renders/neon/keyframes/shot_01.png",
+      "renders/neon/keyframes/shot_02.png",
+    ]);
+    const held = await advanceFilmJob(env, "film-619");
+    expect(held?.job.phase).toBe("keyframe");         // partial: held, per the test above
+    addKeys("renders/neon/keyframes/shot_03.png", "renders/neon/keyframes/shot_04.png");
+    const done = await advanceFilmJob(env, "film-619");
+    expect(done?.job.phase).toBe("done");             // full set: advances
+    expect(done?.job.keyframe_recovered).toBe(true);
+    expect(done?.job.keyframes?.map((k) => k.shot_id).sort()).toEqual(["shot_01", "shot_02", "shot_03", "shot_04"]);
+    expect(done?.job.keyframes_incomplete).toBeUndefined(); // full set -> no degrade
+  });
+
+  it("at the ceiling with a partial set: delivers what rendered, records the drop, never a silent complete (#619)", async () => {
+    const { env, read } = kfRecoveryEnv(
+      kfJob({
+        created_at: Date.now() - (PHASE_HARD_DEADLINE_SECONDS + 60) * 1000,
+        phase_started_at: Date.now() - (PHASE_HARD_DEADLINE_SECONDS + 60) * 1000,
+      }),
+      ["renders/neon/keyframes/shot_01.png", "renders/neon/keyframes/shot_02.png"],
+    );
+    const r = await advanceFilmJob(env, "film-619");
+    // advanced (delivered the 2 rendered scenes) rather than hanging or hard-failing the whole film...
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.keyframe_recovered).toBe(true);
+    // ...but LOUDLY: the drop is recorded so the film never reports a clean complete over the rebased total.
+    expect(r?.job.keyframes_incomplete).toEqual({ adopted: 2, expected: 4, dropped: ["shot_03", "shot_04"] });
+    // and it is surfaced on the film summary the API returns.
+    expect(summarizeFilm(read(), null).keyframes_incomplete).toEqual({ adopted: 2, expected: 4, dropped: ["shot_03", "shot_04"] });
+  });
+});
+
 describe("clipFileMatchesShot (#139 clip-name matching)", () => {
   it("matches the shot's motion clip at a digit boundary", () => {
     expect(clipFileMatchesShot("shot_09_i2v.mp4", "shot_09")).toBe(true);

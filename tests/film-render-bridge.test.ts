@@ -398,3 +398,40 @@ describe("filmRowFromJob (#164 -- film jobs in render history)", () => {
   });
 
 });
+
+describe("filmJobToPollView surfaces the #619 keyframes_incomplete degrade", () => {
+  const base = (over: Partial<FilmJob>): FilmJob => ({
+    film_id: "film-619",
+    project: "neon",
+    bundle_key: "bundles/neon.json",
+    scenes: [
+      { shot_id: "shot_01", prompt: "a", seconds: 7 },
+      { shot_id: "shot_02", prompt: "b", seconds: 7 },
+    ],
+    motion_backend: null,
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: null,
+    phase: "clips",
+    keyframes_incomplete: { adopted: 2, expected: 4, dropped: ["shot_03", "shot_04"] },
+    created_at: Date.now(),
+    ...over,
+  });
+
+  it("attaches keyframes_incomplete to the poll output while still in flight (not just at done)", () => {
+    const view = filmJobToPollView(base({ phase: "clips" }), null);
+    expect(view.status).toBe("IN_PROGRESS");
+    expect((view.output as Record<string, unknown>).keyframes_incomplete).toEqual({ adopted: 2, expected: 4, dropped: ["shot_03", "shot_04"] });
+  });
+
+  it("attaches keyframes_incomplete to the poll output at done, alongside the delivered film", () => {
+    const view = filmJobToPollView(base({ phase: "done", film_key: "renders/film-619/film.mp4" }), null);
+    expect(view.status).toBe("COMPLETED");
+    expect((view.output as Record<string, unknown>).keyframes_incomplete).toEqual({ adopted: 2, expected: 4, dropped: ["shot_03", "shot_04"] });
+  });
+
+  it("is absent on a normal render (no degrade)", () => {
+    const view = filmJobToPollView(base({ phase: "clips", keyframes_incomplete: undefined }), null);
+    expect((view.output as Record<string, unknown>).keyframes_incomplete).toBeUndefined();
+  });
+});
