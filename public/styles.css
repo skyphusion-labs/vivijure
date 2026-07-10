@@ -1145,3 +1145,23 @@ body.sw-open .sw-dock { transform: none; }
   color: #0d0f14; border: none; border-radius: 8px; padding: 10px 12px;
   font: inherit; font-weight: 700; cursor: pointer;
 }
+
+/* Demo read-only banner (injected by readonly-gate.js when the host projects host.readonly). A
+   projection of the registry, not a hardcoded demo page: absent host.readonly, this never renders. */
+.readonly-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 22px; font-size: 13px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--ink); background: color-mix(in srgb, var(--accent-2) 14%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--line));
+}
+.readonly-dot {
+  flex: 0 0 auto; width: 8px; height: 8px; border-radius: 999px;
+  background: var(--accent-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-2) 25%, transparent);
+}
+.readonly-msg { flex: 1 1 auto; }
+.readonly-pulse { animation: readonly-flash 0.5s ease; }
+@keyframes readonly-flash {
+  0% { background: color-mix(in srgb, var(--accent-2) 14%, var(--panel)); }
+  35% { background: color-mix(in srgb, var(--accent-2) 34%, var(--panel)); }
+  100% { background: color-mix(in srgb, var(--accent-2) 14%, var(--panel)); }
+}

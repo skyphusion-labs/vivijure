@@ -38,7 +38,7 @@ import {
   deleteCastArtifacts,
 } from "./cast-media";
 import { exportCastBundle, importCastBundle } from "./cast-bundle";
-import { gateApi } from "./auth-gate";
+import { gateApi, isDemoMode } from "./auth-gate";
 import { isSpendRoute, enforceSpendLimit } from "./rate-limit";
 import { applyResponseSecurity } from "./asset-response";
 import { chatImage, type ChatImageArgs } from "./chat-image";
@@ -1418,7 +1418,14 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
       // Advertise the host's transport capability (the CORE describing itself, orthogonal to the module
       // `api` version): `dispatch` is true when this deploy binds the WfP namespace, so an operator /
       // the studio UI can tell an install-without-redeploy host from a service-binding-only one.
-      return json(modulesResponse(modules, renderConfigProjection(), { dispatch: !!env.MODULE_DISPATCH }));
+      // `readonly` (#625, demo deploys only) is the ONE projected capability the frontend gates every
+      // mutation affordance on; it reads from the same normalization the auth gate dispatches on.
+      return json(
+        modulesResponse(modules, renderConfigProjection(), {
+          dispatch: !!env.MODULE_DISPATCH,
+          ...(isDemoMode(env) ? { readonly: true } : {}),
+        }),
+      );
     }
     if (WELCOME_REDIRECT_PATHS.has(url.pathname) && (request.method === "GET" || request.method === "HEAD")) {
       return Response.redirect(WELCOME_REDIRECT_TARGET, 301);
