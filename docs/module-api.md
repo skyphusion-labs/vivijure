@@ -46,7 +46,7 @@ Shapes live in `src/modules/types.ts`.
 | `cast.image` | Portrait + bible -> LoRA training reference images. | pick one |
 | `notify` | Film done -> deliver a render-complete notification (email, webhook, ...). | chain (0..n) |
 | `master` | Assembled film's audio bed -> mastered audio (music upscale + LUFS loudness). Film-level, runs after the audio mix is built (assemble), before the final mux; fail-safe (a master miss muxes the un-mastered bed). The audio sibling of `finish` (clips) and the dialogue/speech lane (per-shot voice). | chain (0..n) |
-| `film.finish` | Assembled + muxed film -> film with opening title / end-credit cards. Post-mux, before done. Dispatched on the single-film render path (`/api/render/film`, fail-safe); the scatter/gather path does not run it yet. | chain (0..n) |
+| `film.finish` | Assembled + muxed film -> film with opening title / end-credit cards. Post-mux, before done. Runs on both the single-film path (`/api/render/film`) and the scatter/gather finalize (`runScatterFilmFinish`); fail-safe on both. Scatter threads async submit+poll per chain step so a long `film.finish` survives across gather ticks (#602). | chain (0..n) |
 
 `pick one` hooks resolve to a single module (the user's chosen backend). `chain` hooks run every
 installed module in a declared order, each consuming the previous output.
