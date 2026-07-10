@@ -5,8 +5,8 @@ Cloudflare + RunPod accounts (BYO keys + GPU). One input surface, idempotent re-
 What it does (see issue #244 for the design + options survey):
   - one input surface + correct secret handling (hidden prompts, never echoed, logged, or on argv),
   - the full provisioning spine: Cloudflare (D1, R2 x2, AI Gateway, Secrets Store + an R2 S3 token
-    mint, plus a CF Access app ONLY when AUTH_MODE=access), then RunPod (template, network volume,
-    endpoints), then seed -> migrate -> deploy. In the default AUTH_MODE=token the studio's /api/* gate
+    mint, plus a CF Access app ONLY when AUTH_MODE=access), then RunPod (a serverless template +
+    endpoint per satellite, volume-less), then seed -> migrate -> deploy. In the default AUTH_MODE=token the studio's /api/* gate
     is a built-in bearer token (STUDIO_API_TOKEN worker secret, minted + printed once); no CF Access,
     no Zero Trust dashboard step. AUTH_MODE=access provisions the edge Access app + arms the in-worker
     JWT backstop instead. This mirrors deploy.sh; see docs/SECURITY.md sections 1b (token) and 1/1a. The cross-wiring order is enforced -- most importantly the Secrets Store is seeded BEFORE
@@ -19,8 +19,8 @@ HONESTY NOTE: the provider calls are REAL. `up` provisions against YOUR live Clo
 accounts -- it mints an R2 API token, creates an Access app, RunPod endpoints, etc. The calls are
 written against the CF/RunPod API docs + the RunPod OpenAPI, but have NOT been integration-tested end
 to end on a live account; treat the first run accordingly. A few values you MUST set before a live run
-(DEPLOY_DOMAIN, OPERATOR_EMAIL, DATACENTER_ID, BACKEND_IMAGE_TAG, GPU_TYPE_IDS) are flagged at the top
-and the run dies loud if any is missing.
+(DEPLOY_DOMAIN, OPERATOR_EMAIL for access mode; GPU_TYPE_IDS) are flagged at the top and the run dies
+loud if any is missing. The per-endpoint image tags default to each satellite released tag.
 
 WHAT THIS TOOL COLLECTS (and what it never will):
   COLLECTS: exactly three infra credentials, for YOUR accounts -- a Cloudflare account id, a
@@ -91,11 +91,12 @@ STORE_BINDING_NAMES = (  # binding NAMES only (never values) -- the store keys t
     "R2_S3_ENDPOINT",
 )
 
-# RunPod serverless endpoints to stand up (each is an id the studio needs). The cloud-i2v passthroughs
-# run through the backend endpoint; upscale + musetalk are dedicated. A first deploy can opt into a
-# subset -- upscale/lipsync degrade gracefully.
-RUNPOD_ENDPOINTS = ("vivijure-backend", "vivijure-upscale", "vivijure-musetalk")
-GHCR_IMAGE = "ghcr.io/skyphusion-labs/vivijure-backend"  # public image -> NO registry auth (see note).
+# RunPod serverless endpoints to stand up (each is an id the studio needs). Each finish satellite runs
+# its OWN container image (see runpod_images()); a satellite templated with the backend image fails
+# every finish job (#678). audio-upscale is first-class -- modules/speech-upscale binds
+# AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID (#658). A first deploy can opt into a subset -- upscale/lipsync
+# degrade gracefully.
+RUNPOD_ENDPOINTS = ("vivijure-backend", "vivijure-upscale", "vivijure-musetalk", "vivijure-audio-upscale")
 
 
 # --------------------------------------------------------------------------------------------------
@@ -584,9 +585,27 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
 
 
 RUNPOD_API = "https://rest.runpod.io/v1"  # the current REST API (Bearer key; OpenAPI at /v1/openapi.json)
-DATACENTER_ID = ""  # REQUIRED for a network volume -- set an available DC id (RunPod console)
-BACKEND_IMAGE_TAG = ""  # REQUIRED -- pin an explicit released tag (e.g. "0.4.9"); never "latest"
 GPU_TYPE_IDS: list = []  # REQUIRED -- endpoint GPU type id(s) (GET /gputypes)
+
+# Per-endpoint image + released tag (#678). One manifest -- a finish satellite MUST run its own image,
+# never the backend image. Tags are BARE semver GHCR tags (never a git :sha -- the endpoint-image pin
+# rule); each is an override knob defaulting to that repo current released tag. Bump the default when a
+# satellite ships a new tag, or edit a knob to pin a specific tag for a run.
+BACKEND_IMAGE_TAG = "0.4.9"        # ghcr.io/skyphusion-labs/vivijure-backend
+UPSCALE_IMAGE_TAG = "0.2.9"        # ghcr.io/skyphusion-labs/vivijure-upscale
+MUSETALK_IMAGE_TAG = "0.1.4"       # ghcr.io/skyphusion-labs/vivijure-musetalk
+AUDIO_UPSCALE_IMAGE_TAG = "0.1.0"  # ghcr.io/skyphusion-labs/vivijure-audio-upscale
+
+
+def runpod_images() -> dict:
+    """endpoint name -> (image, tag). A function (not a module constant) so the *_IMAGE_TAG knobs can
+    be edited in place -- or monkeypatched in a test -- and still flow through."""
+    return {
+        "vivijure-backend": ("ghcr.io/skyphusion-labs/vivijure-backend", BACKEND_IMAGE_TAG),
+        "vivijure-upscale": ("ghcr.io/skyphusion-labs/vivijure-upscale", UPSCALE_IMAGE_TAG),
+        "vivijure-musetalk": ("ghcr.io/skyphusion-labs/vivijure-musetalk", MUSETALK_IMAGE_TAG),
+        "vivijure-audio-upscale": ("ghcr.io/skyphusion-labs/vivijure-audio-upscale", AUDIO_UPSCALE_IMAGE_TAG),
+    }
 
 
 def rp_api(method: str, path: str, key: str, body: dict | None = None):
@@ -622,8 +641,9 @@ def rp_reconcile(*, kind: str, key: str, list_path: str, create_path: str, creat
 
 def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dict:
     """Step 2. RunPod must come BEFORE secret-seeding because RUNPOD_ENDPOINT_ID is a seeded secret.
-    Order within: registry-auth (only if the image is private) -> template (pin GHCR image, R2 env) ->
-    network volume -> endpoint. Returns {endpoint_name: endpoint_id}. Reconciled by name. Consumes the
+    Order within: registry-auth (only if the image is private) -> a serverless template per endpoint
+    (pin the endpoint image, R2 env) -> endpoint (volume-less; baked images ship weights in-layer).
+    Returns {endpoint_name: endpoint_id}. Reconciled by name. Consumes the
     R2 S3 creds (cf_derived, from the CF R2-token mint) for the backend env.
 
     GOTCHA encoded: for a PUBLIC GHCR image, leave containerRegistryAuthId UNSET. A stale/blank-but-
@@ -632,10 +652,13 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
     log("provisioning RunPod (registry-auth?, templates, volumes, endpoints) ...")
 
     # Required config -- die loud rather than POST an empty/unpinned value (relying on a remote 400).
-    if not BACKEND_IMAGE_TAG or BACKEND_IMAGE_TAG == "latest":
-        die('set BACKEND_IMAGE_TAG to an explicit released tag (e.g. "0.2.27") -- never empty or "latest"')
-    if not DATACENTER_ID:
-        die("set DATACENTER_ID to an available RunPod data-center id (GET /datacenters) -- volumes require it")
+    images = runpod_images()
+    for ep in RUNPOD_ENDPOINTS:
+        img, tag = images.get(ep, (None, None))
+        if not img:
+            die(f"no image mapping for RunPod endpoint {ep!r} (see runpod_images())")
+        if not tag or tag == "latest":
+            die(f'set an explicit released tag for {ep} (bare semver, e.g. "0.4.9") -- never empty or "latest"')
     if not GPU_TYPE_IDS:
         die("set GPU_TYPE_IDS to the endpoint GPU type id(s) (GET /gputypes)")
 
@@ -657,23 +680,25 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
 
     endpoints: dict = {}
     for ep in RUNPOD_ENDPOINTS:
+        image, tag = images[ep]
         tmpl = rp_reconcile(kind="template", key=key, list_path="/templates", create_path="/templates",
             create_body={
                 "name": f"{ep}-tmpl",
-                "imageName": f"{GHCR_IMAGE}:{BACKEND_IMAGE_TAG}",
+                "imageName": f"{image}:{tag}",  # this endpoint OWN image (#678), not the backend for all
+                # isServerless marks this a SERVERLESS template. Without it RunPod defaults to a POD
+                # template and the endpoint create then fails 100% ("Serverless endpoints cannot use pod
+                # templates") -- #677. Confirmed against the v1 OpenAPI + a live proving run.
+                "isServerless": True,
                 "containerDiskInGb": 500,
                 "env": backend_env,
                 **({"containerRegistryAuthId": registry_auth_id} if registry_auth_id else {}),
             }, name=f"{ep}-tmpl", known_id=st.resource_id(f"runpod_template_{ep}"))
-        # Network volume for the model weights (warm cache between jobs). dataCenterId is REQUIRED +
-        # region-specific (confirmed against the v1 OpenAPI); checked + die-loud at the top of this fn.
-        vol = rp_reconcile(kind="network volume", key=key, list_path="/networkvolumes",
-            create_path="/networkvolumes",
-            create_body={"name": f"{ep}-vol", "size": 100, "dataCenterId": DATACENTER_ID},  # size in GB
-            name=f"{ep}-vol", known_id=st.resource_id(f"runpod_volume_{ep}"))
+        # No network volume (#676): the baked image ships the weights in-layer, so a volume only pins the
+        # endpoint to one datacenter (shrinking the schedulable GPU pool) + bills ~$7/mo for nothing.
+        # Prod runs volume-less; this mirrors it.
         ep_res = rp_reconcile(kind="endpoint", key=key, list_path="/endpoints", create_path="/endpoints",
             create_body={
-                "name": ep, "templateId": tmpl.rid, "networkVolumeId": vol.rid,
+                "name": ep, "templateId": tmpl.rid,
                 "gpuTypeIds": GPU_TYPE_IDS,
                 "workersMin": 0, "workersMax": 1,
                 # scaler/idle/timeout tuning (scalerType / scalerValue / idleTimeout / executionTimeoutMs)
@@ -682,7 +707,6 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
         endpoints[ep] = ep_res.rid
         st.put_resource(f"runpod_endpoint_{ep}", ep_res.rid, adopted=ep_res.adopted)
         st.put_resource(f"runpod_template_{ep}", tmpl.rid, adopted=tmpl.adopted)
-        st.put_resource(f"runpod_volume_{ep}", vol.rid, adopted=vol.adopted)
 
     # Model seeding: the backend image self-preloads weights from R2 on first cold start (the
     # R2-mirror-on-cold-start model), so it is not blocking; optionally pre-seed each volume via the
@@ -912,7 +936,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
         steps = [
             "preflight (deps + token validity)",
             cf_step,
-            "provision RunPod (registry-auth?, template, volume, endpoints) -> capture endpoint ids",
+            "provision RunPod (registry-auth?, per-endpoint serverless template, endpoints; volume-less) -> capture endpoint ids",
             "seed Cloudflare Secrets Store  <-- BEFORE deploy (#237)",
             "run D1 migrations",
             "deploy module workers, then the core (core carries the AUTH_MODE var)",
