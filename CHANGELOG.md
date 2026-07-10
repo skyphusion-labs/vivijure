@@ -3,6 +3,27 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.19.2
+
+**Two follow-up fixes: the renders-list default limit + a soft `.srt` download affordance.** PATCH.
+
+- **`GET /api/storyboard/renders` default limit was unreachable for an absent `?limit` (#670).** The route
+  coerced `Number(url.searchParams.get("limit"))` FIRST; an absent param is `null` and `Number(null)` is
+  `0` (finite), so the `Number.isFinite` guard passed and `limit=0` flowed through, making the intended
+  default dead code for the absent case -- `listRendersForUser` then clamped 0 up to 1, so a headless /
+  API / MCP consumer calling without a limit silently got ONE render row and could conclude there was one
+  render (the frontend always sends `limit=25`, so zero UI impact). Fix: resolve an absent/empty param to
+  the default BEFORE coercing (a garbage string still falls back to the default), and align the two
+  mismatched defaults (route 100, function signature 50) on one exported `DEFAULT_RENDERS_LIMIT` (50) so
+  they cannot drift again.
+- **Soft `.srt` subtitle sidecar surfaced as a download in render history (#669).** After #663 the core
+  re-times the subtitle sidecar for the title-card prepend, but it was reachable only by R2 key
+  convention. `filmJobToPollView` now carries `film_finish.sidecar_key` on the done output ONLY when a
+  sidecar was produced, so it persists on the render row and the history list returns it (absent stays
+  absent -- no null noise on legacy rows); the frontend projects it into the action row as a
+  "subtitles (.srt)" download next to the film download (registry-projection, no extra fetch). The
+  poll-view output shape in `docs/CONTRACT.md` documents `sidecar_key`.
+
 ## v0.19.1
 
 **Fix sprint: four adoption / delivery correctness fixes across the render + deploy paths.** PATCH.
