@@ -933,6 +933,13 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
             # The Secrets Store create API takes a BULK ARRAY body (a single object is invalid_json_body).
             cf_api("POST", base, tok, [{"name": name, "value": v, "scopes": ["workers"]}])
         log(f"  seeded {name}")  # name only, never the value
+    if pending_operator:
+        log("POST-INSTALL: these store secrets were seeded as PLACEHOLDERS and must be replaced with your")
+        log("  real values before the modules that use them work (all are optional enhance/finish paths):")
+        for pname in pending_operator:
+            log(f"    - {pname}")
+        log("  Replace each in the Cloudflare Secrets Store (dashboard or API) under the 'vivijure' store")
+        log("  this installer created; leaving a placeholder just disables that one module.")
     return pending_operator
 
 
@@ -1065,17 +1072,10 @@ def bring_up_containers(repo: Path) -> None:
     log("(phase 2) CPU containers + VPC services -- skipped in phase 1")
 
 
-def finalize(repo: Path, st: State, pending_operator=()) -> None:
+def finalize(repo: Path, st: State) -> None:
     # Honesty rider: a degrade is NEVER silent -- the installer says the media stack was not provisioned.
     log("MEDIA STACK NOT PROVISIONED (installer phase-2 is roadmap): the studio is running in its "
         "documented media-less mode -- clips render, no final concat / title cards.")
-    if pending_operator:
-        log("POST-INSTALL: these store secrets were seeded as PLACEHOLDERS and must be replaced with your")
-        log("  real values before the modules that use them work (all are optional enhance/finish paths):")
-        for name in pending_operator:
-            log(f"    - {name}")
-        log("  Replace each in the Cloudflare Secrets Store (dashboard or API) under the 'vivijure' store")
-        log("  this installer created; leaving a placeholder just disables that one module.")
     log("done. studio URL + recorded resource ids are in " + str(repo / state_file_name()))
 
 
@@ -1136,7 +1136,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
     bind_state_to_account(st, s)  # #684: refuse to reuse another account's state
     cf_derived = provision_cloudflare_infra(repo, s, st)
     runpod_endpoints = provision_runpod(repo, s, st, cf_derived)
-    pending_operator = seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
+    seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237); prints the operator checklist
     render_and_write_core_toml(repo, s, st)  # F1: wrangler.toml must exist for migrations + deploy
     run_migrations(repo, s)
     deploy_workers(repo, s, st)
@@ -1144,7 +1144,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
         set_studio_api_token(repo, s, rotate_token, noninteractive)  # operator login (worker secret, safe post-deploy)
     restore_store_id_placeholder(repo, st.resource_id("store_id"))  # leave the working tree clean post-deploy
     bring_up_containers(repo)
-    finalize(repo, st, pending_operator)
+    finalize(repo, st)
 
 
 def deployed_worker_ids(acct: str, tok: str) -> set:
