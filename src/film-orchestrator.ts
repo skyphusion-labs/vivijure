@@ -1679,8 +1679,13 @@ export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob |
  *  stage writes `renders/<project>/keyframes/<shot_id>.png` itself (its own R2 creds; see the keyframe
  *  module), so the core can recover an orphaned keyframe phase straight from R2 presence -- no GPU re-
  *  run. Returns only keyframes whose shot_id is in the storyboard, so a stale PNG from an older render
- *  of the same project can never inject a shot the film did not ask for. */
-export async function listProjectKeyframes(env: Env, project: string, scenes: FilmScene[]): Promise<FilmKeyframeRef[]> {
+ *  of the same project can never inject a shot the film did not ask for. Also drops any keyframe written BEFORE
+ *  this run started (`createdAtMs`, the film job created_at): a prior render of the same project name leaves a
+ *  FULL stale set at the identical shot_id paths, which the pending-poll fast path would otherwise adopt on
+ *  tick one -- cancelling the live producer and shipping wrong content silently (#661, the #245/#249 class).
+ *  This run own orphans (the #129/#619/#143 recovery) always upload AFTER created_at, so legit recovery
+ *  survives; a leftover from an older render becomes invisible. */
+export async function listProjectKeyframes(env: Env, project: string, scenes: FilmScene[], createdAtMs: number): Promise<FilmKeyframeRef[]> {
   const prefix = `renders/${project}/keyframes/`;
   const wanted = new Set(scenes.map((s) => s.shot_id));
   const out: FilmKeyframeRef[] = [];
@@ -1688,6 +1693,9 @@ export async function listProjectKeyframes(env: Env, project: string, scenes: Fi
   do {
     const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
     for (const o of listed.objects) {
+      // Freshness guard (#661): skip any object written BEFORE this run started (R2Object.uploaded is a Date,
+      // job stamps are epoch ms -- normalize explicitly). Only enforced when a floor is passed.
+      if (createdAtMs && o.uploaded.getTime() < createdAtMs) continue;
       const file = o.key.slice(prefix.length);
       // Images only: the backend also writes a `<shot_id>.hash` param-hash sidecar per keyframe
       // (backend #112, reuse-vs-regen). Without this filter the sidecar shares the shot_id, sorts
@@ -1709,7 +1717,7 @@ export async function listProjectKeyframes(env: Env, project: string, scenes: Fi
  *  lenient on partials, treating absent shots as genuine non-renders at the ceiling.) */
 export async function keyframeSetCompleteInR2(env: Env, job: FilmJob): Promise<boolean> {
   if (!job.scenes.length) return false;
-  const present = await listProjectKeyframes(env, job.project, job.scenes);
+  const present = await listProjectKeyframes(env, job.project, job.scenes, job.created_at);
   const have = new Set(present.map((k) => k.shot_id));
   return job.scenes.every((s) => have.has(s.shot_id));
 }
@@ -1760,7 +1768,7 @@ export async function cancelInFlightKeyframe(env: Env, job: FilmJob): Promise<vo
  *  has passed PHASE_HARD_DEADLINE_SECONDS. Returns true iff it advanced the phase; a partial hold (or
  *  nothing in R2) returns false and leaves the phase in "keyframe". */
 async function recoverStalledKeyframePhase(env: Env, job: FilmJob, preModules: RegisteredModule[] | undefined, atCeiling: boolean): Promise<boolean> {
-  const adopted = await listProjectKeyframes(env, job.project, job.scenes);
+  const adopted = await listProjectKeyframes(env, job.project, job.scenes, job.created_at);
   if (!adopted.length) return false; // nothing in R2 to adopt -- not actually complete; let the ceiling hard-fail
   const covered = new Set(adopted.map((k) => k.shot_id));
   const dropped = job.scenes.filter((s) => !covered.has(s.shot_id)).map((s) => s.shot_id);
@@ -1801,9 +1809,9 @@ export { clipFileMatchesShot };
  *  wrapper over render-orchestrator's listClipsByShotId). When a motion.backend poll never resolves (GC'd
  *  RunPod job), the clip is still in R2; matching by shot-id boundary recovers a stalled clips phase from
  *  R2 presence, no GPU re-run. Only shots in the storyboard are returned. */
-export async function listProjectClips(env: Env, project: string, scenes: FilmScene[]): Promise<{ shot_id: string; clip_key: string }[]> {
+export async function listProjectClips(env: Env, project: string, scenes: FilmScene[], createdAtMs: number): Promise<{ shot_id: string; clip_key: string }[]> {
   const wanted = scenes.map((s) => s.shot_id);
-  const found = await listClipsByShotId(env, project, wanted);
+  const found = await listClipsByShotId(env, project, wanted, clipFileMatchesShot, createdAtMs);
   return wanted.filter((s) => found.has(s)).map((s) => ({ shot_id: s, clip_key: found.get(s) as string }));
 }
 

@@ -714,11 +714,16 @@ describe("phaseAgeSeconds (#129)", () => {
 });
 
 // R2 list double: serves objects whose keys start with the queried prefix, supporting a single page.
-function r2ListEnv(keys: string[]) {
+function r2ListEnv(items: (string | { key: string; uploadedMs: number })[]) {
+  // A plain-string entry defaults to uploaded epoch 0 (the pre-#661 tests pass a 0 floor, so age is moot);
+  // an object entry carries an explicit uploadedMs for the #661 freshness-guard cases.
+  const objs = items.map((it) => typeof it === "string"
+    ? { key: it, uploaded: new Date(0) }
+    : { key: it.key, uploaded: new Date(it.uploadedMs) });
   return {
     R2_RENDERS: {
       list: async ({ prefix }: { prefix: string }) => ({
-        objects: keys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        objects: objs.filter((o) => o.key.startsWith(prefix)),
         truncated: false,
       }),
     },
@@ -736,14 +741,14 @@ describe("listProjectKeyframes (#129 R2 adoption)", () => {
       "renders/neon/keyframes/shot_02.png",
       "renders/neon/keyframes/shot_99.png", // stale from an older render -- must be dropped
     ]);
-    const out = await listProjectKeyframes(env, "neon", sc);
+    const out = await listProjectKeyframes(env, "neon", sc, 0);
     expect(out).toEqual([
       { shot_id: "shot_01", keyframe_key: "renders/neon/keyframes/shot_01.png" },
       { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.png" },
     ]);
   });
   it("returns empty when no keyframes are in R2 yet", async () => {
-    expect(await listProjectKeyframes(r2ListEnv([]), "neon", sc)).toEqual([]);
+    expect(await listProjectKeyframes(r2ListEnv([]), "neon", sc, 0)).toEqual([]);
   });
   it("ignores .hash param-hash sidecars (backend #112): the PNG wins, never the sidecar (#578)", async () => {
     // .hash sorts BEFORE .png lexicographically; pre-#578 the first-seen dedupe adopted the sidecar
@@ -754,7 +759,7 @@ describe("listProjectKeyframes (#129 R2 adoption)", () => {
       "renders/neon/keyframes/shot_02.hash",
       "renders/neon/keyframes/shot_02.png",
     ]);
-    const out = await listProjectKeyframes(env, "neon", sc);
+    const out = await listProjectKeyframes(env, "neon", sc, 0);
     expect(out).toEqual([
       { shot_id: "shot_01", keyframe_key: "renders/neon/keyframes/shot_01.png" },
       { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.png" },
@@ -765,7 +770,7 @@ describe("listProjectKeyframes (#129 R2 adoption)", () => {
       "renders/neon/keyframes/shot_01.hash",
       "renders/neon/keyframes/shot_02.png",
     ]);
-    const out = await listProjectKeyframes(env, "neon", sc);
+    const out = await listProjectKeyframes(env, "neon", sc, 0);
     expect(out).toEqual([
       { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.png" },
     ]);
@@ -775,10 +780,29 @@ describe("listProjectKeyframes (#129 R2 adoption)", () => {
       "renders/neon/keyframes/shot_01.JPG",
       "renders/neon/keyframes/shot_02.webp",
     ]);
-    const out = await listProjectKeyframes(env, "neon", sc);
+    const out = await listProjectKeyframes(env, "neon", sc, 0);
     expect(out).toEqual([
       { shot_id: "shot_01", keyframe_key: "renders/neon/keyframes/shot_01.JPG" },
       { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.webp" },
+    ]);
+  });
+  it("#661: drops a stale FULL set uploaded BEFORE this run started (the live producer keeps running)", async () => {
+    const RUN_START = 2_000_000;
+    const env = r2ListEnv([
+      { key: "renders/neon/keyframes/shot_01.png", uploadedMs: RUN_START - 4 * 86_400_000 }, // 4d-old leftover
+      { key: "renders/neon/keyframes/shot_02.png", uploadedMs: RUN_START - 4 * 86_400_000 },
+    ]);
+    expect(await listProjectKeyframes(env, "neon", sc, RUN_START)).toEqual([]);
+  });
+  it("#661: adopts this run own orphans uploaded AFTER the job started (legit #129 recovery survives)", async () => {
+    const RUN_START = 2_000_000;
+    const env = r2ListEnv([
+      { key: "renders/neon/keyframes/shot_01.png", uploadedMs: RUN_START + 5_000 },
+      { key: "renders/neon/keyframes/shot_02.png", uploadedMs: RUN_START + 5_000 },
+    ]);
+    expect(await listProjectKeyframes(env, "neon", sc, RUN_START)).toEqual([
+      { shot_id: "shot_01", keyframe_key: "renders/neon/keyframes/shot_01.png" },
+      { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.png" },
     ]);
   });
 });
@@ -811,6 +835,16 @@ describe("keyframeSetCompleteInR2 (pending-poll adoption guard)", () => {
     expect(await keyframeSetCompleteInR2(r2ListEnv([]), job(sc))).toBe(false);
     expect(await keyframeSetCompleteInR2(r2ListEnv([]), job([]))).toBe(false);
   });
+  it("#661: a stale FULL set (uploaded before the run) does NOT count as complete", async () => {
+    const RUN_START = 2_000_000;
+    const staleJob = { project: "neon", scenes: sc, created_at: RUN_START } as unknown as FilmJob;
+    const env = r2ListEnv([
+      { key: "renders/neon/keyframes/shot_01.png", uploadedMs: RUN_START - 86_400_000 },
+      { key: "renders/neon/keyframes/shot_02.png", uploadedMs: RUN_START - 86_400_000 },
+      { key: "renders/neon/keyframes/shot_03.png", uploadedMs: RUN_START - 86_400_000 },
+    ]);
+    expect(await keyframeSetCompleteInR2(env, staleJob)).toBe(false);
+  });
 });
 
 // Env double that round-trips one film job through R2 (get -> mutate -> put) and serves the keyframe
@@ -822,7 +856,7 @@ function recoveryEnv(job: FilmJob, keyframeKeys: string[]) {
       get: async (key: string) => (key === filmJobDocKey(job.film_id) ? { text: async () => stored } : null),
       put: async (key: string, body: string) => { if (key === filmJobDocKey(job.film_id)) stored = body; },
       list: async ({ prefix }: { prefix: string }) => ({
-        objects: keyframeKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        objects: keyframeKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k, uploaded: new Date() })),
         truncated: false,
       }),
     },
@@ -899,7 +933,7 @@ function kfRecoveryEnv(job: FilmJob, keyframeKeys: string[]) {
       get: async (key: string) => (key === filmDoc ? { text: async () => stored } : null),
       put: async (key: string, body: string) => { if (key === filmDoc) stored = body; },
       list: async ({ prefix }: { prefix: string }) => ({
-        objects: keyframeKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        objects: keyframeKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k, uploaded: new Date() })),
         truncated: false,
       }),
     },
@@ -1120,14 +1154,25 @@ describe("listProjectClips (#139 R2 adoption)", () => {
       "renders/neon/clips/shot_10_i2v.mp4",
       "renders/neon/clips/shot_99_i2v.mp4",      // not in storyboard -- dropped
     ]);
-    const out = await listProjectClips(env, "neon", sc);
+    const out = await listProjectClips(env, "neon", sc, 0);
     expect(out).toEqual([
       { shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4" },
       { shot_id: "shot_10", clip_key: "renders/neon/clips/shot_10_i2v.mp4" },
     ]);
   });
   it("returns empty when no clips are in R2", async () => {
-    expect(await listProjectClips(r2ListEnv([]), "neon", sc)).toEqual([]);
+    expect(await listProjectClips(r2ListEnv([]), "neon", sc, 0)).toEqual([]);
+  });
+  it("#661: drops a stale clip uploaded BEFORE this run started, keeps a fresh one", async () => {
+    const RUN_START = 2_000_000;
+    const env = r2ListEnv([
+      { key: "renders/neon/clips/shot_01_i2v.mp4", uploadedMs: RUN_START - 4 * 86_400_000 }, // stale leftover
+      { key: "renders/neon/clips/shot_10_i2v.mp4", uploadedMs: RUN_START + 5_000 },          // this run own clip
+    ]);
+    const out = await listProjectClips(env, "neon", sc, RUN_START);
+    expect(out).toEqual([
+      { shot_id: "shot_10", clip_key: "renders/neon/clips/shot_10_i2v.mp4" },
+    ]);
   });
 });
 
@@ -1150,7 +1195,7 @@ function clipsRecoveryEnv(job: FilmJob, clipJob: ClipJobLike, clipKeys: string[]
         else if (key === clipDoc) clipStored = body;
       },
       list: async ({ prefix }: { prefix: string }) => ({
-        objects: clipKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k })),
+        objects: clipKeys.filter((k) => k.startsWith(prefix)).map((k) => ({ key: k, uploaded: new Date() })),
         truncated: false,
       }),
     },

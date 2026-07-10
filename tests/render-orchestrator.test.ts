@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeJob, applyPoll, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, advanceClipJob, startClipJob, cancelInFlightClips } from "../src/render-orchestrator";
+import { summarizeJob, applyPoll, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2, advanceClipJob, startClipJob, cancelInFlightClips } from "../src/render-orchestrator";
 import type { ClipJob, ClipShot } from "../src/render-orchestrator";
 import type { RegisteredModule } from "../src/modules/types";
 import type { Env } from "../src/env";
@@ -274,5 +274,75 @@ describe("#535 clip tick reuses the threaded registry (no per-tick module.json f
     expect(job.shots[0].poll).toBe("tok9");
     expect(job.shots[0].runpod_job_id).toBe("rp-xyz"); // #536: retained for cancel/accounting
     expect(manifestHits()).toBe(0);                    // #535: threaded registry, no discovery fan-out
+  });
+});
+
+
+// --- #661 freshness floor: a prior render of the SAME project name leaves clips at identical
+// renders/<project>/clips/<shot>_<backend> paths; without a floor the stall/fail reclaim would adopt a
+// 4-day-old clip and ship wrong content silently. minUploadedMs (the ClipJob created_at) makes this run
+// own clips (uploaded AFTER the job started) the only reclaim candidates; a leftover becomes invisible.
+describe("listClipsByShotId freshness floor (#661)", () => {
+  const RUN_START = 2_000_000;
+  const listEnv = (items: { key: string; uploadedMs: number }[]) => ({
+    R2_RENDERS: {
+      list: async ({ prefix }: { prefix: string }) => ({
+        objects: items.filter((o) => o.key.startsWith(prefix)).map((o) => ({ key: o.key, uploaded: new Date(o.uploadedMs) })),
+        truncated: false,
+      }),
+    },
+  } as unknown as Env);
+
+  it("skips a clip uploaded BEFORE the floor, keeps one uploaded AFTER", async () => {
+    const env = listEnv([
+      { key: "renders/p/clips/shot_01_i2v.mp4", uploadedMs: RUN_START - 4 * 86_400_000 }, // stale leftover
+      { key: "renders/p/clips/shot_02_i2v.mp4", uploadedMs: RUN_START + 5_000 },          // this run own clip
+    ]);
+    const m = await listClipsByShotId(env, "p", ["shot_01", "shot_02"], clipFileMatchesShot, RUN_START);
+    expect(m.has("shot_01")).toBe(false);
+    expect(m.get("shot_02")).toBe("renders/p/clips/shot_02_i2v.mp4");
+  });
+
+  it("floor 0 (default) keeps every clip regardless of age (back-compat)", async () => {
+    const env = listEnv([{ key: "renders/p/clips/shot_01_i2v.mp4", uploadedMs: 1 }]);
+    const m = await listClipsByShotId(env, "p", ["shot_01"]);
+    expect(m.get("shot_01")).toBe("renders/p/clips/shot_01_i2v.mp4");
+  });
+});
+
+describe("reclaimClipsFromR2 freshness (#661): a prior render clip is never silently adopted", () => {
+  it("does NOT reclaim a pending shot whose only R2 clip predates the clip job", async () => {
+    const cj = job(["pending"]);
+    cj.project = "neon"; cj.created_at = 2_000_000; cj.shots[0].shot_id = "shot_01";
+    const env = {
+      R2_RENDERS: {
+        list: async ({ prefix }: { prefix: string }) => ({
+          objects: [{ key: "renders/neon/clips/shot_01_i2v.mp4", uploaded: new Date(cj.created_at - 86_400_000) }]
+            .filter((o) => o.key.startsWith(prefix)),
+          truncated: false,
+        }),
+      },
+    } as unknown as Env;
+    const adopted = await reclaimClipsFromR2(env, cj);
+    expect(adopted).toBe(0);
+    expect(cj.shots[0].status).toBe("pending"); // left for a genuine render, not silently stale-adopted
+  });
+
+  it("DOES reclaim a pending shot whose R2 clip was uploaded after the clip job started (#141 survives)", async () => {
+    const cj = job(["pending"]);
+    cj.project = "neon"; cj.created_at = 2_000_000; cj.shots[0].shot_id = "shot_01";
+    const env = {
+      R2_RENDERS: {
+        list: async ({ prefix }: { prefix: string }) => ({
+          objects: [{ key: "renders/neon/clips/shot_01_i2v.mp4", uploaded: new Date(cj.created_at + 5_000) }]
+            .filter((o) => o.key.startsWith(prefix)),
+          truncated: false,
+        }),
+      },
+    } as unknown as Env;
+    const adopted = await reclaimClipsFromR2(env, cj);
+    expect(adopted).toBe(1);
+    expect(cj.shots[0].status).toBe("done");
+    expect(cj.shots[0].clip_key).toBe("renders/neon/clips/shot_01_i2v.mp4");
   });
 });
