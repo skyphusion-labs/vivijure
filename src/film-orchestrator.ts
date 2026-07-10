@@ -37,7 +37,7 @@ import {
   summarizeFinish, summarizeFilm, orderFinalClips, joinKeyframesToScenes, filmPhaseToShardStatus,
   applyFinishOutput, adoptFinishStepOutput, applySpeechOutput,
   FINISH_STEP_MAX_ATTEMPTS, classifyFinishFailure, classifyFinishRetry, resolveFinishConfigs,
-  finishShotAdoptableFromR2, reclaimFinishShotsFromR2, finishStepOutputKey, finishStepAppliedTag,
+  finishShotAdoptableFromR2, reclaimFinishShotsFromR2, finishStepOutputKey, finishStepAppliedTag, finishShotLedgerReconciles,
   classifyAssembleTransport,
   MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, filmSeconds, masteredBedKey, applyMasterOutput,
   degradeMasterStep, masterChainDone,
@@ -519,6 +519,15 @@ async function advanceFinishPhase(env: Env, job: FilmJob, preModules?: Registere
       if (key && await finishArtifactHashMatches(env, job, fs, key)) verified.set(fs.shot_id, key);
     }
     reclaimFinishShotsFromR2(finishShots, verified, preModules); // #583: thread modules so the reused marker reconstructs into `adopted`
+  }
+  // #662 honesty guard: a DONE finish shot's per-step ledger MUST reconcile 1:1 to its chain (every step
+  // accounted for, run OR reused). Log LOUD if it does not -- an under-reconciled ledger is the "applied
+  // drops one tag" class and must never ship silently (#245/#249). Never fails the render: the ledger is a
+  // record and the union applied+adopted still carries the transforms; this surfaces a bookkeeping drop.
+  for (const fs of finishShots) {
+    if (fs.status === "done" && !finishShotLedgerReconciles(fs)) {
+      console.warn(`film ${job.film_id}: finish shot ${fs.shot_id} ledger does NOT reconcile to its chain [${fs.chain.join(", ")}] (ledger ${(fs.ledger ?? []).length}/${fs.chain.length}); applied=${JSON.stringify(fs.applied)} adopted=${JSON.stringify(fs.adopted ?? [])} (#662)`);
+    }
   }
   if (finishShots.every((fs) => fs.status !== "pending")) {
     // Fail LOUD on a genuinely-failed finish step. After the bounded transient-retry (failOrRetry)
