@@ -3,6 +3,22 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.18.0
+
+**Welcome/marketing page moves off the Worker to vivijure.com (#617).** MINOR. The public marketing
+landing page (`public/welcome.html`) no longer ships inside the Worker bundle: it used to deploy with
+every self-hosted studio, dragging our marketing surface, the Umami analytics inject, and the
+`/welcome` CSP special-casing along with it. The storefront now lives solely at `https://vivijure.com/`
+(already the richer, canonical marketing site), and `/welcome` (+ `/welcome/`, `/welcome.html`) on the
+studio host is now a clean **301 redirect** there for link equity. Removed from the Worker:
+`welcome.html`, the `welcomeCsp` / `injectWelcomeUmami` / `WELCOME_PATHS` machinery, and the
+`UMAMI_WEBSITE_ID` env, across `src/asset-response.ts`, `src/env.ts`, `wrangler.toml.example`,
+`deploy.sh`, CI, and `.dev-modbound`. The response-security chokepoint now streams every body
+unchanged (the per-request welcome rewrite was its only body-mutating path). Docs updated (SECURITY,
+PRIVACY, legal, deploy-config). Two operational notes: the `/welcome` public Access bypass MUST stay
+so the 301 resolves for anonymous visitors, and the post-deploy edge purge still flushes the stale
+page on the cutover deploy. Ship via tag deploy to make the redirect live.
+
 ## v0.17.5
 
 **Keyframe stall recovery: no more silent half-films (#619).** PATCH. A stale keyframe poll with

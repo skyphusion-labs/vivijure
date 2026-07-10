@@ -22,11 +22,11 @@ workers_dev = false
 # The Worker owns ALL security headers (CF managed-transform header layer is OFF), so EVERY response
 # -- including the static HTML pages -- must run through the Worker's applyResponseSecurity chokepoint:
 #   - run_worker_first = true: route every request (pages + sub-resources) through the Worker class.
-#     Without it, Workers Assets serves /welcome etc. straight from the edge, BYPASSING the Worker, so
+#     Without it, Workers Assets serves the pages straight from the edge, BYPASSING the Worker, so
 #     the static pages get NO headers (the post-v0.7.4 finding).
 #   - html_handling = "none": serve assets at their EXACT path with NO .html<->pretty-URL redirects.
 #     This is the load-bearing half: with the default handling, serveStudioAsset's env.ASSETS.fetch
-#     of /welcome.html 307-redirects back to /welcome -> redirect loop -> blank page (the #374 -> #375
+#     of /planner.html 307-redirects back to /planner -> redirect loop -> blank page (the #374 -> #375
 #     revert). "none" makes that fetch return the real file (200), and the Worker maps the pretty page
 #     routes itself (STUDIO_PAGE_ASSETS, incl. "/" -> /modules.html). Dev-verified, no loop.
 assets = { directory = "./public", binding = "ASSETS", html_handling = "none", run_worker_first = true }
@@ -49,10 +49,6 @@ tail_consumers = [ { service = "vivijure-tail" } ]
 AUTH_MODE = "${AUTH_MODE}"
 ACCESS_TEAM_DOMAIN = "${ACCESS_TEAM_DOMAIN}"
 ACCESS_AUD = "${ACCESS_AUD}"
-# Cloudflare Web Analytics token, deploy-injected into /welcome by the Worker (src/asset-response.ts).
-# PUBLIC, not a secret -- but DEFAULT EMPTY: a self-hosted deploy that leaves it unset ships NO beacon,
-# so /welcome visitors phone home to NO ONE. Set it ONLY on your own deploy to keep your own analytics.
-UMAMI_WEBSITE_ID = "${UMAMI_WEBSITE_ID}"
 # R2 S3-API presign identifiers (src/r2-presign.ts). NOT secrets: R2_S3_ENDPOINT is the public
 # account-scoped R2 S3 host (https://<account-id>.r2.cloudflarestorage.com), R2_S3_BUCKET is the
 # same `vivijure` bucket bound as R2_RENDERS below. Both are deploy-injected (ci.yml / deploy.sh)

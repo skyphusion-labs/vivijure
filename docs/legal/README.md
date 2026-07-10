@@ -57,7 +57,7 @@ The Privacy policy was written after reading the actual data path:
 
 - **Canonical home: this directory (`docs/legal/*.md`).** Markdown, version-controlled, reviewable in
   PRs, the single source of truth.
-- **Linking them:** the public `/welcome` page footer links to all three documents (their GitHub
+- **Linking them:** the `vivijure.com` storefront footer links to all three documents (their GitHub
   pages -- this directory IS the canonical home). Serving worker-local human-readable pages (e.g.
   `/legal/privacy`, `/legal/terms`, `/legal/acceptable-use`) is still a follow-up; when it lands,
   keep the markdown here as the source and render/copy to served pages so there is one source of
