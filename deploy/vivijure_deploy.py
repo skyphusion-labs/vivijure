@@ -307,31 +307,69 @@ def module_worker_name(repo: Path, mod: str) -> str:
 
 
 def core_worker_name(repo: Path) -> str:
-    """The core worker NAME = the root wrangler.toml `name` (default 'vivijure-studio')."""
-    m = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"', (repo / "wrangler.toml").read_text())
+    """The core worker NAME = the root wrangler.toml `name` (default 'vivijure-studio'). Falls back to
+    wrangler.toml.example when the rendered toml is not present yet (the installer renders it -- F1)."""
+    src = repo / "wrangler.toml" if (repo / "wrangler.toml").exists() else repo / "wrangler.toml.example"
+    m = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"', src.read_text())
     if not m:
-        die("no `name` in wrangler.toml")
+        die(f"no `name` in {src.name}")
     return m.group(1)
 
 
-def transform_core_toml(text: str, *, prefix: str, module_service_names: list, d1_id: str, store_id: str) -> str:
-    """PURE text render of the core wrangler.toml for an ISOLATED (prefixed) instance. Empty prefix ->
-    unchanged (never called then). A prefixed core CANNOT deploy verbatim: its [[services]] point at
-    prod-named modules, its D1/R2 + Secrets Store bindings are prod's, and its [[vpc_services]] /
-    tail_consumers / [[routes]] / [[migrations]] targets do not exist for an isolated instance (a
-    dangling binding, or a delete-class migration for a class this fresh worker never had, fails
-    `wrangler deploy`). This applies exactly the rewrites that make an isolated core deployable:
-      - repoint every [[services]] service = "<module>" to the prefixed module worker name,
-      - rebind [[r2_buckets]] bucket_name + the R2_S3_BUCKET var to the prefixed buckets,
-      - inject the prefixed D1 database_id + the prefixed Secrets Store store_id,
-      - enable workers_dev + drop the custom-domain [[routes]] block (an isolated instance verifies on
-        workers.dev; it needs no domain),
-      - strip [[vpc_services]] + tail_consumers + [[migrations]] (unprovisioned / inapplicable here).
-    Unit-tested here; the end-to-end (wrangler accepts it, the isolated core stands up) is proven when a
-    prefixed instance is first deployed live."""
-    p = prefix.strip()
-    if not p:
-        return text
+def render_core_toml(text: str, *, account_id: str, d1_id: str, store_id: str,
+                     primary_bucket: str = None, prefix: str = "", module_service_names=()) -> str:
+    """PURE render of a DEPLOYABLE core wrangler.toml from wrangler.toml.example (F1). ALWAYS does the
+    base-install render; the prefix branch adds instance isolation on top. account_id is NEVER hardcoded
+    -- the caller passes CLOUDFLARE_ACCOUNT_ID.
+
+    Base install is MEDIA-LESS -- the studio's documented degrade mode (clips render; no final concat /
+    title cards). The installer does NOT yet provision the media stack (phase-2 is a stub), so the
+    render STRIPS every binding whose target a base install does not create, else `wrangler deploy`
+    dangles:
+      - substitute the ${...} placeholders (AUTH_MODE, ACCESS_*, R2_S3_ENDPOINT/BUCKET, the rate-limit
+        namespace id, D1_DATABASE_ID) + the Secrets Store store_id placeholder,
+      - inject the created D1 database_id + Secrets Store store_id,
+      - enable workers_dev + drop the custom-domain [[routes]] (a base install verifies on workers.dev),
+      - STRIP [[vpc_services]] (media-stack VPC), tail_consumers (vivijure-tail), and [[migrations]]
+        (a delete-class migration for a Durable-Object class this fresh worker never had hard-fails).
+    Isolation (prefix set): additionally prefix the R2 bucket bindings + repoint [[services]] to the
+    prefixed module worker names."""
+    p = (prefix or "").strip()
+    pb = primary_bucket or R2_BUCKETS[0]
+    def pfx(n):
+        return f"{p}-{n}" if p else n
+    for k, v in {
+        "${AUTH_MODE}": AUTH_MODE,
+        "${ACCESS_TEAM_DOMAIN}": ACCESS_TEAM_DOMAIN,
+        "${ACCESS_AUD}": ACCESS_AUD,
+        "${R2_S3_ENDPOINT}": f"https://{account_id}.r2.cloudflarestorage.com",
+        "${R2_S3_BUCKET}": pfx(pb),
+        "${SPEND_RATE_LIMITER_NS_ID}": "1001",
+        "${D1_DATABASE_ID}": d1_id or "",
+    }.items():
+        text = text.replace(k, v)
+    if store_id:
+        text = text.replace(STORE_ID_PLACEHOLDER, store_id)
+    if d1_id:
+        text = re.sub(r'(?m)^(database_id\s*=\s*").*?(")', lambda m: m.group(1) + d1_id + m.group(2), text)
+    if p:
+        for b in R2_BUCKETS:
+            text = text.replace(f'bucket_name = "{b}"', f'bucket_name = "{pfx(b)}"')
+        for w in module_service_names:
+            text = text.replace(f'service = "{w}"', f'service = "{pfx(w)}"')
+    text = re.sub(r'(?m)^workers_dev\s*=\s*false\s*$', 'workers_dev = true', text)
+    text = re.sub(r'(?ms)^\[\[routes\]\].*?(?=^\[|\Z)', '', text)
+    text = re.sub(r'(?ms)^\[\[vpc_services\]\].*?(?=^\[|\Z)', '', text)
+    text = re.sub(r'(?ms)^\[\[migrations\]\].*?(?=^\[|\Z)', '', text)
+    text = re.sub(r'(?m)^tail_consumers\s*=\s*\[.*?\]\s*$', '', text)
+    return text
+
+
+def render_module_toml(text: str) -> str:
+    """Base-install render of a module wrangler.toml: STRIP [[vpc_services]] (the media-stack VPC
+    services are unprovisioned by a base install; binding one dangles the deploy). The store_id
+    placeholder is handled separately (replace_store_id_placeholder)."""
+    return re.sub(r'(?ms)^\[\[vpc_services\]\].*?(?=^\[|\Z)', '', text)
     def pfx(n):
         return f"{p}-{n}"
     for w in module_service_names:
@@ -397,8 +435,8 @@ def preflight(repo: Path, s: Secrets) -> None:
     """Fail fast before touching anything: deps present, tokens actually valid, repo looks right."""
     if shutil.which("npx") is None:
         die("npx (Node) not found -- wrangler is required to deploy the workers")
-    if not (repo / "wrangler.toml").exists():
-        die(f"run from the vivijure repo root (no wrangler.toml at {repo})")
+    if not (repo / "wrangler.toml.example").exists():
+        die(f"run from the vivijure repo root (no wrangler.toml.example at {repo})")
     # Validate the CF token with a real, harmless authenticated call (token verify).
     http_json("GET", "https://api.cloudflare.com/client/v4/user/tokens/verify", s.cf_api_token)
     # Validate the RunPod key (list endpoints; empty is fine).
@@ -498,7 +536,7 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     gw_slug = prefixed(AI_GATEWAY_ID)
     gateway = create_if_absent(kind="AI Gateway", account=acct, token=tok,
         list_path="/accounts/{acct}/ai-gateway/gateways", create_path="/accounts/{acct}/ai-gateway/gateways",
-        create_body={"id": gw_slug, "cache_ttl": 0, "collect_logs": True,
+        create_body={"id": gw_slug, "cache_ttl": 0, "cache_invalidate_on_update": False, "collect_logs": True,
                      "rate_limiting_interval": 0, "rate_limiting_limit": 0, "rate_limiting_technique": "fixed"},
         name=gw_slug, name_key="id", id_key="id", known_id=st.get("gateway_id"))
     st.put("gateway_id", gateway)  # an identifier (the slug), not a secret -- safe in state
@@ -700,26 +738,37 @@ def run_migrations(repo: Path, s: Secrets) -> None:
 
 def deploy_workers(repo: Path, s: Secrets, st: State) -> None:
     """Step 5. Modules BEFORE the core (the core binds each module as a [[services]] dependency).
-    Wrangler bundles + uploads. Only reachable AFTER seed_secrets (the store bindings must resolve).
-    When DEPLOY_PREFIX is set, every worker deploys under its prefixed name (`--name`) and the core is
-    deployed from a transformed, isolated-instance toml (transform_core_toml)."""
+    F1: the installer RENDERS a deployable wrangler.toml from wrangler.toml.example (with the D1 +
+    Secrets Store ids it just created); it no longer requires a pre-rendered toml. Base install is
+    MEDIA-LESS -- the module [[vpc_services]] blocks (5 media-stack modules) + the core VPC / tail /
+    routes / DO-migration blocks are stripped, since a base install does not provision those targets."""
     mods = module_dirs(repo)
     isolate = bool(DEPLOY_PREFIX.strip())
-    log(f"deploying {len(mods)} module workers, then the core ...{' (isolated: ' + DEPLOY_PREFIX.strip() + ')' if isolate else ''}")
+    log(f"deploying {len(mods)} module workers, then the core (media-less base install)"
+        f"{' (isolated: ' + DEPLOY_PREFIX.strip() + ')' if isolate else ''} ...")
     env = cf_env_for(s)
+    acct, d1_id, store_id = s.cf_account_id, str(st.get("d1_id") or ""), str(st.get("store_id") or "")
     for m in mods:
-        extra = ["--name", prefixed(module_worker_name(repo, m))] if isolate else []
-        wrangler(["deploy", "-c", f"modules/{m}/wrangler.toml", *extra], cwd=repo, cf_env=env)
-    # The core, AFTER every module (service bindings). Carry the /api/* auth mode as a NON-SECRET
-    # [vars] override so the deployed gate matches AUTH_MODE regardless of the committed wrangler.toml
-    # placeholder (STUDIO_API_TOKEN itself is a worker SECRET, set separately -- never a var, never argv).
+        mp = repo / "modules" / m / "wrangler.toml"
+        text = mp.read_text()
+        name_extra = ["--name", prefixed(module_worker_name(repo, m))] if isolate else []
+        if "[[vpc_services]]" in text:  # a media-stack module -> strip its VPC binding (base install)
+            tmp = repo / "modules" / m / ".wrangler-base.toml"
+            tmp.write_text(render_module_toml(text))
+            try:
+                wrangler(["deploy", "-c", f"modules/{m}/.wrangler-base.toml", *name_extra], cwd=repo, cf_env=env)
+            finally:
+                tmp.unlink(missing_ok=True)
+        else:
+            wrangler(["deploy", "-c", f"modules/{m}/wrangler.toml", *name_extra], cwd=repo, cf_env=env)
+    # The core, AFTER every module (service bindings). Carry the /api/* auth mode as a NON-SECRET var.
     core_vars = ["--var", f"AUTH_MODE:{AUTH_MODE}"]
     if AUTH_MODE == "access":
         core_vars += ["--var", f"ACCESS_TEAM_DOMAIN:{ACCESS_TEAM_DOMAIN}", "--var", f"ACCESS_AUD:{ACCESS_AUD}"]
+    rendered = render_core_toml((repo / "wrangler.toml.example").read_text(),
+        account_id=acct, d1_id=d1_id, store_id=store_id, primary_bucket=R2_BUCKETS[0],
+        prefix=DEPLOY_PREFIX.strip(), module_service_names=[module_worker_name(repo, m) for m in mods])
     if isolate:
-        rendered = transform_core_toml((repo / "wrangler.toml").read_text(), prefix=DEPLOY_PREFIX.strip(),
-            module_service_names=[module_worker_name(repo, m) for m in mods],
-            d1_id=str(st.get("d1_id") or ""), store_id=str(st.get("store_id") or ""))
         tmp = repo / f"wrangler.{DEPLOY_PREFIX.strip()}.toml"
         tmp.write_text(rendered)
         try:
@@ -727,6 +776,7 @@ def deploy_workers(repo: Path, s: Secrets, st: State) -> None:
         finally:
             tmp.unlink(missing_ok=True)
     else:
+        (repo / "wrangler.toml").write_text(rendered)  # F1: rendered from the example (gitignored)
         wrangler(["deploy", *core_vars], cwd=repo, cf_env=env)
 
 
@@ -794,6 +844,9 @@ def bring_up_containers(repo: Path) -> None:
 
 
 def finalize(repo: Path, st: State) -> None:
+    # Honesty rider: a degrade is NEVER silent -- the installer says the media stack was not provisioned.
+    log("MEDIA STACK NOT PROVISIONED (installer phase-2 is roadmap): the studio is running in its "
+        "documented media-less mode -- clips render, no final concat / title cards.")
     log("done. studio URL + recorded resource ids are in " + str(repo / state_file_name()))
 
 
@@ -826,7 +879,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
         ]
         if AUTH_MODE == "token":
             steps.append("mint + put STUDIO_API_TOKEN worker secret (operator login; kept on re-run unless --rotate-token)")
-        steps.append("(phase 2) bring up CPU containers + VPC services")
+        steps.append("(phase 2 -- NOT run: roadmap) media stack; base install is media-less (clips render, no final concat/titles)")
         for i, name in enumerate(steps, 1):
             log(f"  {i}. {name}")
         return
@@ -846,11 +899,30 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
     finalize(repo, st)
 
 
-def cmd_down(repo: Path, delete_data: bool) -> None:
+def wrangler_delete_tolerant(args: list, *, cwd: Path, cf_env: dict, label: str) -> None:
+    """`wrangler delete` for teardown that TOLERATES a worker that was never deployed (F4). A partial /
+    failed `up` MUST still be teardownable -- that is half of what `down` is for. A worker that does not
+    exist (CF code 10007) is a SKIP + note, never an abort, so teardown always reaches the D1 / bucket /
+    Secrets Store cleanup."""
+    child_env = dict(os.environ)
+    if cf_env:
+        child_env.update(cf_env)
+    proc = subprocess.run(["npx", "wrangler", *args], cwd=str(cwd), env=child_env,
+                          capture_output=True, text=True)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode == 0:
+        log(f"  deleted {label}")
+    elif "does not exist" in out or "10007" in out:
+        log(f"  skip {label}: not deployed (already gone)")
+    else:
+        log(f"  WARN {label}: delete failed (exit {proc.returncode}); continuing teardown")
+
+
+def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False) -> None:
     """Teardown in reverse dependency order, by recorded id. R2 buckets + D1 hold user data and are
     LEFT in place unless --delete-data is given."""
     st = State.load(repo)
-    s = collect_secrets()  # teardown needs the keys too -- same hidden-prompt handling, never argv
+    s = collect_secrets(noninteractive_env=noninteractive)  # F3: env-cred path (like up), else hidden prompts
     log("teardown (reverse dependency order, by recorded id) ...")
 
     # RunPod first (endpoint -> volume -> template). An endpoint with live workers may need scaling to 0
@@ -880,8 +952,10 @@ def cmd_down(repo: Path, delete_data: bool) -> None:
     isolate = bool(DEPLOY_PREFIX.strip())
     for m in module_dirs(repo):
         extra = ["--name", prefixed(module_worker_name(repo, m))] if isolate else []
-        wrangler(["delete", "-c", f"modules/{m}/wrangler.toml", *extra], cwd=repo, cf_env=cf_env_for(s))
-    wrangler(["delete", *(["--name", prefixed(core_worker_name(repo))] if isolate else [])], cwd=repo, cf_env=cf_env_for(s))
+        wrangler_delete_tolerant(["delete", "-c", f"modules/{m}/wrangler.toml", *extra],
+                                 cwd=repo, cf_env=cf_env_for(s), label=f"worker {m}")
+    wrangler_delete_tolerant(["delete", *(["--name", prefixed(core_worker_name(repo))] if isolate else [])],
+                             cwd=repo, cf_env=cf_env_for(s), label="core worker")
     removed.append("workers (modules + core)")
 
     sid = st.get("store_id")
@@ -932,6 +1006,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("plan", help="alias for `up --dry-run`")
     down = sub.add_parser("down", help="teardown by recorded id")
     down.add_argument("--delete-data", action="store_true", help="ALSO delete R2 buckets + D1 (your data)")
+    down.add_argument("--noninteractive", action="store_true", help="read creds from env (CI/headless), never argv")
 
     args = ap.parse_args(argv)
     repo = Path.cwd()
@@ -942,7 +1017,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "plan":
         cmd_up(repo, dry_run=True, noninteractive=False)
     elif args.cmd == "down":
-        cmd_down(repo, delete_data=args.delete_data)
+        cmd_down(repo, delete_data=args.delete_data, noninteractive=args.noninteractive)
 
 
 if __name__ == "__main__":
