@@ -619,5 +619,14 @@ export interface ModulesResponse {
    *  instead of growing per-feature demo branches; omitted everywhere else. A module never reads
    *  this; an operator / the studio UI / a health probe does. OPTIONAL + additive:
    *  a deploy without WfP omits it, and NO MODULE_API bump (docs/module-dispatch.md section 5.3). */
-  host?: { dispatch: boolean; readonly?: boolean };
+  host?: {
+    dispatch: boolean;
+    readonly?: boolean;
+    // #631 Phase B (demo deploys only): `render.available` true => the click-to-render menu is live
+    // (the backend is reachable + enabled); false => renders are paused. `assistant` carries the OSS
+    // "free model" note so it renders wherever the assistant surfaces, from THIS projection (constraint 9),
+    // never a hardcoded page branch. Both omitted off-demo. A module never reads these; the UI does.
+    render?: { available: boolean };
+    assistant?: { model: string; note: string };
+  };
 }

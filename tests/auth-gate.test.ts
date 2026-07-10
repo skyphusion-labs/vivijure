@@ -402,3 +402,35 @@ describe("verifyTokenRequest -- named per-consumer tokens (#445)", () => {
     expect((await verifyTokenRequest(post, e)).ok).toBe(false);
   });
 });
+
+// ---- demo mode Phase B (#631): the two-route write allowlist ----------------------------------
+describe("AUTH_MODE=demo Phase B -- exactly two demo write routes are allowed", () => {
+  const env = { AUTH_MODE: "demo" } as any;
+  const at = (method: string, path: string) => gateApi(new Request("https://studio" + path, { method }), env);
+
+  it("POST /api/demo/render and /api/demo/chat are allowed (demo-visitor)", async () => {
+    for (const path of ["/api/demo/render", "/api/demo/chat"]) {
+      const d = await at("POST", path);
+      expect(d).toMatchObject({ ok: true, sub: "demo-visitor" });
+    }
+  });
+
+  it("the demo poll (GET /api/demo/render/:id) is allowed like any read", async () => {
+    const d = await at("GET", "/api/demo/render/job-123");
+    expect(d).toMatchObject({ ok: true, sub: "demo-visitor" });
+  });
+
+  it("every OTHER write stays denied -- the prod render/plan/chat routes included", async () => {
+    for (const path of ["/api/render/film", "/api/storyboard/plan", "/api/chat", "/api/demo/render/anything-else", "/api/cast"]) {
+      const d = await at("POST", path);
+      expect(d).toMatchObject({ ok: false, status: 403, reason: expect.stringMatching(/read-only/) });
+    }
+  });
+
+  it("a non-POST method on an allowlisted demo write route is NOT unlocked (POST-only)", async () => {
+    for (const method of ["PUT", "PATCH", "DELETE"]) {
+      const d = await at(method, "/api/demo/render");
+      expect(d).toMatchObject({ ok: false, status: 403 });
+    }
+  });
+});

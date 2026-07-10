@@ -1,6 +1,6 @@
 // Vivijure studio core: module host, render API router, planner/cast UI server.
 
-import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest, cloudMotionModules, defaultGpuDoorModule, gpuDoorMotionModules, motionBackendPreflightError, motionConfigPreflightError } from "./modules/registry";
+import { discoverModules, modulesResponse, dispatchChain, servingForHook, validateManifest, cloudMotionModules, defaultGpuDoorModule, gpuDoorMotionModules, motionBackendPreflightError, motionConfigPreflightError, invokeModule, pollModule, resolveFetcher } from "./modules/registry";
 import { runLiveConformance, allPass, failures } from "./modules/conformance";
 import { installModuleRow, uninstallModuleRow, setModuleEnabled, listInstalledModules } from "./installed-modules";
 import { resolveRenderPipeline, type RenderPipelineSelection } from "./modules/render-pipeline";
@@ -39,6 +39,14 @@ import {
 } from "./cast-media";
 import { exportCastBundle, importCastBundle } from "./cast-bundle";
 import { gateApi, isDemoMode } from "./auth-gate";
+import { DEMO_MEDIA_ORIGIN } from "./asset-response";
+import type { MotionBackendInput, MotionBackendOutput } from "./modules/types";
+import { aiRun } from "./ai-binding";
+import {
+  submitDemoRender, pollDemoRender, listRenderables, DEFAULT_DEMO_RENDER_CAPS,
+  type DemoRenderDeps, type DemoRenderCaps, type DemoBackend, type D1Like,
+} from "./demo-render";
+import { runDemoChat, DEFAULT_DEMO_CHAT_CAPS, type DemoChatCaps, type DemoChatModel } from "./demo-chat";
 import { isSpendRoute, enforceSpendLimit } from "./rate-limit";
 import { applyResponseSecurity } from "./asset-response";
 import { chatImage, type ChatImageArgs } from "./chat-image";
@@ -1281,7 +1289,157 @@ const hSetModuleEnabled: Handler = async (req, env, _ctx, p) => {
 };
 
 // --- route table ---------------------------------------------------------
+// ---------------------------------------------------------------------------
+// #631 Phase B: public demo click-to-render (a SEEDED shot -> one LTX i2v clip on the standing Vultr box
+// via the demo-scoped local-gpu door) + a capped OSS assistant. Every handler double-guards isDemoMode
+// (defense in depth: the gate already denies these routes off-demo, but a non-demo deploy must never
+// expose them even if the gate were misconfigured). Bounded by construction; see src/demo-render.ts.
+// ---------------------------------------------------------------------------
+
+const DEMO_ASSISTANT_DEFAULT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEMO_ASSISTANT_NOTE =
+  "running on a free open-weights model here -- not as sharp as the full studio brain; run your own Vivijure for the good one.";
+
+function demoIp(req: Request): string {
+  return req.headers.get("cf-connecting-ip") || "global";
+}
+
+function positiveIntVar(v: string | undefined, dflt: number): number {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : dflt;
+}
+
+function demoRenderCaps(env: Env): DemoRenderCaps {
+  return {
+    ...DEFAULT_DEMO_RENDER_CAPS,
+    perIpDaily: positiveIntVar(env.DEMO_RENDER_PER_IP_DAILY, DEFAULT_DEMO_RENDER_CAPS.perIpDaily),
+    globalDaily: positiveIntVar(env.DEMO_RENDER_GLOBAL_DAILY, DEFAULT_DEMO_RENDER_CAPS.globalDaily),
+    queueDepth: positiveIntVar(env.DEMO_RENDER_QUEUE_DEPTH, DEFAULT_DEMO_RENDER_CAPS.queueDepth),
+  };
+}
+
+function demoChatCaps(env: Env): DemoChatCaps {
+  return {
+    ...DEFAULT_DEMO_CHAT_CAPS,
+    perIpDaily: positiveIntVar(env.DEMO_CHAT_PER_IP_DAILY, DEFAULT_DEMO_CHAT_CAPS.perIpDaily),
+    globalDaily: positiveIntVar(env.DEMO_CHAT_GLOBAL_DAILY, DEFAULT_DEMO_CHAT_CAPS.globalDaily),
+  };
+}
+
+/** Is the demo render backend armed? DEMO_RENDER_ENABLED="true" AND the demo-scoped local-gpu door is
+ *  bound. Post-credits the operator unsets the var (or unbinds the door) -> renders paused, no outage. */
+function demoRenderEnabled(env: Env): boolean {
+  return (env.DEMO_RENDER_ENABLED || "").trim() === "true"
+    && !!resolveFetcher(env as unknown as Record<string, unknown>, "MODULE_LOCAL_GPU");
+}
+
+/** The DemoBackend adapter over the demo-scoped local-gpu motion.backend door. The box reads the seeded
+ *  keyframe from its OWN R2 prefix (by key) and writes the clip there, returning clip_key; the demo never
+ *  touches R2. Submit/poll mirror the module async contract (invokeModule/pollModule). */
+function demoBackend(env: Env): DemoBackend {
+  const envRec = env as unknown as Record<string, unknown>;
+  return {
+    async reachable() {
+      return demoRenderEnabled(env);
+    },
+    async submit(r, jobId) {
+      const f = resolveFetcher(envRec, "MODULE_LOCAL_GPU");
+      if (!f) return { ok: false, error: "local-gpu door not bound" };
+      const input: MotionBackendInput = {
+        shot_id: jobId,
+        keyframe_url: r.keyframe_url,
+        keyframe_key: r.keyframe_key,
+        prompt: r.prompt,
+        seconds: r.seconds,
+      };
+      const resp = await invokeModule<MotionBackendInput, MotionBackendOutput>(f, {
+        hook: "motion.backend", input, config: { quality: r.quality }, context: { project: "demo", job_id: jobId },
+      });
+      if (resp.ok && (resp as { pending?: boolean }).pending) return { ok: true, poll: (resp as { poll: string }).poll };
+      if (!resp.ok) return { ok: false, error: (resp as { error?: string }).error || "submit failed" };
+      return { ok: false, error: "local-gpu returned no poll token" };
+    },
+    async poll(token) {
+      const f = resolveFetcher(envRec, "MODULE_LOCAL_GPU");
+      if (!f) return { ok: false, error: "local-gpu door not bound" };
+      const p = await pollModule<MotionBackendOutput>(f, { poll: token });
+      if (p.ok && (p as { pending?: boolean }).pending) return { ok: true, pending: true };
+      if (p.ok) {
+        const clip = (p as { output: MotionBackendOutput }).output?.clip_key;
+        return clip ? { ok: true, clipKey: clip } : { ok: false, error: "backend returned no clip_key" };
+      }
+      return { ok: false, error: (p as { error?: string }).error || "poll failed" };
+    },
+  };
+}
+
+function demoRenderDeps(env: Env): DemoRenderDeps {
+  return {
+    db: env.DB as unknown as D1Like,
+    backend: demoBackend(env),
+    artifactOrigin: (env.DEMO_ARTIFACT_ORIGIN || DEMO_MEDIA_ORIGIN).trim(),
+    caps: demoRenderCaps(env),
+    now: Date.now(),
+  };
+}
+
+const hDemoMenu: Handler = async (req, env) => {
+  if (!isDemoMode(env)) throw notFound("route");
+  const scenes = await listRenderables(env.DB as unknown as D1Like);
+  return json({ available: demoRenderEnabled(env), scenes });
+};
+
+const hDemoRender: Handler = async (req, env) => {
+  if (!isDemoMode(env)) throw notFound("route");
+  // Per-IP BURST limiter (the existing spend primitive, fail-closed) on top of the per-day submission caps.
+  const rl = await enforceSpendLimit(req, env);
+  if (!rl.ok) return json({ error: rl.message }, rl.status);
+  const b = await readBody<{ scene?: string }>(req);
+  const r = await submitDemoRender(demoRenderDeps(env), {
+    renderableId: String(b.scene || ""), ip: demoIp(req), jobId: crypto.randomUUID(),
+  });
+  if (!r.ok) {
+    const status = r.reason === "paused" ? 503 : r.reason === "unknown-scene" ? 400 : 429;
+    return json({ error: r.message, reason: r.reason }, status);
+  }
+  return json({ jobId: r.jobId, status: r.status, position: r.position, waitSeconds: r.waitSeconds });
+};
+
+const hDemoPoll: Handler = async (req, env, ctx, p) => {
+  if (!isDemoMode(env)) throw notFound("route");
+  const r = await pollDemoRender(demoRenderDeps(env), p.id);
+  if (r.status === "not_found") throw notFound("render");
+  return json(r);
+};
+
+const hDemoChat: Handler = async (req, env) => {
+  if (!isDemoMode(env)) throw notFound("route");
+  const b = await readBody<{ message?: string }>(req);
+  const model: DemoChatModel = async ({ system, user, maxTokens }) => {
+    const modelId = env.DEMO_ASSISTANT_MODEL || DEMO_ASSISTANT_DEFAULT_MODEL;
+    const out = await aiRun(env, modelId, {
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      max_tokens: maxTokens,
+    });
+    const resp = (out as { response?: unknown }).response;
+    return typeof resp === "string" ? resp : "";
+  };
+  const r = await runDemoChat(
+    { db: env.DB as unknown as D1Like, model, caps: demoChatCaps(env), now: Date.now() },
+    { ip: demoIp(req), message: String(b.message || "") },
+  );
+  if (!r.ok) {
+    const status = r.reason === "exhausted" ? 429 : r.reason === "error" ? 503 : 400;
+    return json({ error: r.message, reason: r.reason, model: "oss" }, status);
+  }
+  return json({ reply: r.reply, model: "oss" });
+};
+
 const API_ROUTES: Route[] = [
+  { method: "GET",    pattern: "/api/demo/menu",                       handler: hDemoMenu },
+  { method: "POST",   pattern: "/api/demo/render",                     handler: hDemoRender },
+  { method: "GET",    pattern: "/api/demo/render/:id",                 handler: hDemoPoll },
+  { method: "POST",   pattern: "/api/demo/chat",                       handler: hDemoChat },
   { method: "GET",    pattern: "/api/storyboard/projects",                        handler: hListProjects },
   { method: "POST",   pattern: "/api/storyboard/projects",                        handler: hCreateProject },
   { method: "GET",    pattern: "/api/storyboard/projects/:id",                    handler: hGetProject },
@@ -1423,7 +1581,15 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
       return json(
         modulesResponse(modules, renderConfigProjection(), {
           dispatch: !!env.MODULE_DISPATCH,
-          ...(isDemoMode(env) ? { readonly: true } : {}),
+          ...(isDemoMode(env)
+            ? {
+                readonly: true,
+                render: { available: demoRenderEnabled(env) },
+                // Assistant capability only when the AI binding is present (Phase B provisioned); a
+                // Phase-A demo (no AI) simply omits it, so the UI never advertises a chat it cannot serve.
+                ...((env as { AI?: unknown }).AI ? { assistant: { model: "oss", note: DEMO_ASSISTANT_NOTE } } : {}),
+              }
+            : {}),
         }),
       );
     }
