@@ -1165,3 +1165,8 @@ body.sw-open .sw-dock { transform: none; }
   35% { background: color-mix(in srgb, var(--accent-2) 34%, var(--panel)); }
   100% { background: color-mix(in srgb, var(--accent-2) 14%, var(--panel)); }
 }
+.readonly-source {
+  flex: 0 0 auto; color: var(--ink); text-decoration: underline; white-space: nowrap;
+  font-weight: 600; opacity: 0.9;
+}
+.readonly-source:hover { opacity: 1; color: var(--accent); }
