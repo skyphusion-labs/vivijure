@@ -3,6 +3,23 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.18.1
+
+**advanceToClips loud-degrades a partial keyframe set, no silent half-film (#622).** PATCH. The
+normal-completion sibling of the v0.17.5 (#619) stall fix. `advanceToClips` failed the film ONLY when
+a keyframe module matched none of the requested shots; a PARTIAL set (some matched, some missing)
+advanced to clips built from the matched shots alone, silently rebasing every downstream counter to
+the smaller total so the film reported a clean `complete` over a half-set -- reachable whenever a
+keyframe module honestly returns fewer keyframes than scenes (e.g. a per-shot content refusal). A
+partial set is not a schema violation (a module can legitimately complete short), so the fix mirrors
+the #619 keyframe-ceiling contract: it now delivers the scenes that rendered but LOUDLY, recording the
+drop on the existing `keyframes_incomplete` field ({adopted, expected, dropped}), emitting the
+`film.keyframes_incomplete` structured event, and surfacing the degrade on `summarizeFilm` + the poll
+view, so the film never reports a clean complete over the rebased total. The all-missing case still
+hard-fails loud; the record is guarded so the ceiling-recovery path never double-records. Scope:
+only the module-completion path (`advanceToClips`); `startFilmFromKeyframes` (a caller-supplied
+keyframe subset = explicit intent) is unchanged. Ships via tag deploy.
+
 ## v0.18.0
 
 **Welcome/marketing page moves off the Worker to vivijure.com (#617).** MINOR. The public marketing
