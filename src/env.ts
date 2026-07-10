@@ -97,6 +97,23 @@ export interface Env {
   AUTH_MODE?: string;
   STUDIO_API_TOKEN?: string;
 
+  // #631 Phase B public demo render + assistant (demo deploys ONLY; UNBOUND/absent on prod + self-host,
+  // so no code path here can reach the box or the model off-demo). DEMO_RENDER_ENABLED "true" arms the
+  // seeded click-to-render menu (also needs MODULE_LOCAL_GPU bound to the demo-scoped local-gpu door);
+  // unset/"false" => renders paused (the swappable-backend HORIZON state, box dies ~2026-08-04).
+  DEMO_RENDER_ENABLED?: string;
+  // The isolated demo R2 PUBLIC origin the box writes rendered clips under; the demo builds the artifact
+  // URL as <origin>/<clip_key> (the demo worker binds NO R2). Enumerated in the demo media CSP (no wildcard).
+  DEMO_ARTIFACT_ORIGIN?: string;
+  // The OSS assistant model id (Workers AI llama-3.3-70b class) + optional cap overrides. Numeric strings
+  // parsed with the shipped defaults (demo-render.ts / demo-chat.ts) when unset/garbage.
+  DEMO_ASSISTANT_MODEL?: string;
+  DEMO_RENDER_PER_IP_DAILY?: string;
+  DEMO_RENDER_GLOBAL_DAILY?: string;
+  DEMO_RENDER_QUEUE_DEPTH?: string;
+  DEMO_CHAT_PER_IP_DAILY?: string;
+  DEMO_CHAT_GLOBAL_DAILY?: string;
+
   // Dev-only planner AI mock (#411 dev-parity). When "1"/"true", planStoryboard/refineStoryboard
   // return deterministic canned completions instead of a live model call, so the planner re-prompt
   // flow is drivable in the fully-local module-bound dev env (no AI binding). UNSET in prod; the
