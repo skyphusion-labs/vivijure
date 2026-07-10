@@ -5,6 +5,15 @@
 // so top-level declarations are visible across files in load order. The
 // <script> tag order in planner.html is significant -- do not reorder.
 
+
+// artifactUrl: an artifact reference is normally an R2 key served through the studio /api/artifact/
+// presign route. The public demo studio (#625) has no R2 binding and seeds render rows whose
+// output_key is an ABSOLUTE showcase URL; return such a URL verbatim so the film plays straight from
+// assets.skyphusion.net. For a normal relative key this is byte-identical to before, so prod behavior
+// is unchanged (a projection that also accepts an absolute artifact URL).
+function artifactUrl(key) {
+  return /^https?:\/\//i.test(key) ? key : "/api/artifact/" + key;
+}
 function buildHistoryRow(r, childrenByParent) {
   const li = document.createElement("li");
   li.className = "planner-history-item";
@@ -327,7 +336,7 @@ function buildHistoryRow(r, childrenByParent) {
 
   if (r.output_key) {
     const dl = document.createElement("a");
-    dl.href = "/api/artifact/" + r.output_key;
+    dl.href = artifactUrl(r.output_key);
     dl.download = (r.project || "silent") + ".mp4";
     dl.className = "planner-history-action";
     dl.textContent = "download";
@@ -425,7 +434,7 @@ function buildHistoryRow(r, childrenByParent) {
     const playerWrap = document.createElement("div");
     playerWrap.className = "planner-history-player";
     const video = document.createElement("video");
-    video.src = "/api/artifact/" + r.output_key;
+    video.src = artifactUrl(r.output_key);
     video.controls = true;
     video.preload = "metadata";
     video.playsInline = true;
