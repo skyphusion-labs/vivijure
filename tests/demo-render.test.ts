@@ -143,6 +143,7 @@ describe("demo-render submit + queue", () => {
     const r1 = await submitDemoRender(deps(st, be, 1000), { renderableId: SCENE.id, ip: "1.1.1.1", jobId: "j1" });
     const r2 = await submitDemoRender(deps(st, be, 2000), { renderableId: SCENE.id, ip: "2.2.2.2", jobId: "j2" });
     expect(r1.ok && r1.status).toBe("running");
+    expect(r1.ok && r1.position).toBe(0);                // the running job is AT the front, not waiting
     expect(r2.ok && r2.status).toBe("queued");         // box busy -> queued, not a 2nd box submit
     expect(be.submits).toBe(1);                          // only ONE job on the box
     expect(r2.ok && r2.position).toBe(1);                // one ahead (the running job)

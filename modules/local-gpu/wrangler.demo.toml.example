@@ -1,0 +1,23 @@
+# vivijure-demo-local-gpu (#631 Phase B): a DEMO-SCOPED instance of the local-gpu motion.backend door,
+# bound into the public demo core (vivijure-demo) as MODULE_LOCAL_GPU. SAME code as the prod door; the
+# ONLY difference is the backend it points at -- the standing demo GPU box via its stable NAMED tunnel.
+#
+# Rendered to wrangler.demo.toml (gitignored) and deployed SEPARATELY from the prod local-gpu module:
+#   wrangler deploy -c modules/local-gpu/wrangler.demo.toml
+#   printf %s "$(cat <token-file>)" | wrangler secret put LOCAL_BACKEND_TOKEN -c modules/local-gpu/wrangler.demo.toml
+#
+# LOCAL_BACKEND_URL is a public custom-domain hostname (token-protected), so it rides as a [vars] entry;
+# LOCAL_BACKEND_TOKEN is a wrangler SECRET put from a chmod-600 file (never echoed, never in CI). No public
+# surface (workers_dev=false, no route): /invoke is reachable ONLY via the core's service binding.
+name = "vivijure-demo-local-gpu"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[observability]
+enabled = true
+
+[vars]
+# The demo box's stable named-tunnel hostname (NOT a quick tunnel -- must survive box reboots).
+LOCAL_BACKEND_URL = "https://REPLACE_WITH_DEMO_DOOR_HOSTNAME"
