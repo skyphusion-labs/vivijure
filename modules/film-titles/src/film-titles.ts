@@ -68,3 +68,43 @@ export function passthroughOutput(input: FilmFinishInput, reason: string, opts: 
     ...(opts.degraded ? { degraded: reason } : {}),
   };
 }
+
+// --- async job+poll (#602) ---------------------------------------------------------------------
+// A film.finish encode (title/credit cards) can outlast a Worker request budget on a long film. The
+// module submits the film to the video-finish container's async route and returns a poll token, so the
+// CORE drives submit+poll across ticks (mirroring the GPU finish satellites) instead of one module
+// holding a long request open. The token is opaque to the core and decoded only here.
+
+export interface FinishPoll {
+  jobId: string;       // the container's background job id
+  filmKey: string;     // the input film key (the fallback result key)
+  outputKey: string;   // the deterministic key the container writes the carded film to
+  submittedAt: number; // epoch ms; measures the container "job not found" (restart) grace window
+}
+
+export function encodePoll(s: FinishPoll): string {
+  return btoa(JSON.stringify(s));
+}
+
+export function decodePoll(token: string): FinishPoll | null {
+  try {
+    const o = JSON.parse(atob(token)) as FinishPoll;
+    if (o && typeof o.jobId === "string" && typeof o.filmKey === "string" && typeof o.outputKey === "string") {
+      return { jobId: o.jobId, filmKey: o.filmKey, outputKey: o.outputKey, submittedAt: typeof o.submittedAt === "number" ? o.submittedAt : 0 };
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+// How long after submit a container "job not found" is treated as a restart race (keep polling) vs a
+// real drop (fail, so the core re-dispatches or degrades). The container job store is in-process, so a
+// container restart drops the job; the deterministic output key makes a core re-run idempotent.
+export const CONTAINER_NOTFOUND_GRACE_MS = 30_000;
+
+/** Map the container's completed /film-titles result to a FilmFinishOutput. A real write lands the
+ *  carded film at outputKey (result.key echoes it); a missing key falls back to the deterministic
+ *  outputKey the core presigned, never the raw input (a card WAS applied). */
+export function completedOutput(result: { key?: string } | null, st: FinishPoll): FilmFinishOutput {
+  const filmKey = result && typeof result.key === "string" && result.key.length > 0 ? result.key : st.outputKey;
+  return { film_key: filmKey, applied: ["film-titles"] };
+}

@@ -791,6 +791,47 @@ export interface RunFilmFinishResult {
                      // caller must NOT finalize (keep phase re-enterable + keep the assembled film_key)
 }
 
+// #602 async job+poll: a film.finish step whose encode outlasts a request budget is submitted ONCE and
+// polled ACROSS TICKS with the persisted module poll token, so no request holds it open. This bounds
+// how many TERMINAL poll/submit failures a single step re-dispatches (the deterministic output key
+// makes a re-run idempotent) before it soft-degrades -- ships the film UNCARDED, never fails it (#190).
+export const FILM_FINISH_STEP_MAX_ATTEMPTS = 3;
+// The async output PUT is presigned ONCE per submit and must outlive the whole single-step encode
+// (polled across ticks), unlike the synchronous path's short-lived per-request presign. Sized above the
+// driver's ~90-min phase ceiling backstop so a long single encode's PUT never expires mid-flight.
+export const FILM_FINISH_ASYNC_PRESIGN_TTL_SECONDS = 7200;
+
+/** Presign the per-step transport (film GET + carded-film PUT + optional .srt sidecar PUT) and build the
+ *  FilmFinishInput seed. Shared by the synchronous dispatchChain path (ttl 1800) and the async submit
+ *  path (a long ttl, since the PUT must outlive a multi-tick encode). The module is credentialless: it
+ *  only ever sees these presigned URLs, never R2 creds. */
+async function filmFinishSeed(
+  env: Env,
+  input: RunFilmFinishInput,
+  inKey: string,
+  outKey: string,
+  captions: FilmFinishInput["captions"],
+  ttl = 1800,
+): Promise<FilmFinishInput> {
+  const sidecarKey = outKey.replace(/\.mp4$/i, "") + ".srt";
+  const [videoUrl, outputUrl, sidecarUrl] = await Promise.all([
+    presignR2Get(env, inKey, ttl),
+    presignR2Put(env, outKey, ttl),
+    presignR2Put(env, sidecarKey, ttl),
+  ]);
+  return {
+    film_key: inKey,
+    video_url: videoUrl,
+    output_url: outputUrl,
+    output_key: outKey,
+    title: input.film_titles?.title,
+    credits: input.film_titles?.credits,
+    captions,
+    sidecar_url: sidecarUrl,
+    sidecar_key: sidecarKey,
+  };
+}
+
 /** Dispatch ONE film.finish module against DETERMINISTIC keys: read inKey, write outKey (plus its .srt).
  *  #600: a deterministic outKey is what makes a completed step ADOPTABLE from R2 on a later tick instead
  *  of being re-encoded under a fresh random key. Reuses dispatchChain for a single-element chain so the
@@ -805,23 +846,7 @@ async function runFilmFinishStep(
   captions: FilmFinishInput["captions"],
 ): Promise<{ film_key: string; applied: string[]; errors: string[]; steps?: string[]; degraded?: string }> {
   const envRec = env as unknown as Record<string, unknown>;
-  const sidecarKey = outKey.replace(/\.mp4$/i, "") + ".srt";
-  const [videoUrl, outputUrl, sidecarUrl] = await Promise.all([
-    presignR2Get(env, inKey, 1800),
-    presignR2Put(env, outKey, 1800),
-    presignR2Put(env, sidecarKey, 1800),
-  ]);
-  const seed: FilmFinishInput = {
-    film_key: inKey,
-    video_url: videoUrl,
-    output_url: outputUrl,
-    output_key: outKey,
-    title: input.film_titles?.title,
-    credits: input.film_titles?.credits,
-    captions,
-    sidecar_url: sidecarUrl,
-    sidecar_key: sidecarKey,
-  };
+  const seed = await filmFinishSeed(env, input, inKey, outKey, captions);
   // Single-element chain: dispatchChain gives the config-clamp + degrade/error handling for free;
   // nextInput is never called with one module.
   const result = await dispatchChain<FilmFinishInput, FilmFinishOutput>(
@@ -873,6 +898,13 @@ export async function runFilmFinish(
     // callers that do not persist per tick). `now` is injectable for tests.
     dispatched?: Record<string, number>;
     persistDispatch?: (key: string, ts: number) => Promise<void>;
+    // #602 async job+poll: the job`s persisted per-step token map (deterministic key -> in-flight module
+    // poll token) + a terminal-failure counter (deterministic key -> count) + a persist callback (token
+    // null => forget the step`s token). Providing persistPoll ENABLES the submit+poll-across-ticks path;
+    // absent => the legacy synchronous dispatchChain path (unit tests / non-persisting callers).
+    polls?: Record<string, string>;
+    attempts?: Record<string, number>;
+    persistPoll?: (key: string, token: string | null) => Promise<void>;
     now?: number;
   },
 ): Promise<RunFilmFinishResult> {
@@ -894,40 +926,117 @@ export async function runFilmFinish(
   const degradeParts: string[] = [];
   let lastSteps: string[] | undefined;
   const now = opts?.now ?? Date.now();
+  // persistPoll present => the caller persists per tick, so drive the module async (submit once, poll
+  // across ticks). Absent => the synchronous dispatchChain step (behavior-identical to pre-#602).
+  const asyncDrive = !!opts?.persistPoll;
   let complete = true;
+
+  // Soft-degrade ONE step (ship the film uncarded, #190) without failing the render: record the reason,
+  // forget any in-flight token, and let the chain continue from the CURRENT (uncarded) key.
+  const softDegradeStep = async (outKey: string, reason: string): Promise<void> => {
+    errors.push(reason);
+    degradeParts.push(reason);
+    if (opts?.dispatched) delete opts.dispatched[outKey];
+    if (asyncDrive) await opts!.persistPoll!(outKey, null);
+  };
+  // Fold a completed film.finish output into the chain (advance to the carded key, record what ran).
+  // Returns false when the output VIOLATES the contract (the caller soft-degrades instead of folding a
+  // malformed key forward -- a bare/absent key would 404 the next step`s GET).
+  const foldOutput = (module: RegisteredModule, out: FilmFinishOutput, outKey: string): boolean => {
+    if (hookOutputViolation(module.name, "film.finish", out)) return false;
+    applied.push(module.name);
+    if (Array.isArray(out.applied)) lastSteps = out.applied;
+    if (typeof out.degraded === "string" && out.degraded.length > 0) degradeParts.push(`${module.name}: ${out.degraded}`);
+    curKey = typeof out.film_key === "string" && out.film_key.length > 0 ? out.film_key : outKey;
+    return true;
+  };
+
   for (let n = 0; n < steps.length; n++) {
     const module = steps[n];
     const outKey = base + "-ff" + n + ".mp4";
+
+    // AUTHORITATIVE completion (#122/#141/#600): this step`s deterministic artifact is already in R2 --
+    // a prior attempt completed (its request/encode outlived the poll), or the container PUT it between
+    // polls. Adopt it (REUSE, never a fake applied run, #583) and thread it forward.
     if (await r2ObjectExists(env, outKey)) {
-      // ADOPT: this step completed in a prior attempt (its deterministic artifact is in R2). Reuse it and
-      // thread it forward; record it as adopted, NEVER a fake applied run (#583).
       adopted.push(module.name);
       curKey = outKey;
+      if (opts?.polls) delete opts.polls[outKey];
+      if (opts?.dispatched) delete opts.dispatched[outKey];
+      if (opts?.attempts) delete opts.attempts[outKey];
       continue;
     }
-    // #600 in-flight guard: the key is NOT in R2. If a prior tick dispatched this step within the window,
-    // it is still encoding -- do NOT re-dispatch (the advance lease TTL 300s < an ~8-min encode and the
-    // advance can fail open, so an unguarded re-entry would fire a DUPLICATE encode). Stop the chain (the
-    // next step needs this one`s output); resume next tick, adopting once the encode lands.
-    const lastTs = opts?.dispatched?.[outKey];
-    if (lastTs !== undefined && now - lastTs < FILM_FINISH_INFLIGHT_WINDOW_SECONDS * 1000) {
-      complete = false;
-      break;
+
+    if (!asyncDrive) {
+      // --- legacy synchronous path (unchanged): #600 in-flight guard + one dispatchChain step. ---
+      const lastTs = opts?.dispatched?.[outKey];
+      if (lastTs !== undefined && now - lastTs < FILM_FINISH_INFLIGHT_WINDOW_SECONDS * 1000) { complete = false; break; }
+      await opts?.persistDispatch?.(outKey, now);
+      const r = await runFilmFinishStep(env, input, module, curKey, outKey, captions);
+      if (opts?.dispatched) delete opts.dispatched[outKey];
+      errors.push(...r.errors);
+      applied.push(...r.applied);
+      if (r.steps) lastSteps = r.steps;
+      if (r.degraded) degradeParts.push(r.degraded);
+      curKey = r.film_key;
+      continue;
     }
-    // Persist the dispatch BEFORE firing it, so a request killed mid-encode still leaves the guard set
-    // (the #583 artifact-first crash-safety instinct); the cost is one stale-window wait if it dies.
-    await opts?.persistDispatch?.(outKey, now);
-    const r = await runFilmFinishStep(env, input, module, curKey, outKey, captions);
-    // The dispatch RETURNED, so this step is NOT in flight -- clear its guard marker. A step that DIED
-    // mid-encode never reaches here, so its marker persists and guards the next tick. A returned step is
-    // handled by adoption (real write -> outKey present) or by a cheap re-run (noop -> outKey absent, no
-    // encode), so a lingering marker on a noop must not stall the chain for a full window.
+
+    // --- async submit+poll path (#602) ---
+    const fetcher = resolveFetcher(envRec, module.binding);
+    if (!fetcher) { await softDegradeStep(outKey, `${module.name}: not reachable`); continue; }
+    const config = validateConfig(module.config_schema, input.film_finish_config?.[module.name]);
+    const context = { project: input.project, job_id: input.job_id };
+    const token = opts?.polls?.[outKey];
+
+    if (token) {
+      // An async job is in flight for this step: poll it.
+      const p = await pollModule<FilmFinishOutput>(fetcher, { poll: token });
+      if (p.ok && !(p as { pending?: boolean }).pending) {
+        const out = (p as { output: FilmFinishOutput }).output;
+        if (!foldOutput(module, out, outKey)) { await softDegradeStep(outKey, `${module.name}: ${hookOutputViolation(module.name, "film.finish", out)}`); continue; }
+        if (opts?.dispatched) delete opts.dispatched[outKey];
+        if (opts?.attempts) delete opts.attempts[outKey];
+        await opts!.persistPoll!(outKey, null);
+        continue;
+      }
+      if (p.ok) { complete = false; break; } // still encoding -> resume next tick
+      // Terminal poll failure (container job failed / not found past its restart grace / bad token).
+      // Bounded re-dispatch: forget the token so next tick re-submits (idempotent), until the cap; then
+      // soft-degrade the step (ship uncarded, #190). R2 adoption still short-circuits if it lands.
+      const attempts = (opts?.attempts?.[outKey] ?? 0) + 1;
+      if (opts?.attempts) opts.attempts[outKey] = attempts;
+      if (opts?.dispatched) delete opts.dispatched[outKey];
+      await opts!.persistPoll!(outKey, null);
+      if (attempts >= FILM_FINISH_STEP_MAX_ATTEMPTS) { await softDegradeStep(outKey, `${module.name}: ${p.error} (after ${attempts} attempts)`); continue; }
+      complete = false; break; // re-submit next tick (bounded)
+    }
+
+    // No token: SUBMIT. An async module returns { pending, poll }; a sync (or fallback) module or a
+    // pre-#602 container returns the output directly (or a soft-degrade passthrough).
+    // #600 in-flight guard (async flavor): a recent dispatch with NO token means either a sync-fallback
+    // module is still holding a request open on this step, or an async submit whose request died before
+    // persisting its token -- do NOT fire a DUPLICATE encode; resume next tick (adopt once the
+    // deterministic key lands, or re-submit past the window).
+    const lastTs = opts?.dispatched?.[outKey];
+    if (lastTs !== undefined && now - lastTs < FILM_FINISH_INFLIGHT_WINDOW_SECONDS * 1000) { complete = false; break; }
+    await opts?.persistDispatch?.(outKey, now); // crash-safe #600 marker: guards a sync-fallback encode
+    const seed = await filmFinishSeed(env, input, curKey, outKey, captions, FILM_FINISH_ASYNC_PRESIGN_TTL_SECONDS);
+    const r = await invokeModule<FilmFinishInput, FilmFinishOutput>(fetcher, { hook: "film.finish", input: seed, config, context });
+    if (r.ok && (r as { pending?: boolean }).pending) {
+      // Accepted async: persist the token (it supersedes the dispatch marker) and resume next tick.
+      await opts!.persistPoll!(outKey, (r as { poll: string }).poll);
+      if (opts?.dispatched) delete opts.dispatched[outKey];
+      complete = false; break;
+    }
     if (opts?.dispatched) delete opts.dispatched[outKey];
-    errors.push(...r.errors);
-    applied.push(...r.applied);              // a module that invoked ok is recorded even on a degrade (#207)
-    if (r.steps) lastSteps = r.steps;        // keep the last step output detail (applied / passthrough / noop)
-    if (r.degraded) degradeParts.push(r.degraded);
-    curKey = r.film_key;                     // follow the module key: outKey on a real write, inKey on noop/degrade
+    if (r.ok && "output" in r) {
+      const out = (r as { output: FilmFinishOutput }).output;
+      if (!foldOutput(module, out, outKey)) await softDegradeStep(outKey, `${module.name}: ${hookOutputViolation(module.name, "film.finish", out)}`);
+      continue;
+    }
+    // Submit ok:false (a deterministic input/config reject): soft-degrade this step (#190).
+    await softDegradeStep(outKey, `${module.name}: ${(r as { error?: string }).error ?? "invoke failed"}`);
   }
   const degraded = degradeParts.length > 0 ? degradeParts.join("; ") : undefined;
   return { ran: true, film_key: curKey, applied, adopted, errors, steps: lastSteps, degraded, complete };
@@ -938,6 +1047,8 @@ export async function runFilmFinish(
 async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<boolean> {
   if (!job.film_key) return true; // nothing to card -> complete
   job.film_finish_dispatched ??= {};
+  job.film_finish_polls ??= {};
+  job.film_finish_attempts ??= {};
   const r = await runFilmFinish(env, {
     film_key: job.film_key,
     scenes: job.scenes,
@@ -950,6 +1061,15 @@ async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredMo
   }, preModules, {
     dispatched: job.film_finish_dispatched,
     persistDispatch: async (key, ts) => { job.film_finish_dispatched![key] = ts; await putFilm(env, job); },
+    // #602 async job+poll: persist the per-step module poll token + terminal-failure count so submit and
+    // poll span ticks (a long single step no longer re-burns each tick). null token => forget the step.
+    polls: job.film_finish_polls,
+    attempts: job.film_finish_attempts,
+    persistPoll: async (key, token) => {
+      if (token === null) delete job.film_finish_polls![key];
+      else job.film_finish_polls![key] = token;
+      await putFilm(env, job);
+    },
   });
   if (!r.ran) return true; // no film.finish module installed -> leave job untouched (identical to pre-refactor)
   if (r.errors.length > 0) {

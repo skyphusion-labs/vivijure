@@ -39,6 +39,11 @@ export type InvokeResponse<O = unknown> =
   | { ok: true; output: O }
   | { ok: true; pending: true; poll: string }
   | { ok: false; error: string };
+export interface PollRequest { poll: string; }
+export type PollResponse<O = unknown> =
+  | { ok: true; pending: true }
+  | { ok: true; output: O }
+  | { ok: false; error: string };
 
 // film.finish input (vivijure-module/2), the SUBTITLE view. The core hands the assembled+muxed film
 // and PRESIGNED URLs (it owns the R2 S3 creds; this module stays credentialless and just forwards to

@@ -136,6 +136,15 @@ export interface FilmJob {
   // NOT re-dispatched, so a killed leaseholder + the 300s advance-lease TTL (shorter than an ~8-min
   // encode) + the fail-open advance path cannot fire a DUPLICATE encode of the same step each tick.
   film_finish_dispatched?: Record<string, number>;
+  // #602 async job+poll: a film.finish module can return { pending, poll } when its work outlasts a
+  // request budget (a long subtitle burn / card concat). The core drives submit+poll ACROSS TICKS with
+  // the persisted token, so no single request holds the encode open. film_finish_polls maps the step`s
+  // deterministic output key -> that step`s in-flight module poll token; film_finish_attempts counts a
+  // step`s TERMINAL poll/submit failures, bounding re-dispatch before the step soft-degrades (ships the
+  // film UNCARDED, #190 fail-safe -- a card miss never fails a fully-rendered film). R2 presence at the
+  // step key stays authoritative on completion (adopt), exactly as the #600 synchronous path.
+  film_finish_polls?: Record<string, string>;
+  film_finish_attempts?: Record<string, number>;
   // Loud, structured degrade when the video-finish tier (VIDEO_FINISH_VPC) is UNAVAILABLE at
   // assemble/mux -- the binding is unbound, or the container/tunnel was unreachable after the bounded
   // retry. The film COMPLETES (never hard-fails after the GPU spend, #519) delivering what was rendered:

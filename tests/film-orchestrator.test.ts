@@ -1658,6 +1658,122 @@ function moduleFetcher(
   };
 }
 
+// #602 async job+poll END-TO-END through advanceFilmJob: a film.finish module that returns
+// { pending, poll } (its container encode outlasts a request budget) is SUBMITTED once and POLLED across
+// ticks, never re-burning the encode each tick. The film finalizes only when the poll completes. This is
+// the residual #600 did not cover: a SINGLE step that alone exceeds one request budget.
+describe("applyFilmFinish async submit+poll across ticks (#602)", () => {
+  const FILM_ID = "film-finish-async";
+  const MUX_KEY = `renders/${FILM_ID}/film-audio.mp4`;
+  const FF0_KEY = `renders/${FILM_ID}/film-audio-ff0.mp4`;
+  const MANIFEST = {
+    name: "film-titles", version: "0.2.0", api: "vivijure-module/2", hooks: ["film.finish"],
+    provides: [{ id: "film-titles", label: "Title + credit cards" }], config_schema: {},
+    ui: { section: "film.finish", order: 10 },
+  };
+
+  // A stateful film.finish module: /invoke -> pending+poll; /poll -> pending until `completeAfter`
+  // polls, then the completed output at the deterministic FF0 key.
+  function asyncEnv(completeAfter: number) {
+    _resetModuleDiscoveryCache();
+    const job = {
+      film_id: FILM_ID, project: "p", scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+      phase: "mux" as const, silent_film_key: `renders/${FILM_ID}/film-silent.mp4`,
+      audio_key: `renders/${FILM_ID}/audio.mp4`, mux_output_key: MUX_KEY,
+      film_titles: { title: { text: "NEON HALFLIFE" } }, created_at: 0,
+    };
+    let stored = JSON.stringify(job);
+    let polls = 0;
+    const j = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    const env: Record<string, unknown> = {
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey(FILM_ID) ? { text: async () => stored } : null),
+        head: async () => null, // FF0 never appears in R2: completion is driven by the POLL, not adoption
+        put: async (key: string, val: string) => { if (key === filmJobDocKey(FILM_ID)) stored = val; },
+      },
+      VIDEO_FINISH_VPC: { fetch: async () => j({ ok: true, key: MUX_KEY }) }, // mux container
+      MODULE_FILM_TITLES: {
+        fetch: async (input: Request | string) => {
+          const url = typeof input === "string" ? input : input.url;
+          if (url.endsWith("/module.json")) return j(MANIFEST);
+          if (url.endsWith("/poll")) {
+            polls += 1;
+            return polls >= completeAfter
+              ? j({ ok: true, output: { film_key: FF0_KEY, applied: ["film-titles"] } })
+              : j({ ok: true, pending: true });
+          }
+          return j({ ok: true, pending: true, poll: "tok-ff0" }); // /invoke -> accepted async
+        },
+      },
+      R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+    };
+    return { env: env as unknown as Env, read: () => JSON.parse(stored) as FilmJob, pollCount: () => polls };
+  }
+
+  it("submits on tick 1 (NOT finalized), persists the poll token, resumes next tick", async () => {
+    const { env, read } = asyncEnv(99);
+    const r = await advanceFilmJob(env, FILM_ID);
+    expect(r?.job.phase).not.toBe("done");                 // still encoding -> not finalized
+    expect(read().film_finish_polls?.[FF0_KEY]).toBe("tok-ff0"); // token persisted for the next tick
+    expect(r?.job.film_finish?.applied ?? []).toEqual([]); // nothing folded yet
+    expect(r?.job.film_key).toBe(MUX_KEY);                 // assembled key kept (stable deterministic base)
+  });
+
+  it("polls across ticks and finalizes to the carded film once the job COMPLETES", async () => {
+    const { env, read } = asyncEnv(2); // completes on the 2nd poll
+    await advanceFilmJob(env, FILM_ID);          // tick 1: submit -> pending
+    let doc = read();
+    expect(doc.phase).not.toBe("done");
+    await advanceFilmJob(env, FILM_ID);          // tick 2: poll #1 -> still pending
+    doc = read();
+    expect(doc.phase).not.toBe("done");
+    expect(doc.film_finish_polls?.[FF0_KEY]).toBe("tok-ff0"); // token retained while pending
+    const r = await advanceFilmJob(env, FILM_ID); // tick 3: poll #2 -> completed
+    expect(r?.job.phase).toBe("done");
+    expect(r?.job.film_finish?.applied).toEqual(["film-titles"]);
+    expect(r?.job.film_finish?.degraded).toBeUndefined();
+    expect(r?.job.film_key).toBe(FF0_KEY);       // finalized to the carded film
+    expect(read().film_finish_polls?.[FF0_KEY]).toBeUndefined(); // token cleared on completion
+  });
+
+  it("a container job FAILURE (poll ok:false) re-dispatches, then soft-degrades -- ships UNCARDED, never fails", async () => {
+    _resetModuleDiscoveryCache();
+    const job = {
+      film_id: FILM_ID, project: "p", scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 3 }],
+      phase: "mux" as const, silent_film_key: `renders/${FILM_ID}/film-silent.mp4`,
+      audio_key: `renders/${FILM_ID}/audio.mp4`, mux_output_key: MUX_KEY,
+      film_titles: { title: { text: "NEON HALFLIFE" } }, created_at: 0,
+    };
+    let stored = JSON.stringify(job);
+    const j = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    const env = {
+      R2_RENDERS: {
+        get: async (key: string) => (key === filmJobDocKey(FILM_ID) ? { text: async () => stored } : null),
+        head: async () => null,
+        put: async (key: string, val: string) => { if (key === filmJobDocKey(FILM_ID)) stored = val; },
+      },
+      VIDEO_FINISH_VPC: { fetch: async () => j({ ok: true, key: MUX_KEY }) },
+      MODULE_FILM_TITLES: {
+        fetch: async (input: Request | string) => {
+          const url = typeof input === "string" ? input : input.url;
+          if (url.endsWith("/module.json")) return j(MANIFEST);
+          if (url.endsWith("/poll")) return j({ ok: false, error: "container job failed: ffmpeg boom" });
+          return j({ ok: true, pending: true, poll: "tok-ff0" });
+        },
+      },
+      R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+      R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+    } as unknown as Env;
+    // Drive enough ticks to exhaust the bounded re-dispatch (submit + poll-fail per attempt), then degrade.
+    let last: Awaited<ReturnType<typeof advanceFilmJob>> = null;
+    for (let i = 0; i < 12; i++) { last = await advanceFilmJob(env, FILM_ID); if (last?.job.phase === "done") break; }
+    expect(last?.job.phase).toBe("done");                       // fail-safe: the film STILL ships (#190)
+    expect(last?.job.film_key).toBe(MUX_KEY);                   // uncarded (the assembled film), never dropped
+    expect(last?.job.film_finish?.degraded).toContain("ffmpeg boom"); // the miss is OBSERVABLE, not silent
+  });
+});
+
 describe("advanceFilmJob dialogue phase injects audio_key into finish (talking characters)", () => {
   const job = {
     film_id: "film-dlg-1",
