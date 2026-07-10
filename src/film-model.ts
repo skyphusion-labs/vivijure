@@ -150,6 +150,18 @@ export interface FilmJob {
     delivered: "clips" | "silent_film"; // what shipped instead of the finished film
     clips?: { shot_id: string; clip_key: string }[]; // per-shot clips (assemble degrade), the deliverable
   };
+  // Loud, structured degrade when the keyframe stall recovery hit the phase ceiling with only a
+  // PARTIAL keyframe set in R2 (#619): keyframes upload progressively, so a stall mid-batch leaves
+  // some scenes unrendered. Below the ceiling the recovery HOLDS for the rest; at the ceiling it
+  // advances delivering the scenes that DID render, but records the drop here so the film NEVER
+  // reports a clean complete over the rebased (smaller) shot total. Surfaced on FilmSummary + the
+  // poll view + a `film.keyframes_incomplete` structured event (#245/#249). Absent on a normal render
+  // (a full set, or a below-ceiling partial that simply waits for the rest).
+  keyframes_incomplete?: {
+    adopted: number;    // scenes whose keyframe landed in R2 and were carried forward
+    expected: number;   // scenes the storyboard asked for
+    dropped: string[];  // shot_ids with no keyframe at the ceiling (never rendered)
+  };
   mux_output_key?: string; // deterministic mux destination for idempotent retries
   mix_audio_key?: string; // #231: multi-track mixed audio (dialogue + ducked music + loudnorm) destination
   mux_attempts?: number;
@@ -237,6 +249,9 @@ export interface FilmSummary {
   // the film COMPLETED delivering per-shot clips (assemble) or the silent film (mux) instead of the
   // finished film. Absent on a normal render. Lets the API/UI show "clips only, finish unavailable" (#519).
   finish_unavailable?: FilmJob["finish_unavailable"];
+  // #619: keyframe recovery hit the ceiling with a partial set; the film delivered only the scenes
+  // that rendered. Absent on a normal render. Lets the API/UI show "N of M scenes, dropped [...]".
+  keyframes_incomplete?: FilmJob["keyframes_incomplete"];
 }
 export function summarizeFinish(shots: FinishShot[]): FinishSummary {
   return {
@@ -255,6 +270,7 @@ export function summarizeFilm(job: FilmJob, clipJob: ClipJob | null): FilmSummar
     film_key: job.film_key,
     film_finish: job.film_finish,
     finish_unavailable: job.finish_unavailable,
+    keyframes_incomplete: job.keyframes_incomplete,
   };
 }
 

@@ -971,6 +971,23 @@ function emitFinishUnavailable(job: FilmJob): void {
   }));
 }
 
+/** Emit the loud, structured degrade event when the keyframe stall recovery reached the phase ceiling
+ *  with only a PARTIAL keyframe set (#619): the missing scenes never rendered, so the film advances
+ *  delivering what DID render, but this makes the drop greppable ({"ev":"film.keyframes_incomplete"})
+ *  for the UI + smoke tests, never a silent half-film (#245/#249). */
+function emitKeyframesIncomplete(job: FilmJob): void {
+  const k = job.keyframes_incomplete;
+  if (!k) return;
+  console.log(JSON.stringify({
+    ev: "film.keyframes_incomplete",
+    film_id: job.film_id,
+    project: job.project,
+    adopted: k.adopted,
+    expected: k.expected,
+    dropped: k.dropped,
+  }));
+}
+
 /** Video-finish tier UNAVAILABLE at assemble (VIDEO_FINISH_VPC unbound, or the concat container
  *  unreachable after the bounded retry): there is no single concatenated film, but every per-shot clip
  *  is rendered and sitting in R2. COMPLETE the film delivering those clips with a loud, structured
@@ -1518,14 +1535,40 @@ export async function cancelInFlightKeyframe(env: Env, job: FilmJob): Promise<vo
 }
 
 /** Recover a keyframe phase whose module poll has gone stale (RunPod GC'd the finished job) by adopting
- *  the keyframes already in R2 and advancing exactly as a fresh keyframe completion would (afterKeyframe
- *  Output -> clips, or done for a keyframes-only preview). Idempotent: marks keyframe_recovered so it
- *  runs once, and a fresh-completion advance on a later poll is unaffected (the phase has moved on).
- *  Returns true iff it adopted keyframes and moved the phase. */
-async function recoverStalledKeyframePhase(env: Env, job: FilmJob, preModules?: RegisteredModule[]): Promise<boolean> {
+ *  the keyframes already in R2. Keyframes upload to R2 progressively as the batch renders, so a stall
+ *  mid-batch leaves a PARTIAL set; adopting it is fine, but treating it as THE set -- cancelling the
+ *  still-running producer and advancing -- ships a silent half-film (#619). So this mirrors the clips
+ *  recovery (#143): it advances (cancel + afterKeyframeOutput) ONLY when the adopted set covers every
+ *  scene, or once the phase ceiling has expired. Below the ceiling a partial set HOLDS -- no cancel, no
+ *  advance, keyframe_recovered NOT set -- so the next stalled sweep picks up the keyframes that land
+ *  after this pass. At the ceiling with a partial set it advances LOUDLY, delivering what rendered:
+ *  records the dropped scenes on `keyframes_incomplete`, emits the structured event, and never lets the
+ *  film report a clean complete over the rebased total (#245/#249). `atCeiling` is true once the phase
+ *  has passed PHASE_HARD_DEADLINE_SECONDS. Returns true iff it advanced the phase; a partial hold (or
+ *  nothing in R2) returns false and leaves the phase in "keyframe". */
+async function recoverStalledKeyframePhase(env: Env, job: FilmJob, preModules: RegisteredModule[] | undefined, atCeiling: boolean): Promise<boolean> {
   const adopted = await listProjectKeyframes(env, job.project, job.scenes);
-  if (!adopted.length) return false; // nothing in R2 to adopt -- not actually complete; let the ceiling handle it
-  console.warn(`film ${job.film_id}: keyframe poll stale, adopting ${adopted.length} orphaned keyframes from R2 (#129)`);
+  if (!adopted.length) return false; // nothing in R2 to adopt -- not actually complete; let the ceiling hard-fail
+  const covered = new Set(adopted.map((k) => k.shot_id));
+  const dropped = job.scenes.filter((s) => !covered.has(s.shot_id)).map((s) => s.shot_id);
+
+  if (dropped.length && !atCeiling) {
+    // Partial set, still inside the phase window: the rest of the batch may still be uploading. HOLD --
+    // do NOT cancel the live producer and do NOT advance (that is exactly the #619 silent-half-film bug).
+    // Re-fires every stalled sweep (like the clips recovery, #143) until the set is complete or the ceiling.
+    console.warn(`film ${job.film_id}: keyframe poll stale with a PARTIAL set (${adopted.length}/${job.scenes.length} in R2; missing ${dropped.join(", ")}); holding, not advancing (#619)`);
+    return false;
+  }
+  if (dropped.length) {
+    // At the ceiling with a partial set: the missing scenes did not render and will not. Advance with
+    // what landed, but LOUDLY -- record the drop + emit the event, so the film never reports a clean
+    // complete over the rebased (smaller) shot total (#619, clips-delivered degrade discipline #245/#249).
+    job.keyframes_incomplete = { adopted: adopted.length, expected: job.scenes.length, dropped };
+    emitKeyframesIncomplete(job);
+    console.warn(`film ${job.film_id}: keyframe phase hit the ceiling with only ${adopted.length}/${job.scenes.length} keyframes; delivering the rendered scenes, dropped ${dropped.join(", ")} (#619)`);
+  } else {
+    console.warn(`film ${job.film_id}: keyframe poll stale, adopting the full set of ${adopted.length} keyframes from R2 (#129)`);
+  }
   // #327: STOP the still-running RunPod job BEFORE discarding its poll token. Adopting the cached
   // keyframes satisfies the work, but the GPU job keeps training/rendering unless we cancel it; clearing
   // keyframe_poll without cancelling is exactly what orphaned it. Best-effort, honest-degrade-logged.
@@ -1594,9 +1637,13 @@ async function recoverStalledPhase(env: Env, job: FilmJob, preModules?: Register
   if (!POLLABLE_PHASES.has(job.phase)) return false;
   const age = phaseAgeSeconds(job, now);
 
-  // Same-phase recovery: a keyframe poll that never resolved, but the keyframes are in R2.
+  // Same-phase recovery: a keyframe poll that never resolved, but keyframes are landing in R2. Mirrors
+  // the clips recovery (#143/#619): a partial set below the ceiling HOLDS (re-fires next sweep), the full
+  // set advances, and the ceiling advances what rendered with a loud keyframes_incomplete degrade. NO
+  // one-shot gate on a partial pass -- keyframe_recovered is set only when it actually advances, so the
+  // !keyframe_recovered guard just stops a re-run AFTER the phase has moved on.
   if (job.phase === "keyframe" && !job.keyframe_recovered && age >= KEYFRAME_STALL_SECONDS) {
-    if (await recoverStalledKeyframePhase(env, job, preModules)) return true;
+    if (await recoverStalledKeyframePhase(env, job, preModules, age >= PHASE_HARD_DEADLINE_SECONDS)) return true;
   }
 
   // Same-phase recovery: a clips (motion.backend) poll that never resolved, but the clips are in R2
@@ -1715,9 +1762,10 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
         // renders/<project>/keyframes/shot_NN.png to R2, so the poll reads pending forever. Don't wait for
         // KEYFRAME_STALL_SECONDS (20min) to adopt -- once the FULL set is in R2, advance now. The
         // completeness guard is essential: adopting a PARTIAL set (mid-generation) would advance to clips
-        // with keyframes missing. (recoverStalledKeyframePhase stays as the >20min backstop, which is
-        // lenient on partial = genuine non-renders.)
-        await recoverStalledKeyframePhase(env, job, modules);
+        // with keyframes missing. (recoverStalledKeyframePhase stays as the >20min backstop, which HOLDS a
+        // partial set below the ceiling and delivers-with-degrade at it, #619.) This path already proved the
+        // FULL set is present, so atCeiling=false is moot: recovery takes its full-set advance branch.
+        await recoverStalledKeyframePhase(env, job, modules, false);
       }
     }
     await putFilm(env, job);
