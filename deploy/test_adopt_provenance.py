@@ -50,7 +50,7 @@ def test_down_skips_adopted_runpod(repo, monkeypatch, capsys):
     st.put_resource("runpod_endpoint_vivijure-backend", "ep-adopted", adopted=True)
     deleted = []
 
-    def fake_rp(method, path, key, body=None):
+    def fake_rp(method, path, key, body=None, **kw):
         deleted.append((method, path))
         return {}
 
@@ -69,7 +69,7 @@ def test_down_deletes_created_runpod(repo, monkeypatch, capsys):
     st.put_resource("runpod_endpoint_vivijure-backend", "ep-created", adopted=False)
     deleted = []
 
-    def fake_rp(method, path, key, body=None):
+    def fake_rp(method, path, key, body=None, **kw):
         deleted.append((method, path))
         return {}
 
@@ -86,7 +86,7 @@ def test_down_include_adopted_deletes_adopted(repo, monkeypatch, capsys):
     st.put_resource("runpod_endpoint_vivijure-backend", "ep-adopted", adopted=True)
     deleted = []
 
-    def fake_rp(method, path, key, body=None):
+    def fake_rp(method, path, key, body=None, **kw):
         deleted.append((method, path))
         return {}
 

@@ -79,7 +79,10 @@ python3 deploy/vivijure_deploy.py down --delete-data    # also delete R2 buckets
 ```
 
 For `--noninteractive`, export `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `RUNPOD_API_KEY`
-(so a value is never typed where it could be captured) -- still never argv.
+(so a value is never typed where it could be captured) -- still never argv. In this mode the operator
+`STUDIO_API_TOKEN` is written to a `0600` file beside the state file (`.vivijure-studio-token`) and the
+PATH is printed, never the value (stdout is typically piped/tee'd in CI). Interactive mode keeps the
+one-time SAVE-THIS-NOW banner.
 
 ## The provisioning order (why it is the way it is)
 
@@ -94,10 +97,15 @@ The pieces are mutually dependent, so the order is load-bearing:
    ship the weights in-layer, so a volume would only pin the pool to one datacenter and bill for
    nothing. Four endpoints: backend + upscale + musetalk + audio-upscale. Captures the endpoint ids
    (seeded under the per-satellite secret names in step 3). Must precede step 3.
-3. **Seed the Cloudflare Secrets Store** -- `RUNPOD_API_KEY` (yours), `RUNPOD_ENDPOINT_ID` (step 2),
-   `GATEWAY_ID` (step 1), `R2_S3_*` (step 1). **This MUST happen before the deploy:** a module
-   worker's `secrets_store_secrets` binding fails at `wrangler deploy` if the store secret does not
-   yet exist (see #237). A re-run re-seeds rotated values before re-deploying.
+3. **Seed the Cloudflare Secrets Store** -- the store keys are the UNION of every `secret_name` the
+   deployed workers bind (asserted in `test_secret_map.py`). The installer resolves + seeds the
+   auto-sourced ones: `RUNPOD_API_KEY` (yours); the per-endpoint RunPod ids under their OWN store names
+   (`BACKEND_` / `VIDEO_UPSCALE_` / `MUSETALK_` / `AUDIO_UPSCALE_RUNPOD_ENDPOINT_ID`, step 2);
+   `GATEWAY_ID` + the scoped `R2_S3_*` creds (step 1). Operator-supplied secrets (`CF_AIG_TOKEN`,
+   `PLAN_ENHANCE_CF_AIG_TOKEN`, `LOCAL_BACKEND_URL`/`_TOKEN`) seed as MARKED placeholders so the module
+   deploy resolves, then a post-install checklist tells you which to replace. **This MUST happen before
+   the deploy:** a module worker's `secrets_store_secrets` binding fails at `wrangler deploy` if the
+   store secret does not yet exist (see #237). A re-run re-seeds rotated values before re-deploying.
 4. **D1 migrations** (`wrangler d1 migrations apply` -- Terraform cannot do this).
 5. **Deploy** module workers, then the core (the core binds each module as a `[[services]]`
    dependency, so modules ship first).
@@ -110,11 +118,24 @@ The pieces are mutually dependent, so the order is load-bearing:
 create-if-absent, record the id. Safe to re-run after a partial failure. The state file holds
 resource ids only -- never secrets -- and should be gitignored.
 
-`down` deletes by those recorded ids: the RunPod endpoints/volumes/templates, the workers (modules +
-core via `wrangler delete`), the Access app, AI Gateway, the Secrets Store, and **the minted R2 API
-token** (so a teardown never leaves a live credential behind). It prints a summary of what it removed.
-`--delete-data` additionally deletes the R2 buckets + D1 (your render + project data); without it,
-those are left intact. (A re-run of `up` re-mutates the module wrangler.tomls with the store id during
+The state file is **bound to the Cloudflare account that created it** (#684): it records
+`cf_account_id` at first write, and any later `up`/`down` with credentials for a different account
+**dies loud** rather than silently reusing the first account's resource ids (which would skip the R2
+mint and 10182 the new account's core). To stand up a second account from the same clone, use a
+separate checkout, remove the state file for a fresh install, or set `DEPLOY_PREFIX` (its state file
+is per-prefix).
+
+`down` deletes by those recorded ids: the RunPod endpoints/templates (and any legacy volume), the
+workers (modules + core via `wrangler delete`), the Access app, AI Gateway, the Secrets Store, and
+**the minted R2 API token** (so a teardown never leaves a live credential behind). It prints a summary
+of what it removed. `--delete-data` additionally deletes the R2 buckets + D1 (your render + project
+data); without it, those are left intact.
+
+`down` is **idempotent**: it removes each state entry after the resource is deleted, and treats a
+delete-on-missing as already-gone (RunPod returns 404 OR 500 for a missing resource), so the documented
+`down` then `down --delete-data` two-step works without dying on an already-deleted resource. Because
+`wrangler delete` exits non-zero even on a successful delete, the teardown gates its WARN on whether the
+worker actually vanished (checked via the CF API), so a clean teardown no longer emits false failures. (A re-run of `up` re-mutates the module wrangler.tomls with the store id during
 deploy and restores the placeholder after, so your checkout stays clean on success.)
 
 ## Isolation: a second instance / a proving run (`DEPLOY_PREFIX`)
