@@ -88,7 +88,7 @@ ACCESS_AUD = ""          # AUTH_MODE=access only: the studio Access application 
 # finish-lipsync binds var RUNPOD_ENDPOINT_ID FROM store secret MUSETALK_RUNPOD_ENDPOINT_ID. The old
 # seed set (a bare RUNPOD_ENDPOINT_ID) was read by NOTHING -- the core binds BACKEND_RUNPOD_ENDPOINT_ID
 # and the satellites bind their own per-endpoint names (#658). Grouped by how the value is sourced.
-SECRET_SOURCE_AUTO = (       # the installer resolves + seeds these (user key / RunPod ids / CF derived)
+AUTO_STORE_NAMES = (       # the installer resolves + seeds these (user key / RunPod ids / CF derived)
     "RUNPOD_API_KEY",
     "BACKEND_RUNPOD_ENDPOINT_ID",
     "VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID",
@@ -98,13 +98,13 @@ SECRET_SOURCE_AUTO = (       # the installer resolves + seeds these (user key / 
     "R2_S3_ACCESS_KEY_ID",
     "R2_S3_SECRET_ACCESS_KEY",
 )
-SECRET_SOURCE_OPERATOR = (   # the operator supplies these post-install; seeded as a MARKED placeholder
+OPERATOR_STORE_NAMES = (   # the operator supplies these post-install; seeded as a MARKED placeholder
     "CF_AIG_TOKEN",              #   so the module deploy resolves (else 10182), then flagged to replace.
     "PLAN_ENHANCE_CF_AIG_TOKEN",
     "LOCAL_BACKEND_URL",
     "LOCAL_BACKEND_TOKEN",
 )
-STORE_BINDING_NAMES = SECRET_SOURCE_AUTO + SECRET_SOURCE_OPERATOR
+STORE_BINDING_NAMES = AUTO_STORE_NAMES + OPERATOR_STORE_NAMES
 
 # Which RunPod endpoint id seeds which store secret name (the core + each finish satellite read a
 # DISTINCT per-endpoint store key). Keys MUST equal RUNPOD_ENDPOINTS.
@@ -848,7 +848,7 @@ def restore_store_id_placeholder(repo: Path, store_id: str) -> None:
 
 def resolved_secret_values(runpod_api_key: str, cf_derived: dict, runpod_endpoints: dict) -> dict:
     """The AUTO-sourced store secret values (store secret_name -> value). Operator-class names are NOT
-    here (they seed as placeholders). Pure -- unit tested. Keys == SECRET_SOURCE_AUTO."""
+    here (they seed as placeholders). Pure -- unit tested. Keys == AUTO_STORE_NAMES."""
     vals = {
         "RUNPOD_API_KEY": runpod_api_key,
         "GATEWAY_ID": cf_derived.get("GATEWAY_ID", ""),
@@ -912,7 +912,7 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
     # crashed-between case above).
     pending_operator: list = []
     for name in STORE_BINDING_NAMES:
-        if name in SECRET_SOURCE_OPERATOR:
+        if name in OPERATOR_STORE_NAMES:
             # Operator supplies these post-install; the store secret MUST exist or the module deploy
             # fails 10182, but we have no value -> seed a MARKED placeholder + flag it. Never clobber a
             # real value the operator already set on a prior run.

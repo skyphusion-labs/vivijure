@@ -41,14 +41,14 @@ def test_store_binding_names_equal_the_toml_union():
 
 def test_no_secret_name_seeded_twice():
     assert len(vd.STORE_BINDING_NAMES) == len(set(vd.STORE_BINDING_NAMES))
-    assert not (set(vd.SECRET_SOURCE_AUTO) & set(vd.SECRET_SOURCE_OPERATOR))
+    assert not (set(vd.AUTO_STORE_NAMES) & set(vd.OPERATOR_STORE_NAMES))
 
 
 def test_endpoint_secret_names_cover_every_endpoint():
     assert set(vd.ENDPOINT_SECRET_NAMES) == set(vd.RUNPOD_ENDPOINTS)
     # every per-endpoint store name is in the AUTO-seeded set
     for secname in vd.ENDPOINT_SECRET_NAMES.values():
-        assert secname in vd.SECRET_SOURCE_AUTO
+        assert secname in vd.AUTO_STORE_NAMES
 
 
 def test_resolved_values_map_each_endpoint_to_its_store_name():
@@ -56,7 +56,7 @@ def test_resolved_values_map_each_endpoint_to_its_store_name():
     cf = {"GATEWAY_ID": "gw", "R2_S3_ACCESS_KEY_ID": "ak", "R2_S3_SECRET_ACCESS_KEY": "sk"}
     vals = vd.resolved_secret_values("rp-key", cf, eps)
     # keys are exactly the auto-seeded set (no operator names leak in)
-    assert set(vals) == set(vd.SECRET_SOURCE_AUTO)
+    assert set(vals) == set(vd.AUTO_STORE_NAMES)
     assert vals["BACKEND_RUNPOD_ENDPOINT_ID"] == "vivijure-backend-EPID"
     assert vals["MUSETALK_RUNPOD_ENDPOINT_ID"] == "vivijure-musetalk-EPID"
     assert vals["VIDEO_UPSCALE_RUNPOD_ENDPOINT_ID"] == "vivijure-upscale-EPID"
