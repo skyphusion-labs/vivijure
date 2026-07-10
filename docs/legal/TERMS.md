@@ -36,6 +36,13 @@ your own setup govern your instance; you become the operator, not a customer of 
   for Conrad and the crew, for internal use and testing. It is not a public service, there is no
   account anyone creates with us, and we do not host anyone else's content. Skyphusion Labs does not
   host or manage Vivijure instances for other people and will not get into that business.
+- **The public demo** (`demo.vivijure.com`) is Skyphusion Labs (Conrad) running the software as a
+  public, read-only showcase: anyone may browse a seeded catalog and pre-made films, but it renders
+  nothing, has no account or sign-in, and refuses every state-changing request. It is provided
+  AS-IS on the same terms as the software (Sections 7 and 8), the Acceptable Use Policy applies to it
+  (in particular Section 2.4: no attacking, scraping, evading rate limits on, or otherwise abusing an
+  instance), and the showcase films are illustrative in-house work. It is not a hosted service that
+  holds your content.
 
 If you deploy Vivijure yourself, you are an operator, not a customer of ours, and these Terms are not
 a service agreement between you and us. The AGPL applies to the code, including its requirement that
@@ -71,7 +78,7 @@ your access, and you will not attempt to bypass the gate or rate limits. Partici
 
 ## 4. Acceptable use
 
-Use of the software, the project, and Conrad's instance is subject to the **Acceptable Use Policy**
+Use of the software, the project, Conrad's instance, and the public demo (`demo.vivijure.com`) is subject to the **Acceptable Use Policy**
 (`ACCEPTABLE-USE.md`), which is incorporated by reference. Violating it, especially the CSAM red line,
 is a material breach and can end your access to Conrad's instance and your standing in the project
 immediately.
@@ -114,7 +121,7 @@ your instance calls.)
 
 ## 7. Software is provided AS-IS (warranty disclaimer)
 
-THE SOFTWARE (AND CONRAD'S INSTANCE, FOR ANYONE HE ADMITS TO IT) IS PROVIDED "AS IS" AND "AS
+THE SOFTWARE (AND CONRAD'S INSTANCE FOR ANYONE HE ADMITS TO IT, AND THE PUBLIC DEMO AT `demo.vivijure.com`) IS PROVIDED "AS IS" AND "AS
 AVAILABLE," WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY
 IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
 We do not warrant that the software will be uninterrupted, error-free, secure, or that any output will
@@ -131,7 +138,7 @@ without notice.
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, SKYPHUSION LABS AND CONRAD (AND ANYONE INVOLVED IN MAKING THE
 SOFTWARE AVAILABLE) WILL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY,
 OR PUNITIVE DAMAGES, OR FOR LOST PROFITS, DATA, OR GOODWILL, ARISING OUT OF OR RELATED TO YOUR USE OF
-(OR INABILITY TO USE) THE SOFTWARE OR CONRAD'S INSTANCE, EVEN IF ADVISED OF THE POSSIBILITY. BECAUSE
+(OR INABILITY TO USE) THE SOFTWARE, CONRAD'S INSTANCE, OR THE PUBLIC DEMO, EVEN IF ADVISED OF THE POSSIBILITY. BECAUSE
 THE SOFTWARE IS PROVIDED FREE OF CHARGE, THE TOTAL AGGREGATE LIABILITY WILL NOT EXCEED $0 USD (THE
 AMOUNT YOU PAID FOR THE SOFTWARE, WHICH IS ZERO).
 
