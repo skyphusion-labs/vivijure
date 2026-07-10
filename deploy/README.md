@@ -139,6 +139,27 @@ this instance's state file -- is NOT adopted silently: the run stops and names i
 (whose state already records the id) reconciles exactly as before. Pass `up --adopt` to deliberately
 reuse a pre-existing resource.
 
+## Base install is media-less (the honest degrade)
+
+`up` stands up a WORKING studio, not the full media pipeline. The installer renders a deployable
+`wrangler.toml` from `wrangler.toml.example` (it no longer needs a pre-rendered toml -- it injects the
+D1 + Secrets Store ids it just created; `account_id` comes from `CLOUDFLARE_ACCOUNT_ID`, never
+hardcoded). Because the media stack (the CPU containers + their Cloudflare VPC services) is **not**
+provisioned by the installer yet (phase-2 is a roadmap stub), the render STRIPS the bindings whose
+targets a base install does not create -- the core + 5 modules `[[vpc_services]]`, the `tail_consumer`,
+the custom-domain route (it enables `workers_dev` instead), and the Durable-Object `[[migrations]]`.
+
+The studio therefore comes up in its **documented media-less mode: clips render, but there is no final
+concat / title-card step**. A degrade is never silent -- `up` prints this at completion, and it is
+stated here. To get the media stack, provision the containers + VPC services out of band (roadmap:
+the installer will grow this; likely a paid-plan dependency for the finish path).
+
+## Teardown is non-interactive-capable and partial-safe
+
+`down` takes `--noninteractive` (read creds from env, like `up`) for headless teardown. It is also
+partial-safe: a worker that was never deployed (a failed/partial `up`) is skipped, never a hard abort,
+so `down` always reaches the D1 / R2 / Secrets Store cleanup. A failed `up` is always teardownable.
+
 ## Roadmap
 
 - **Done:** the CLI, input/secret handling, the full CF + RunPod provisioning spine, seed-before-deploy
