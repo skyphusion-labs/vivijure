@@ -37,7 +37,7 @@ The GPU render backend is `vivijure-backend` (RunPod serverless). Production UI:
 Deep docs live in `docs/`; this file is the working method and conventions. When a change touches one
 of these areas, update the matching doc.
 
-- `docs/module-api.md` -- the typed hook contract (`vivijure-module/1`); read FIRST. A module builds to this.
+- `docs/module-api.md` -- the typed hook contract (`vivijure-module/2`; `/1` is closed); read FIRST. A module builds to this.
 - `docs/module-authoring.md` -- how to author a new module worker against the contract.
 - `docs/CONTRACT.md` -- the core <-> backend render contract (bundle in, artifacts out).
 - `docs/mcp.md` -- the Studio MCP Worker (`src/mcp.ts`): drive the studio API from an agent; opt-in, deploys separately.
@@ -70,7 +70,7 @@ first, green, before considering a change done.
   orchestration; everything else is a module worker behind a typed hook. `src/` holds the core
   (orchestration, cast DB, bundle assembly, audio/beat staging, preflight); `modules/` holds the
   shipped module workers.
-- **The module contract is sacred.** `src/modules/types.ts` is `vivijure-module/1`; a breaking change
+- **The module contract is sacred.** `src/modules/types.ts` is `vivijure-module/2`; a breaking change
   bumps the api version. Module repos vendor this exact file -- keep it dependency-free. One typed
   input/output per hook; a module declares its knobs in `config_schema` and the core clamps against it.
 - **The frontend is a projection of the registry.** The UI renders from `GET /api/modules`; never
