@@ -114,7 +114,7 @@ un-reopenable, the Worker can ALSO verify the Access JWT itself (`src/access-aut
 it FAILS CLOSED: every `/api/*` request must carry a `Cf-Access-Jwt-Assertion` whose RS256
 signature verifies against the team JWKS (`https://<team>/cdn-cgi/access/certs`) and whose `aud`,
 `iss`, and `exp`/`nbf` match. Absent, malformed, expired, wrong-audience, unknown-key, bad-signature,
-or unverifiable (JWKS unreachable with no cached key) => denied. `/health` and `/welcome` stay open.
+or unverifiable (JWKS unreachable with no cached key) => denied. `/health` and `/welcome` (now a 301 redirect to the vivijure.com storefront) stay open.
 
 **Arming it (config, not secrets -> `wrangler.toml [vars]`):** set `ACCESS_TEAM_DOMAIN` (the Zero
 Trust team hostname) and `ACCESS_AUD` (the Access application AUD tag). When BOTH are set the gate
@@ -257,11 +257,12 @@ not in this regex. Do not mistake loosening/tightening the regex for an entropy 
 
 ## 3. Intentionally public surfaces, and the `/api/modules` projection
 
-Only **`/welcome`** (the marketing landing page, `welcome.html`) and **`/health`** are reachable
+Only **`/welcome`** (a 301 redirect to the marketing storefront at https://vivijure.com/; #617 moved the page itself off the Worker) and **`/health`** are reachable
 without authentication, by design; both are reviewed to leak nothing internal. On the production
 instance `/welcome` and `/health` each sit behind their own path-scoped Cloudflare Access app whose
 policy is a public bypass (everyone for `/welcome`, a production-IP allowlist for `/health`); those
-path-scoped apps are independent of `AUTH_MODE` and do NOT extend to `/api/*`.
+path-scoped apps are independent of `AUTH_MODE` and do NOT extend to `/api/*`. The public
+`/welcome` bypass MUST stay in place so the 301 redirect resolves for anonymous visitors.
 
 **`GET /api/modules`** -- the registry projection that the self-assembling UI renders from -- sits
 BEHIND the auth gate like every other `/api/*` route. Its payload is scrubbed as defense in depth:
@@ -371,30 +372,24 @@ Cloudflare's zone-wide "Add security headers" managed transform is **OFF** (capt
 strips them, so the matrix below is the whole truth. Headers are `set` (overwrite), never appended,
 so a re-enabled zone default could not duplicate them.
 
-The CSP is **per response class**: the known studio page routes get the strict studio policy;
-`/welcome` gets its own policy (it has one inline `<style>` block + inline `style=` attributes, so
-`style-src` allows `'unsafe-inline'` -- scripts stay strict `'self'`); **every other response**
-(the JSON API, non-HTML assets, redirects, the 429, and any non-page HTML) gets a **locked**
+The CSP is **per response class**: the known studio page routes get the strict studio policy; **every other response**
+(the JSON API, non-HTML assets, redirects incl. the `/welcome` 301, the 429, and any non-page HTML) gets a **locked**
 `default-src 'none'` CSP. A stray or mislabeled `text/html` response on a non-page route therefore
 never receives the permissive page policy.
 
 | Response class | Content-Security-Policy | X-Content-Type-Options | X-Frame-Options | Referrer-Policy | Permissions-Policy |
 |---|---|---|---|---|---|
 | Studio pages (`/`, `/planner`, `/cast`, `/modules`, `/settings`) | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'` | `nosniff` | `DENY` | `same-origin` | `camera=(), microphone=(), geolocation=()` |
-| `/welcome` (BASE, self-host) | as studio, but `style-src 'self' 'unsafe-inline'`, `img-src`/`media-src` add `https://assets.skyphusion.net` | `nosniff` | `DENY` | `same-origin` | same |
-| `/welcome` (analytics ON: `UMAMI_WEBSITE_ID` set + valid UUID) | BASE plus `https://analytics.skyphusion.org` on `script-src` and `connect-src` | `nosniff` | `DENY` | `same-origin` | same |
 | Everything else (API/JSON, assets, redirects, 429, non-page HTML) | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'` | `nosniff` | `DENY` | `same-origin` | (none -- document-only) |
 
 `frame-ancestors 'none'` supersedes `X-Frame-Options`; the latter is kept for pre-CSP agents.
-`Permissions-Policy` is document-only, so it is set on pages, not on JSON/asset responses. The
-`/welcome` analytics CSP delta and the Umami script injection share ONE gate (`umamiWebsiteIdValid`),
-so a self-hoster with no token gets neither and the two can never disagree (#363). A downstream
+`Permissions-Policy` is document-only, so it is set on pages, not on JSON/asset responses. A downstream
 deployer who re-enables a CDN/proxy header layer should keep it OFF for this origin, or reconcile it
 with this matrix, to preserve the single-source-of-truth property.
 
 **Load-bearing assets config.** Because the Worker is the header authority, the Workers Assets binding
-MUST route the static pages through the Worker: `run_worker_first = true` (else the edge serves
-`/welcome` and the studio pages directly, bypassing the chokepoint -- they get NO headers) AND
+MUST route the static pages through the Worker: `run_worker_first = true` (else the edge serves the
+studio pages directly, bypassing the chokepoint -- they get NO headers) AND
 `html_handling = "none"` (else `serveStudioAsset`'s `.html` fetch 307-redirects to the pretty URL and
 loops). The Worker maps the pretty page routes itself (`STUDIO_PAGE_ASSETS`, including `/` ->
 `/index.html`). Changing either setting silently drops header coverage on the static pages; keep them
@@ -409,14 +404,14 @@ security-header transform above). The chokepoint defaults a non-page response th
 
 | Response class | Cache-Control | Set by |
 |---|---|---|
-| Static pages + assets (`/welcome`, studio pages, JS/CSS) | `public, max-age=0, must-revalidate` | Workers Assets binding (preserved through the chokepoint) |
+| Static pages + assets (studio pages, JS/CSS) | `public, max-age=0, must-revalidate` | Workers Assets binding (preserved through the chokepoint) |
 | Artifact (`/api/artifact/<key>`) | `private, max-age=300` | `hServeArtifact` (`private` = never edge-cached, so an authenticated artifact never enters a shared cache) |
 | Cast bundle download | `no-store` | `assembleBundle` |
 | API/JSON, the 429, marker downloads, any other bare non-page response | `no-store` | chokepoint default (set-if-absent) |
 
 `no-store` on the dynamic/authenticated classes keeps a private API body out of any shared or
 browser cache; the static assets keep the binding's revalidating policy so the edge can still cache
-them (the `/welcome` release-purge flow depends on that edge cache existing, #405/#407).
+them (the release-purge flow that flushes the old `/welcome` page and `/` depends on that edge cache existing, #405/#407).
 
 ## Checklist when changing the surface
 

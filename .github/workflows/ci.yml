@@ -196,10 +196,6 @@ jobs:
           VPC_AUDIO_BEAT_SYNC_ID: ${{ secrets.VPC_AUDIO_BEAT_SYNC_ID }}
           VPC_AUDIO_MIX_ID: ${{ secrets.VPC_AUDIO_MIX_ID }}
           SPEND_RATE_LIMITER_NS_ID: ${{ secrets.SPEND_RATE_LIMITER_NS_ID }}
-          # Optional: Umami website UUID for /welcome. PUBLIC, default EMPTY -- an unset secret
-          # renders UMAMI_WEBSITE_ID = "" so /welcome ships NO tracker (token-free). Set the
-          # secret only to enable your own analytics.
-          UMAMI_WEBSITE_ID: ${{ secrets.UMAMI_WEBSITE_ID }}
           # Opt-in Workers-for-Platforms switch. A repo VARIABLE (not a secret -- not sensitive),
           # unset by default. Only THIS account sets it to "1", after creating the vivijure-modules
           # dispatch namespace out of band. A community fork/self-host never sets it, so their render
@@ -228,7 +224,7 @@ jobs:
           if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then echo "::error::CLOUDFLARE_ACCOUNT_ID unset -- cannot render R2_S3_ENDPOINT"; exit 1; fi
           R2_S3_ENDPOINT="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"; export R2_S3_ENDPOINT
           R2_S3_BUCKET="${R2_S3_BUCKET:-vivijure}"; export R2_S3_BUCKET
-          VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $UMAMI_WEBSITE_ID $R2_S3_ENDPOINT $R2_S3_BUCKET'
+          VARS='$AUTH_MODE $ACCESS_TEAM_DOMAIN $ACCESS_AUD $D1_DATABASE_ID $VPC_VIDEO_FINISH_ID $VPC_IMAGE_PREP_ID $VPC_AUDIO_BEAT_SYNC_ID $VPC_AUDIO_MIX_ID $SPEND_RATE_LIMITER_NS_ID $R2_S3_ENDPOINT $R2_S3_BUCKET'
           envsubst "$VARS" < wrangler.toml.example > wrangler.toml
           # fail-closed: no placeholder may survive OUTSIDE comments (a missing secret would leave a
           # literal ${...}); comment-prose mentioning ${...} is fine, and -F keeps the pattern
@@ -327,7 +323,7 @@ jobs:
 
       # Opt-in, self-host safe edge-cache purge. The core worker is already LIVE by this step, so a
       # failure here NEVER rolls back the deploy -- it just means /welcome may serve stale from the
-      # edge until purged. Gated exactly like UMAMI_WEBSITE_ID / ENABLE_WFP_DISPATCH: a community
+      # edge until purged. Gated exactly like ENABLE_WFP_DISPATCH: a community
       # self-host sets none of the three values below, so this is a clean no-op (exit 0). Only when a
       # zone id, purge host, and a purge-scoped token (NOT the deploy token) are all set do we purge.
       # POSIX sh (BusyBox ash in node:22-alpine); no jq/python in the image, so we grep the JSON.

@@ -1359,18 +1359,22 @@ const API_ROUTES: Route[] = [
   { method: "PATCH",  pattern: "/api/modules/:name/config",            handler: hPatchModuleConfig },
 ];
 
+// #617: the marketing/welcome page moved off the Worker to the vivijure.com storefront. /welcome
+// (+ trailing-slash + the direct .html) now 301-redirects there for link equity; it no longer ships
+// in the Worker bundle. Kept as a redirect (not a 404) so inbound links stay valid across the cutover.
+// The redirect response streams through applyResponseSecurity like any other (locked CSP + companions).
+const WELCOME_REDIRECT_PATHS = new Set(["/welcome", "/welcome/", "/welcome.html"]);
+const WELCOME_REDIRECT_TARGET = "https://vivijure.com/";
+
 // Pretty studio page paths (vivijure.skyphusion.org/planner, /cast, /modules). Served
 // from public/*.html so nav works even before a deploy picks up new worker code.
-// /welcome is the public marketing landing page (welcome.html); it is the only path here
-// meant to be reachable without CF Access (it gets a public Access bypass on the /welcome
-// prefix), so it carries no studio data and links into the gated app rather than embedding it.
+// The public marketing/welcome page is NOT here: #617 moved it to the vivijure.com storefront,
+// and /welcome (+ aliases) now 301-redirects there (WELCOME_REDIRECT_PATHS, handled in routeRequest).
 const STUDIO_PAGE_ASSETS: Record<string, string> = {
   // index.html was a byte-identical copy of modules.html (removed in the 2026-07 truth pass);
   // the modules/pipeline page IS the landing page, served from the single source file.
   "/": "/modules.html",
   "/index.html": "/modules.html",
-  "/welcome": "/welcome.html",
-  "/welcome/": "/welcome.html",
   "/planner": "/planner.html",
   "/planner/": "/planner.html",
   "/cast": "/cast.html",
@@ -1389,7 +1393,7 @@ export default {
   // Single security-header chokepoint: EVERY response routeRequest returns is stamped with the right
   // headers for its class (CF's zone-wide managed transform is off; the worker owns headers, #370).
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    return applyResponseSecurity(await routeRequest(request, env, ctx), request, env);
+    return applyResponseSecurity(await routeRequest(request, env, ctx), request);
   },
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sweepUnresolvedJobs(env, ctx));
@@ -1415,6 +1419,9 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
       // `api` version): `dispatch` is true when this deploy binds the WfP namespace, so an operator /
       // the studio UI can tell an install-without-redeploy host from a service-binding-only one.
       return json(modulesResponse(modules, renderConfigProjection(), { dispatch: !!env.MODULE_DISPATCH }));
+    }
+    if (WELCOME_REDIRECT_PATHS.has(url.pathname) && (request.method === "GET" || request.method === "HEAD")) {
+      return Response.redirect(WELCOME_REDIRECT_TARGET, 301);
     }
     const studioPage = STUDIO_PAGE_ASSETS[url.pathname];
     if (studioPage && (request.method === "GET" || request.method === "HEAD")) {

@@ -202,9 +202,10 @@ Labs is not in that path. None of these are advertising or data-broker relations
   is set `Secure; SameSite=Strict` and scoped to `/api/`. It is a functional security cookie, not a
   tracking cookie, and it carries no identity beyond the token itself. (In the optional Access mode of
   Section 4, the cookie in play is instead Cloudflare Access's own edge cookie.)
-- **The public marketing page (`/welcome`) uses Cloudflare Web Analytics**, which is cookieless,
-  collects no personal data, and is not used for advertising or sold to anyone. It gives the operator
-  basic aggregate page-view counts.
+- **The studio Worker ships no analytics or tracking beacon.** The public marketing page moved off
+  the Worker to the separate `vivijure.com` storefront (#617); `/welcome` on the studio host is now a
+  301 redirect there. That storefront uses cookieless, self-hosted analytics for aggregate page-view
+  counts only -- a different origin that collects no personal data and is neither advertising nor sold.
 - **The browser's local storage** holds small UI conveniences (e.g. which character was last viewed,
   a remembered training style). This stays in the browser and is not transmitted as tracking.
 
