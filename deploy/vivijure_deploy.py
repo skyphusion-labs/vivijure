@@ -551,9 +551,9 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
 
 
 RUNPOD_API = "https://rest.runpod.io/v1"  # the current REST API (Bearer key; OpenAPI at /v1/openapi.json)
-DATACENTER_ID = ""  # REQUIRED for a network volume -- set an available DC id (GET /datacenters or console)
-BACKEND_IMAGE_TAG = ""  # REQUIRED -- pin an explicit released tag (e.g. "0.2.27"); never "latest" (reproducibility)
-GPU_TYPE_IDS: list = []  # REQUIRED -- endpoint GPU type id(s) (GET /gputypes), e.g. ["NVIDIA H100 80GB HBM3"]
+DATACENTER_ID = ""  # REQUIRED for a network volume -- set an available DC id (RunPod console)
+BACKEND_IMAGE_TAG = ""  # REQUIRED -- pin an explicit released tag (e.g. "0.4.9"); never "latest"
+GPU_TYPE_IDS: list = []  # REQUIRED -- endpoint GPU type id(s) (GET /gputypes)
 
 
 def rp_api(method: str, path: str, key: str, body: dict | None = None):
@@ -714,7 +714,7 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
         "R2_S3_ENDPOINT": cf_derived.get("R2_S3_ENDPOINT", ""),
     }
     base = f"/accounts/{acct}/secrets_store/stores/{store_id}/secrets"
-    existing = {x.get("name") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict)}
+    existing = {x.get("name"): x.get("id") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict) and x.get("name")}
     # COUPLING NOTE: on a re-run, mint_r2_s3_token returns an EMPTY R2 secret (CF returns the token
     # value only once). The skip-empty guard below is what protects the already-seeded R2 secret from
     # being overwritten with a blank on a reconcile -- do NOT "fix" it to seed empty values.
@@ -724,9 +724,10 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
             log(f"  skip {name}: no value this run (already seeded, or not yet resolved) -- left as-is")
             continue
         if name in existing:
-            cf_api("PATCH", f"{base}/{name}", tok, {"value": v, "scopes": ["workers"]})
+            cf_api("PATCH", f"{base}/{existing[name]}", tok, {"value": v, "scopes": ["workers"]})
         else:
-            cf_api("POST", base, tok, {"name": name, "value": v, "scopes": ["workers"]})
+            # The Secrets Store create API takes a BULK ARRAY body (a single object is invalid_json_body).
+            cf_api("POST", base, tok, [{"name": name, "value": v, "scopes": ["workers"]}])
         log(f"  seeded {name}")  # name only, never the value
 
 
@@ -734,6 +735,20 @@ def run_migrations(repo: Path, s: Secrets) -> None:
     """Step 4. D1 schema migrations (Wrangler only -- Terraform cannot do this). Additive, idempotent."""
     log("applying D1 migrations ...")
     wrangler(["d1", "migrations", "apply", prefixed(D1_DATABASE), "--remote"], cwd=repo, cf_env=cf_env_for(s))
+
+
+def render_and_write_core_toml(repo: Path, s: Secrets, st: State) -> None:
+    """Render a DEPLOYABLE wrangler.toml from wrangler.toml.example (F1), BEFORE migrations + deploy --
+    `wrangler d1 migrations apply` AND `wrangler deploy` both need it present. Uses the D1 + Secrets
+    Store ids captured in state; account_id from CLOUDFLARE_ACCOUNT_ID (never hardcoded). Media-less
+    base install (VPC / tail / routes / DO-migration blocks stripped -- see render_core_toml)."""
+    mods = module_dirs(repo)
+    rendered = render_core_toml((repo / "wrangler.toml.example").read_text(),
+        account_id=s.cf_account_id, d1_id=str(st.get("d1_id") or ""), store_id=str(st.get("store_id") or ""),
+        primary_bucket=R2_BUCKETS[0], prefix=DEPLOY_PREFIX.strip(),
+        module_service_names=[module_worker_name(repo, m) for m in mods])
+    (repo / "wrangler.toml").write_text(rendered)
+    log(f"  rendered wrangler.toml from the example ({'isolated' if DEPLOY_PREFIX.strip() else 'verbatim'}, media-less)")
 
 
 def deploy_workers(repo: Path, s: Secrets, st: State) -> None:
@@ -765,19 +780,10 @@ def deploy_workers(repo: Path, s: Secrets, st: State) -> None:
     core_vars = ["--var", f"AUTH_MODE:{AUTH_MODE}"]
     if AUTH_MODE == "access":
         core_vars += ["--var", f"ACCESS_TEAM_DOMAIN:{ACCESS_TEAM_DOMAIN}", "--var", f"ACCESS_AUD:{ACCESS_AUD}"]
-    rendered = render_core_toml((repo / "wrangler.toml.example").read_text(),
-        account_id=acct, d1_id=d1_id, store_id=store_id, primary_bucket=R2_BUCKETS[0],
-        prefix=DEPLOY_PREFIX.strip(), module_service_names=[module_worker_name(repo, m) for m in mods])
-    if isolate:
-        tmp = repo / f"wrangler.{DEPLOY_PREFIX.strip()}.toml"
-        tmp.write_text(rendered)
-        try:
-            wrangler(["deploy", "-c", tmp.name, "--name", prefixed(core_worker_name(repo)), *core_vars], cwd=repo, cf_env=env)
-        finally:
-            tmp.unlink(missing_ok=True)
-    else:
-        (repo / "wrangler.toml").write_text(rendered)  # F1: rendered from the example (gitignored)
-        wrangler(["deploy", *core_vars], cwd=repo, cf_env=env)
+    # wrangler.toml was rendered earlier (render_and_write_core_toml, before migrations -- both
+    # `wrangler d1 migrations apply` and `wrangler deploy` need it present). Deploy the core.
+    name_extra = ["--name", prefixed(core_worker_name(repo))] if isolate else []
+    wrangler(["deploy", *name_extra, *core_vars], cwd=repo, cf_env=env)
 
 
 def _mint_studio_token() -> str:
@@ -890,6 +896,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
     cf_derived = provision_cloudflare_infra(repo, s, st)
     runpod_endpoints = provision_runpod(repo, s, st, cf_derived)
     seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
+    render_and_write_core_toml(repo, s, st)  # F1: wrangler.toml must exist for migrations + deploy
     run_migrations(repo, s)
     deploy_workers(repo, s, st)
     if AUTH_MODE == "token":
@@ -961,8 +968,8 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False) -> Non
     sid = st.get("store_id")
     if sid:
         base = f"/accounts/{acct}/secrets_store/stores/{sid}/secrets"
-        for name in {x.get("name") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict)}:
-            cf_api("DELETE", f"{base}/{name}", tok)
+        for sec_id in {x.get("id") for x in (cf_api("GET", base, tok) or []) if isinstance(x, dict) and x.get("id")}:
+            cf_api("DELETE", f"{base}/{sec_id}", tok)
         cf_api("DELETE", f"/accounts/{acct}/secrets_store/stores/{sid}", tok)
         removed.append("Secrets Store (store + secrets)")
     aid = st.get("access_app_id")
