@@ -1059,6 +1059,23 @@ def finalize(repo: Path, st: State, pending_operator=()) -> None:
 # --------------------------------------------------------------------------------------------------
 
 
+def bind_state_to_account(st: State, s: Secrets) -> None:
+    """#684: bind the state file to the Cloudflare account that created it. State records resource ids
+    with NO account, so running the same clone against a SECOND account silently reused the first
+    account's ids -- a stale r2_token_id skips the R2 mint, so the new account's core deploy 10182s (the
+    #680 failure shape, reachable with no crash), and a same-name resource on the new account would look
+    adopted-by-this-instance. Record cf_account_id at first write; die loud on a mismatch thereafter.
+    The account id is an identifier (not a secret), safe to record + name in the error."""
+    recorded = st.get("cf_account_id")
+    if recorded and recorded != s.cf_account_id:
+        die(f"state file {state_file_name()} belongs to Cloudflare account {recorded}, but the supplied "
+            f"credentials are for {s.cf_account_id}. Refusing to reuse another account's resource ids. "
+            f"For a second account use a separate clone, remove {state_file_name()} for a fresh install, "
+            f"or set DEPLOY_PREFIX to isolate the instance (its state file is per-prefix).")
+    if not recorded:
+        st.put("cf_account_id", s.cf_account_id)
+
+
 def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool = False) -> None:
     validate_auth_config()  # cheap, credential-free; runs for plan and up alike
     # The plan is order-only -- it needs NO credentials, so never prompt for secrets in a dry-run.
@@ -1091,6 +1108,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
     log("credential presence: " + s.presence())  # SET/missing only
     st = State.load(repo)
     preflight(repo, s)
+    bind_state_to_account(st, s)  # #684: refuse to reuse another account's state
     cf_derived = provision_cloudflare_infra(repo, s, st)
     runpod_endpoints = provision_runpod(repo, s, st, cf_derived)
     pending_operator = seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
@@ -1149,6 +1167,7 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
     --include-adopted is passed (#659)."""
     st = State.load(repo)
     s = collect_secrets(noninteractive_env=noninteractive)  # F3: env-cred path (like up), else hidden prompts
+    bind_state_to_account(st, s)  # #684: don't tear down against the wrong account
     log("teardown (reverse dependency order, by recorded id) ...")
     if include_adopted:
         log("WARNING: --include-adopted will DELETE adopted resources (pre-existing before this deploy)")

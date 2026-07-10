@@ -118,6 +118,13 @@ The pieces are mutually dependent, so the order is load-bearing:
 create-if-absent, record the id. Safe to re-run after a partial failure. The state file holds
 resource ids only -- never secrets -- and should be gitignored.
 
+The state file is **bound to the Cloudflare account that created it** (#684): it records
+`cf_account_id` at first write, and any later `up`/`down` with credentials for a different account
+**dies loud** rather than silently reusing the first account's resource ids (which would skip the R2
+mint and 10182 the new account's core). To stand up a second account from the same clone, use a
+separate checkout, remove the state file for a fresh install, or set `DEPLOY_PREFIX` (its state file
+is per-prefix).
+
 `down` deletes by those recorded ids: the RunPod endpoints/templates (and any legacy volume), the
 workers (modules + core via `wrangler delete`), the Access app, AI Gateway, the Secrets Store, and
 **the minted R2 API token** (so a teardown never leaves a live credential behind). It prints a summary

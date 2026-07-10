@@ -172,3 +172,27 @@ def test_wrangler_delete_warn_gated_on_reality(repo, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "WARN" not in out
     assert "verified via API" in out
+
+
+# ---- #684 state bound to the Cloudflare account ---------------------------------------------------
+
+def test_state_records_account_on_first_write(repo):
+    st = vd.State.load(repo)
+    vd.bind_state_to_account(st, vd.Secrets("acct-A", "cf", "rp"))
+    assert st.get("cf_account_id") == "acct-A"
+    # persisted
+    assert vd.State.load(repo).get("cf_account_id") == "acct-A"
+
+
+def test_state_same_account_is_a_noop(repo):
+    st = vd.State.load(repo)
+    st.put("cf_account_id", "acct-A")
+    vd.bind_state_to_account(st, vd.Secrets("acct-A", "cf", "rp"))  # must not die
+    assert st.get("cf_account_id") == "acct-A"
+
+
+def test_state_second_account_dies_loud(repo):
+    st = vd.State.load(repo)
+    st.put("cf_account_id", "acct-A")
+    with pytest.raises(SystemExit):
+        vd.bind_state_to_account(st, vd.Secrets("acct-B", "cf", "rp"))
