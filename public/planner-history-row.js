@@ -343,6 +343,20 @@ function buildHistoryRow(r, childrenByParent) {
     actions.appendChild(dl);
   }
 
+  // #669: the subtitle module (film.finish) can write a soft .srt (mode = sidecar or both); #663
+  // re-times it and the core surfaces its R2 key on the done render row as output.sidecar_key. Offer
+  // it as a download next to the film. Absent (burn-only, silent, pre-#663) means not rendered.
+  const sidecarKey = r.output && typeof r.output === "object" ? r.output.sidecar_key : undefined;
+  if (typeof sidecarKey === "string" && sidecarKey) {
+    const srt = document.createElement("a");
+    srt.href = artifactUrl(sidecarKey);
+    srt.download = (r.project || "film") + ".srt";
+    srt.className = "planner-history-action planner-history-action-srt";
+    srt.textContent = "subtitles (.srt)";
+    srt.title = "download the soft subtitle sidecar (.srt)";
+    actions.appendChild(srt);
+  }
+
   // v0.141.0: per-render log, written to R2 on resolve at a conventional key
   // (renders/logs/<job_id>.txt). Available once the render is terminal; opens
   // the text log via /api/artifact (ownership-gated; the browser carries the

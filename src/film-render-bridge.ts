@@ -163,6 +163,10 @@ export function filmJobToPollView(job: FilmJob, clipJob: ClipJob | null, keyfram
       project: job.project,
       mode,
     };
+    // #663/#669: surface the soft .srt subtitle sidecar key on the done output ONLY when present,
+    // so the persisted render row + history list carry it and the planner can offer a download.
+    // Absent (burn-only, silent, pre-#663) stays absent -- no null noise on legacy rows.
+    if (job.film_finish?.sidecar_key) output.sidecar_key = job.film_finish.sidecar_key;
     // #519: video-finish tier was UNAVAILABLE (unbound / unreachable-after-retry) -- the film COMPLETED
     // delivering what was rendered (per-shot clips at assemble, or the silent film at mux). Surface the
     // loud status + the deliverable clip keys so the planner/UI shows "clips only, finish unavailable"

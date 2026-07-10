@@ -434,4 +434,16 @@ describe("filmJobToPollView surfaces the #619 keyframes_incomplete degrade", () 
     const view = filmJobToPollView(base({ phase: "clips", keyframes_incomplete: undefined }), null);
     expect((view.output as Record<string, unknown>).keyframes_incomplete).toBeUndefined();
   });
+
+  it("surfaces film_finish.sidecar_key on the done output when a subtitle sidecar was produced (#663/#669)", () => {
+    const view = filmJobToPollView(base({ phase: "done", film_key: "renders/film-619/film.mp4", film_finish: { applied: ["subtitle"], errors: [], sidecar_key: "renders/film-619/film.srt" } }), null);
+    expect(view.status).toBe("COMPLETED");
+    expect((view.output as Record<string, unknown>).sidecar_key).toBe("renders/film-619/film.srt");
+  });
+
+  it("omits sidecar_key on the done output when no sidecar was produced (burn-only / silent / pre-#663)", () => {
+    const view = filmJobToPollView(base({ phase: "done", film_key: "renders/film-619/film.mp4", film_finish: { applied: ["film-titles"], errors: [] } }), null);
+    expect(view.status).toBe("COMPLETED");
+    expect((view.output as Record<string, unknown>).sidecar_key).toBeUndefined();
+  });
 });
