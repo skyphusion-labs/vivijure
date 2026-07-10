@@ -196,3 +196,27 @@ def test_state_second_account_dies_loud(repo):
     st.put("cf_account_id", "acct-A")
     with pytest.raises(SystemExit):
         vd.bind_state_to_account(st, vd.Secrets("acct-B", "cf", "rp"))
+
+
+# ---- #680 heal tolerates an already-revoked stale token ------------------------------------------
+
+def test_revoke_token_tolerant_404_is_already_gone(monkeypatch):
+    def fake_http(method, url, token, body=None, *, raise_on_error=False):
+        raise vd.DeployHTTPError("DELETE", url, 404)
+    monkeypatch.setattr(vd, "http_json", fake_http)
+    vd.revoke_token_tolerant("acct", "tok", "tok-gone")  # must NOT raise
+
+
+def test_revoke_token_tolerant_invalid_id_envelope_is_already_gone(monkeypatch):
+    def fake_http(method, url, token, body=None, *, raise_on_error=False):
+        return {"success": False, "errors": [{"code": 1000, "message": "Invalid API token id"}]}
+    monkeypatch.setattr(vd, "http_json", fake_http)
+    vd.revoke_token_tolerant("acct", "tok", "tok-bad")  # must NOT raise
+
+
+def test_revoke_token_tolerant_real_error_dies(monkeypatch):
+    def fake_http(method, url, token, body=None, *, raise_on_error=False):
+        raise vd.DeployHTTPError("DELETE", url, 403)  # e.g. permissions -- a real failure
+    monkeypatch.setattr(vd, "http_json", fake_http)
+    with pytest.raises(SystemExit):
+        vd.revoke_token_tolerant("acct", "tok", "tok-live")

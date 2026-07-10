@@ -601,6 +601,31 @@ def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
     return {"R2_S3_ACCESS_KEY_ID": token_id, "R2_S3_SECRET_ACCESS_KEY": secret, "R2_S3_ENDPOINT": endpoint}
 
 
+def revoke_token_tolerant(account: str, token: str, token_id: str) -> None:
+    """Revoke a CF API token, tolerating already-gone (used by the #680 mint-lost heal: the stale token
+    may have been revoked out-of-band -- dashboard, or an operator cleanup, exactly what happened in the
+    live pass -- and the heal must still re-mint, not die). A 404 or a CF invalid-token-id error means
+    already-revoked (log + continue); any other failure still dies loud."""
+    try:
+        out = http_json("DELETE", f"{CF_API}/accounts/{account}/tokens/{token_id}", token, raise_on_error=True)
+    except DeployHTTPError as e:
+        if e.code == 404:
+            log(f"  R2 token {token_id} already revoked (HTTP 404) -- continuing to re-mint")
+            return
+        die(f"revoking R2 token {token_id} failed: {e}")
+        return
+    if isinstance(out, dict) and out.get("success") is False:
+        errs = out.get("errors") or []
+        msgs = "; ".join(str(x.get("message", x)) for x in errs)
+        codes = {x.get("code") for x in errs if isinstance(x, dict)}
+        # CF invalid-token-id family: 1000 (invalid api token), 7000/7003 (routing / bad identifier),
+        # or a message that names a missing/invalid id -> treat as already-revoked.
+        if (codes & {1000, 7000, 7003}) or any(w in msgs.lower() for w in ("not found", "invalid", "could not route")):
+            log(f"  R2 token {token_id} already revoked ({msgs or 'invalid id'}) -- continuing to re-mint")
+            return
+        die(f"Cloudflare DELETE token {token_id} -> {msgs or 'success:false'}")
+
+
 def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
     """Step 1. The CF data-plane resources the workers bind (D1, R2 x2, AI Gateway), reconciled by name.
     Returns the IN-MEMORY derived values the secret seed needs (GATEWAY_ID slug + R2 S3 creds);
@@ -876,7 +901,7 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
                      secret_in_store="R2_S3_SECRET_ACCESS_KEY" in existing):
         old_id = st.resource_id("r2_token_id")
         log("  R2 S3 secret mint-lost (token id in state, secret absent from store) -- revoking + re-minting (#680)")
-        cf_api("DELETE", f"/accounts/{acct}/tokens/{old_id}", tok)
+        revoke_token_tolerant(acct, tok, old_id)       # tolerate an already-revoked stale token
         st.remove("r2_token_id")                       # clear so mint_r2_s3_token re-mints for real
         cf_derived.update(mint_r2_s3_token(acct, tok, st))
 
