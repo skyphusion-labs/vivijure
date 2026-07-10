@@ -123,6 +123,7 @@ export async function listClipsByShotId(
   project: string,
   shotIds: string[],
   matches: (file: string, shotId: string) => boolean = clipFileMatchesShot,
+  minUploadedMs = 0,
 ): Promise<Map<string, string>> {
   const prefix = `renders/${project}/clips/`;
   const found = new Map<string, string>(); // shot_id -> key (first match wins)
@@ -130,6 +131,12 @@ export async function listClipsByShotId(
   do {
     const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
     for (const o of listed.objects) {
+      // Freshness guard (#661): when a floor is set, skip any clip written BEFORE this run started. A prior
+      // render of the same project name leaves clips at the identical renders/<project>/clips/<shot>_<backend>
+      // path; without this the stall/fail reclaim adopts a 4-day-old clip and ships wrong content silently
+      // (the #245/#249 class). This run own clips always upload AFTER the job created_at, so the legit #141
+      // reclaim survives. R2Object.uploaded is a Date; job stamps are epoch ms -- normalize explicitly.
+      if (minUploadedMs && o.uploaded.getTime() < minUploadedMs) continue;
       const file = o.key.slice(prefix.length);
       for (const shotId of shotIds) {
         if (!found.has(shotId) && matches(file, shotId)) found.set(shotId, o.key);
@@ -313,7 +320,7 @@ export async function cancelInFlightClips(env: Env, jobId: string, preModules?: 
 export async function reclaimClipsFromR2(env: Env, job: ClipJob): Promise<number> {
   const notDone = job.shots.filter((s) => s.status !== "done" && s.validated !== "fail");
   if (!notDone.length) return 0;
-  const present = await listClipsByShotId(env, job.project, notDone.map((s) => s.shot_id));
+  const present = await listClipsByShotId(env, job.project, notDone.map((s) => s.shot_id), clipFileMatchesShot, job.created_at);
   let adopted = 0;
   for (const shot of notDone) {
     if (present.has(shot.shot_id)) {
