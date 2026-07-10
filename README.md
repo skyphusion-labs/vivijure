@@ -11,7 +11,7 @@ a cloud motion API. You own every artifact.
 
 Filmmakers, homelab builders, and creative technologists who want an AI film studio they own: your GPU, your keys, your films. No subscription wall.
 
-**Live:** https://vivijure.com · **Welcome demo:** https://vivijure.skyphusion.org/welcome · **Skyphusion Labs:** https://skyphusion.org
+**Live:** https://vivijure.com · **Studio:** https://vivijure.skyphusion.org · **Skyphusion Labs:** https://skyphusion.org
 
 ## Quick start
 
