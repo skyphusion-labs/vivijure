@@ -12,7 +12,9 @@
 ## BLUF (bottom line up front)
 
 We do not want your data. With Vivijure that is not a slogan, it is a literal fact: **there is no
-Vivijure service that we operate for you, so there is nothing for us to collect.**
+Vivijure service that we operate to hold your content, so there is almost nothing for us to
+collect (the one public thing we run, the read-only demo, is built to collect nothing about you --
+Section 1a).**
 
 - **Vivijure is free software (AGPL-3.0-only) that you run yourself.** You deploy it on your own
   infrastructure (your own Cloudflare account, your own GPU/RunPod), and your storyboards, prompts,
@@ -21,10 +23,14 @@ Vivijure service that we operate for you, so there is nothing for us to collect.
 - **Skyphusion Labs does not run a hosted, multi-tenant, sign-up service.** There is no Vivijure
   account you create with us, no platform we host your content on, and no pool of user data we hold.
   We maintain the software; we do not operate it for the public.
-- **The only Vivijure instance Skyphusion Labs runs is Conrad's own private instance at
-  `vivijure.skyphusion.org`.** It is gated, used by Conrad and the crew (plus the Slate Discord bot
-  via its own named API token), and is not a service anyone signs up for. It processes Conrad's own
-  creative content, not data collected from outside users.
+- **Skyphusion Labs runs exactly two Vivijure instances, and only two.** (1) Conrad's own private
+  instance at `vivijure.skyphusion.org`: gated, used by Conrad and the crew (plus the Slate Discord
+  bot via its own named API token), not a service anyone signs up for; it processes Conrad's own
+  creative content, not data collected from outside users. (2) A public, read-only **demo** at
+  `demo.vivijure.com`: open to anonymous visitors to browse a seeded catalog and pre-made showcase
+  films, it renders nothing, has no account or sign-in, and collects no visitor data beyond the
+  standard edge request logs any website receives. Neither is a hosted, multi-tenant service that
+  holds your content. See Section 1a for exactly what the demo does and does not process.
 
 If you want a privacy policy for your Vivijure instance, you write it, because you are the operator
 and the only person who can see that data. This document explains why the software collects so
@@ -44,9 +50,10 @@ is always "whoever runs that instance," never Skyphusion Labs as some central op
 |---|---|---|
 | **You self-host** | You (or whoever deployed that instance) | Yours, on your infrastructure. Skyphusion Labs never receives it. |
 | **Conrad's private instance (`vivijure.skyphusion.org`)** | Skyphusion Labs (Conrad), for Conrad and the crew only | Conrad's own creative content on Conrad's infrastructure. Not data collected from outside users; there are no outside users. |
+| **The public demo (`demo.vivijure.com`)** | Skyphusion Labs (Conrad), for anyone to browse | No visitor data. It is read-only, renders nothing, has no account, and collects nothing a visitor submits. Only standard edge request logs (Section 1a). |
 
-There is no third row. We do not host instances for other people and will not get into hosting or
-managing them. If you reach a Vivijure instance, whoever deployed it is the operator; the AGPL
+We still do not host instances that hold OTHER people's content, and will not get into hosting or
+managing them for anyone. If you reach a Vivijure instance, whoever deployed it is the operator; the AGPL
 requires them to make their source available, but it does NOT make them adopt this privacy stance,
 and they may collect or handle data however their own instance is configured. Ask that operator.
 
@@ -54,6 +61,27 @@ The rest of this document describes (a) why the software is built to need almost
 what Conrad's own private instance does, as a worked, honest example.
 
 ---
+
+## 1a. The public demo studio (`demo.vivijure.com`)
+
+Separate from Conrad's private instance, Skyphusion Labs runs a public, read-only **demo** so anyone
+can see what the studio is without deploying it. It is built to collect nothing about you:
+
+- **No account, no sign-in, no token.** You browse anonymously. There is nothing to register and no
+  profile to create.
+- **It renders nothing and stores nothing you submit.** Every state-changing request (anything that
+  would create, edit, or render) is refused. The money/compute integrations (AI, GPU/RunPod, file
+  storage) are simply not connected to the demo, so there is no pipeline for your input to enter. The
+  projects, cast, and finished films you see are a fixed, in-house seeded catalog; the films stream
+  from Skyphusion's own asset host (`assets.skyphusion.net`).
+- **No identity cookie and no tracking.** The demo sets no cookie that identifies you (the studio's
+  functional token cookie is never populated because no token is ever entered), and the demo ships no
+  analytics beacon, tracker, or advertising pixel.
+- **What is processed:** only the ordinary server request logs that Cloudflare (and the asset host)
+  keep for any website -- your IP address, user agent, and the paths you request -- used for
+  security, abuse prevention, and rate limiting, on Skyphusion's own infrastructure, never sold or
+  used to profile you. To render your own work with your own data, you self-host (the rest of this
+  policy explains why that keeps the data yours).
 
 ## 2. How the system is built (why there is so little data)
 
