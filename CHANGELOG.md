@@ -3,6 +3,18 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.17.5
+
+**Keyframe stall recovery: no more silent half-films (#619).** PATCH. A stale keyframe poll with
+only a PARTIAL keyframe set in R2 no longer cancels the still-running keyframe job and advances
+with the subset (which shipped a film missing scenes while reporting `complete: true`). The
+recovery now mirrors the clips recovery (#143): a partial set below the phase ceiling HOLDS (no
+cancel, re-fires each stalled sweep as late keyframes land), a full set advances as before, and
+the ceiling delivers what rendered LOUDLY -- new `keyframes_incomplete` job field
+({adopted, expected, dropped}), a `film.keyframes_incomplete` structured event, and the degrade
+surfaced on every poll view. Found by the S26 exercise render (film-8b47feb1 delivered 2 of 4
+scenes as a clean green). PR #620.
+
 ## v0.17.4
 
 **Welcome page SEO: canonical storefront defers to vivijure.com (#604).** PATCH. `/welcome` now
