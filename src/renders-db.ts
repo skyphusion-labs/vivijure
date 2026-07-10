@@ -925,9 +925,15 @@ export async function deleteRenderRow(
   return changes > 0;
 }
 
+/** The renders-list page size when a caller passes no `limit`. ONE source of truth for both the
+ *  GET /api/storyboard/renders route and this function's default, so they cannot drift (#670: the route
+ *  said 100, this signature said 50). 50 is a sensible API/MCP page (well under the 200 clamp below);
+ *  the frontend always sends its own explicit limit, so this governs headless/API/MCP consumers. */
+export const DEFAULT_RENDERS_LIMIT = 50;
+
 export async function listRendersForUser(
   env: Env,
-  limit = 50,
+  limit = DEFAULT_RENDERS_LIMIT,
   projectId: number | null = null,
 ): Promise<RenderRow[]> {
   // Clamp limit so a runaway client cannot drain the DB binding.
