@@ -174,6 +174,15 @@ describe("modulesResponse", () => {
     expect(r.catalog.find((h) => h.name === "finish")?.cardinality).toBe("chain");
     expect(r.catalog.every((h) => h.blurb.length > 0)).toBe(true);
   });
+  it("omits host when not passed, carries it verbatim when passed (additive, #625)", () => {
+    expect(modulesResponse([], render)).not.toHaveProperty("host");
+    expect(modulesResponse([], render, { dispatch: true }).host).toEqual({ dispatch: true });
+    // the demo studio projection: readonly rides the same optional host object
+    expect(modulesResponse([], render, { dispatch: false, readonly: true }).host).toEqual({
+      dispatch: false,
+      readonly: true,
+    });
+  });
 });
 
 describe("resolvePickOne", () => {
