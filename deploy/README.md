@@ -108,6 +108,37 @@ token** (so a teardown never leaves a live credential behind). It prints a summa
 those are left intact. (A re-run of `up` re-mutates the module wrangler.tomls with the store id during
 deploy and restores the placeholder after, so your checkout stays clean on success.)
 
+## Isolation: a second instance / a proving run (`DEPLOY_PREFIX`)
+
+By default the installer uses the canonical resource names (`vivijure-studio`, the `vivijure` /
+`skyphusion-llm` buckets, the `vivijure` Secrets Store + AI Gateway, the `vivijure-module-*` workers).
+To stand up a SECOND instance on the SAME Cloudflare account -- a proving run beside a live studio, a
+staging copy -- set `DEPLOY_PREFIX` (a constant at the top of `vivijure_deploy.py`, e.g. `"proving"`).
+Empty (the default) is byte-for-byte the old behavior; a real outsider sees zero delta.
+
+When set, the prefix is applied through ONE seam (`prefixed()`) to every globally-named resource: the
+D1 database, BOTH R2 buckets, the Secrets Store, the AI Gateway slug, the scoped R2 S3 token, the core
+worker, every module worker, and the state file (`.proving-vivijure-deploy.json`, so two instances keep
+disjoint state). The minted R2 S3 token is scoped to the prefixed bucket. Module workers deploy under
+`--name`; the core deploys from a transformed toml (`transform_core_toml`) that repoints its module
+service bindings to the prefixed names, rebinds its D1/R2 + injects the prefixed Secrets Store id,
+enables `workers_dev`, and drops the custom-domain `[[routes]]` plus the `[[vpc_services]]` /
+`tail_consumers` / `[[migrations]]` blocks (an isolated instance needs no domain and does not provision
+the media-stack / tail / Durable-Object targets, so binding them would dangle the deploy). A prefixed
+instance verifies on its `*.workers.dev` URL.
+
+Assumptions: the operator has already rendered `wrangler.toml` (the installer transforms that rendered
+file; it does not render from the example). Workers-for-Platforms dispatch is not prefixed -- an
+isolated instance runs the service-binding path (leave `[[dispatch_namespaces]]` commented).
+
+## Safety: no silent adopt (`--adopt`)
+
+`up` reconciles by name. To protect a shared account (e.g. a live test instance beside this one), a
+pre-existing resource with the SAME name that THIS instance did not create -- its id is not recorded in
+this instance's state file -- is NOT adopted silently: the run stops and names it. A legitimate re-run
+(whose state already records the id) reconciles exactly as before. Pass `up --adopt` to deliberately
+reuse a pre-existing resource.
+
 ## Roadmap
 
 - **Done:** the CLI, input/secret handling, the full CF + RunPod provisioning spine, seed-before-deploy
