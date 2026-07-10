@@ -1,0 +1,76 @@
+# Vivijure PUBLIC DEMO STUDIO -- wrangler config (#625). SEPARATE deploy from the studio core.
+#
+# This is the read-only, zero-spend public demo at demo.vivijure.com. It runs the SAME Worker code
+# (src/index.ts) as the core, but AUTH_MODE=demo flips it to a browse-only projection: reads open to
+# everyone, every mutation denied at the gate (src/auth-gate.ts verifyDemoRequest), and GET
+# /api/modules advertises host.readonly = true. The catalog + content come entirely from a dedicated
+# demo D1 seeded out of band (migrations/demo/0001_demo_seed.sql); no live module, GPU, or storage is
+# reachable.
+#
+# account_id is NOT hardcoded; it is read from CLOUDFLARE_ACCOUNT_ID (env / CI secret), exactly like
+# wrangler.toml.example. The real wrangler.demo.toml is gitignored and rendered from this example (or
+# copied by hand, filling the one ${...} placeholder for a `wrangler deploy -c wrangler.demo.toml`).
+
+name = "vivijure-demo"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# No preview URLs, no workers.dev: the demo lives ONLY at its custom domain (below). A *.workers.dev
+# hostname would be an unlabeled second door onto the same read-only surface -- keep it off.
+preview_urls = false
+workers_dev = false
+
+# The studio frontend (public/) served via Workers Assets. IDENTICAL config to the core: the Worker
+# owns ALL security headers, so every response (pages included) must route through the Worker's
+# applyResponseSecurity chokepoint.
+#   - run_worker_first = true: route every request through the Worker class (else the pages get NO
+#     headers -- the post-v0.7.4 finding).
+#   - html_handling = "none": serve assets at their EXACT path, no .html<->pretty-URL redirect loop
+#     (the #374 -> #375 revert). The Worker maps the pretty page routes itself (STUDIO_PAGE_ASSETS).
+# In demo mode applyResponseSecurity emits STUDIO_DEMO_CSP (asset-response.ts): the base studio CSP
+# plus `media-src 'self' https://assets.skyphusion.net`, so the seeded showcase MP4s play.
+assets = { directory = "./public", binding = "ASSETS", html_handling = "none", run_worker_first = true }
+
+[observability]
+enabled = true
+
+# AUTH_MODE = "demo" is EXPLICIT and load-bearing. The deploy fails loud when AUTH_MODE is unset (the
+# gate fails closed on an unknown mode, v0.12.1), and demo mode is the ENTIRE point of this deploy:
+#   - src/auth-gate.ts isDemoMode -> reads open, writes denied with the "demo studio is read-only" reason;
+#   - src/index.ts /api/modules -> host.readonly = true;
+#   - src/modules/registry.ts isDemoEnv -> reads the seeded installed_modules rows with NO dispatch namespace;
+#   - src/asset-response.ts -> STUDIO_DEMO_CSP (the showcase media-src).
+# NEVER default this elsewhere; a demo deploy is demo mode or it is nothing.
+[vars]
+AUTH_MODE = "demo"
+
+# The dedicated DEMO D1 (binding name DB). Provision + seed OUT OF BAND, NEVER touching prod:
+#   wrangler d1 create vivijure-demo                                    # paste the id below / into CI var
+#   wrangler d1 migrations apply vivijure-demo --remote                 # base schema migrations/0001..0010
+#   wrangler d1 execute vivijure-demo --remote --file=migrations/demo/0001_demo_seed.sql   # the seed (idempotent)
+# The seed's render rows carry ABSOLUTE assets.skyphusion.net URLs, so the demo needs NO R2 binding to
+# display a film. database_id is rendered from D1_DEMO_DATABASE_ID (CI) or filled by hand.
+[[d1_databases]]
+binding = "DB"
+database_name = "vivijure-demo"
+database_id = "${D1_DEMO_DATABASE_ID}"
+
+# --- DELIBERATELY ABSENT bindings -- the ABSENCE is the zero-spend proof, do NOT add any of these. ---
+#
+# A demo deploy binds ONLY the demo D1 (DB) + static ASSETS above. It has NO AI, NO RunPod secrets,
+# NO R2 buckets, NO Secrets Store secrets (demo mode reads no STUDIO_API_TOKEN), NO MODULE_* service
+# bindings, NO MODULE_DISPATCH namespace, NO VPC services, NO tail consumer, NO cron [triggers], and
+# NO rate-limit binding. Every read path the demo exercises tolerates their absence (verified on
+# wrangler dev with AUTH_MODE=demo + seed): the catalog is the seeded installed_modules rows, the
+# films are absolute showcase URLs, and every write is denied at the gate before any binding is touched.
+#
+# If something at boot or deploy demands one of these bindings, that is a BLOCKER to escalate -- NOT a
+# binding to add. Adding a binding to silence a warning would spend money and break the zero-spend
+# promise this deploy exists to prove.
+
+# demo.vivijure.com on the vivijure.com zone. Workers custom domain owns DNS + the cert (Universal SSL
+# for a first-level subdomain -- NO Advanced Certificate Manager needed).
+[[routes]]
+pattern = "demo.vivijure.com"
+custom_domain = true
