@@ -1,10 +1,12 @@
 // film-titles: a film.finish module worker (vivijure-module/2). Adds an opening TITLE card and an
 // end CREDIT card to the assembled+muxed film, via the always-on video-finish CPU container's
-// /film-titles route over Workers VPC (VIDEO_FINISH_VPC).
+// video-finish route over Workers VPC (VIDEO_FINISH_VPC).
 //
-// SYNCHRONOUS: card generation + a 2-3 segment concat on a ~30 s film completes in a few seconds on
-// the CPU container, within the Worker timeout. No /poll. The core runs the film.finish chain on the
-// assembled film (post-mux, before done), folding modules in ui.order.
+// ASYNC job+poll (#602): a card concat on a LONG film can outlast a Worker request budget, so this
+// module submits to the container's async route and returns { ok, pending, poll }; the core polls
+// /poll across ticks (mirroring the GPU finish satellites). It FALLS BACK to the synchronous
+// /film-titles route when the container has no async support (a pre-#602 container 404s the async
+// route), so an old container keeps working unchanged.
 //
 // CREDENTIALLESS by design: the core presigns the film GET + the result PUT and hands them in the
 // input. This module forwards the spec to the container and reports the output key. It never touches
@@ -19,18 +21,26 @@ import {
   type ModuleManifest,
   type InvokeRequest,
   type InvokeResponse,
+  type PollRequest,
+  type PollResponse,
   type FilmFinishInput,
   type FilmFinishOutput,
 } from "./contract";
-import { coerceConfig, hasCards, buildContainerSpec, passthroughOutput } from "./film-titles";
+import {
+  coerceConfig, hasCards, buildContainerSpec, passthroughOutput,
+  encodePoll, decodePoll, completedOutput, CONTAINER_NOTFOUND_GRACE_MS,
+} from "./film-titles";
 
 interface Env {
   VIDEO_FINISH_VPC: { fetch(url: RequestInfo, init?: RequestInit): Promise<Response> };
 }
 
+// The container route this module drives (sync POST /film-titles, async POST /async/film-titles).
+const ROUTE = "film-titles";
+
 const MANIFEST: ModuleManifest = {
   name: "film-titles",
-  version: "0.1.1",
+  version: "0.2.0",
   api: MODULE_API,
   hooks: ["film.finish"],
   provides: [{ id: "film-titles", label: "Title + credit cards on the finished film" }],
@@ -54,6 +64,44 @@ function passthrough(input: FilmFinishInput, reason: string, degraded = false): 
   return { ok: true, output };
 }
 
+/** Try the container's async job route. On 202 + jobId -> the job id; on anything else (a pre-#602
+ *  container 404s the route, a non-202, or a transport failure) -> null, so the caller falls back to
+ *  the synchronous route. Absolute URL: the host is the VPC service, ignored by the binding. */
+async function submitAsync(env: Env, spec: Record<string, unknown>): Promise<string | null> {
+  let resp: Response;
+  try {
+    resp = await env.VIDEO_FINISH_VPC.fetch(`http://video-finish/async/${ROUTE}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spec),
+    });
+  } catch { return null; }
+  if (resp.status !== 202) return null;
+  try {
+    const body = (await resp.json()) as { ok?: boolean; jobId?: string };
+    return body.ok === true && typeof body.jobId === "string" && body.jobId.length > 0 ? body.jobId : null;
+  } catch { return null; }
+}
+
+/** Synchronous fallback: the pre-#602 behavior, unchanged. Used when the container has no async route. */
+async function invokeSync(env: Env, input: FilmFinishInput, spec: Record<string, unknown>): Promise<InvokeResponse<FilmFinishOutput>> {
+  let resp: Response;
+  try {
+    resp = await env.VIDEO_FINISH_VPC.fetch("http://video-finish/film-titles", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spec),
+    });
+  } catch {
+    return passthrough(input, "passthrough:container-unreachable", true);
+  }
+  if (!resp.ok) return passthrough(input, "passthrough:container-failed", true);
+  let body: { ok?: boolean; key?: string };
+  try {
+    body = (await resp.json()) as typeof body;
+  } catch {
+    return passthrough(input, "passthrough:container-bad-response", true);
+  }
+  if (!body.ok) return passthrough(input, "passthrough:container-failed", true);
+  return { ok: true, output: { film_key: body.key || input.output_key, applied: ["film-titles"] } };
+}
+
 async function invoke(env: Env, req: InvokeRequest<FilmFinishInput>): Promise<InvokeResponse<FilmFinishOutput>> {
   const input = req.input;
   if (!input || !input.film_key || !input.video_url || !input.output_url || !input.output_key) {
@@ -65,32 +113,43 @@ async function invoke(env: Env, req: InvokeRequest<FilmFinishInput>): Promise<In
   const cfg = coerceConfig(req.config);
   const spec = buildContainerSpec(input, cfg);
 
+  // Prefer async so a long encode survives across request budgets; fall back to sync for a pre-#602
+  // container (back-compat). A sync fallback that itself fails soft-degrades (#190), never drops the film.
+  const jobId = await submitAsync(env, spec);
+  if (jobId) {
+    return { ok: true, pending: true, poll: encodePoll({ jobId, filmKey: input.film_key, outputKey: input.output_key, submittedAt: Date.now() }) };
+  }
+  return invokeSync(env, input, spec);
+}
+
+async function poll(env: Env, body: PollRequest): Promise<PollResponse<FilmFinishOutput>> {
+  const st = decodePoll(body.poll);
+  if (!st) return { ok: false, error: "film-titles: bad poll token" };
+  if (!env.VIDEO_FINISH_VPC) return { ok: false, error: "film-titles: no VIDEO_FINISH_VPC binding" };
+
   let resp: Response;
   try {
-    // Absolute URL (host is the VPC service, ignored by the binding). A bare "/film-titles" is not a
-    // valid URL and throws in the Workers runtime, which the catch below would mask as
-    // "container-unreachable", silently passing the film through UNCARDED. Matches the core convention
-    // env.VIDEO_FINISH_VPC.fetch("http://video-finish/finish").
-    resp = await env.VIDEO_FINISH_VPC.fetch("http://video-finish/film-titles", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(spec),
-    });
-  } catch (e) {
-    return passthrough(input, "passthrough:container-unreachable", true);
-  }
-  if (!resp.ok) return passthrough(input, "passthrough:container-failed", true);
-
-  let body: { ok?: boolean; key?: string };
-  try {
-    body = (await resp.json()) as typeof body;
+    resp = await env.VIDEO_FINISH_VPC.fetch(`http://video-finish/async/status/${encodeURIComponent(st.jobId)}`);
   } catch {
-    return passthrough(input, "passthrough:container-bad-response", true);
+    return { ok: true, pending: true }; // transport blip: re-poll next tick
   }
-  if (!body.ok) return passthrough(input, "passthrough:container-failed", true);
-
-  // The container wrote the carded film to output_key (behind output_url). Report it as the new film.
-  return { ok: true, output: { film_key: body.key || input.output_key, applied: ["film-titles"] } };
+  if (resp.status === 404) {
+    // The container lost the job (its store is in-process; a restart drops it). Brief grace for a
+    // post-submit race; past it, report gone so the core re-dispatches -- the deterministic output key
+    // makes a re-run idempotent (#141 GC-grace discipline, container flavor).
+    return Date.now() - st.submittedAt < CONTAINER_NOTFOUND_GRACE_MS
+      ? { ok: true, pending: true }
+      : { ok: false, error: "film-titles: video-finish container job not found (restarted); resubmit" };
+  }
+  if (!resp.ok) return { ok: true, pending: true }; // 5xx gateway blip: re-poll
+  let s: { status?: string; result?: { ok?: boolean; key?: string } | null; error?: string };
+  try { s = (await resp.json()) as typeof s; } catch { return { ok: true, pending: true }; }
+  if (s.status === "completed") {
+    if (!s.result || s.result.ok !== true) return { ok: false, error: "film-titles: container completed without an ok result" };
+    return { ok: true, output: completedOutput(s.result, st) };
+  }
+  if (s.status === "failed") return { ok: false, error: "film-titles: container job failed: " + (s.error ?? "unknown") };
+  return { ok: true, pending: true }; // pending / unknown -> keep polling
 }
 
 export default {
@@ -108,6 +167,13 @@ export default {
         return json({ ok: false, error: "unsupported hook " + String(req.hook) } as InvokeResponse);
       }
       return json(await invoke(env, req));
+    }
+    if (request.method === "POST" && url.pathname === "/poll") {
+      let body: PollRequest;
+      try { body = (await request.json()) as PollRequest; }
+      catch { return json({ ok: false, error: "invalid JSON body" } as PollResponse); }
+      if (!body?.poll || typeof body.poll !== "string") return json({ ok: false, error: "poll token required" } as PollResponse);
+      return json(await poll(env, body));
     }
     return json({ ok: false, error: "not found" }, 404);
   },

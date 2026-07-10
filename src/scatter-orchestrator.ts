@@ -319,6 +319,8 @@ async function maybeFinalizeScatter(env: Env, job: ScatterJob): Promise<void> {
 async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
   if (job.film_finish || !job.film_key) return; // already run (or nothing to card)
   job.film_finish_dispatched ??= {};
+  job.film_finish_polls ??= {};
+  job.film_finish_attempts ??= {};
   const r = await runFilmFinish(env, {
     film_key: job.film_key,
     // Caption scenes in the SAME order the gather assembles the clips (expected_shot_ids), NOT bundle
@@ -335,6 +337,15 @@ async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
     // duplicate encode of the same step.
     dispatched: job.film_finish_dispatched,
     persistDispatch: async (key, ts) => { job.film_finish_dispatched![key] = ts; await saveScatterJob(env, job); },
+    // #602 async job+poll: persist the per-step module poll token + terminal-failure count so a long
+    // single film.finish step survives across gather ticks instead of re-burning each tick.
+    polls: job.film_finish_polls,
+    attempts: job.film_finish_attempts,
+    persistPoll: async (key, token) => {
+      if (token === null) delete job.film_finish_polls![key];
+      else job.film_finish_polls![key] = token;
+      await saveScatterJob(env, job);
+    },
   });
   if (!r.ran) { job.film_finish = { applied: [], errors: [] }; return; } // no film.finish module -> mark + skip
   if (r.errors.length > 0) console.warn(`scatter film.finish errors for ${job.scatter_id}: ${r.errors.join("; ")}`);

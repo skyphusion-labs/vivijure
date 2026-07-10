@@ -107,21 +107,37 @@ describe("subtitle pure logic", () => {
   });
 });
 
-// Module invoke path (default export). Guards the same #207 lesson as film-titles: a BARE "/subtitle"
-// URL throws in the Workers runtime, would be masked as "container-unreachable", and ship the film
-// UNCAPTIONED. Also asserts the honest degrade/no-op behavior.
-describe("subtitle module invoke", () => {
-  function vpcEnv(over: { status?: number; body?: unknown; throws?: boolean } = {}) {
+// Module invoke path (default export). #602: the module is ASYNC-FIRST -- it submits to the container's
+// /async/subtitle route and returns a poll token; the core drives submit+poll across ticks. It FALLS
+// BACK to the synchronous /subtitle route on a pre-#602 container. Both use ABSOLUTE URLs (the #207
+// bare-path bug). Also asserts the honest degrade/no-op behavior + film.finish conformance.
+describe("subtitle module invoke (#602 async + honest degrade)", () => {
+  function vpcEnv(over: {
+    asyncSupported?: boolean;
+    statusResult?: { status: string; result?: unknown; error?: string };
+    syncStatus?: number;
+    syncBody?: unknown;
+    throws?: boolean;
+  } = {}) {
     const calls: string[] = [];
+    const asyncSupported = over.asyncSupported ?? true;
+    const j = (b: unknown, status = 200) =>
+      new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
     const env = {
       VIDEO_FINISH_VPC: {
         async fetch(input: Request | string) {
-          calls.push(typeof input === "string" ? input : input.url);
+          const url = typeof input === "string" ? input : input.url;
+          calls.push(url);
           if (over.throws) throw new TypeError("Invalid URL");
-          return new Response(JSON.stringify(over.body ?? { ok: true, key: "renders/film-x/film_subbed.mp4", burned: true, sidecar: false }), {
-            status: over.status ?? 200,
-            headers: { "content-type": "application/json" },
-          });
+          const path = new URL(url).pathname;
+          if (path.startsWith("/async/status/")) {
+            const st = over.statusResult ?? { status: "completed", result: { ok: true, key: "renders/film-x/film_subbed.mp4", burned: true, sidecar: false } };
+            return j(st, st.status === "not_found" ? 404 : 200);
+          }
+          if (path.startsWith("/async/")) {
+            return asyncSupported ? j({ ok: true, jobId: "job-sub", status: "pending" }, 202) : j({ ok: false, error: "unknown async route" }, 404);
+          }
+          return j(over.syncBody ?? { ok: true, key: "renders/film-x/film_subbed.mp4", burned: true, sidecar: false }, over.syncStatus ?? 200);
         },
       },
     } as unknown as Parameters<typeof worker.fetch>[1];
@@ -134,36 +150,66 @@ describe("subtitle module invoke", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ hook: "film.finish", input, config, context: {} }),
     });
+  const pollReq = (token: string) =>
+    new Request("https://module/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ poll: token }),
+    });
 
-  it("calls the container with an ABSOLUTE url and burns the captions (not degraded)", async () => {
+  it("submits async and returns a poll token (absolute /async URL, #207)", async () => {
     const { env, calls } = vpcEnv();
     const res = await worker.fetch(invoke(baseInput()), env);
-    const json = (await res.json()) as { ok: boolean; output: { film_key: string; applied: string[]; degraded?: string } };
+    const json = (await res.json()) as { ok: boolean; pending?: boolean; poll?: string };
     expect(calls).toHaveLength(1);
     expect(() => new URL(calls[0])).not.toThrow();
-    expect(new URL(calls[0]).pathname).toBe("/subtitle");
+    expect(new URL(calls[0]).pathname).toBe("/async/subtitle");
+    expect(json.ok).toBe(true);
+    expect(json.pending).toBe(true);
+    expect(typeof json.poll).toBe("string");
+  });
+
+  it("polls to the captioned film on completion, honoring the contract (not degraded)", async () => {
+    const { env } = vpcEnv();
+    const sub = (await (await worker.fetch(invoke(baseInput()), env)).json()) as { poll: string };
+    const json = (await (await worker.fetch(pollReq(sub.poll), env)).json()) as { ok: boolean; output: { film_key: string; applied: string[]; degraded?: string } };
     expect(json.ok).toBe(true);
     expect(json.output.film_key).toBe("renders/film-x/film_subbed.mp4"); // the captioned film, not the original
     expect(json.output.applied).toEqual(["subtitle"]);
     expect(json.output.degraded).toBeUndefined();
-    // conformance: the success payload honors the film.finish contract
     expect(checkHookOutput("film.finish", json.output).pass).toBe(true);
   });
 
-  it("reports both burn and sidecar when the container wrote both", async () => {
-    const { env } = vpcEnv({ body: { ok: true, key: "renders/film-x/film_subbed.mp4", burned: true, sidecar: true } });
-    const res = await worker.fetch(invoke(baseInput(), { mode: "both" }), env);
-    const json = (await res.json()) as { ok: boolean; output: { film_key: string; applied: string[] } };
+  it("poll reports both burn and sidecar when the container wrote both", async () => {
+    const { env } = vpcEnv({ statusResult: { status: "completed", result: { ok: true, key: "renders/film-x/film_subbed.mp4", burned: true, sidecar: true } } });
+    const sub = (await (await worker.fetch(invoke(baseInput(), { mode: "both" }), env)).json()) as { poll: string };
+    const json = (await (await worker.fetch(pollReq(sub.poll), env)).json()) as { ok: boolean; output: { film_key: string; applied: string[] } };
     expect(json.output.applied).toEqual(["subtitle", "subtitle:sidecar"]);
     expect(json.output.film_key).toBe("renders/film-x/film_subbed.mp4");
   });
 
-  it("sidecar-only keeps the ORIGINAL film_key (nothing burned), no fake subtitle tag", async () => {
-    const { env } = vpcEnv({ body: { ok: true, key: "", burned: false, sidecar: true } });
-    const res = await worker.fetch(invoke(baseInput(), { mode: "sidecar" }), env);
-    const json = (await res.json()) as { ok: boolean; output: { film_key: string; applied: string[] } };
+  it("poll on a sidecar-only completion keeps the ORIGINAL film_key (no fake burn tag)", async () => {
+    const { env } = vpcEnv({ statusResult: { status: "completed", result: { ok: true, key: "", burned: false, sidecar: true } } });
+    const sub = (await (await worker.fetch(invoke(baseInput(), { mode: "both" }), env)).json()) as { poll: string };
+    const json = (await (await worker.fetch(pollReq(sub.poll), env)).json()) as { ok: boolean; output: { film_key: string; applied: string[] } };
     expect(json.output.film_key).toBe("renders/film-x/film.mp4"); // unchanged
     expect(json.output.applied).toEqual(["subtitle:sidecar"]);
+  });
+
+  it("falls back to the SYNCHRONOUS route on a pre-#602 container", async () => {
+    const { env, calls } = vpcEnv({ asyncSupported: false });
+    const json = (await (await worker.fetch(invoke(baseInput()), env)).json()) as { ok: boolean; output: { film_key: string; applied: string[] } };
+    expect(calls.map((c) => new URL(c).pathname)).toEqual(["/async/subtitle", "/subtitle"]);
+    expect(json.output.film_key).toBe("renders/film-x/film_subbed.mp4");
+    expect(json.output.applied).toEqual(["subtitle"]);
+  });
+
+  it("poll surfaces a container job FAILURE (ok:false -> the core soft-degrades, fail-safe)", async () => {
+    const { env } = vpcEnv({ statusResult: { status: "failed", error: "libass boom" } });
+    const sub = (await (await worker.fetch(invoke(baseInput()), env)).json()) as { poll: string };
+    const json = (await (await worker.fetch(pollReq(sub.poll), env)).json()) as { ok: boolean; error?: string };
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain("container job failed");
   });
 
   it("soft-degrades (fail-safe) when the container is unreachable, keeping the original film", async () => {
@@ -173,14 +219,6 @@ describe("subtitle module invoke", () => {
     expect(json.ok).toBe(true); // never drops the film
     expect(json.output.film_key).toBe("renders/film-x/film.mp4"); // original (uncaptioned)
     expect(json.output.degraded).toBe("passthrough:container-unreachable");
-  });
-
-  it("soft-degrades when the container fails (non-2xx)", async () => {
-    const { env } = vpcEnv({ status: 500, body: { ok: false } });
-    const res = await worker.fetch(invoke(baseInput()), env);
-    const json = (await res.json()) as { ok: boolean; output: { film_key: string; degraded?: string } };
-    expect(json.output.film_key).toBe("renders/film-x/film.mp4");
-    expect(json.output.degraded).toBe("passthrough:container-failed");
   });
 
   it("no-ops without round-tripping the container when there are no captions", async () => {

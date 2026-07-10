@@ -41,9 +41,24 @@ keeps the credentials.
 | `/overlay` | POST | burn a text overlay / card onto the film |
 | `/film-titles` | POST | prepend a title card + append credit cards |
 | `/subtitle` | POST | burn time-synced captions (and/or emit a soft `.srt` sidecar) |
+| `/async/{route}` | POST | #602: submit `film-titles` or `subtitle` as a BACKGROUND job -> `202 {ok, jobId}` |
+| `/async/status/{jobId}` | GET | poll a background job -> `{ok, status: pending|completed|failed, result?, error?}` (`404 {status:"not_found"}` if unknown) |
 
 Every route takes presigned R2 URLs (GET inputs, PUT output) in a small JSON body and returns
 `{ ok, ... }`. Failures are returned as data (`{ ok: false, error }`), never thrown across the wire.
+
+### Async job+poll (#602)
+
+A `film.finish` encode (a long subtitle burn / card concat) can outlast a single Worker request
+budget; the SYNCHRONOUS route then dies before the container PUTs, so the step never completes.
+`POST /async/film-titles` and `POST /async/subtitle` take the SAME JSON body as their sync twins but
+return `202 {ok, jobId}` immediately, run the ffmpeg work in a background task, and PUT the finished
+MP4 to the presigned output URL on completion. The `subtitle` / `film-titles` module workers poll
+`GET /async/status/{jobId}` and the core drives submit+poll across ticks (mirroring the GPU finish
+satellites). Jobs live IN-PROCESS: a container restart drops them, at which point status answers
+`not_found` and the core re-submits (the deterministic output key makes a re-run idempotent) or adopts
+the R2 artifact if the encode had finished. The synchronous routes are UNCHANGED, so an old core / an
+old module keeps working.
 
 ## DSP
 

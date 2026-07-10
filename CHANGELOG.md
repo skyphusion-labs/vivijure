@@ -3,6 +3,30 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.19.0
+
+**film.finish survives a single step over budget: async job+poll for the video-finish container
+(#602).** MINOR. v0.15.x's #600 made a film.finish CHAIN survivable (per-step deterministic keys +
+R2-presence adoption across ticks), but a SINGLE step whose encode alone exceeds one request budget
+re-dispatched forever: a synchronous module has no poll token, and its output key never appears
+because the encode dies with the request. Three layers, no contract bump: the video-finish container
+gains an async mode (`POST /async/{route}` -> 202 + jobId, background ffmpeg, PUT on completion;
+`GET /async/status/{jobId}`) with the sync routes unchanged; the film-titles + subtitle modules
+(v0.2.0) go async-first, returning the existing generic `{pending, poll}` variant and FALLING BACK to
+the sync route on a pre-#602 container; the core's `runFilmFinish` becomes a true submit+poll-per-tick
+phase on persisted tokens (`film_finish_polls`/`_attempts`), handling both shapes, threaded through
+single-film AND scatter. R2 presence stays authoritative on completion and the #190 fail-safe holds:
+a genuinely failed step retries bounded then soft-degrades RECORDED (ships uncarded, never silently,
+never failing the render). Core deploys safely ahead of the container: the sync fallback carries prod
+until the media stack rolls the new image (#634).
+
+Also in this release (shipped on main since v0.18.1, deploys with this tag):
+- **Demo studio Phase A foundation (#625):** `AUTH_MODE=demo` read-only gate (GET/HEAD open to
+  everyone, every mutation 403, no credential honored) + `host.readonly` registry projection (#628);
+  the frontend read-only gate as a pure projection of that one flag (#629); the registry's ONE
+  deliberate demo-mode exception reading seeded `installed_modules` without a dispatch namespace,
+  display-only by construction (#630). No effect on any non-demo deploy (pinned by tests).
+
 ## v0.18.1
 
 **advanceToClips loud-degrades a partial keyframe set, no silent half-film (#622).** PATCH. The
