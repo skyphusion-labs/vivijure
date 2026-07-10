@@ -43,6 +43,7 @@ import getpass
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -95,6 +96,36 @@ STORE_BINDING_NAMES = (  # binding NAMES only (never values) -- the store keys t
 # subset -- upscale/lipsync degrade gracefully.
 RUNPOD_ENDPOINTS = ("vivijure-backend", "vivijure-upscale", "vivijure-musetalk")
 GHCR_IMAGE = "ghcr.io/skyphusion-labs/vivijure-backend"  # public image -> NO registry auth (see note).
+
+
+# --------------------------------------------------------------------------------------------------
+# Instance isolation (#244). DEPLOY_PREFIX is the ONE seam that lets a SECOND instance stand up on the
+# SAME Cloudflare account without colliding with (or silently adopting) the first -- a second studio, a
+# proving run beside a live service, a name coincidence. Default EMPTY = today's verbatim behavior,
+# byte-for-byte, zero delta for a real outsider.
+# --------------------------------------------------------------------------------------------------
+
+DEPLOY_PREFIX = ""  # e.g. "proving" -> every globally-named resource becomes "proving-<name>". Empty = verbatim.
+
+# Runtime flag (NOT a constant): `up --adopt` opts INTO reusing a pre-existing same-name resource this
+# instance did not create. Default False = REFUSE to silently adopt (guards a shared account).
+_ADOPT = False
+
+
+def prefixed(name: str) -> str:
+    """The ONE name-derivation seam. Empty DEPLOY_PREFIX -> the name verbatim (zero delta). Set ->
+    "<prefix>-<name>". EVERY globally-scoped resource name (D1, both R2 buckets, the Secrets Store, the
+    AI Gateway slug, the R2 S3 token, the core + module worker names, the state file) derives through
+    here -- never string-scatter the prefix."""
+    p = DEPLOY_PREFIX.strip()
+    return f"{p}-{name}" if p else name
+
+
+def state_file_name() -> str:
+    """The per-instance state file. Prefixed so two instances on one account keep disjoint state (the
+    leading dot of the hidden file is preserved; the prefix goes after it)."""
+    p = DEPLOY_PREFIX.strip()
+    return f".{p}-vivijure-deploy.json" if p else STATE_FILE
 
 
 # --------------------------------------------------------------------------------------------------
@@ -209,16 +240,28 @@ def cf_api(method: str, path: str, token: str, body: dict | None = None):
 
 def create_if_absent(*, kind: str, account: str, token: str, list_path: str, create_path: str,
                      create_body: dict, name: str, name_key: str, id_key: str,
-                     list_unwrap: str | None = None) -> str:
+                     list_unwrap: str | None = None, known_id: str | None = None) -> str:
     """Idempotent reconcile by NAME -> returns the resource id. Lists existing, matches name_key, else
-    POSTs create_body. list_unwrap handles nested list results (e.g. R2 buckets under 'buckets')."""
+    POSTs create_body. list_unwrap handles nested list results (e.g. R2 buckets under 'buckets').
+
+    NO-SILENT-ADOPT guard (#244): a pre-existing resource with the SAME name that THIS instance did not
+    create (known_id, from our state file, does not match it) is NOT adopted silently -- the run DIES,
+    unless `up --adopt` was passed. This is the footgun killer on a shared account: a name coincidence
+    with another live deployment (e.g. a test instance beside this one) can no longer be hijacked."""
     listed = cf_api("GET", list_path.format(acct=account), token)
     items = (listed.get(list_unwrap) if (list_unwrap and isinstance(listed, dict)) else listed) or []
     for it in (items if isinstance(items, list) else []):
         if isinstance(it, dict) and it.get(name_key) == name:
             rid = str(it.get(id_key, name))
-            log(f"  {kind} '{name}' exists ({rid})")
-            return rid
+            if known_id is not None and str(known_id) == rid:
+                log(f"  {kind} '{name}' exists ({rid}) [created by this instance]")
+                return rid
+            if _ADOPT:
+                log(f"  {kind} '{name}' exists ({rid}) -- ADOPTING (--adopt)")
+                return rid
+            die(f"refusing to adopt pre-existing {kind} '{name}' ({rid}): this instance did not create it "
+                f"(not recorded in {state_file_name()}). It may belong to another deployment on this "
+                f"account. Re-run `up --adopt` to reuse it deliberately, or set DEPLOY_PREFIX to isolate.")
     created = cf_api("POST", create_path.format(acct=account), token, create_body)
     rid = str(created.get(id_key, name)) if isinstance(created, dict) else name
     log(f"  {kind} '{name}' created ({rid})")
@@ -254,6 +297,60 @@ def module_dirs(repo: Path) -> list[str]:
     return mods
 
 
+def module_worker_name(repo: Path, mod: str) -> str:
+    """The deployed worker NAME of a module = its wrangler.toml `name` (NOT the dir name). Read once so a
+    prefixed deploy passes `--name prefixed(name)` and the core binds that same prefixed name."""
+    m = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"', (repo / "modules" / mod / "wrangler.toml").read_text())
+    if not m:
+        die(f"module {mod}: no `name` in modules/{mod}/wrangler.toml")
+    return m.group(1)
+
+
+def core_worker_name(repo: Path) -> str:
+    """The core worker NAME = the root wrangler.toml `name` (default 'vivijure-studio')."""
+    m = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"', (repo / "wrangler.toml").read_text())
+    if not m:
+        die("no `name` in wrangler.toml")
+    return m.group(1)
+
+
+def transform_core_toml(text: str, *, prefix: str, module_service_names: list, d1_id: str, store_id: str) -> str:
+    """PURE text render of the core wrangler.toml for an ISOLATED (prefixed) instance. Empty prefix ->
+    unchanged (never called then). A prefixed core CANNOT deploy verbatim: its [[services]] point at
+    prod-named modules, its D1/R2 + Secrets Store bindings are prod's, and its [[vpc_services]] /
+    tail_consumers / [[routes]] / [[migrations]] targets do not exist for an isolated instance (a
+    dangling binding, or a delete-class migration for a class this fresh worker never had, fails
+    `wrangler deploy`). This applies exactly the rewrites that make an isolated core deployable:
+      - repoint every [[services]] service = "<module>" to the prefixed module worker name,
+      - rebind [[r2_buckets]] bucket_name + the R2_S3_BUCKET var to the prefixed buckets,
+      - inject the prefixed D1 database_id + the prefixed Secrets Store store_id,
+      - enable workers_dev + drop the custom-domain [[routes]] block (an isolated instance verifies on
+        workers.dev; it needs no domain),
+      - strip [[vpc_services]] + tail_consumers + [[migrations]] (unprovisioned / inapplicable here).
+    Unit-tested here; the end-to-end (wrangler accepts it, the isolated core stands up) is proven when a
+    prefixed instance is first deployed live."""
+    p = prefix.strip()
+    if not p:
+        return text
+    def pfx(n):
+        return f"{p}-{n}"
+    for w in module_service_names:
+        text = text.replace(f'service = "{w}"', f'service = "{pfx(w)}"')
+    for b in R2_BUCKETS:
+        text = text.replace(f'bucket_name = "{b}"', f'bucket_name = "{pfx(b)}"')
+        text = text.replace(f'R2_S3_BUCKET = "{b}"', f'R2_S3_BUCKET = "{pfx(b)}"')
+    if d1_id:
+        text = re.sub(r'(?m)^(database_id\s*=\s*").*?(")', lambda m: m.group(1) + d1_id + m.group(2), text)
+    if store_id:
+        text = re.sub(r'(?m)^(\s*store_id\s*=\s*").*?(")', lambda m: m.group(1) + store_id + m.group(2), text)
+    text = re.sub(r'(?m)^workers_dev\s*=\s*false\s*$', 'workers_dev = true', text)
+    text = re.sub(r'(?ms)^\[\[routes\]\].*?(?=^\[|\Z)', '', text)
+    text = re.sub(r'(?ms)^\[\[vpc_services\]\].*?(?=^\[|\Z)', '', text)
+    text = re.sub(r'(?ms)^\[\[migrations\]\].*?(?=^\[|\Z)', '', text)
+    text = re.sub(r'(?m)^tail_consumers\s*=\s*\[.*?\]\s*$', '', text)
+    return text
+
+
 # --------------------------------------------------------------------------------------------------
 # State: idempotent reconcile. Records resource ids (NEVER secrets) so a re-run reconciles and a
 # teardown can delete by id.
@@ -267,7 +364,7 @@ class State:
 
     @classmethod
     def load(cls, repo: Path) -> "State":
-        p = repo / STATE_FILE
+        p = repo / state_file_name()
         data = json.loads(p.read_text()) if p.exists() else {}
         return cls(p, data)
 
@@ -333,7 +430,7 @@ def provision_access_app(account: str, token: str, st: State) -> None:
                 "include": [{"email": {"email": OPERATOR_EMAIL}}],
             }],
         },
-        name=DEPLOY_DOMAIN, name_key="domain", id_key="id")
+        name=DEPLOY_DOMAIN, name_key="domain", id_key="id", known_id=st.get("access_app_id"))
     st.put("access_app_id", app_id)
 
 
@@ -354,13 +451,18 @@ def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
     if not pg:
         log("  WARN: 'Workers R2 Storage Write' permission group not found -- R2 S3 token NOT minted")
         return {"R2_S3_ACCESS_KEY_ID": "", "R2_S3_SECRET_ACCESS_KEY": "", "R2_S3_ENDPOINT": endpoint}
+    # Scope: to the PREFIXED primary render bucket when isolating (a proving / second instance must not
+    # hold a key that can reach another instance's -- or prod's -- buckets), else account-wide (verbatim).
+    if DEPLOY_PREFIX.strip():
+        resources = {f"com.cloudflare.api.account.{account}.r2.bucket.{prefixed(R2_BUCKETS[0])}": "*"}
+    else:
+        resources = {f"com.cloudflare.api.account.{account}": "*"}
     created = cf_api("POST", f"/accounts/{account}/tokens", token, {
-        "name": "vivijure-r2-s3",
+        "name": prefixed("vivijure-r2-s3"),
         "policies": [{
             "effect": "allow",
             "permission_groups": [{"id": pg["id"]}],
-            # Account-scoped; narrow the resource to one bucket for a tighter blast radius if preferred.
-            "resources": {f"com.cloudflare.api.account.{account}": "*"},
+            "resources": resources,
         }],
     }) or {}
     token_id, token_value = created.get("id", ""), created.get("value", "")
@@ -380,20 +482,25 @@ def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
 
     d1_id = create_if_absent(kind="D1 database", account=acct, token=tok,
         list_path="/accounts/{acct}/d1/database", create_path="/accounts/{acct}/d1/database",
-        create_body={"name": D1_DATABASE}, name=D1_DATABASE, name_key="name", id_key="uuid")
+        create_body={"name": prefixed(D1_DATABASE)}, name=prefixed(D1_DATABASE), name_key="name",
+        id_key="uuid", known_id=st.get("d1_id"))
     st.put("d1_id", d1_id)
 
-    for b in R2_BUCKETS:
+    prefixed_buckets = [prefixed(b) for b in R2_BUCKETS]
+    for nb in prefixed_buckets:
         create_if_absent(kind="R2 bucket", account=acct, token=tok,
             list_path="/accounts/{acct}/r2/buckets", create_path="/accounts/{acct}/r2/buckets",
-            create_body={"name": b}, name=b, name_key="name", id_key="name", list_unwrap="buckets")
-    st.put("r2_buckets", list(R2_BUCKETS))
+            create_body={"name": nb}, name=nb, name_key="name", id_key="name", list_unwrap="buckets",
+            known_id=st.get(f"r2_bucket_{nb}"))
+        st.put(f"r2_bucket_{nb}", nb)
+    st.put("r2_buckets", prefixed_buckets)
 
+    gw_slug = prefixed(AI_GATEWAY_ID)
     gateway = create_if_absent(kind="AI Gateway", account=acct, token=tok,
         list_path="/accounts/{acct}/ai-gateway/gateways", create_path="/accounts/{acct}/ai-gateway/gateways",
-        create_body={"id": AI_GATEWAY_ID, "cache_ttl": 0, "collect_logs": True,
+        create_body={"id": gw_slug, "cache_ttl": 0, "collect_logs": True,
                      "rate_limiting_interval": 0, "rate_limiting_limit": 0, "rate_limiting_technique": "fixed"},
-        name=AI_GATEWAY_ID, name_key="id", id_key="id")
+        name=gw_slug, name_key="id", id_key="id", known_id=st.get("gateway_id"))
     st.put("gateway_id", gateway)  # an identifier (the slug), not a secret -- safe in state
 
     # Scoped R2 S3 token: mint + derive (Access Key ID = token id; Secret = SHA-256(token value)).
@@ -417,16 +524,25 @@ def rp_api(method: str, path: str, key: str, body: dict | None = None):
 
 
 def rp_reconcile(*, kind: str, key: str, list_path: str, create_path: str, create_body: dict,
-                 name: str, name_key: str = "name", id_key: str = "id") -> str:
-    """Idempotent reconcile by NAME against the RunPod REST API -> returns the resource id."""
+                 name: str, name_key: str = "name", id_key: str = "id", known_id: str | None = None) -> str:
+    """Idempotent reconcile by NAME against the RunPod REST API -> returns the resource id. Same
+    no-silent-adopt guard as create_if_absent (#244): a same-name resource this instance did not create
+    dies unless `up --adopt`."""
     listed = rp_api("GET", list_path, key)
     items = listed if isinstance(listed, list) else (
         (listed.get("data") or listed.get("endpoints") or listed.get("templates") or [])
         if isinstance(listed, dict) else [])
     for it in items:
         if isinstance(it, dict) and it.get(name_key) == name:
-            log(f"  RunPod {kind} '{name}' exists ({it.get(id_key)})")
-            return str(it.get(id_key, ""))
+            rid = str(it.get(id_key, ""))
+            if known_id is not None and str(known_id) == rid:
+                log(f"  RunPod {kind} '{name}' exists ({rid}) [created by this instance]")
+                return rid
+            if _ADOPT:
+                log(f"  RunPod {kind} '{name}' exists ({rid}) -- ADOPTING (--adopt)")
+                return rid
+            die(f"refusing to adopt pre-existing RunPod {kind} '{name}' ({rid}): this instance did not "
+                f"create it (not in {state_file_name()}). Re-run `up --adopt` to reuse it, or rename via DEPLOY_PREFIX.")
     created = rp_api("POST", create_path, key, create_body)
     rid = str(created.get(id_key, "")) if isinstance(created, dict) else ""
     log(f"  RunPod {kind} '{name}' created ({rid})")
@@ -465,7 +581,7 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
         "R2_S3_ACCESS_KEY_ID": cf_derived.get("R2_S3_ACCESS_KEY_ID", ""),
         "R2_S3_SECRET_ACCESS_KEY": cf_derived.get("R2_S3_SECRET_ACCESS_KEY", ""),
         "R2_ENDPOINT": cf_derived.get("R2_S3_ENDPOINT", ""),
-        "R2_BUCKET": R2_BUCKETS[0],
+        "R2_BUCKET": prefixed(R2_BUCKETS[0]),
     }
 
     endpoints: dict = {}
@@ -477,13 +593,13 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
                 "containerDiskInGb": 500,
                 "env": backend_env,
                 **({"containerRegistryAuthId": registry_auth_id} if registry_auth_id else {}),
-            }, name=f"{ep}-tmpl")
+            }, name=f"{ep}-tmpl", known_id=st.get(f"runpod_template_{ep}"))
         # Network volume for the model weights (warm cache between jobs). dataCenterId is REQUIRED +
         # region-specific (confirmed against the v1 OpenAPI); checked + die-loud at the top of this fn.
         vol_id = rp_reconcile(kind="network volume", key=key, list_path="/networkvolumes",
             create_path="/networkvolumes",
             create_body={"name": f"{ep}-vol", "size": 100, "dataCenterId": DATACENTER_ID},  # size in GB
-            name=f"{ep}-vol")
+            name=f"{ep}-vol", known_id=st.get(f"runpod_volume_{ep}"))
         ep_id = rp_reconcile(kind="endpoint", key=key, list_path="/endpoints", create_path="/endpoints",
             create_body={
                 "name": ep, "templateId": tmpl_id, "networkVolumeId": vol_id,
@@ -491,7 +607,7 @@ def provision_runpod(repo: Path, s: Secrets, st: State, cf_derived: dict) -> dic
                 "workersMin": 0, "workersMax": 1,
                 # scaler/idle/timeout tuning (scalerType / scalerValue / idleTimeout / executionTimeoutMs)
                 # is optional; confirm the exact fields against the live /v1/openapi.json before tuning.
-            }, name=ep)
+            }, name=ep, known_id=st.get(f"runpod_endpoint_{ep}"))
         endpoints[ep] = ep_id
         st.put(f"runpod_endpoint_{ep}", ep_id)
         st.put(f"runpod_template_{ep}", tmpl_id)
@@ -546,7 +662,8 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
 
     store_id = create_if_absent(kind="Secrets Store", account=acct, token=tok,
         list_path="/accounts/{acct}/secrets_store/stores", create_path="/accounts/{acct}/secrets_store/stores",
-        create_body={"name": STORE_NAME}, name=STORE_NAME, name_key="name", id_key="id")
+        create_body={"name": prefixed(STORE_NAME)}, name=prefixed(STORE_NAME), name_key="name",
+        id_key="id", known_id=st.get("store_id"))
     st.put("store_id", store_id)
     replace_store_id_placeholder(repo, store_id)  # so the deploy's bindings resolve
 
@@ -578,24 +695,39 @@ def seed_secrets(repo: Path, s: Secrets, st: State, cf_derived: dict, runpod_end
 def run_migrations(repo: Path, s: Secrets) -> None:
     """Step 4. D1 schema migrations (Wrangler only -- Terraform cannot do this). Additive, idempotent."""
     log("applying D1 migrations ...")
-    wrangler(["d1", "migrations", "apply", D1_DATABASE, "--remote"], cwd=repo, cf_env=cf_env_for(s))
+    wrangler(["d1", "migrations", "apply", prefixed(D1_DATABASE), "--remote"], cwd=repo, cf_env=cf_env_for(s))
 
 
-def deploy_workers(repo: Path, s: Secrets) -> None:
+def deploy_workers(repo: Path, s: Secrets, st: State) -> None:
     """Step 5. Modules BEFORE the core (the core binds each module as a [[services]] dependency).
-    Wrangler bundles + uploads. Only reachable AFTER seed_secrets (the store bindings must resolve)."""
+    Wrangler bundles + uploads. Only reachable AFTER seed_secrets (the store bindings must resolve).
+    When DEPLOY_PREFIX is set, every worker deploys under its prefixed name (`--name`) and the core is
+    deployed from a transformed, isolated-instance toml (transform_core_toml)."""
     mods = module_dirs(repo)
-    log(f"deploying {len(mods)} module workers, then the core ...")
+    isolate = bool(DEPLOY_PREFIX.strip())
+    log(f"deploying {len(mods)} module workers, then the core ...{' (isolated: ' + DEPLOY_PREFIX.strip() + ')' if isolate else ''}")
     env = cf_env_for(s)
     for m in mods:
-        wrangler(["deploy", "-c", f"modules/{m}/wrangler.toml"], cwd=repo, cf_env=env)
+        extra = ["--name", prefixed(module_worker_name(repo, m))] if isolate else []
+        wrangler(["deploy", "-c", f"modules/{m}/wrangler.toml", *extra], cwd=repo, cf_env=env)
     # The core, AFTER every module (service bindings). Carry the /api/* auth mode as a NON-SECRET
     # [vars] override so the deployed gate matches AUTH_MODE regardless of the committed wrangler.toml
     # placeholder (STUDIO_API_TOKEN itself is a worker SECRET, set separately -- never a var, never argv).
     core_vars = ["--var", f"AUTH_MODE:{AUTH_MODE}"]
     if AUTH_MODE == "access":
         core_vars += ["--var", f"ACCESS_TEAM_DOMAIN:{ACCESS_TEAM_DOMAIN}", "--var", f"ACCESS_AUD:{ACCESS_AUD}"]
-    wrangler(["deploy", *core_vars], cwd=repo, cf_env=env)
+    if isolate:
+        rendered = transform_core_toml((repo / "wrangler.toml").read_text(), prefix=DEPLOY_PREFIX.strip(),
+            module_service_names=[module_worker_name(repo, m) for m in mods],
+            d1_id=str(st.get("d1_id") or ""), store_id=str(st.get("store_id") or ""))
+        tmp = repo / f"wrangler.{DEPLOY_PREFIX.strip()}.toml"
+        tmp.write_text(rendered)
+        try:
+            wrangler(["deploy", "-c", tmp.name, "--name", prefixed(core_worker_name(repo)), *core_vars], cwd=repo, cf_env=env)
+        finally:
+            tmp.unlink(missing_ok=True)
+    else:
+        wrangler(["deploy", *core_vars], cwd=repo, cf_env=env)
 
 
 def _mint_studio_token() -> str:
@@ -662,7 +794,7 @@ def bring_up_containers(repo: Path) -> None:
 
 
 def finalize(repo: Path, st: State) -> None:
-    log("done. studio URL + recorded resource ids are in " + str(repo / STATE_FILE))
+    log("done. studio URL + recorded resource ids are in " + str(repo / state_file_name()))
 
 
 # --------------------------------------------------------------------------------------------------
@@ -675,6 +807,13 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
     # The plan is order-only -- it needs NO credentials, so never prompt for secrets in a dry-run.
     if dry_run:
         log(f"PLAN (dry-run) -- AUTH_MODE={AUTH_MODE}; order (no credentials needed, no changes made):")
+        if DEPLOY_PREFIX.strip():
+            log(f"  ISOLATED (DEPLOY_PREFIX={DEPLOY_PREFIX.strip()!r}): every resource -> {DEPLOY_PREFIX.strip()}-<name> "
+                f"(e.g. D1 {prefixed(D1_DATABASE)!r}); state {state_file_name()!r}; the core deploys from a transformed "
+                f"toml (no custom domain -- workers.dev). A foreign same-name resource is NOT adopted silently (use --adopt).")
+        else:
+            log("  VERBATIM (DEPLOY_PREFIX empty): prod-shape names; a pre-existing same-name resource this instance "
+                "did not create is NOT adopted silently (pass --adopt to override).")
         cf_step = ("provision Cloudflare infra (D1, R2 x2, AI Gateway, scoped R2 token"
                    + (", Access app" if AUTH_MODE == "access" else "; NO Access app -- token mode") + ")")
         steps = [
@@ -699,7 +838,7 @@ def cmd_up(repo: Path, dry_run: bool, noninteractive: bool, rotate_token: bool =
     runpod_endpoints = provision_runpod(repo, s, st, cf_derived)
     seed_secrets(repo, s, st, cf_derived, runpod_endpoints)  # MUST precede deploy (#237)
     run_migrations(repo, s)
-    deploy_workers(repo, s)
+    deploy_workers(repo, s, st)
     if AUTH_MODE == "token":
         set_studio_api_token(repo, s, rotate_token)  # operator login (worker secret, safe post-deploy)
     restore_store_id_placeholder(repo, st.get("store_id"))  # leave the working tree clean post-deploy
@@ -738,9 +877,11 @@ def cmd_down(repo: Path, delete_data: bool) -> None:
 
     # Workers (modules + core) via `wrangler delete`. wrangler may prompt for confirmation depending on
     # version; that surfaces (it is not silently skipped).
+    isolate = bool(DEPLOY_PREFIX.strip())
     for m in module_dirs(repo):
-        wrangler(["delete", "-c", f"modules/{m}/wrangler.toml"], cwd=repo, cf_env=cf_env_for(s))
-    wrangler(["delete"], cwd=repo, cf_env=cf_env_for(s))
+        extra = ["--name", prefixed(module_worker_name(repo, m))] if isolate else []
+        wrangler(["delete", "-c", f"modules/{m}/wrangler.toml", *extra], cwd=repo, cf_env=cf_env_for(s))
+    wrangler(["delete", *(["--name", prefixed(core_worker_name(repo))] if isolate else [])], cwd=repo, cf_env=cf_env_for(s))
     removed.append("workers (modules + core)")
 
     sid = st.get("store_id")
@@ -786,6 +927,8 @@ def main(argv: list[str] | None = None) -> None:
     up.add_argument("--noninteractive", action="store_true", help="read creds from env (CI/headless), never argv")
     up.add_argument("--rotate-token", action="store_true",
                     help="token mode: mint a FRESH STUDIO_API_TOKEN even if one exists (invalidates the old login)")
+    up.add_argument("--adopt", action="store_true",
+                    help="reuse a pre-existing same-name resource this instance did not create (default: refuse)")
     sub.add_parser("plan", help="alias for `up --dry-run`")
     down = sub.add_parser("down", help="teardown by recorded id")
     down.add_argument("--delete-data", action="store_true", help="ALSO delete R2 buckets + D1 (your data)")
@@ -793,6 +936,8 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     repo = Path.cwd()
     if args.cmd == "up":
+        global _ADOPT
+        _ADOPT = bool(getattr(args, "adopt", False))
         cmd_up(repo, dry_run=args.dry_run, noninteractive=args.noninteractive, rotate_token=args.rotate_token)
     elif args.cmd == "plan":
         cmd_up(repo, dry_run=True, noninteractive=False)
