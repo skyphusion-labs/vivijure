@@ -1,6 +1,6 @@
 {
   "name": "vivijure-studio",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "Vivijure Studio: self-hosted AGPL AI film production on Cloudflare Workers with module registry and your own GPU backends.",
   "license": "AGPL-3.0-only",
   "homepage": "https://vivijure.com",
