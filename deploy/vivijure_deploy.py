@@ -602,17 +602,18 @@ def mint_r2_s3_token(account: str, token: str, st: State) -> dict:
 
 
 def revoke_token_tolerant(account: str, token: str, token_id: str) -> None:
-    """Revoke a CF API token, tolerating already-gone (used by the #680 mint-lost heal: the stale token
-    may have been revoked out-of-band -- dashboard, or an operator cleanup, exactly what happened in the
-    live pass -- and the heal must still re-mint, not die). A 404 or a CF invalid-token-id error means
-    already-revoked (log + continue); any other failure still dies loud."""
+    """Revoke a CF API token, tolerating already-gone. Used by the #680 mint-lost heal (re-mint after a
+    stale token) AND by down (#682): the token may have been revoked out-of-band -- dashboard, or an
+    operator cleanup, exactly what happened in the live pass -- and neither path should die on that. A
+    404 or a CF invalid-token-id error means already-revoked (log + continue); any other failure still
+    dies loud."""
     try:
         out = http_json("DELETE", f"{CF_API}/accounts/{account}/tokens/{token_id}", token, raise_on_error=True)
     except DeployHTTPError as e:
         if e.code == 404:
-            log("  stale R2 token already revoked (HTTP 404) -- continuing to re-mint")
+            log("  R2 token already revoked (HTTP 404) -- continuing")
             return
-        die(f"revoking the stale R2 token failed: HTTP {e.code}")
+        die(f"revoking the R2 token failed: HTTP {e.code}")
         return
     if isinstance(out, dict) and out.get("success") is False:
         errs = out.get("errors") or []
@@ -621,9 +622,9 @@ def revoke_token_tolerant(account: str, token: str, token_id: str) -> None:
         # CF invalid-token-id family: 1000 (invalid api token), 7000/7003 (routing / bad identifier),
         # or a message that names a missing/invalid id -> treat as already-revoked.
         if (codes & {1000, 7000, 7003}) or any(w in msgs.lower() for w in ("not found", "invalid", "could not route")):
-            log(f"  stale R2 token already revoked ({msgs or 'invalid id'}) -- continuing to re-mint")
+            log(f"  R2 token already revoked ({msgs or 'invalid id'}) -- continuing")
             return
-        die(f"Cloudflare DELETE of the stale R2 token -> {msgs or 'success:false'}")
+        die(f"Cloudflare DELETE of the R2 token -> {msgs or 'success:false'}")
 
 
 def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
@@ -1276,7 +1277,7 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
         if st.is_adopted("r2_token_id") and not include_adopted:
             log(f"  skipping adopted R2 API token {rt}")
         else:
-            cf_api("DELETE", f"/accounts/{acct}/tokens/{rt}", tok)
+            revoke_token_tolerant(acct, tok, rt)  # tolerate a token revoked out-of-band (#682)
             removed.append("R2 API token")
             st.remove("r2_token_id")
 

@@ -220,3 +220,23 @@ def test_revoke_token_tolerant_real_error_dies(monkeypatch):
     monkeypatch.setattr(vd, "http_json", fake_http)
     with pytest.raises(SystemExit):
         vd.revoke_token_tolerant("acct", "tok", "tok-live")
+
+
+def test_down_tolerates_already_revoked_r2_token(repo, monkeypatch):
+    """down must not die if the recorded R2 token was revoked out-of-band (#682)."""
+    st = vd.State.load(repo)
+    st.put("r2_token_id", "rtok-gone")
+
+    def fake_http(method, url, token, body=None, *, raise_on_error=False):
+        if method == "DELETE" and "/tokens/" in url:
+            raise vd.DeployHTTPError("DELETE", url, 404)
+        return {}
+
+    monkeypatch.setattr(vd, "http_json", fake_http)
+    monkeypatch.setattr(vd, "rp_api", lambda *a, **k: {})
+    monkeypatch.setattr(vd, "module_dirs", lambda _r: [])
+    monkeypatch.setattr(vd, "wrangler_delete_tolerant", lambda *a, **k: None)
+    monkeypatch.setattr(vd, "collect_secrets", lambda **_: vd.Secrets("a", "c", "r"))
+
+    vd.cmd_down(repo, delete_data=False, noninteractive=True)  # must NOT raise
+    assert vd.State.load(repo).resource_id("r2_token_id") is None
