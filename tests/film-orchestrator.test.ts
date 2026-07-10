@@ -981,6 +981,114 @@ describe("advanceFilmJob partial keyframe recovery (#619)", () => {
   });
 });
 
+// #622 env double for the NORMAL keyframe-completion path (NOT a stall). The keyframe module /poll returns
+// an OUTPUT (non-pending) carrying a PARTIAL keyframe set, so advanceToClips joins fewer keyframes than
+// scenes -- the silent-half-film shape of #619 reached without any stall. A motion.backend module is bound
+// returning a pending clip, so the film settles in "clips" without dragging in the finish/assemble
+// machinery. Round-trips every doc by exact key; carries the fake R2 presign creds advanceToClips needs.
+function kfCompletionEnv(job: FilmJob, keyframeOutput: { shot_id: string; keyframe_key: string }[]) {
+  const store = new Map<string, string>();
+  store.set(filmJobDocKey(job.film_id), JSON.stringify(job));
+  const jr = (b: unknown) => new Response(JSON.stringify(b), { headers: { "content-type": "application/json" } });
+  const MOTION_MANIFEST = {
+    name: "seedance", version: "0.1.0", api: "vivijure-module/2", hooks: ["motion.backend"],
+    provides: [{ id: "seedance", label: "Seedance" }], config_schema: {}, ui: { section: "motion.backend", order: 10 },
+  };
+  const env = {
+    R2_S3_ACCESS_KEY_ID: "k", R2_S3_SECRET_ACCESS_KEY: "s",
+    R2_S3_ENDPOINT: "https://acc.r2.cloudflarestorage.com", R2_S3_BUCKET: "renders",
+    R2_RENDERS: {
+      get: async (k: string) => (store.has(k) ? { text: async () => store.get(k) as string } : null),
+      put: async (k: string, b: string) => { store.set(k, b); },
+      list: async ({ prefix }: { prefix: string }) => ({
+        objects: [...store.keys()].filter((x) => x.startsWith(prefix)).map((x) => ({ key: x })),
+        truncated: false,
+      }),
+    },
+    // The keyframe module: /poll resolves to the (possibly partial) output; /module.json is invalid so it
+    // is skipped from the registry (the poll path resolves the fetcher by binding, not via discovery).
+    MODULE_KEYFRAME: {
+      fetch: async (input: Request | string) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.endsWith("/poll")) return jr({ ok: true, output: { project: job.project, keyframes: keyframeOutput } });
+        return jr({}); // /module.json -> invalid manifest -> skipped
+      },
+    },
+    // A serving motion.backend so advanceToClips can start a clip job; the shot stays pending so the film
+    // settles in "clips" (we assert the keyframe degrade, not the downstream clip/finish behavior).
+    MODULE_SEEDANCE: {
+      fetch: async (input: Request | string) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.endsWith("/module.json")) return jr(MOTION_MANIFEST);
+        if (url.endsWith("/invoke")) return jr({ ok: true, pending: true, poll: "mtok" });
+        return jr({ ok: true, pending: true }); // /poll stays pending
+      },
+    },
+  } as unknown as Env;
+  return { env, read: () => JSON.parse(store.get(filmJobDocKey(job.film_id)) as string) as FilmJob };
+}
+
+describe("advanceToClips partial keyframe set on the NORMAL completion path (#622)", () => {
+  const scenes4: FilmScene[] = [
+    { shot_id: "shot_01", prompt: "a", seconds: 7 },
+    { shot_id: "shot_02", prompt: "b", seconds: 7 },
+    { shot_id: "shot_03", prompt: "c", seconds: 7 },
+    { shot_id: "shot_04", prompt: "d", seconds: 7 },
+  ];
+  // A fresh keyframe phase awaiting its poll (created_at NOW, so the #129/#619 stall recovery does NOT
+  // fire -- this is the module honestly reporting completion, not a GC orphan). NOT keyframes_only, so
+  // afterKeyframeOutput takes the advanceToClips branch (a keyframes-only preview never rebases a film).
+  const kfJob = (over: Partial<FilmJob> = {}): FilmJob => ({
+    film_id: "film-622",
+    project: "neon",
+    bundle_key: "bundles/neon.json",
+    scenes: scenes4,
+    motion_backend: null, // let startClipJob pick the serving motion module (seedance)
+    motion_config: {},
+    finish_config: {},
+    keyframe_binding: "MODULE_KEYFRAME",
+    phase: "keyframe",
+    keyframe_poll: "kfphantom",
+    created_at: Date.now(),
+    phase_started_at: Date.now(),
+    ...over,
+  });
+
+  it("delivers-with-degrade when the module completes with a PARTIAL set: advances but records the drop LOUDLY (#622)", async () => {
+    // The exact #622 shape: a keyframe module reports done with 2 of 4 keyframes. The old code built the
+    // clip job from the 2 matched shots and dropped shot_03/shot_04 silently, so the film reported a clean
+    // complete over a rebased total of 2. It must now advance delivering the 2 rendered scenes, but record
+    // the drop so no counter is silently rebased.
+    const { env, read } = kfCompletionEnv(kfJob(), [
+      { shot_id: "shot_01", keyframe_key: "renders/neon/keyframes/shot_01.png" },
+      { shot_id: "shot_02", keyframe_key: "renders/neon/keyframes/shot_02.png" },
+    ]);
+    const r = await advanceFilmJob(env, "film-622");
+    expect(r?.job.phase).toBe("clips"); // advanced (delivered what rendered), did NOT hard-fail the whole film
+    expect(r?.job.keyframes_incomplete).toEqual({ adopted: 2, expected: 4, dropped: ["shot_03", "shot_04"] });
+    // surfaced on the film summary the API returns, and persisted (not just in-memory)
+    expect(summarizeFilm(read(), null).keyframes_incomplete).toEqual({ adopted: 2, expected: 4, dropped: ["shot_03", "shot_04"] });
+    expect(read().keyframes_incomplete).toEqual({ adopted: 2, expected: 4, dropped: ["shot_03", "shot_04"] });
+  });
+
+  it("does NOT flag a degrade when the module completes with the FULL set (#622)", async () => {
+    const full = scenes4.map((s) => ({ shot_id: s.shot_id, keyframe_key: `renders/neon/keyframes/${s.shot_id}.png` }));
+    const { env, read } = kfCompletionEnv(kfJob(), full);
+    const r = await advanceFilmJob(env, "film-622");
+    expect(r?.job.phase).toBe("clips");
+    expect(r?.job.keyframes_incomplete).toBeUndefined(); // full coverage -> no degrade
+    expect(read().keyframes_incomplete).toBeUndefined();
+  });
+
+  it("still HARD-FAILS when the module returns NONE of the requested shots (unchanged, no degrade record) (#622)", async () => {
+    const { env, read } = kfCompletionEnv(kfJob(), []);
+    const r = await advanceFilmJob(env, "film-622");
+    expect(r?.job.phase).toBe("failed");
+    expect(r?.job.error).toMatch(/produced none of the requested shots/);
+    expect(read().keyframes_incomplete).toBeUndefined(); // a hard fail is not a delivered-with-degrade
+  });
+});
+
 describe("clipFileMatchesShot (#139 clip-name matching)", () => {
   it("matches the shot's motion clip at a digit boundary", () => {
     expect(clipFileMatchesShot("shot_09_i2v.mp4", "shot_09")).toBe(true);

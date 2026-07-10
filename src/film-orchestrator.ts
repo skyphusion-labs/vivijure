@@ -144,13 +144,30 @@ async function afterKeyframeOutput(env: Env, job: FilmJob, kfOut: KeyframeOutput
   await advanceToClips(env, job, kfOut, preModules);
 }
 
-/** Internal: presign each matched keyframe -> start the clip job, advancing the film to phase=clips. */
+/** Internal: presign each matched keyframe -> start the clip job, advancing the film to phase=clips. A
+ *  keyframe module that reports completion with a PARTIAL set (fewer keyframes than scenes) advances
+ *  delivering what rendered, but records a LOUD keyframes_incomplete degrade rather than silently
+ *  rebasing every downstream counter to the smaller total (#622, the normal-completion sibling of the
+ *  #619 stall). */
 async function advanceToClips(env: Env, job: FilmJob, kfOut: KeyframeOutput, preModules?: RegisteredModule[]): Promise<void> {
   const { matched, missing } = joinKeyframesToScenes(job.scenes, kfOut.keyframes || []);
   if (!matched.length) {
     job.phase = "failed";
     job.error = `keyframe stage produced none of the requested shots (missing: ${missing.join(", ")})`;
     return;
+  }
+  if (missing.length && !job.keyframes_incomplete) {
+    // A keyframe module reported completion with a PARTIAL set (fewer keyframes than scenes): the #622
+    // sibling of the #619 stall, on the NORMAL (non-recovery) completion path. Silently building the clip
+    // job from `matched` alone rebases every downstream counter to the smaller total, so the film reports
+    // a clean complete over a half-set -- the exact silent-half-film shape (#245/#249). Deliver the scenes
+    // that DID render, but LOUDLY: record the drop on keyframes_incomplete + emit the structured event,
+    // the same clips-delivered degrade contract as the keyframe stall ceiling (#619). Guarded on
+    // !keyframes_incomplete so the ceiling-recovery path (which sets + emits BEFORE calling here) does not
+    // double-record the same drop.
+    job.keyframes_incomplete = { adopted: matched.length, expected: job.scenes.length, dropped: missing };
+    emitKeyframesIncomplete(job);
+    console.warn(`film ${job.film_id}: keyframe module completed with only ${matched.length}/${job.scenes.length} keyframes; delivering the rendered scenes, dropped ${missing.join(", ")} (#622)`);
   }
   const shots: ClipShotInput[] = [];
   for (const m of matched) {
