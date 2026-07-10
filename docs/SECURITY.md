@@ -227,6 +227,40 @@ token mode is enough. A team, an org, or anything with staff turnover: put Acces
 > id), pick a team name (this sets `ACCESS_TEAM_DOMAIN` = `<team>.cloudflareaccess.com`), create
 > the Access application for your studio hostname, and copy its AUD tag into `ACCESS_AUD`.
 
+## 1d. Demo mode: the public demo studio (`AUTH_MODE = "demo"`, #625)
+
+`demo.vivijure.com` is a Skyphusion-Labs-operated PUBLIC deploy that shows the studio to anonymous
+visitors at ZERO spend. Its posture is a distinct, documented auth mode -- deliberately the INVERSE
+of the section-3 "only `/welcome` and `/health` are public" default: in demo mode the entire READ
+surface is public by design, and there is nothing to write.
+
+- **Gate (`verifyDemoRequest`, `src/auth-gate.ts`).** `GET`/`HEAD` are open to EVERYONE,
+  unauthenticated. Every mutating method (`POST`/`PUT`/`PATCH`/`DELETE`/anything else) is denied
+  `403` for everyone, credential-independently: a bearer token unlocks nothing, because a demo
+  deploy has no writes to unlock.
+- **Zero-spend is enforced PRIMARILY by ABSENT bindings.** The demo deploy binds none of the money
+  surfaces (no AI Gateway, no RunPod, no R2, no module service bindings, no dispatch namespace), so
+  there is physically nothing to spend even if a request reached a spend path. The demo gate is the
+  independent SECOND barrier at the front door; absent bindings are the first.
+- **Own seeded D1, no prod data.** The demo binds its own D1 seeded from
+  `migrations/demo/0001_demo_seed.sql` (the 26 captured module manifests + fictional projects/cast +
+  completed renders whose films are the S23 showcase MP4s). The seed lives in a subdirectory so it
+  can never auto-apply to prod (see the seed file header) and carries high explicit ids (>=9000).
+- **`host.readonly` projection (`src/modules/registry.ts` `isDemoEnv`, the structural twin of
+  `isDemoMode`; change both together).** `GET /api/modules` projects `host.readonly = true` in demo
+  mode; the frontend read-only gate (`public/readonly-gate.js`) renders the honest banner and blocks
+  mutations client-side BEFORE the network. The server gate is authoritative; the client gate is UX
+  on top of it.
+- **CSP: `STUDIO_DEMO_CSP` (`src/asset-response.ts`).** Demo PAGES get `STUDIO_CSP` plus exactly one
+  wider directive -- `media-src 'self' https://assets.skyphusion.net` -- so the showcase films
+  (served from the host-pinned asset origin, no R2 binding needed) play. Every other directive is
+  byte-identical to prod, and a non-demo deploy never serves this policy. All non-page responses keep
+  the locked CSP (section 8).
+- **Cookies / identity.** No token is ever entered on the demo, so no identity cookie is set and the
+  server sends no `Set-Cookie` on anonymous responses (live-verified). The client token shim
+  (`public/auth-token.js`) writes only an empty, immediately-expiring placeholder cookie via
+  `document.cookie` when no token is present; it carries nothing.
+
 ## 2. Job ids are capabilities (possession = access)
 
 Several mutating routes are keyed by a job id (`WHERE job_id = ?`): render progress/finish updates,
@@ -258,7 +292,7 @@ not in this regex. Do not mistake loosening/tightening the regex for an entropy 
 ## 3. Intentionally public surfaces, and the `/api/modules` projection
 
 Only **`/welcome`** (a 301 redirect to the marketing storefront at https://vivijure.com/; #617 moved the page itself off the Worker) and **`/health`** are reachable
-without authentication, by design; both are reviewed to leak nothing internal. On the production
+without authentication, by design; both are reviewed to leak nothing internal. (A demo deploy, `AUTH_MODE = "demo"`, additionally opens the entire `GET`/`HEAD` surface to anonymous visitors while denying every mutation `403`; see section 1d.) On the production
 instance `/welcome` and `/health` each sit behind their own path-scoped Cloudflare Access app whose
 policy is a public bypass (everyone for `/welcome`, a production-IP allowlist for `/health`); those
 path-scoped apps are independent of `AUTH_MODE` and do NOT extend to `/api/*`. The public
@@ -417,7 +451,7 @@ them (the release-purge flow that flushes the old `/welcome` page and `/` depend
 
 - [ ] New hostname or route -> confirm the active auth gate still covers it (in production the
       in-worker token gate; in access mode the Cloudflare Access app). `/api/*` must stay gated;
-      only `/welcome` and `/health` are public.
+      only `/welcome` and `/health` are public. (A demo deploy is the deliberate exception, section 1d: all `GET`/`HEAD` is intentionally public, all mutations `403`.)
 - [ ] New job-keyed OR resource-`:id` route -> the id must be an unguessable `crypto.randomUUID()`
       capability (a job id, or a resource `public_id` per section 1c); never expose or accept a
       sequential integer or other low-entropy id as a capability.
