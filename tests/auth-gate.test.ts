@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { gateApi, verifyTokenRequest, constantTimeEqual, sha256Hex, TOKEN_COOKIE } from "../src/auth-gate";
+import { gateApi, verifyTokenRequest, constantTimeEqual, sha256Hex, isDemoMode, TOKEN_COOKIE } from "../src/auth-gate";
 import worker from "../src/index";
 import type { Env } from "../src/env";
 import { __resetJwksCacheForTest, type CertsFetcher } from "../src/access-auth";
@@ -109,6 +109,54 @@ describe("gateApi -- AUTH_MODE dispatch, fail closed", () => {
     const env = { AUTH_MODE: "token", ALLOW_UNAUTHENTICATED: "true" } as any; // note: no secret either
     const d = await gateApi(req(), env);
     expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+});
+
+// ---- demo mode (#625: the public demo studio) --------------------------------------------------
+
+function demoReq(method: string, headers: Record<string, string> = {}): Request {
+  return new Request("https://studio/api/cast", { method, headers });
+}
+
+describe("AUTH_MODE=demo -- reads open to everyone, writes closed to everyone", () => {
+  const env = { AUTH_MODE: "demo" } as any;
+
+  it("GET and HEAD are allowed unauthenticated", async () => {
+    for (const method of ["GET", "HEAD"]) {
+      const d = await gateApi(demoReq(method), env);
+      expect(d).toMatchObject({ ok: true, sub: "demo-visitor" });
+    }
+  });
+
+  it("every mutating method denies 403", async () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      const d = await gateApi(demoReq(method), env);
+      expect(d).toMatchObject({ ok: false, status: 403, reason: expect.stringMatching(/read-only/) });
+    }
+  });
+
+  it("a valid bearer token does NOT unlock mutations (no operator path into a demo deploy)", async () => {
+    const withSecret = { AUTH_MODE: "demo", STUDIO_API_TOKEN: SECRET } as any;
+    const d = await gateApi(demoReq("POST", { authorization: `Bearer ${SECRET}` }), withSecret);
+    expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("ALLOW_UNAUTHENTICATED does not unlock mutations either (hatch stays scoped to the legacy path)", async () => {
+    const hatch = { AUTH_MODE: "demo", ALLOW_UNAUTHENTICATED: "true" } as any;
+    const d = await gateApi(demoReq("DELETE"), hatch);
+    expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("OPTIONS is not a read: it denies (only GET/HEAD are open)", async () => {
+    const d = await gateApi(demoReq("OPTIONS"), env);
+    expect(d).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("isDemoMode normalizes exactly like the gate (trim; anything else is not demo)", () => {
+    expect(isDemoMode({ AUTH_MODE: " demo " } as any)).toBe(true);
+    expect(isDemoMode({ AUTH_MODE: "demo" } as any)).toBe(true);
+    expect(isDemoMode({ AUTH_MODE: "token" } as any)).toBe(false);
+    expect(isDemoMode({} as any)).toBe(false);
   });
 });
 

@@ -90,8 +90,9 @@ export interface Env {
   // #423 built-in token auth (src/auth-gate.ts). AUTH_MODE selects the /api/* gate: "token" ->
   // Authorization: Bearer checked against STUDIO_API_TOKEN with a constant-time compare (no Zero
   // Trust needed); "access" or unset -> the CF Access path above (unset keeps the legacy
-  // resolution, so pre-#423 deploys are untouched). Any other value denies everything (fail
-  // closed). AUTH_MODE is a [vars] entry; STUDIO_API_TOKEN is a worker SECRET deploy.sh mints
+  // resolution, so pre-#423 deploys are untouched); "demo" (#625) -> the public demo studio
+  // (GET/HEAD open to everyone, every mutation 403, no credential honored). Any other value
+  // denies everything (fail closed). AUTH_MODE is a [vars] entry; STUDIO_API_TOKEN is a worker SECRET deploy.sh mints
   // (openssl rand -hex 32 | wrangler secret put STUDIO_API_TOKEN). See docs/SECURITY.md.
   AUTH_MODE?: string;
   STUDIO_API_TOKEN?: string;
