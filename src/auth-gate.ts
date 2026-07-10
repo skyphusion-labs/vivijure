@@ -151,7 +151,8 @@ export async function verifyTokenRequest(request: Request, env: Env): Promise<Ac
 
 // True when this deployment is the public demo studio (#625). Exported so the /api/modules route
 // can project `host.readonly` from the SAME normalization the gate dispatches on -- one definition
-// of "demo mode", two consumers.
+// of "demo mode", two consumers. CANONICAL: src/modules/registry.ts carries a structural twin
+// (isDemoEnv) because the registry stays import-free of Env by rule; change both together.
 export function isDemoMode(env: Env): boolean {
   return (env.AUTH_MODE || "").trim() === "demo";
 }

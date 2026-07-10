@@ -160,6 +160,23 @@ describe("discoverDispatchModules", () => {
     const { DB } = fakeDb([{ ...row, manifest_json: bad }]);
     expect(await discoverDispatchModules({ DB, [DISPATCH_BINDING]: fakeNamespace({}) })).toEqual([]);
   });
+
+  // #625: the demo studio's display-only catalog -- seeded rows surface WITHOUT a namespace.
+  it("AUTH_MODE=demo reads seeded rows with NO namespace bound (the demo catalog path)", async () => {
+    const { DB } = fakeDb([row]);
+    const mods = await discoverDispatchModules({ DB, AUTH_MODE: "demo" });
+    expect(mods).toHaveLength(1);
+    expect(mods[0].name).toBe("pe-cloud");
+    // the ref still encodes as dispatch:<script>; with no namespace bound resolveFetcher
+    // returns null for it, so nothing discovered this way is invocable even if reached.
+    expect(mods[0].binding).toBe(dispatchRef("pe-script"));
+    expect(resolveFetcher({ DB, AUTH_MODE: "demo" }, mods[0].binding)).toBeNull();
+  });
+  it("a NON-demo AUTH_MODE still short-circuits without a namespace (zero D1 overhead preserved)", async () => {
+    const { DB } = fakeDb([row]);
+    expect(await discoverDispatchModules({ DB, AUTH_MODE: "token" })).toEqual([]);
+    expect(await discoverDispatchModules({ DB, AUTH_MODE: "" })).toEqual([]);
+  });
 });
 
 // --------------------------------------------------------------------------- mergeRegistries

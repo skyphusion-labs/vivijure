@@ -52,6 +52,13 @@ function isDispatch(v: unknown): v is DispatchLike {
   return !!v && typeof (v as { get?: unknown }).get === "function";
 }
 
+/** Structural twin of `isDemoMode` in ../auth-gate (which is canonical): same AUTH_MODE
+ *  normalization, duplicated here ONLY because the registry stays import-free of Env by rule
+ *  (see DispatchLike above). If the demo-mode definition ever changes, change BOTH. */
+function isDemoEnv(env: Record<string, unknown>): boolean {
+  return typeof env.AUTH_MODE === "string" && env.AUTH_MODE.trim() === "demo";
+}
+
 /** The env key naming the WfP dispatch-namespace binding. Excluded from the `MODULE_*` service scan
  *  (it is a DispatchNamespace, NOT a module Fetcher): the `isFetcher` guard already rejects it by shape
  *  (a namespace has `.get()`, not `.fetch()`), but the exclusion is made EXPLICIT so a future
@@ -340,11 +347,18 @@ interface InstalledModuleRow {
  *  conformance-checked manifest, and tag it with its `dispatch` descriptor (the namespace analogue of
  *  `binding`). Gated on `env.MODULE_DISPATCH` (the namespace binding) being present: a deploy WITHOUT
  *  WfP short-circuits here and never touches D1, so non-WfP / self-host deploys pay ZERO overhead and
- *  behave exactly as before. Best-effort + total, like the service-binding scan: a D1 error or a
- *  drifted manifest row is logged and dropped, never crashes discovery. (docs/module-dispatch.md 3.1/3.4) */
+ *  behave exactly as before. ONE deliberate exception (#625): the public demo studio binds no
+ *  namespace on purpose (its zero-spend proof is money bindings being ABSENT) but seeds
+ *  `installed_modules` with captured real manifests so `/api/modules` projects the authentic catalog.
+ *  Demo mode therefore reads the table too -- display-only by construction: AUTH_MODE=demo denies
+ *  every mutation at the gate, and the seeded dispatch refs name scripts no namespace serves, so
+ *  nothing discovered this way is invocable. Best-effort + total, like the service-binding scan: a
+ *  D1 error or a drifted manifest row is logged and dropped, never crashes discovery.
+ *  (docs/module-dispatch.md 3.1/3.4) */
 export async function discoverDispatchModules(env: Record<string, unknown>): Promise<RegisteredModule[]> {
   const ns = env[DISPATCH_BINDING];
-  if (!isDispatch(ns)) return []; // no WfP namespace bound -> nothing to discover, no D1 read
+  // no WfP namespace bound -> nothing to discover, no D1 read (unless this is the demo studio)
+  if (!isDispatch(ns) && !isDemoEnv(env)) return [];
   const db = env.DB;
   if (!db || typeof (db as D1Like).prepare !== "function") return [];
   let rows: InstalledModuleRow[];
