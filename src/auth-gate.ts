@@ -161,9 +161,17 @@ export function isDemoMode(env: Env): boolean {
 // any presented credential -- there is no operator path into a demo deploy through the API, so a
 // leaked/guessed token is worth nothing here. The deny reason names the demo so a visitor poking
 // the API understands what they hit.
+// #631 Phase B: the ONLY write routes a demo deploy allows -- the seeded-menu render + the capped OSS
+// assistant. Every OTHER mutation (incl. the prod render/plan/chat routes) stays denied. One allowlist,
+// auditable in one place; the demo's entire write surface is these two routes.
+export const DEMO_WRITE_ROUTES: ReadonlySet<string> = new Set(["/api/demo/render", "/api/demo/chat"]);
+
 export function verifyDemoRequest(request: Request): AccessDecision {
   const method = request.method.toUpperCase();
   if (method === "GET" || method === "HEAD") {
+    return { ok: true, sub: "demo-visitor", email: null };
+  }
+  if (method === "POST" && DEMO_WRITE_ROUTES.has(new URL(request.url).pathname)) {
     return { ok: true, sub: "demo-visitor", email: null };
   }
   return {

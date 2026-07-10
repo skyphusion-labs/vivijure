@@ -106,8 +106,16 @@ export function applyResponseSecurity(res: Response, request: Request, env?: Env
 
   if (cls === "studio") {
     // Demo deploys (#625) get the one-directive-wider policy so the showcase films play; everyone
-    // else gets STUDIO_CSP byte-identical to before (env omitted -> never demo).
-    const csp = env && isDemoMode(env) ? STUDIO_DEMO_CSP : STUDIO_CSP;
+    // else gets STUDIO_CSP byte-identical to before (env omitted -> never demo). #631: a demo render
+    // clip is served from the isolated demo artifact origin -- enumerate it on the SAME media-src
+    // directive (it is the last directive in STUDIO_DEMO_CSP), never a wildcard, and only when it is a
+    // distinct origin from the showcase host.
+    let csp = STUDIO_CSP;
+    if (env && isDemoMode(env)) {
+      csp = STUDIO_DEMO_CSP;
+      const artifact = env.DEMO_ARTIFACT_ORIGIN?.trim();
+      if (artifact && artifact !== DEMO_MEDIA_ORIGIN) csp = STUDIO_DEMO_CSP + " " + artifact;
+    }
     return rebuild(res, pageHeaders(new Headers(res.headers), csp), res.body);
   }
   // Non-page: api/json, non-HTML assets, redirects (incl. the /welcome 301), the 429, or any HTML

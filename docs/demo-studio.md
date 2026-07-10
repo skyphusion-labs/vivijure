@@ -38,6 +38,11 @@ that the demo cannot spend money: no code path can reach a GPU, an LLM, or stora
 > a **BLOCKER to escalate, NOT a binding to add**. Adding a binding to silence a warning would spend
 > money and break the promise this deploy exists to keep.
 
+> **Phase B (#631) update:** the demo now also does bounded CLICK-TO-RENDER + a capped OSS assistant, so
+> the invariant is no longer pure absence but **bounded spend in two disjoint families** (owned-GPU render
+> + gateway-capped OSS tokens), with RunPod + frontier credits STILL zero by absence. See "Phase B" below
+> for exactly what opens and what stays absent.
+
 ## Config
 
 `wrangler.demo.toml.example` is the committed template (mirrors `wrangler.toml.example`
@@ -85,6 +90,59 @@ All commands run with `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` in the en
    A green deploy prints exactly three bindings: `DB (vivijure-demo)`, `ASSETS`, and
    `AUTH_MODE ("demo")`. If it prints any other binding, the config drifted -- stop.
 
+## Phase B: click-to-render + assistant (#631)
+
+Phase B turns the read-only demo into a **bounded** click-to-render demo, without reopening the two spend
+families the demo exists to keep at zero.
+
+**Render (constraints 1-5).** A visitor picks ONE **seeded** scene from the menu (`GET /api/demo/menu`,
+projected from the `demo_renderable` rows) and `POST /api/demo/render {scene}` renders ONE LTX i2v clip on
+the standing Vultr vGPU box via a **demo-scoped `local-gpu` door** (`MODULE_LOCAL_GPU`). The render is
+SERIAL (one box, global concurrency 1) with an honest FIFO queue: `GET /api/demo/render/:id` reports
+`queued` (+ position + wait), `running`, `done` (+ the public clip URL), or `failed`. A depth cap refuses
+enqueue past ~10 ("queue is full"); per-IP + global daily caps (`demo_counter`) + the per-IP burst limiter
+(`SPEND_RATE_LIMITER`) bound abuse. The box reads the seeded keyframe from an **isolated demo R2 prefix**
+and writes the clip there; the demo builds the artifact URL as `DEMO_ARTIFACT_ORIGIN/<clip_key>` and binds
+**no** R2 itself. When the box is offline (`DEMO_RENDER_ENABLED != "true"` or `MODULE_LOCAL_GPU` unbound)
+the demo reports **renders paused** (`host.render.available=false`); browse keeps working and submit is
+refused plainly -- the swappable-backend state for the box's ~2026-08-04 credit horizon.
+
+**CSAM by construction (constraint 4).** The visitor's ENTIRE input is a seeded scene id -- no free text,
+no uploads. Every prompt + keyframe is curator-vetted, so the bright line is satisfied structurally, not by
+a filter.
+
+**Assistant (constraints 6-9).** `POST /api/demo/chat {message}` runs a demo-scoped OSS model
+(`DEMO_ASSISTANT_MODEL`, a Workers-AI llama-3.3-70b class) behind its OWN hard-capped AI Gateway
+(`GATEWAY_ID` = the demo gateway, which carries the hard daily budget). Per-IP + global daily caps
+(`demo_counter`) are checked BEFORE the model call, so an exhausted visitor spends zero tokens; the cap
+reply is plain text and browse keeps working (honest exhaustion). The prompt is demo-scoped with a low
+output cap and NO tool/binding reach beyond read-only studio state. `GET /api/modules` projects
+`host.assistant = { model: "oss", note: "..." }` so the "free model" note renders wherever the assistant
+surfaces (constraint 9).
+
+**The write surface** is exactly two routes: `POST /api/demo/render` and `POST /api/demo/chat`
+(`DEMO_WRITE_ROUTES` in `src/auth-gate.ts`). Every other mutation -- including the prod render/plan/chat
+routes -- stays denied by `verifyDemoRequest`.
+
+### Binding delta (what OPENS vs what STAYS ABSENT)
+
+**Opens** (added to the Phase-A `DB` + `ASSETS`): `MODULE_LOCAL_GPU` (the demo-scoped local-gpu door),
+`AI` + `GATEWAY_ID` (the demo gateway), `SPEND_RATE_LIMITER`, and the `DEMO_*` vars; the demo D1 gains the
+`0002_demo_render.sql` tables (`demo_renderable`, `demo_render_queue`, `demo_counter`).
+
+**Stays absent** (still the proof): `RUNPOD_*`, every frontier BYOK key, `R2` / `R2_RENDERS` / `R2_S3_*`,
+the CPU-container VPCs, `MODULE_DISPATCH` + every other `MODULE_*`, cron `[triggers]`, tail, `STUDIO_API_TOKEN`.
+
+### Rollout (gated through the lead)
+
+The isolated demo R2 prefix creds, the regenerated `LOCAL_BACKEND_TOKEN`, the stable **named** box tunnel,
+and the demo AI Gateway id are minted/provisioned by the lead/infra and WIRED into the rendered
+`wrangler.demo.toml` + the demo-scoped local-gpu worker (values never in CI, never in a transcript). The
+seeded `demo_renderable` rows carry `REPLACE_WITH_*` keyframe placeholders until the curator keyframes are
+uploaded to the demo prefix; an unresolved placeholder fails the render honestly, never a silent success.
+**A fresh adversarial security pass on the LIVE demo is a Phase B SHIP GATE** (the write surface went from
+zero routes to two; the Phase A verdict does not carry over).
+
 ## Live verify (assert on JSON/headers, not prose)
 
 | # | Request | Expect |
@@ -94,6 +152,11 @@ All commands run with `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` in the en
 | 3 | `GET /planner` | `200` HTML, `content-security-policy` contains `media-src 'self' https://assets.skyphusion.net` |
 | 4 | a seeded render's `output_key` (an `assets.skyphusion.net` showcase mp4) | `curl -I` -> `200` |
 | 5 | `GET /` (root) | `200`, loads unauthenticated (no token prompt) |
+
+| 6 | `GET /api/demo/menu` | `200`, `scenes: [...]` seeded; `available` reflects `DEMO_RENDER_ENABLED` + the door |
+| 7 | `POST /api/demo/render {scene:<seeded id>}` when paused | `503` reason `paused` (renders paused; browse still 200) |
+| 8 | `POST /api/render/film` (a prod write route) | `403` read-only (the carve-out is ONLY the two demo routes) |
+| 9 | `GET /api/modules` in Phase B | `host.render.available` present; `host.assistant.{model,note}` present when `AI` is bound |
 
 > Note: for the first few seconds after the custom domain provisions, the edge may return a
 > transient `500 (error code 1104)` while the cert warms; retry and it clears.

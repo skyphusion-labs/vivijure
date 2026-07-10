@@ -45,10 +45,35 @@ enabled = true
 [vars]
 AUTH_MODE = "demo"
 
+# --- Phase B (#631) render + assistant knobs. Absent/off => the demo stays Phase-A read-only (renders
+# paused, no assistant). Fill + provision the paired bindings below at Phase B rollout (rider: infra
+# mints creds, never CI). ---
+# DEMO_RENDER_ENABLED "true" arms the seeded click-to-render menu; it ALSO needs MODULE_LOCAL_GPU bound
+# (below). Unset/"false" => host.render.available=false => the UI shows "renders paused" (the box dies
+# ~2026-08-04; flip this off to park renders with no demo outage).
+DEMO_RENDER_ENABLED = "false"
+# The ISOLATED demo R2 public origin the box writes clips under; the demo serves <origin>/<clip_key>
+# (the demo worker binds NO R2). Enumerated in the demo media CSP. Keep it under assets.skyphusion.net
+# so the existing STUDIO_DEMO_CSP media-src already admits it (no CSP change needed); a distinct origin
+# is added to media-src automatically (asset-response.ts), still no wildcard.
+DEMO_ARTIFACT_ORIGIN = "https://assets.skyphusion.net"
+# The OSS assistant model + optional cap overrides (defaults: 3 renders/IP/day, 2000 global; 20 chats/IP,
+# 2000 global; queue depth 10). Tune without a code change.
+DEMO_ASSISTANT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+# DEMO_RENDER_PER_IP_DAILY = "3"
+# DEMO_RENDER_GLOBAL_DAILY = "2000"
+# DEMO_RENDER_QUEUE_DEPTH = "10"
+# DEMO_CHAT_PER_IP_DAILY = "20"
+# DEMO_CHAT_GLOBAL_DAILY = "2000"
+# Fail-closed spend limiter posture is the default; the demo render route uses SPEND_RATE_LIMITER for the
+# per-IP burst check, so that binding MUST be present when DEMO_RENDER_ENABLED="true" (a broken/unbound
+# limiter denies renders 503, which is the correct money-path posture).
+
 # The dedicated DEMO D1 (binding name DB). Provision + seed OUT OF BAND, NEVER touching prod:
 #   wrangler d1 create vivijure-demo                                    # paste the id below / into CI var
 #   wrangler d1 migrations apply vivijure-demo --remote                 # base schema migrations/0001..0010
 #   wrangler d1 execute vivijure-demo --remote --file=migrations/demo/0001_demo_seed.sql   # the seed (idempotent)
+#   wrangler d1 execute vivijure-demo --remote --file=migrations/demo/0002_demo_render.sql   # Phase B: menu + queue + counters (idempotent)
 # The seed's render rows carry ABSOLUTE assets.skyphusion.net URLs, so the demo needs NO R2 binding to
 # display a film. database_id is rendered from D1_DEMO_DATABASE_ID (CI) or filled by hand.
 [[d1_databases]]
@@ -56,18 +81,50 @@ binding = "DB"
 database_name = "vivijure-demo"
 database_id = "${D1_DEMO_DATABASE_ID}"
 
-# --- DELIBERATELY ABSENT bindings -- the ABSENCE is the zero-spend proof, do NOT add any of these. ---
+# --- Phase B (#631) bindings: EXACTLY the two bounded spend paths, provisioned + filled at rollout. ---
+# Until provisioned, leave these OUT: the demo runs Phase A (render paused, no assistant), fully valid.
 #
-# A demo deploy binds ONLY the demo D1 (DB) + static ASSETS above. It has NO AI, NO RunPod secrets,
-# NO R2 buckets, NO Secrets Store secrets (demo mode reads no STUDIO_API_TOKEN), NO MODULE_* service
-# bindings, NO MODULE_DISPATCH namespace, NO VPC services, NO tail consumer, NO cron [triggers], and
-# NO rate-limit binding. Every read path the demo exercises tolerates their absence (verified on
-# wrangler dev with AUTH_MODE=demo + seed): the catalog is the seeded installed_modules rows, the
-# films are absolute showcase URLs, and every write is denied at the gate before any binding is touched.
+# (a) The render path -- the ONE new outbound: a DEMO-SCOPED local-gpu door worker holding the box's
+#     stable NAMED-tunnel LOCAL_BACKEND_URL + a REGENERATED demo LOCAL_BACKEND_TOKEN (minted by infra;
+#     values never in CI). The demo core reaches it as MODULE_LOCAL_GPU; the box reads the seeded
+#     keyframe from the ISOLATED demo R2 prefix and writes the clip there -> a public DEMO_ARTIFACT_ORIGIN
+#     URL. The demo core binds NO R2, NO presign creds, NO CPU-container VPCs.
+# [[services]]
+# binding = "MODULE_LOCAL_GPU"
+# service = "vivijure-demo-local-gpu"   # the demo-scoped local-gpu worker (its own deploy, demo box creds)
 #
-# If something at boot or deploy demands one of these bindings, that is a BLOCKER to escalate -- NOT a
-# binding to add. Adding a binding to silence a warning would spend money and break the zero-spend
-# promise this deploy exists to prove.
+# (b) The assistant -- an OSS model behind its OWN hard-capped AI Gateway (GATEWAY_ID = the DEMO gateway,
+#     a Secrets Store secret; the gateway config carries the HARD daily budget). Per-IP + global daily
+#     caps are enforced in D1 (demo_counter) BEFORE the model is called.
+# [ai]
+# binding = "AI"
+# [[secrets_store_secrets]]
+# binding = "GATEWAY_ID"
+# store_id = "REPLACE_WITH_VIVIJURE_SECRETS_STORE_ID"
+# secret_name = "DEMO_GATEWAY_ID"
+#
+# (c) The per-IP BURST limiter for the render route (constraint 4). Its namespace id is provisioned by
+#     infra; the daily submission caps live in demo_counter (above), this is the short-window burst gate.
+# [[ratelimits]]
+# name = "SPEND_RATE_LIMITER"
+# namespace_id = "${DEMO_SPEND_RATE_LIMITER_NS_ID}"
+# simple = { limit = 6, period = 60 }
+
+# --- STILL DELIBERATELY ABSENT -- the ABSENCE is the (now BOUNDED-spend) proof, do NOT add any of these. ---
+#
+# Phase B keeps the two spend families disjoint and everything else absent:
+#   * NO RUNPOD_API_KEY / RUNPOD_ENDPOINT_ID -- no datacenter GPU; RunPod spend is zero BY ABSENCE.
+#   * NO frontier BYOK keys (XAI_API_KEY / OPENAI_API_KEY / CF_AIG_TOKEN for a frontier model) -- the
+#     assistant is OSS-only; metered frontier tokens are unreachable.
+#   * NO R2 buckets (R2 / R2_RENDERS) and NO R2_S3_* presign creds -- the box owns the render bytes to an
+#     isolated public prefix; the demo only string-builds the public URL.
+#   * NO CPU-container VPCs (VIDEO_FINISH_VPC / IMAGE_PREP_VPC / AUDIO_BEAT_SYNC_VPC / AUDIO_MIX_VPC) --
+#     Phase B renders ONE i2v clip, no assemble/mux.
+#   * NO MODULE_DISPATCH namespace and NO OTHER MODULE_* service binding -- the catalog stays the seeded
+#     rows; ONLY the local-gpu door is reachable, so no other GPU/paid backend can be invoked.
+#   * NO cron [triggers] (the render advances on GET-poll), NO tail consumer, NO STUDIO_API_TOKEN.
+#
+# If boot/deploy demands one of the absent bindings, that is a BLOCKER to escalate -- NOT a binding to add.
 
 # demo.vivijure.com on the vivijure.com zone. Workers custom domain owns DNS + the cert (Universal SSL
 # for a first-level subdomain -- NO Advanced Certificate Manager needed).

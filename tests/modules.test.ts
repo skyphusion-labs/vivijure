@@ -183,6 +183,19 @@ describe("modulesResponse", () => {
       readonly: true,
     });
   });
+
+  it("#631 Phase B: render + assistant capabilities ride the same host object (additive)", () => {
+    const host = modulesResponse([], render, {
+      dispatch: false, readonly: true,
+      render: { available: true },
+      assistant: { model: "oss", note: "free model here" },
+    }).host;
+    expect(host).toEqual({
+      dispatch: false, readonly: true,
+      render: { available: true },
+      assistant: { model: "oss", note: "free model here" },
+    });
+  });
 });
 
 describe("resolvePickOne", () => {
