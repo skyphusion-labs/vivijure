@@ -610,9 +610,9 @@ def revoke_token_tolerant(account: str, token: str, token_id: str) -> None:
         out = http_json("DELETE", f"{CF_API}/accounts/{account}/tokens/{token_id}", token, raise_on_error=True)
     except DeployHTTPError as e:
         if e.code == 404:
-            log(f"  R2 token {token_id} already revoked (HTTP 404) -- continuing to re-mint")
+            log("  stale R2 token already revoked (HTTP 404) -- continuing to re-mint")
             return
-        die(f"revoking R2 token {token_id} failed: {e}")
+        die(f"revoking the stale R2 token failed: HTTP {e.code}")
         return
     if isinstance(out, dict) and out.get("success") is False:
         errs = out.get("errors") or []
@@ -621,9 +621,9 @@ def revoke_token_tolerant(account: str, token: str, token_id: str) -> None:
         # CF invalid-token-id family: 1000 (invalid api token), 7000/7003 (routing / bad identifier),
         # or a message that names a missing/invalid id -> treat as already-revoked.
         if (codes & {1000, 7000, 7003}) or any(w in msgs.lower() for w in ("not found", "invalid", "could not route")):
-            log(f"  R2 token {token_id} already revoked ({msgs or 'invalid id'}) -- continuing to re-mint")
+            log(f"  stale R2 token already revoked ({msgs or 'invalid id'}) -- continuing to re-mint")
             return
-        die(f"Cloudflare DELETE token {token_id} -> {msgs or 'success:false'}")
+        die(f"Cloudflare DELETE of the stale R2 token -> {msgs or 'success:false'}")
 
 
 def provision_cloudflare_infra(repo: Path, s: Secrets, st: State) -> dict:
