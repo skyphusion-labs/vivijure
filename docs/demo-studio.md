@@ -74,11 +74,18 @@ All commands run with `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` in the en
    ```bash
    wrangler d1 execute vivijure-demo --remote -c wrangler.demo.toml \
      --file=migrations/demo/0001_demo_seed.sql
+   # Cast portrait backfill. 0001 seeds portrait_key on a FRESH install, but a LIVE demo D1 that already
+   # ran 0001 keeps its NULL portraits (0001 is INSERT OR IGNORE -- it never touches an existing row), so
+   # this UPDATE backfills the standing cast rows. Idempotent (guarded by portrait_key IS NULL); a no-op
+   # on a fresh install where 0001 already set them.
+   wrangler d1 execute vivijure-demo --remote -c wrangler.demo.toml \
+     --file=migrations/demo/0003_demo_cast_portraits.sql
    ```
 
    Seeds: the 26 real module manifests (display-only, `script_name = demo-seed-<name>`, invocable by
-   nothing), plus browseable projects, cast, and COMPLETED render rows whose `output_key` is an
-   absolute `assets.skyphusion.net` showcase MP4.
+   nothing), plus browseable projects, cast (each with an absolute `assets.skyphusion.net` portrait image
+   -- still no R2 binding), and COMPLETED render rows whose `output_key` is an absolute
+   `assets.skyphusion.net` showcase MP4.
 
 4. **Deploy the Worker** (creates the `demo.vivijure.com` custom domain -- Workers custom domains own
    DNS + the cert; a first-level subdomain under `vivijure.com` gets Universal SSL, NO ACM needed):
@@ -150,7 +157,9 @@ zero routes to two; the Phase A verdict does not carry over).
 | 1 | `GET /api/modules` | `200`, 26 modules, `host: {dispatch:false, readonly:true}` |
 | 2 | `POST /api/render/film` | `403` with reason `demo studio is read-only: ...` |
 | 3 | `GET /planner` | `200` HTML, `content-security-policy` contains `media-src 'self' https://assets.skyphusion.net` |
+| 3b | `GET /cast` (or `/planner`) | `200` HTML, `content-security-policy` `img-src` contains `https://assets.skyphusion.net`; the cast list shows all 4 portraits, no CSP violation in the console |
 | 4 | a seeded render's `output_key` (an `assets.skyphusion.net` showcase mp4) | `curl -I` -> `200` |
+| 4b | a seeded cast `portrait_key` (e.g. `.../vivijure/showcase/cast/kesh.jpg`) | `curl -I` -> `200` |
 | 5 | `GET /` (root) | `200`, loads unauthenticated (no token prompt) |
 
 | 6 | `GET /api/demo/menu` | `200`, `scenes: [...]` seeded; `available` reflects `DEMO_RENDER_ENABLED` + the door |

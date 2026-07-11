@@ -14,13 +14,22 @@ function req(path: string): Request {
 }
 
 describe("applyResponseSecurity -- demo media-src (#625)", () => {
-  it("a studio page on a DEMO deploy gets STUDIO_DEMO_CSP (media-src admits exactly the showcase host)", () => {
+  it("a studio page on a DEMO deploy gets STUDIO_DEMO_CSP (img-src + media-src admit exactly the showcase host)", () => {
     const out = applyResponseSecurity(htmlResponse("<html></html>"), req("/planner"), { AUTH_MODE: "demo" } as any);
     const csp = out.headers.get("content-security-policy")!;
     expect(csp).toBe(STUDIO_DEMO_CSP);
+    // seeded cast portraits are absolute assets.skyphusion.net URLs -> img-src must admit the host
+    expect(csp).toContain("img-src 'self' data: blob: https://assets.skyphusion.net;");
+    // showcase films -> media-src admits the host AND stays the LAST directive (Phase-B append invariant)
     expect(csp).toContain("media-src 'self' https://assets.skyphusion.net");
-    // every other directive byte-identical to prod
-    expect(csp.startsWith(STUDIO_CSP)).toBe(true);
+    expect(csp.endsWith("media-src 'self' https://assets.skyphusion.net")).toBe(true);
+    // the non-image prod directives are byte-identical (only img-src is widened)
+    expect(csp).toContain("default-src 'self'; script-src 'self'; style-src 'self'; img-src");
+    expect(csp).toContain("; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self';");
+  });
+  it("prod STUDIO_CSP is NOT widened by the demo change -- img-src has no external origin", () => {
+    expect(STUDIO_CSP).toContain("img-src 'self' data: blob:;");
+    expect(STUDIO_CSP).not.toContain("assets.skyphusion.net");
   });
   it("a NON-demo env (token mode) gets STUDIO_CSP byte-identical -- no media-src", () => {
     const out = applyResponseSecurity(htmlResponse("<html></html>"), req("/planner"), { AUTH_MODE: "token" } as any);

@@ -34,7 +34,11 @@
 
   function artifactUrl(key) {
     if (!key) return "";
-    return "/api/artifact/" + key;
+    // #625/demo: a portrait_key (or ref/source key) can be an ABSOLUTE showcase URL -- the public demo
+    // studio seeds cast portraits from assets.skyphusion.net and binds NO R2. Return such a URL verbatim;
+    // a normal relative R2 key still flows through the studio /api/artifact/ presign route as before, so
+    // prod behavior is byte-identical. Same passthrough as planner-history-row.js artifactUrl.
+    return /^https?:\/\//i.test(key) ? key : "/api/artifact/" + key;
   }
 
   function setListStatus(text, isError) {
