@@ -2677,6 +2677,16 @@ describe("summarizeFilm surfaces delivered-vs-planned clip durations (#707)", ()
     job_id: "j707", project: "p", motion_backend: "local-gpu", binding: "B", shots, created_at: 0,
   } as ClipJobLike);
 
+  it("carries the distilled tier-honesty flag on a delivery entry when the shot has one (#705)", () => {
+    const clipJob = cj([
+      { shot_id: "shot_01", seconds: 5, status: "done", clip_key: "k1", delivered_fps: 24, delivered_frames: 120, distilled: true },
+      { shot_id: "shot_02", seconds: 5, status: "done", clip_key: "k2", delivered_fps: 24, delivered_frames: 120 },
+    ]);
+    const sum = summarizeFilm(base as unknown as FilmJob, clipJob as never);
+    expect(sum.clip_deliveries?.[0].distilled).toBe(true);
+    expect(sum.clip_deliveries?.[1]).not.toHaveProperty("distilled"); // absence stays absent
+  });
+
   it("reports planned vs delivered per done shot with backend-reported fps+frames", () => {
     const clipJob = cj([
       // a 5s plan clamped by a fixed-grid backend: 25f @ 8fps = 3.125s

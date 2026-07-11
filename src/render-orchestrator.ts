@@ -48,6 +48,9 @@ export interface ClipShot extends ClipShotInput {
   // reported no usable numbers (frames=0 sentinel included) -- absence is honest, never fabricated.
   delivered_fps?: number;
   delivered_frames?: number;
+  // #705: tier-honesty signal from the backend (true = a distilled model variant rendered this clip).
+  // Retained verbatim when the module reported it; absent otherwise -- never a fabricated false.
+  distilled?: boolean;
 }
 export interface ClipJob {
   job_id: string;
@@ -97,6 +100,8 @@ export function applyPoll(shot: ClipShot, r: PollResponse<MotionBackendOutput>):
     shot.delivered_fps = output.fps;
     shot.delivered_frames = output.frames;
   }
+  // #705: tier honesty rides the same channel, independent of the duration numbers.
+  if (typeof output.distilled === "boolean") shot.distilled = output.distilled;
 }
 
 /** Pure: does an R2 clips-object filename belong to this shot? The backend writes a finished motion clip
