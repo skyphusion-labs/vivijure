@@ -269,11 +269,42 @@ export function joinKeyframesToScenes(
 }
 
 export interface FinishSummary { total: number; done: number; failed: number; pending: number; adopted: number; }
+/** #707: per-shot delivered-vs-planned duration, surfaced on the film summary. A fixed-grid motion
+ *  backend (e.g. CogVideoX: 8fps pinned, per-tier frame caps) honestly clamps a shot's requested
+ *  duration; the clamp was always visible in the module output but silent to the API/UI. One entry per
+ *  done shot whose backend reported usable fps+frames; a backend that reports nothing contributes no
+ *  entry (absence over fabrication). */
+export interface ClipDelivery {
+  shot_id: string;
+  planned_seconds: number;
+  delivered_seconds: number; // frames/fps, rounded to ms
+  fps: number;
+  frames: number;
+}
+
+export function clipDeliveries(clipJob: ClipJob | null): ClipDelivery[] | undefined {
+  if (!clipJob) return undefined;
+  const out: ClipDelivery[] = [];
+  for (const s of clipJob.shots) {
+    if (s.status !== "done" || !s.delivered_fps || !s.delivered_frames) continue;
+    out.push({
+      shot_id: s.shot_id,
+      planned_seconds: s.seconds,
+      delivered_seconds: Math.round((s.delivered_frames / s.delivered_fps) * 1000) / 1000,
+      fps: s.delivered_fps,
+      frames: s.delivered_frames,
+    });
+  }
+  return out.length ? out : undefined;
+}
+
 export interface FilmSummary {
   film_id: string;
   phase: FilmJob["phase"];
   error?: string;
   clips?: JobSummary;
+  // #707: delivered-vs-planned per shot (see ClipDelivery). Absent until a backend reports durations.
+  clip_deliveries?: ClipDelivery[];
   finish?: FinishSummary;
   film_key?: string; // present once the film is assembled (phase "done")
   // Outcome of the film.finish chain (title / credit cards). Surfaced so the API/frontend can show
@@ -301,6 +332,7 @@ export function summarizeFilm(job: FilmJob, clipJob: ClipJob | null): FilmSummar
   return {
     film_id: job.film_id, phase: job.phase, error: job.error,
     clips: clipJob ? summarizeJob(clipJob) : undefined,
+    clip_deliveries: clipDeliveries(clipJob),
     finish: job.finish_shots ? summarizeFinish(job.finish_shots) : undefined,
     film_key: job.film_key,
     film_finish: job.film_finish,

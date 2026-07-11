@@ -35,6 +35,19 @@ describe("applyPoll", () => {
     applyPoll(s, { ok: false, error: "boom" });
     expect(s).toMatchObject({ status: "failed", error: "boom" });
   });
+  it("retains the DELIVERED fps+frames on the shot (#707: delivered-vs-planned surfacing)", () => {
+    const s = shot(); // planned 5s
+    // a fixed-grid backend honestly clamped: 25 frames at a pinned 8fps = a 3.125s clip
+    applyPoll(s, { ok: true, output: { shot_id: "s", clip_key: "renders/p/clips/s.mp4", fps: 8, frames: 25 } });
+    expect(s).toMatchObject({ status: "done", delivered_fps: 8, delivered_frames: 25 });
+  });
+  it("treats the frames=0 nothing-to-report sentinel as ABSENT delivery data, never a 0-frame record (#707)", () => {
+    const s = shot();
+    applyPoll(s, { ok: true, output: { shot_id: "s", clip_key: "renders/p/clips/s.mp4", fps: 24, frames: 0 } });
+    expect(s.status).toBe("done");
+    expect(s.delivered_fps).toBeUndefined();
+    expect(s.delivered_frames).toBeUndefined();
+  });
   it("fails a shot whose output is envelope-ok but off-contract (#345), never advancing garbage", () => {
     const s = shot();
     s.motion_backend = "seedance";
