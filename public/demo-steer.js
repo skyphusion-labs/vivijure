@@ -45,6 +45,12 @@
     if (sec < 60) return "about " + Math.max(5, sec) + " sec";
     return "about " + Math.round(sec / 60) + " min";
   }
+  // An artifact reference is normally an R2 key served through /api/artifact/; a seeded showcase film
+  // carries an ABSOLUTE URL (assets.skyphusion.net, admitted by the demo media-src). Mirror of
+  // artifactUrl() in planner-history-row.js: pass an absolute URL through, prefix a bare key.
+  function artifactUrl(key) {
+    return /^https?:\/\//i.test(key) ? key : "/api/artifact/" + key;
+  }
 
   // --- planner: replace the plan form with a steer panel (CSS hides the flow sections) ---
   function buildPlannerSteer(host) {
@@ -82,7 +88,7 @@
     watch.type = "button";
     watch.appendChild(el("span", "demo-tile-title", "Watch the finished films"));
     watch.appendChild(el("span", "demo-tile-sub", "Real renders made in this studio, below."));
-    watch.addEventListener("click", scrollToHistory);
+    watch.addEventListener("click", scrollToFilms);
     side.appendChild(watch);
 
     var own = el("a", "demo-tile");
@@ -96,13 +102,59 @@
     grid.appendChild(side);
     panel.appendChild(grid);
 
+    // the finished-films gallery: a control-free, view-only surface built entirely from rows we
+    // render here (no management UI). #planner-history stays hidden in demo.
+    var gallery = el("section", "demo-gallery");
+    gallery.id = "demo-gallery";
+    gallery.appendChild(el("h3", "demo-gallery-title", "Finished films"));
+    gallery.appendChild(el("p", "demo-hint", "Real renders made in this studio. Press play."));
+    var films = el("div", "demo-films");
+    films.id = "demo-films";
+    gallery.appendChild(films);
+    panel.appendChild(gallery);
+
     main.insertBefore(panel, main.firstChild);
     loadScenes(render);
+    loadGallery();
   }
 
-  function scrollToHistory() {
-    var h = document.getElementById("planner-history");
-    if (h) h.scrollIntoView({ behavior: "smooth", block: "start" });
+  function scrollToFilms() {
+    var g = document.getElementById("demo-gallery");
+    if (g) g.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // --- finished-films gallery (Option B: control-free by construction) ---
+  function loadGallery() {
+    var wrap = document.getElementById("demo-films");
+    if (!wrap) return;
+    wrap.appendChild(el("p", "demo-hint", "Loading films..."));
+    fetch("/api/storyboard/renders?limit=50")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var rows = (d && d.renders) || [];
+        var films = rows.filter(function (r) { return r && r.status === "COMPLETED" && r.output_key; });
+        wrap.textContent = "";
+        if (!films.length) { wrap.appendChild(el("p", "demo-hint", "No finished films to show yet.")); return; }
+        films.forEach(function (r) { wrap.appendChild(filmCard(r)); });
+      })
+      .catch(function () {
+        wrap.textContent = "";
+        wrap.appendChild(el("p", "demo-hint", "Could not load the finished films right now."));
+      });
+  }
+
+  function filmCard(r) {
+    var card = el("div", "demo-film");
+    card.appendChild(el("span", "demo-film-title", r.label || r.project || "Untitled film"));
+    var v = document.createElement("video");
+    v.className = "demo-film-video";
+    v.controls = true;
+    v.playsInline = true;
+    v.preload = "metadata";
+    v.src = artifactUrl(r.output_key);
+    card.appendChild(v);
+    if (r.quality_tier) card.appendChild(el("span", "demo-film-meta", String(r.quality_tier)));
+    return card;
   }
 
   function loadScenes(render) {
@@ -131,7 +183,7 @@
     var b = el("button", "demo-link-btn");
     b.type = "button";
     b.textContent = "Watch the finished films";
-    b.addEventListener("click", scrollToHistory);
+    b.addEventListener("click", scrollToFilms);
     p.appendChild(b);
     return p;
   }
