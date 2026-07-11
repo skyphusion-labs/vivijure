@@ -166,6 +166,8 @@ zero routes to two; the Phase A verdict does not carry over).
 | 7 | `POST /api/demo/render {scene:<seeded id>}` when paused | `503` reason `paused` (renders paused; browse still 200) |
 | 8 | `POST /api/render/film` (a prod write route) | `403` read-only (the carve-out is ONLY the two demo routes) |
 | 9 | `GET /api/modules` in Phase B | `host.render.available` present; `host.assistant.{model,note}` present when `AI` is bound |
+| 10 | `GET /api/storyboard/models` | `200` with `{"models":[]}` -- a demo never advertises frontier planning models it cannot invoke |
+| 11 | `GET /api/voices` | `200` with `{"voices":[]}` -- the same honesty rule for the TTS voice catalog |
 
 > Note: for the first few seconds after the custom domain provisions, the edge may return a
 > transient `500 (error code 1104)` while the cert warms; retry and it clears.

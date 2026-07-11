@@ -157,6 +157,15 @@ export function isDemoMode(env: Env): boolean {
   return (env.AUTH_MODE || "").trim() === "demo";
 }
 
+// Capability catalogs (planning models, TTS voices) name backends a DEMO deploy cannot invoke: no
+// gateway/provider credential is bound, and the routes that would use them are denied at the gate.
+// Serving the full list there advertises capability the deployment does not have (a picker of
+// frontier models that can never run), so a demo serves the EMPTY list; both pickers have an
+// authored empty state. Every other mode serves the catalog untouched.
+export function catalogForDeploy<T>(env: Env, catalog: readonly T[]): readonly T[] {
+  return isDemoMode(env) ? [] : catalog;
+}
+
 // Demo-mode gate (#625): reads open to everyone, writes closed to everyone. Deliberately ignores
 // any presented credential -- there is no operator path into a demo deploy through the API, so a
 // leaked/guessed token is worth nothing here. The deny reason names the demo so a visitor poking
