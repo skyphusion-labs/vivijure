@@ -3,6 +3,38 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.19.3
+
+**The installer actually works: nine live-proving findings fixed.** PATCH (deploy tooling only; no
+runtime behavior change). The S29 proving pass ran `deploy/vivijure_deploy.py` end-to-end on live
+accounts for the first time (free -> teardown -> paid -> teardown) and filed a findings ledger; this
+release fixes all of it (PRs #683, #685):
+
+- RunPod provisioning correctness: templates are SERVERLESS (#677 -- endpoint create could never
+  succeed before), each satellite endpoint runs its OWN image via a per-endpoint manifest + tag knobs
+  and audio-upscale is a first-class endpoint (#678), and the pre-bake network volume is GONE (#676 --
+  baked images ship weights in-layer; no more DATACENTER_ID, no DC-pinned workers, no ~$7/mo/endpoint
+  dead storage).
+- State honesty: every successful create persists to state IMMEDIATELY, and a create that errors
+  after server-side success (RunPod's intermittent 500 flake) is recovered by re-list instead of
+  orphaning the resource and footgunning the next run (#675). State is bound to the Cloudflare
+  account that created it -- a second-account run dies loud instead of silently reusing ids (#684).
+- Secret map: the store seed list is the UNION of every secret_name the workers actually bind
+  (unit-asserted against the tomls); per-satellite endpoint ids seed under their real names, and
+  operator-supplied secrets seed as marked placeholders with a post-install checklist (#658 -- the
+  old seed set left the core + satellites failing 10182 at deploy).
+- R2 mint-lost heal: a run that died between the R2 token mint and the seed no longer perma-fails
+  every later deploy; the installer revokes the stale token and re-mints (#680), tolerating tokens
+  already revoked out-of-band.
+- `down` is idempotent (#682): state entries clear as resources delete, delete-on-missing is
+  already-gone (RunPod 404 OR 500), worker-delete WARNs are gated on API reality (no more 27 false
+  "delete failed" on a clean teardown), and the documented `--delete-data` re-run works.
+- `--noninteractive` writes the operator token to a 0600 file beside the state file instead of
+  printing it into CI logs (#681).
+
+Files: deploy/vivijure_deploy.py, deploy/README.md, deploy/test_runpod_provision.py,
+deploy/test_secret_map.py, deploy/test_adopt_provenance.py, package.json, CHANGELOG.md
+
 ## v0.19.2
 
 **Two follow-up fixes: the renders-list default limit + a soft `.srt` download affordance.** PATCH.
