@@ -260,6 +260,36 @@ describe("filmJobToPollView", () => {
     expect(out.stalled).toBeUndefined();
     expect(out.last_progress_at).toBe(fresh.phase_started_at);
   });
+
+  // #707: the film-status route (FilmSummary) carries clip_deliveries, but the planner polls THIS
+  // view -- without the relay the panel's delivered-vs-planned surfacing stays dark (Joan's wire-gap).
+  it("relays clip_deliveries (+ distilled) on the poll view, in progress AND at done (#707/#705)", () => {
+    const clipJob = {
+      job_id: "clip-1", project: "demo", motion_backend: "local-gpu", binding: "MODULE_LOCAL_GPU",
+      shots: [{
+        shot_id: "shot_01", keyframe_url: "u", prompt: "x", seconds: 5,
+        status: "done" as const, clip_key: "c", delivered_fps: 8, delivered_frames: 25, distilled: false,
+      }],
+      created_at: Date.now(),
+    };
+    const inflight = filmJobToPollView(base, clipJob);
+    expect((inflight.output as Record<string, unknown>).clip_deliveries).toEqual([
+      { shot_id: "shot_01", planned_seconds: 5, delivered_seconds: 3.125, fps: 8, frames: 25, distilled: false },
+    ]);
+    const done = filmJobToPollView({ ...base, phase: "done", film_key: "f.mp4" }, clipJob);
+    expect((done.output as Record<string, unknown>).clip_deliveries).toEqual([
+      { shot_id: "shot_01", planned_seconds: 5, delivered_seconds: 3.125, fps: 8, frames: 25, distilled: false },
+    ]);
+  });
+
+  it("omits clip_deliveries when no shot reported durations (absence stays absent)", () => {
+    const view = filmJobToPollView(base, {
+      job_id: "clip-1", project: "demo", motion_backend: "own-gpu", binding: "MODULE_OWN_GPU",
+      shots: [{ shot_id: "shot_01", keyframe_url: "u", prompt: "x", seconds: 5, status: "done" as const, clip_key: "c" }],
+      created_at: Date.now(),
+    });
+    expect((view.output as Record<string, unknown>).clip_deliveries).toBeUndefined();
+  });
 });
 
 describe("stallSignal (#129 render-status contract)", () => {
