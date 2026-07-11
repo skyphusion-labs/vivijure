@@ -41,6 +41,15 @@ describe("applyPoll", () => {
     applyPoll(s, { ok: true, output: { shot_id: "s", clip_key: "renders/p/clips/s.mp4", fps: 8, frames: 25 } });
     expect(s).toMatchObject({ status: "done", delivered_fps: 8, delivered_frames: 25 });
   });
+  it("retains the backend's distilled tier-honesty flag, and only when reported (#705)", () => {
+    const s = shot();
+    applyPoll(s, { ok: true, output: { shot_id: "s", clip_key: "renders/p/clips/s.mp4", fps: 24, frames: 120, distilled: true } });
+    expect(s.distilled).toBe(true);
+
+    const s2 = shot();
+    applyPoll(s2, { ok: true, output: { shot_id: "s", clip_key: "renders/p/clips/s.mp4", fps: 24, frames: 120 } });
+    expect(s2.distilled).toBeUndefined(); // absence stays absent, never a fabricated false
+  });
   it("treats the frames=0 nothing-to-report sentinel as ABSENT delivery data, never a 0-frame record (#707)", () => {
     const s = shot();
     applyPoll(s, { ok: true, output: { shot_id: "s", clip_key: "renders/p/clips/s.mp4", fps: 24, frames: 0 } });
