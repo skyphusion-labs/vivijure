@@ -481,3 +481,55 @@ describe("capability catalogs on a demo deploy -- /api/storyboard/models + /api/
     expect(voices.voices.length).toBeGreaterThan(0);
   });
 });
+
+describe("worker.fetch root routing -- demo lands on the planner (S30 item g)", () => {
+  const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+
+  // ASSETS stub that records which asset path the worker asked for.
+  function makeEnv(overrides: Record<string, unknown>): { env: Env; asked: () => string | null } {
+    let last: string | null = null;
+    const env = {
+      ASSETS: {
+        fetch: async (req: Request) => {
+          last = new URL(req.url).pathname;
+          return new Response("ASSET", { status: 200, headers: { "content-type": "text/html" } });
+        },
+      },
+      ...overrides,
+    } as unknown as Env;
+    return { env, asked: () => last };
+  }
+
+  const get = (path: string) => new Request("https://studio.example" + path);
+
+  it("demo mode: GET / serves the planner asset (not the module host)", async () => {
+    const { env, asked } = makeEnv({ AUTH_MODE: "demo" });
+    const res = await worker.fetch(get("/"), env, ctx);
+    expect(res.status).toBe(200);
+    expect(asked()).toBe("/planner.html");
+  });
+
+  it("demo mode: GET /index.html also remaps to the planner", async () => {
+    const { env, asked } = makeEnv({ AUTH_MODE: "demo" });
+    await worker.fetch(get("/index.html"), env, ctx);
+    expect(asked()).toBe("/planner.html");
+  });
+
+  it("demo mode: the module host stays reachable at /modules (nav unchanged)", async () => {
+    const { env, asked } = makeEnv({ AUTH_MODE: "demo" });
+    await worker.fetch(get("/modules"), env, ctx);
+    expect(asked()).toBe("/modules.html");
+  });
+
+  it("token mode: GET / serves the module host unchanged (byte-identical)", async () => {
+    const { env, asked } = makeEnv({ AUTH_MODE: "token", STUDIO_API_TOKEN: SECRET });
+    await worker.fetch(get("/"), env, ctx);
+    expect(asked()).toBe("/modules.html");
+  });
+
+  it("normal (no AUTH_MODE) mode: GET / serves the module host unchanged", async () => {
+    const { env, asked } = makeEnv({});
+    await worker.fetch(get("/"), env, ctx);
+    expect(asked()).toBe("/modules.html");
+  });
+});
