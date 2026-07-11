@@ -1170,3 +1170,140 @@ body.sw-open .sw-dock { transform: none; }
   font-weight: 600; opacity: 0.9;
 }
 .readonly-source:hover { opacity: 1; color: var(--accent); }
+
+/* ===========================================================================
+   Demo first-impression steering (demo-steer.js). A PROJECTION of the registry:
+   these rules only bite when demo-steer.js adds body.demo-steer-active, which it
+   does only when GET /api/modules projects host.readonly. Absent that flag none
+   of this applies and the studio renders byte-identically to a normal deploy.
+   =========================================================================== */
+
+/* Banner steer CTA (readonly-gate.js). */
+.readonly-cta {
+  flex: 0 0 auto; color: var(--bg); white-space: nowrap; font-weight: 700;
+  text-decoration: none; padding: 4px 10px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.readonly-cta:hover { filter: brightness(1.08); }
+
+/* Planner: hide the full plan-to-render flow for a demo visitor; the demo panel
+   (rendered at the top of .planner-layout) and the recent-renders showcase stay. */
+body.demo-steer-active .planner-header,
+body.demo-steer-active #planner-steps,
+body.demo-steer-active .planner-project,
+body.demo-steer-active .planner-form,
+body.demo-steer-active #planner-output,
+body.demo-steer-active #planner-scenes,
+body.demo-steer-active #planner-audio,
+body.demo-steer-active #planner-preflight,
+body.demo-steer-active #planner-bundle,
+body.demo-steer-active #planner-render,
+body.demo-steer-active #planner-stepnav,
+body.demo-steer-active #planner-resume-banner,
+body.demo-steer-active .sw-tab,
+body.demo-steer-active #sw-dock { display: none !important; }
+
+/* Cast: hide every mutation control; the seeded cast stays browsable. */
+body.demo-steer-active .cast-list-actions,
+body.demo-steer-active #cast-save-btn,
+body.demo-steer-active .cast-portrait-actions,
+body.demo-steer-active .cast-gen-section,
+body.demo-steer-active #cast-training-block,
+body.demo-steer-active .cast-refs-pane > .cast-upload-btn,
+body.demo-steer-active .cast-lora-pane,
+body.demo-steer-active .cast-editor-footer,
+body.demo-steer-active #cast-multi-scene { display: none !important; }
+
+/* --- the demo steer panel --- */
+.demo-panel {
+  margin: 4px 0 8px; padding: 20px 22px; border: 1px solid color-mix(in srgb, var(--accent-2) 30%, var(--line));
+  border-radius: 16px; background:
+    radial-gradient(700px 260px at 90% -30%, color-mix(in srgb, var(--accent-2) 14%, transparent) 0%, transparent 60%),
+    var(--panel);
+}
+.demo-panel-intro h2 { margin: 0 0 6px; font-size: 22px; letter-spacing: 0.01em; }
+.demo-panel-lede { margin: 0 0 18px; color: var(--muted); font-size: 15px; line-height: 1.5; max-width: 62ch; }
+.demo-actions { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 760px) { .demo-actions { grid-template-columns: 1fr; } }
+
+.demo-render { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
+.demo-render h3 { margin: 0 0 4px; font-size: 16px; }
+.demo-hint { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+.demo-scenes { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.demo-scene {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+}
+.demo-scene-title { font-weight: 700; font-size: 14px; color: var(--ink); }
+.demo-scene-desc { font-size: 12px; color: var(--muted); line-height: 1.4; flex: 1 1 auto; }
+.demo-scene-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.demo-scene-secs { font-size: 11px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.demo-scene-btn, .demo-again-btn {
+  cursor: pointer; border: none; border-radius: 8px; padding: 7px 12px; font-weight: 700; font-size: 13px;
+  color: var(--bg); background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.demo-scene-btn:hover { filter: brightness(1.08); }
+.demo-scene-btn:disabled { opacity: 0.45; cursor: default; filter: none; }
+.demo-again-btn { margin-top: 10px; }
+
+.demo-render-live { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.demo-status { margin: 0 0 8px; font-size: 14px; color: var(--ink); }
+.demo-clip { width: 100%; max-width: 100%; border-radius: 10px; background: #000; display: block; }
+.demo-done-note { margin: 10px 0 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.demo-friendly, .demo-paused { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.demo-link-btn {
+  display: inline-block; cursor: pointer; text-decoration: none; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 8px; padding: 7px 12px; font-weight: 600; font-size: 13px; color: var(--ink); background: transparent;
+}
+.demo-link-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.demo-side { display: flex; flex-direction: column; gap: 12px; }
+.demo-tile {
+  display: flex; flex-direction: column; gap: 4px; text-align: left; cursor: pointer;
+  padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2);
+  text-decoration: none; color: var(--ink); font: inherit; width: 100%;
+}
+.demo-tile:hover { border-color: var(--accent-2); }
+.demo-tile-title { font-weight: 700; font-size: 15px; }
+.demo-tile-sub { font-size: 12px; color: var(--muted); line-height: 1.4; }
+
+/* Cast read-only note. */
+.demo-cast-note {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px;
+  padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent-2) 30%, var(--line));
+  border-radius: 12px; background: color-mix(in srgb, var(--accent-2) 8%, var(--panel));
+}
+.demo-cast-note-text { flex: 1 1 260px; font-size: 13px; color: var(--ink); line-height: 1.45; }
+
+/* --- the demo assistant widget (collapsed launcher -> panel) --- */
+.demo-asst-launch {
+  position: fixed; right: 18px; bottom: 18px; z-index: 40; cursor: pointer;
+  border: none; border-radius: 999px; padding: 11px 18px; font-weight: 700; font-size: 14px;
+  color: var(--bg); background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.demo-asst-launch:hover { filter: brightness(1.08); }
+.demo-asst {
+  position: fixed; right: 18px; bottom: 18px; z-index: 41; width: min(360px, calc(100vw - 36px));
+  max-height: min(560px, calc(100vh - 36px)); display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--panel);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.45); overflow: hidden;
+}
+.demo-asst-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.demo-asst-title { font-weight: 800; letter-spacing: 0.02em; }
+.demo-asst-close { cursor: pointer; background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; padding: 0 4px; }
+.demo-asst-close:hover { color: var(--ink); }
+.demo-asst-note { margin: 0; padding: 10px 14px; font-size: 12px; color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); line-height: 1.45; }
+.demo-asst-log { flex: 1 1 auto; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-height: 90px; }
+.demo-asst-msg { padding: 8px 11px; border-radius: 10px; font-size: 13px; line-height: 1.45; max-width: 88%; white-space: pre-wrap; word-break: break-word; }
+.demo-asst-user { align-self: flex-end; background: linear-gradient(90deg, var(--accent), var(--accent-2)); color: var(--bg); font-weight: 600; }
+.demo-asst-bot { align-self: flex-start; background: var(--panel-2); color: var(--ink); border: 1px solid var(--line); }
+.demo-asst-row { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.demo-asst-input { flex: 1 1 auto; resize: none; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--ink); padding: 8px 10px; font: inherit; font-size: 13px; }
+.demo-asst-input:focus { outline: none; border-color: var(--accent); }
+.demo-asst-send {
+  flex: 0 0 auto; cursor: pointer; border: none; border-radius: 8px; padding: 0 14px; font-weight: 700; font-size: 13px;
+  color: var(--bg); background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.demo-asst-send:hover { filter: brightness(1.08); }
