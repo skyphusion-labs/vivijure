@@ -38,7 +38,7 @@ import {
   deleteCastArtifacts,
 } from "./cast-media";
 import { exportCastBundle, importCastBundle } from "./cast-bundle";
-import { gateApi, isDemoMode } from "./auth-gate";
+import { gateApi, isDemoMode, catalogForDeploy } from "./auth-gate";
 import { DEMO_MEDIA_ORIGIN } from "./asset-response";
 import type { MotionBackendInput, MotionBackendOutput } from "./modules/types";
 import { aiRun } from "./ai-binding";
@@ -199,7 +199,7 @@ const hSaveProjectStoryboard: Handler = async (req, env, _c, p) => {
 const hListCast: Handler = async (_req, env) => json({ cast: (await listCast(env)).map(toPublicCast) });
 // The dialogue voice catalog (aura-1 speakers). Static; the cast voice picker renders from it so the
 // list of voices has one source of truth (src/voices.ts), not a hardcoded copy in the frontend.
-const hListVoices: Handler = async () => json({ voices: VOICE_CATALOG });
+const hListVoices: Handler = async (_req, env) => json({ voices: catalogForDeploy(env, VOICE_CATALOG) });
 const hCreateCast: Handler = async (req, env) => {
   const b = await readBody<{ name?: string; bible?: string | null }>(req);
   if (!b.name) throw badRequest("name required");
@@ -1159,7 +1159,7 @@ const hEnhance: Handler = async (req, env) => {
     notes: result.output?.notes ?? [],
   });
 };
-const hModels: Handler = async () => json({ models: PLANNING_MODELS });
+const hModels: Handler = async (_req, env) => json({ models: catalogForDeploy(env, PLANNING_MODELS) });
 const hYaml: Handler = async (req) => {
   const a = await readBody<{ storyboard?: StoryboardValidated }>(req);
   if (!a.storyboard) throw badRequest("storyboard required");

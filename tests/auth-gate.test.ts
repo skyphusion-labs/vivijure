@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { gateApi, verifyTokenRequest, constantTimeEqual, sha256Hex, isDemoMode, TOKEN_COOKIE } from "../src/auth-gate";
+import { gateApi, verifyTokenRequest, constantTimeEqual, sha256Hex, isDemoMode, catalogForDeploy, TOKEN_COOKIE } from "../src/auth-gate";
 import worker from "../src/index";
 import type { Env } from "../src/env";
 import { __resetJwksCacheForTest, type CertsFetcher } from "../src/access-auth";
@@ -432,5 +432,52 @@ describe("AUTH_MODE=demo Phase B -- exactly two demo write routes are allowed", 
       const d = await at(method, "/api/demo/render");
       expect(d).toMatchObject({ ok: false, status: 403 });
     }
+  });
+});
+
+// ---- demo mode serves EMPTY capability catalogs (honesty: no advertised backend it cannot run) ----
+
+describe("capability catalogs on a demo deploy -- /api/storyboard/models + /api/voices", () => {
+  const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+  const demoEnv = {
+    AUTH_MODE: "demo",
+    ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
+  } as unknown as Env;
+  const tokenEnv = {
+    AUTH_MODE: "token",
+    STUDIO_API_TOKEN: SECRET,
+    ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
+  } as unknown as Env;
+
+  function get(path: string, headers: Record<string, string> = {}): Request {
+    return new Request("https://demo.vivijure.com" + path, { headers });
+  }
+
+  it("catalogForDeploy scrubs only demo mode", () => {
+    const cat = [{ id: "x" }];
+    expect(catalogForDeploy({ AUTH_MODE: "demo" } as any, cat)).toEqual([]);
+    expect(catalogForDeploy({ AUTH_MODE: " demo " } as any, cat)).toEqual([]);
+    expect(catalogForDeploy({ AUTH_MODE: "token" } as any, cat)).toBe(cat);
+    expect(catalogForDeploy({} as any, cat)).toBe(cat);
+  });
+
+  it("demo serves models: [] -- the picker must not list frontier models the deploy cannot invoke", async () => {
+    const res = await worker.fetch(get("/api/storyboard/models"), demoEnv, ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ models: [] });
+  });
+
+  it("demo serves voices: [] -- same rule for the TTS voice catalog", async () => {
+    const res = await worker.fetch(get("/api/voices"), demoEnv, ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ voices: [] });
+  });
+
+  it("token mode still serves the full catalogs (no over-scrub outside demo)", async () => {
+    const auth = { authorization: `Bearer ${SECRET}` };
+    const models = (await (await worker.fetch(get("/api/storyboard/models", auth), tokenEnv, ctx)).json()) as any;
+    expect(models.models.length).toBeGreaterThan(0);
+    const voices = (await (await worker.fetch(get("/api/voices", auth), tokenEnv, ctx)).json()) as any;
+    expect(voices.voices.length).toBeGreaterThan(0);
   });
 });
