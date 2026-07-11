@@ -196,6 +196,31 @@ the reorder changes each step INPUT clip, the `#583` step-input provenance hash
 special-case. `finish_consumes_audio` is OPTIONAL and additive (no MODULE_API bump); absent/false =>
 the chain folds purely in `ui.order`.
 
+### Fixed duration grid (`duration_grid`, optional + additive)
+
+A `motion.backend` module whose engine renders on a FIXED duration grid (a pinned output fps plus
+per-quality-tier frame ceilings, e.g. CogVideoX: 8fps, `draft` capped at 25 frames) MAY declare the
+grid so the core can warn AT STORYBOARD TIME that a shot's planned seconds will be clamped, instead
+of the clamp staying silent until the clip lands short (vivijure #707). A tier's maximum deliverable
+seconds is `max_frames / fps`. Tier keys match the render quality tiers the module accepts.
+
+```jsonc
+{
+  "hooks": ["motion.backend"],
+  "duration_grid": {
+    "fps": 8,
+    "tiers": { "draft": { "max_frames": 25 }, "standard": { "max_frames": 49 }, "final": { "max_frames": 49 } }
+  }
+}
+```
+
+The module RELAYS what its backend actually enforces (e.g. read from the backend's own health/info
+endpoint, best-effort) -- it must never fabricate a grid, and it declares nothing when the backend
+has no fixed grid (a flexible engine like LTX simply omits the field). The core's preflight compares
+each shot's planned seconds against the selected tier's ceiling and emits a WARNING per clamped shot
+(never an error: clamping is legitimate behavior; silence was the bug). `duration_grid` is OPTIONAL
+and additive (no MODULE_API bump); absent => no declared constraint, no preflight check.
+
 ## Worked example: the `finish` hook
 
 This is the whole contract for one hook, end to end. It is also the first real module.

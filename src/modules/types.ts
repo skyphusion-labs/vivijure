@@ -187,6 +187,21 @@ export interface ModuleManifest {
    *  means ordered purely by `ui.order` (the legacy behavior). The module declares only its OWN nature;
    *  the cross-module ordering policy stays in the core. */
   finish_consumes_audio?: boolean;
+  /** OPTIONAL, additive (no MODULE_API bump, same pattern as `cancelable`). A motion.backend module
+   *  whose engine renders on a FIXED duration grid (pinned fps + per-tier frame caps, e.g. CogVideoX:
+   *  8fps, draft <= 25 frames) declares the grid so the core can warn AT STORYBOARD TIME that a shot's
+   *  planned seconds will be clamped, instead of the clamp staying silent until the clip lands (#707).
+   *  The module RELAYS what its backend declares (best-effort; e.g. from the backend's /health);
+   *  ABSENT means no declared constraint -- the module must never fabricate a grid. Tier keys match
+   *  the render quality tiers the module accepts (e.g. draft/standard/final). */
+  duration_grid?: DurationGridDecl;
+}
+
+/** A fixed duration grid for a motion backend (#707): the pinned output fps and the per-quality-tier
+ *  frame ceilings. A tier's maximum deliverable seconds = max_frames / fps. */
+export interface DurationGridDecl {
+  fps: number;
+  tiers: Record<string, { max_frames: number }>;
 }
 
 // --------------------------------------------------------------------------- invocation

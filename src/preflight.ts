@@ -251,6 +251,55 @@ export function resolveCastBindings(
   return { resolved, unresolved };
 }
 
+// Duration-grid clamp warning (#707). A fixed-grid motion backend (pinned fps + per-tier frame
+// caps, e.g. CogVideoX: 8fps, draft <= 25 frames) honestly clamps a shot's requested duration at
+// render time; this check surfaces the clamp AT STORYBOARD TIME instead of it staying silent until
+// the clip lands short. WARNING, never an error: clamping is legitimate behavior, silence is the
+// bug. The grid comes from the selected motion module's manifest (duration_grid, relayed from the
+// backend); no declared grid -> no issues, absence is honest.
+
+interface DurationGridLike {
+  fps?: number;
+  tiers?: Record<string, { max_frames?: number }>;
+}
+
+export function checkDurationGrid(
+  storyboard: StoryboardLike,
+  grid: DurationGridLike | null | undefined,
+  quality: string | null | undefined,
+  backendName = "the selected motion backend",
+): PreflightIssue[] {
+  const issues: PreflightIssue[] = [];
+  if (!grid || typeof grid.fps !== "number" || !(grid.fps > 0) || !grid.tiers) return issues;
+  const caps = Object.entries(grid.tiers)
+    .filter((e): e is [string, { max_frames: number }] => typeof e[1]?.max_frames === "number" && e[1].max_frames > 0);
+  if (caps.length === 0) return issues;
+
+  // The declared tier when the caller names one; otherwise the LOOSEST declared cap, so with an
+  // unknown tier we only warn on shots that get clamped no matter which tier renders (no false alarms).
+  const declared = quality ? caps.find(([t]) => t === quality) : undefined;
+  const maxFrames = declared ? declared[1].max_frames : Math.max(...caps.map(([, t]) => t.max_frames));
+  const maxSeconds = Math.round((maxFrames / grid.fps) * 1000) / 1000;
+  const tierPhrase = declared ? `at the ${declared[0]} tier` : "even at its largest tier";
+
+  const scenes = Array.isArray(storyboard.scenes) ? storyboard.scenes : [];
+  scenes.forEach((scene, idx) => {
+    const sid = scene.id || `scene_${(idx + 1).toString().padStart(2, "0")}`;
+    const planned = typeof scene.target_seconds === "number" ? scene.target_seconds
+      : typeof storyboard.clip_seconds === "number" ? storyboard.clip_seconds
+      : undefined;
+    if (planned === undefined || !(planned > 0)) return; // no planned duration to compare (shape checks own <=0)
+    if (planned > maxSeconds + 0.001) {
+      issues.push({
+        level: "warning",
+        scope: `scene[${sid}]`,
+        message: `${sid} plans ${planned}s but ${backendName} delivers at most ${maxSeconds}s ${tierPhrase} (${maxFrames} frames at ${grid.fps}fps); the clip will be clamped`,
+      });
+    }
+  });
+  return issues;
+}
+
 export interface PreflightResult {
   ok: boolean;
   counts: { error: number; warning: number; info: number };

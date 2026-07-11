@@ -78,7 +78,7 @@ import {
   type AudioAnalyzeRequest,
 } from "./runpod-submit";
 import { validateStoryboard, type StoryboardValidated } from "./storyboard-validate";
-import { checkStoryboardShape, checkCastBindingsReady, resolveCastBindings, summarize, type PreflightIssue } from "./preflight";
+import { checkStoryboardShape, checkCastBindingsReady, checkDurationGrid, resolveCastBindings, summarize, type PreflightIssue } from "./preflight";
 import {
   planStoryboard, refineStoryboard, chatComplete,
   type PlanStoryboardArgs, type RefineStoryboardArgs, type ChatCompleteArgs,
@@ -950,6 +950,22 @@ const hPreflight: Handler = async (req, env) => {
     const { resolved, unresolved } = resolveCastBindings(bindings, catalog);
     issues.push(...unresolved);
     issues.push(...checkCastBindingsReady(resolved, catalog, keyframeLabel));
+  }
+  // #707: duration-grid clamp warning. When the client names its selected motion backend (and
+  // optionally the quality tier), and that module's manifest declares a fixed duration_grid, warn
+  // per shot whose planned seconds exceed what the grid can deliver. Both fields are OPTIONAL and
+  // additive on the envelope: an older client sends neither and gets the pre-#707 behavior.
+  const motionBackend = typeof envelope.motionBackend === "string" ? envelope.motionBackend : null;
+  if (motionBackend) {
+    const quality = typeof envelope.quality === "string" ? envelope.quality : null;
+    const motionModules = servingForHook(
+      await discoverModules(env as unknown as Record<string, unknown>, { cacheTtlMs: 60_000 }),
+      "motion.backend",
+    );
+    const mod = motionModules.find((m) => m.name === motionBackend);
+    if (mod?.duration_grid) {
+      issues.push(...checkDurationGrid(validated.value, mod.duration_grid, quality, mod.name));
+    }
   }
   return json(summarize(issues), 200);
 };
