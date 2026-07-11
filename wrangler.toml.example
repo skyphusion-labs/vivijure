@@ -67,6 +67,13 @@ R2_S3_BUCKET = "${R2_S3_BUCKET}"
 #     not dollars.
 # SPEND_LIMIT_FAIL_CLOSED = "false"
 # SPEND_DAILY_CEILING = "25"
+# Assemble duration honesty gate (#697, src/film-orchestrator.ts):
+#   FILM_CLIP_DURATION_FLOOR -- the fraction of a shot`s PLANNED seconds its ASSEMBLED clip must reach
+#     before the render FAILS LOUD (a truncated per-shot finish output, not a legitimate beat-trim; the
+#     pixel gate #558 checks content, not length). Default 0.5, clamped to [0,1]; "0" disables the gate.
+#     The gate arms only once video-finish returns per-clip durations (see containers/video-finish); an
+#     older container reports none and the gate no-ops (logged, never a false failure).
+# FILM_CLIP_DURATION_FLOOR = "0.5"
 
 [observability]
 enabled = true

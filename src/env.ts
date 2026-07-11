@@ -135,6 +135,11 @@ export interface Env {
   // (spend_counter, migration 0008). Over the ceiling denies 429, Retry-After = UTC midnight.
   SPEND_DAILY_CEILING?: string;
 
+  // #697 per-shot duration honesty gate floor: the fraction of a shot`s planned seconds an assembled
+  // clip must reach before the render fails loud (a truncated clip, not a beat-trim). [vars] entry,
+  // parsed + clamped to [0,1] (resolveClipDurationFloor); unset defaults to 0.5, 0 disables the gate.
+  FILM_CLIP_DURATION_FLOOR?: string;
+
   // Transactional mail (render-complete notification). Optional; guard with `if (env.EMAIL)`.
   EMAIL?: EmailServiceBinding;
 

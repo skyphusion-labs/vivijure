@@ -6,6 +6,10 @@ export interface ScatterJob {
   bundle_key: string;
   quality_tier: "draft" | "standard" | "final";
   expected_shot_ids: string[];
+  // #697/#698: ACTUAL per-shot assembled clip seconds (video-finish probe at gather),
+  // shot_id -> seconds. Feeds the per-shot duration gate + caption-cue timeline. Absent on
+  // an older container build (gate no-ops; captions fall back to the bundle plan).
+  actual_clip_durations?: Record<string, number>;
   shard_film_ids: string[];
   shard_shots: string[][];
   motion_backend?: string;

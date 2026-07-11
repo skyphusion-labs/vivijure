@@ -2847,3 +2847,71 @@ describe("#521 discovery threaded once per tick (no per-leg module.json fan-out)
     expect(hits()).toBe(1); // discovered ONCE for the whole tick (was 2+: runFilmFinish + fireNotify each re-scanned)
   });
 });
+
+
+// #697/#698: the per-shot duration honesty gate at assemble. A talking shot delivered a truncated
+// 0.085s clip TWICE during the S31 GPU proof and the film shipped GREEN -- the pixel gate (#558) checks
+// content, not length. This drives the real advanceFilmJob assemble leg with a VPC double that returns
+// per-clip durations, asserting the gate fails loud below the floor and passes at/above it.
+function durationGateEnv(job: object, clipDurations: number[] | undefined) {
+  const filmId = (job as { film_id: string }).film_id;
+  const putCalls: string[] = [];
+  const body: Record<string, unknown> = { ok: true, key: `renders/${filmId}/film.mp4`, durationSeconds: 4, shots: 2 };
+  if (clipDurations !== undefined) body.clipDurations = clipDurations;
+  const env = {
+    DB: { prepare: () => ({ bind: () => ({ run: async () => ({}), first: async () => null, all: async () => ({ results: [] }) }) }) },
+    R2_RENDERS: {
+      // The job doc reads back; the bundle_key (and everything else) is absent, so
+      // readShotDurationsFromBundle returns {} and the plan falls back to scene.seconds.
+      get: async (key: string) => key === filmJobDocKey(filmId) ? { text: async () => JSON.stringify(job) } : null,
+      head: async () => null, // film.mp4 not yet in R2 -> no self-heal short-circuit, real assemble runs
+      put: async (key: string) => { putCalls.push(key); },
+    },
+    VIDEO_FINISH_VPC: {
+      fetch: async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }),
+    },
+    R2_S3_ACCESS_KEY_ID: "test", R2_S3_SECRET_ACCESS_KEY: "test",
+    R2_S3_ENDPOINT: "https://acct.r2.cloudflarestorage.com", R2_S3_BUCKET: "vivijure",
+  } as unknown as Env;
+  return { env, putCalls };
+}
+
+describe("advanceFilmJob assemble duration honesty gate (#697/#698)", () => {
+  const baseJob = {
+    film_id: "film-durgate-1",
+    project: "p",
+    bundle_key: "renders/p/bundle.tar.gz", // absent in R2 -> plan falls back to scene.seconds
+    scenes: [
+      { shot_id: "shot_01", prompt: "x", seconds: 4 },
+      { shot_id: "shot_02", prompt: "y", seconds: 4 },
+    ],
+    phase: "assemble" as const,
+    finish_shots: [
+      { shot_id: "shot_01", clip_key: "renders/film-durgate-1/clips/shot_01_finished.mp4", chain: ["M"], idx: 1, status: "done" as const, applied: [] },
+      { shot_id: "shot_02", clip_key: "renders/film-durgate-1/clips/shot_02_finished.mp4", chain: ["M"], idx: 1, status: "done" as const, applied: [] },
+    ],
+  };
+
+  it("FAILS LOUD when a shot is delivered below the floor (the 0.085s-for-4s case)", async () => {
+    const { env } = durationGateEnv(baseJob, [0.085, 4.01]);
+    const r = await advanceFilmJob(env, "film-durgate-1");
+    expect(r?.job.phase).toBe("failed");
+    expect(r?.job.error).toContain("duration gate");
+    expect(r?.job.error).toContain("shot_01");
+    expect(r?.job.error).toContain("planned 4.00s");
+  });
+
+  it("PASSES at/above the floor (both clips full length) -- no false failure", async () => {
+    const { env } = durationGateEnv(baseJob, [3.96, 4.01]);
+    const r = await advanceFilmJob(env, "film-durgate-1");
+    expect(r?.job.phase).not.toBe("failed");
+    expect(r?.job.actual_clip_durations).toEqual({ shot_01: 3.96, shot_02: 4.01 });
+  });
+
+  it("SKIPS the gate (no false failure) when an older container reports no per-clip durations", async () => {
+    const { env } = durationGateEnv(baseJob, undefined);
+    const r = await advanceFilmJob(env, "film-durgate-1");
+    expect(r?.job.phase).not.toBe("failed");
+    expect(r?.job.actual_clip_durations).toBeUndefined();
+  });
+});
