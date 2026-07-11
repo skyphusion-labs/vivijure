@@ -128,6 +128,15 @@ async function runPreflight() {
     if (planState.castBindings && Object.keys(planState.castBindings).length > 0) {
       body.castBindings = planState.castBindings;
     }
+    // #707: name the currently selected motion backend + quality tier so the
+    // server can warn per shot when that backend's declared duration_grid would
+    // clamp a planned duration. Both are OPTIONAL and additive on the envelope:
+    // absent when the user has not chosen yet (an unmade multi-backend pick, or a
+    // panel not yet rendered), in which case the server emits no grid warning.
+    const motionSel = document.getElementById("planner-motion-backend");
+    if (motionSel && motionSel.value) body.motionBackend = motionSel.value;
+    const tierEl = document.getElementById("planner-quality-tier");
+    if (tierEl && tierEl.value) body.quality = tierEl.value;
     const resp = await fetch("/api/storyboard/preflight", {
       method: "POST",
       headers: { "content-type": "application/json" },

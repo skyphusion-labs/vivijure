@@ -260,6 +260,16 @@ document.addEventListener("DOMContentLoaded", () => {
     // edits the user made while auto was off.
     if (preflightAutoEnabled) schedulePreflight();
   });
+  // #707: re-run preflight when the motion backend or quality tier changes, so the
+  // duration-grid clamp warning stays in sync with the render selection. Delegated
+  // on document because #planner-motion-backend is created dynamically by
+  // renderBackendSelector (a static listener bound at init would miss it).
+  document.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t && (t.id === "planner-quality-tier" || t.id === "planner-motion-backend")) {
+      schedulePreflight();
+    }
+  });
   const bpmEl = $("#planner-bpm");
   if (bpmEl) bpmEl.addEventListener("change", () => {
     const v = Number(bpmEl.value);
