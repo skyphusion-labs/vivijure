@@ -253,3 +253,50 @@ describe("#416 /api/artifact byte-range serving", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// --- #646: no render bucket bound (the zero-spend public demo) -> clean 404, never a 500 ------------
+// A demo deploy binds no R2 (spend-impossible by construction) and its seeded rows carry absolute
+// showcase URLs, so the frontend never hits this route. A manually-poked key still must get the honest
+// answer -- there is no store, so there is no such artifact -- as a clean 404, not a thrown 500.
+function makeEnvNoR2() {
+  return {
+    ALLOW_UNAUTHENTICATED: "true",
+    ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
+    // R2_RENDERS deliberately absent -- this is the demo binding-absence shape.
+  } as unknown as Env;
+}
+
+describe("#646 no-R2 deploy: /api/artifact serves an honest 404, not a 500", () => {
+  it("GET a well-formed key with no binding -> 404 with steer-language body (no store)", async () => {
+    const res = await worker.fetch(new Request(url("/api/artifact/renders/film.mp4")), makeEnvNoR2(), ctx);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body).toEqual({ error: "the artifact store is not available on this deployment" });
+    // steer language, never breakage language: no "broken", no "internal", no stack noise.
+    expect(body.error).not.toMatch(/broken|internal|stack|undefined|R2_RENDERS/i);
+  });
+
+  it("HEAD a well-formed key with no binding -> 404, no body, no throw", async () => {
+    const res = await worker.fetch(
+      new Request(url("/api/artifact/renders/film.mp4"), { method: "HEAD" }), makeEnvNoR2(), ctx,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("a ranged GET with no binding -> 404 (never a 500)", async () => {
+    const res = await worker.fetch(
+      new Request(url("/api/artifact/renders/film.mp4"), { headers: { Range: "bytes=0-99" } }), makeEnvNoR2(), ctx,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("WITH the binding present, serving is byte-identical (guard is a no-op on prod)", async () => {
+    const { env, r2 } = makeEnv();
+    seed1000(r2);
+    const res = await worker.fetch(new Request(url("/api/artifact/renders/film.mp4")), env, ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-length")).toBe("1000");
+    expect(res.headers.get("content-type")).toBe("video/mp4");
+    expect(res.headers.get("accept-ranges")).toBe("bytes");
+  });
+});

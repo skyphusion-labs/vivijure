@@ -373,6 +373,12 @@ function artifactHeaders(contentType: string): Headers {
 // 206 + Content-Range for a satisfiable range, 416 + `Content-Range: bytes */size` for an out-of-bounds
 // one, and a full 200 when the Range is absent / malformed / multi-range.
 const hServeArtifact: Handler = async (req, env, _c, p) => {
+  // #646: a deploy with no render bucket bound (the zero-spend public demo) has no artifact store at
+  // all. Its seeded rows carry absolute showcase URLs, so the frontend never reaches this route; a
+  // manually-poked key must still get the honest answer -- there is no store here, so there is no such
+  // artifact -- as a clean 404, never a thrown 500. On a deploy WITH the binding this is a no-op, so
+  // prod behavior is byte-identical.
+  if (!env.R2_RENDERS) throw notFound("the artifact store is not available on this deployment");
   const key = p.key;
   // F4: the key is the untrusted URL tail. Reject an unsafe shape (traversal/absolute/scheme/control
   // bytes) and anything outside the known artifact namespaces -> 404 (not 400) so a probe learns
