@@ -3,6 +3,26 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.19.4
+
+**The demo-studio first-impression train, folded into a tag, plus two honest-surface fixes.** PATCH
+(demo-gated or prod-inert changes; prod runtime behavior is unchanged except where noted).
+
+- Demo studio (all demo-gated, live at demo.vivijure.com since 2026-07-11): real cast portraits
+  from the showcase asset host (#688), honest capability catalogs -- a demo serves empty
+  planning-model + voice lists instead of advertising backends it cannot invoke (#689), the
+  visitor steer panel -- render-a-free-clip scene menu, capped OSS assistant, honest
+  queue/cap/paused copy, demo root lands on the planner (#690), and a control-free
+  finished-films gallery (#691). Favicons shipped for every studio page (#679).
+- Studio MCP: `submit_film` now exposes `speech_config`, `film_finish_config`, and `master_config`
+  and forwards them verbatim, so subtitle mode (`burn`/`sidecar`/`both`) and the master-chain knobs
+  are reachable from an agent; previously they were silently unreachable via MCP (#674, PR #693).
+- `/api/artifact/*` on a deploy with no render bucket bound (the demo) serves an honest 404 with
+  steer language instead of throwing a 500 (#646, PR #692). Deploys with the binding are
+  byte-identical.
+
+Files: package.json, CHANGELOG.md (release commit; feature files landed in PRs #688-#693)
+
 ## v0.19.3
 
 **The installer actually works: nine live-proving findings fixed.** PATCH (deploy tooling only; no
