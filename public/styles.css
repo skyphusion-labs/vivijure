@@ -1307,3 +1307,19 @@ body.demo-steer-active #cast-multi-scene { display: none !important; }
   color: var(--bg); background: linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 .demo-asst-send:hover { filter: brightness(1.08); }
+
+/* Demo finished-films gallery (demo-steer.js, Option B). Control-free by construction: the only
+   elements a visitor sees here are the ones demo-steer renders (title + <video> + meta), never the
+   render-management history UI. #planner-history stays hidden in demo (defensive rule below). */
+body.demo-steer-active #planner-history { display: none !important; }
+
+.demo-gallery { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.demo-gallery-title { margin: 0 0 4px; font-size: 16px; }
+.demo-films { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-top: 12px; }
+.demo-film {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2);
+}
+.demo-film-title { font-weight: 700; font-size: 14px; color: var(--ink); }
+.demo-film-video { width: 100%; max-width: 100%; border-radius: 8px; background: #000; display: block; }
+.demo-film-meta { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
