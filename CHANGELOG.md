@@ -3,6 +3,42 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.19.5
+
+**The honesty batch: the four S31 GPU-proof findings fixed.** PATCH (fix class; no new features).
+All four were live-hit during the 2026-07-11 v0.19.4 proof renders and every fix follows the
+honest-failures doctrine: a degrade is never silent, garbage bounces loud before spend.
+
+- Per-shot duration honesty gate at assemble (#697, PR #700): the video-finish container probes
+  each normalized clip's ACTUAL assembled seconds and returns `clipDurations`; the core (single-film
+  AND scatter paths) compares each clip against its planned seconds and fails the render LOUD when a
+  clip lands below the floor (`FILM_CLIP_DURATION_FLOOR` [vars] knob, default 0.5, clamped [0,1],
+  "0" disables) -- a 0.085s clip for a 4s speaking shot can no longer ship as a green film. The gate
+  fires on evidence only: an older container reporting no durations logs and no-ops, never a false
+  failure. Root cause of the truncation itself (an outlived/retried encode race adopting a partial
+  write, the #600 family) is class-proven; the exact site needs satellite job correlation and the
+  gate closes the class regardless. NOTE: arms in prod once the media-stack video-finish image rolls.
+- Caption cues timed to the ACTUAL cut (#698, PR #700): burn + .srt cue timelines now build from
+  the probed per-clip durations (bundle plan only fills unreported shots), so cues track the real
+  film on every tier instead of drifting past EOF on standard/draft.
+- A started film never 500s (#695, PR #699): post-start bookkeeping (history-row insert,
+  download-url presign) is best-effort after `startFilmJob` returns -- a transient D1 timeout logs
+  `render.bookkeeping_deferred` and the 201 ships, instead of baiting a retry-on-5xx client into a
+  second film. Poll insert-if-missing heals the row. Same window closed in `hSubmitRender` and
+  `hRenderFromKeyframes`; polls stay throwing (idempotent).
+- Config maps 400 at the door (#696, PR #699): every render/film config map
+  (`keyframe_config`/`motion_config` top-level; `finish_config`/`speech_config`/
+  `film_finish_config`/`master_config` top-level AND per-module entry, plus `renderOverrides` and
+  its per-module config entries) bounces `badRequest` naming the offending (dotted) field when
+  present but not a plain JSON object -- a mis-encoded map can no longer clamp to defaults and
+  silently degrade a film that completes "done".
+
+Files: package.json, CHANGELOG.md, src/index.ts, src/env.ts, src/film-model.ts,
+src/film-orchestrator.ts, src/scatter-orchestrator.ts, src/scatter-orchestrator-types.ts,
+containers/video-finish/app.py, containers/video-finish/README.md, docs/observability.md,
+wrangler.toml.example, tests/render-submit-honesty.test.ts, tests/duration-honesty.test.ts,
+tests/film-orchestrator.test.ts.
+
 ## v0.19.4
 
 **The demo-studio first-impression train, folded into a tag, plus two honest-surface fixes.** PATCH
