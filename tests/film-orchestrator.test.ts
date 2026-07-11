@@ -2669,6 +2669,39 @@ describe("summarizeFilm surfaces film_finish (#211 follow-up)", () => {
   });
 });
 
+describe("summarizeFilm surfaces delivered-vs-planned clip durations (#707)", () => {
+  const base = {
+    film_id: "film-707", project: "p", scenes: [], phase: "clips" as const, created_at: 0,
+  };
+  const cj = (shots: object[]): ClipJobLike => ({
+    job_id: "j707", project: "p", motion_backend: "local-gpu", binding: "B", shots, created_at: 0,
+  } as ClipJobLike);
+
+  it("reports planned vs delivered per done shot with backend-reported fps+frames", () => {
+    const clipJob = cj([
+      // a 5s plan clamped by a fixed-grid backend: 25f @ 8fps = 3.125s
+      { shot_id: "shot_01", seconds: 5, status: "done", clip_key: "k1", delivered_fps: 8, delivered_frames: 25 },
+      // a shot still pending contributes nothing
+      { shot_id: "shot_02", seconds: 5, status: "pending" },
+      // a done shot whose backend reported no numbers contributes nothing (absence over fabrication)
+      { shot_id: "shot_03", seconds: 5, status: "done", clip_key: "k3" },
+    ]);
+    const sum = summarizeFilm(base as unknown as FilmJob, clipJob as never);
+    expect(sum.clip_deliveries).toEqual([
+      { shot_id: "shot_01", planned_seconds: 5, delivered_seconds: 3.125, fps: 8, frames: 25 },
+    ]);
+  });
+
+  it("omits clip_deliveries entirely when no shot reported durations", () => {
+    const clipJob = cj([{ shot_id: "shot_01", seconds: 5, status: "done", clip_key: "k1" }]);
+    expect(summarizeFilm(base as unknown as FilmJob, clipJob as never).clip_deliveries).toBeUndefined();
+  });
+
+  it("omits clip_deliveries with no clip job at all", () => {
+    expect(summarizeFilm(base as unknown as FilmJob, null).clip_deliveries).toBeUndefined();
+  });
+});
+
 describe("finish_artifacts: contract-carried conventions beat the legacy name-derived fallback (S6)", () => {
   const fs = (over: Partial<FinishShot>): FinishShot => ({
     shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4",

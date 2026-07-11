@@ -41,6 +41,13 @@ export interface ClipShot extends ClipShotInput {
   // #523 Layer 2: pixel-content verdict (video-finish container), set once at the film finish gate.
   content_validated?: "ok" | "suspect" | "corrupt" | "skip";
   content_degraded?: string; // set on a "suspect" warn/degrade; the film still completes
+  // #707: what the motion backend actually DELIVERED (a fixed-grid backend honestly clamps, e.g.
+  // CogVideoX pins 8fps with per-tier frame caps, so a 5s plan can land as a 3.1s clip). The module
+  // output has always carried fps+frames; retaining them here lets the film summary surface
+  // delivered-vs-planned per shot instead of staying silent about the clamp. Absent when the module
+  // reported no usable numbers (frames=0 sentinel included) -- absence is honest, never fabricated.
+  delivered_fps?: number;
+  delivered_frames?: number;
 }
 export interface ClipJob {
   job_id: string;
@@ -83,6 +90,13 @@ export function applyPoll(shot: ClipShot, r: PollResponse<MotionBackendOutput>):
   if (violation) { shot.status = "failed"; shot.error = violation; return; } // envelope-ok but off-contract: fail loud, never advance garbage
   shot.status = "done";
   shot.clip_key = output.clip_key;
+  // #707: retain what the backend delivered so the film summary can show delivered-vs-planned. The
+  // contract has always carried fps+frames; modules with nothing to report send frames=0 (sentinel) --
+  // treat that as absent rather than recording a fabricated 0-frame delivery.
+  if (typeof output.fps === "number" && output.fps > 0 && typeof output.frames === "number" && output.frames > 0) {
+    shot.delivered_fps = output.fps;
+    shot.delivered_frames = output.frames;
+  }
 }
 
 /** Pure: does an R2 clips-object filename belong to this shot? The backend writes a finished motion clip
