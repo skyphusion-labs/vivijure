@@ -4,7 +4,7 @@
 
 import type { ClipJob } from "./render-orchestrator";
 import type { FilmJob } from "./film-orchestrator";
-import { summarizeFilm, KEYFRAME_STALL_SECONDS } from "./film-orchestrator";
+import { summarizeFilm, clipDeliveries, KEYFRAME_STALL_SECONDS } from "./film-orchestrator";
 import type { FilmScene } from "./film-orchestrator";
 import type { RunpodJobView, RunpodStatus } from "./runpod-submit";
 import { resolveModuleRenderConfigs } from "./render-module-config";
@@ -208,6 +208,13 @@ export function filmJobToPollView(job: FilmJob, clipJob: ClipJob | null, keyfram
   // scenes that rendered. Surface the loud degrade on EVERY poll (not just at done), so the planner/
   // UI shows "N of M scenes, dropped [...]" instead of a plain green over the rebased shot total.
   if (job.keyframes_incomplete && output) output.keyframes_incomplete = job.keyframes_incomplete;
+
+  // #707: per-shot delivered-vs-planned durations (+ the distilled tier-honesty flag, #705) from the
+  // clip job, surfaced on EVERY poll so the panel shows a clamp both mid-render and at done. The film
+  // status route (FilmSummary) already carries this; the planner polls THIS view, so it must relay
+  // too or the panel stays dark. Absent until a backend reports numbers -- absence stays absent.
+  const deliveries = clipDeliveries(clipJob);
+  if (deliveries && output) output.clip_deliveries = deliveries;
 
   return {
     jobId: job.film_id,
