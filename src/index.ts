@@ -550,6 +550,28 @@ const hAnimateHybrid: Handler = async (req, env, _c, p) => {
 };
 
 // --- render submission / lifecycle ---------------------------------------
+
+// #696: every config map on a render/film submit arrives as unknown JSON. A config map MUST be a plain
+// object -- a module config_schema projects into a { field: value } record, and the invoke-path clamp is
+// forgiving by design, so a string / array / number / null slips straight through and silently degrades
+// the render (a pre-#674 client sent film_finish_config as a JSON STRING; downstream value[subtitle] was
+// undefined, validateConfig clamped to defaults, and subtitle mode=both silently became burn on
+// film-941a4d3b, completing done with no error -- an honest-failures violation). Bounce LOUD at the door,
+// BEFORE any GPU spend, naming the offending field. Mirrors #577 motion_config preflight. An OMITTED
+// field (undefined) is fine; a present non-object (string/array/number/null) bounces. Used by hStartFilm
+// six config maps and hSubmitRender render_overrides bag.
+function assertConfigMapShape(label: string, value: unknown): void {
+  if (value === undefined) return;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw badRequest(label + " must be a JSON object (a { key: value } map), not a " + describeJsonType(value));
+  }
+}
+function describeJsonType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
 const hSubmitRender: Handler = async (req, env) => {
   const b = await readBody<{
     project?: string; bundleKey?: string; qualityTier?: string;
@@ -564,6 +586,17 @@ const hSubmitRender: Handler = async (req, env) => {
   // bundle shape (safe relative key under bundles/), the same way the artifact serve route
   // scopes its key. Enforced once here, before the value is used anywhere.
   if (!isSafeBundleKey(b.bundleKey)) throw badRequest("bundleKey must be a plain relative key under bundles/");
+  // #696: reject a non-object render_overrides bag (or a per-module config entry that is not an object)
+  // at the door -- parseModuleRenderOverrides keeps only isRecord entries, so garbage would otherwise be
+  // silently dropped and the render would degrade with no error. Same honest-failures gate as hStartFilm.
+  assertConfigMapShape("renderOverrides", b.renderOverrides);
+  const roConfig = b.renderOverrides?.config;
+  assertConfigMapShape("renderOverrides.config", roConfig);
+  if (roConfig && typeof roConfig === "object" && !Array.isArray(roConfig)) {
+    for (const [name, cfg] of Object.entries(roConfig)) {
+      assertConfigMapShape(`renderOverrides.config.${name}`, cfg);
+    }
+  }
   const tier = coerceQualityTier(b.qualityTier) ?? "final";
   const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
 
@@ -638,7 +671,7 @@ const hSubmitRender: Handler = async (req, env) => {
     mode: b.keyframesOnly ? "keyframes-only" : "full",
     projectId: await resolveProjectRef(env, b.projectId),
   };
-  await insertRender(env, row);
+  await insertRenderBestEffort(env, row);
   return json(view, 201);
 };
 const hRenderFromKeyframes: Handler = async (req, env) => {
@@ -697,7 +730,7 @@ const hRenderFromKeyframes: Handler = async (req, env) => {
     return json({ error: job.error || "render from keyframes failed" }, 422);
   }
   const view = filmJobToPollView(job, null);
-  await insertRender(env, {
+  await insertRenderBestEffort(env, {
     jobId: view.jobId,
     project,
     bundleKey: b.bundleKey,
@@ -1037,12 +1070,61 @@ async function withFilmDownloadUrl(env: Env, summary: FilmSummary): Promise<Film
   }
   return summary;
 }
+
+// #695: once startFilmJob returns, the film is LIVE and spending, so the submit MUST succeed from the
+// caller view. The post-start bookkeeping (history-row insert, download-url enrichment) is best-effort:
+// a transient throw here -- a D1 storage-timeout on insertRender turned film-941a4d3b 201 into a 500,
+// baiting a retry-on-5xx client into a SECOND film (denial-of-wallet by our own response) -- is logged
+// greppably, never propagated. hPollFilm insert-if-missing heals the history row on the next poll tick
+// (it did exactly that during the S31 proof). hPollFilm itself stays throwing: a poll is idempotent and
+// naturally retried, so a 5xx there costs nothing.
+async function insertRenderBestEffort(env: Env, row: NewRenderRow): Promise<void> {
+  try {
+    await insertRender(env, row);
+  } catch (e) {
+    console.log(JSON.stringify({
+      ev: "render.bookkeeping_deferred",
+      op: "insertRender",
+      job_id: row.jobId,
+      project: row.project,
+      reason: e instanceof Error ? e.message : String(e),
+    }));
+  }
+}
+// #695: the download-url enrichment (R2 presign) is also in the post-start throw window. On a throw,
+// return the plain film summary (no download_url/clip_urls) rather than a 5xx for a started film; the
+// next poll re-enriches it.
+async function withFilmDownloadUrlBestEffort(
+  env: Env,
+  summary: FilmSummary,
+): Promise<FilmSummary & { download_url?: string; clip_urls?: { shot_id: string; download_url: string }[] }> {
+  try {
+    return await withFilmDownloadUrl(env, summary);
+  } catch (e) {
+    console.log(JSON.stringify({
+      ev: "render.bookkeeping_deferred",
+      op: "withFilmDownloadUrl",
+      film_id: summary.film_id,
+      reason: e instanceof Error ? e.message : String(e),
+    }));
+    return summary;
+  }
+}
 const hStartFilm: Handler = async (req, env) => {
   const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[]; cast_loras?: Record<string, string> }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   // Same boundary check as hSubmitRender: canonical bundle shape before any use.
   if (!isSafeBundleKey(a.bundle_key)) throw badRequest("bundle_key must be a plain relative key under bundles/");
   if (!Array.isArray(a.scenes) || a.scenes.length === 0) throw badRequest("scenes[] required");
+  // #696: reject any config map that is present but not a plain JSON object, BEFORE discoverModules or
+  // any keyframe dispatch. A mis-encoded map (e.g. film_finish_config as a JSON string) would otherwise
+  // clamp to defaults downstream and silently degrade the film (subtitle both -> burn, film-941a4d3b).
+  assertConfigMapShape("keyframe_config", a.keyframe_config);
+  assertConfigMapShape("motion_config", a.motion_config);
+  assertConfigMapShape("finish_config", a.finish_config);
+  assertConfigMapShape("speech_config", a.speech_config);
+  assertConfigMapShape("film_finish_config", a.film_finish_config);
+  assertConfigMapShape("master_config", a.master_config);
 
   // #504: a full film must name an EXPLICIT, serving motion.backend -- the same door-check hSubmitRender
   // (#500) enforces. hStartFilm passed motion_backend straight to startFilmJob with NO install check, so
@@ -1114,8 +1196,8 @@ const hStartFilm: Handler = async (req, env) => {
   // Write a renders-table row so this film shows in the history panel (#164), the same way
   // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
   // keeps the row's status in sync as the job advances.
-  await insertRender(env, filmRowFromJob(job));
-  return json({ ok: true, ...(await withFilmDownloadUrl(env, summarizeFilm(job, null))) }, 201);
+  await insertRenderBestEffort(env, filmRowFromJob(job));
+  return json({ ok: true, ...(await withFilmDownloadUrlBestEffort(env, summarizeFilm(job, null))) }, 201);
 };
 const hPollFilm: Handler = async (_req, env, ctx, p) => {
   const r = await advanceFilmJob(env, p.id);
