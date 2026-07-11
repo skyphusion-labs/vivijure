@@ -280,6 +280,9 @@ export interface ClipDelivery {
   delivered_seconds: number; // frames/fps, rounded to ms
   fps: number;
   frames: number;
+  // #705: tier honesty -- true when a distilled model variant rendered the clip. Carried only when
+  // the backend reported it; absent otherwise.
+  distilled?: boolean;
 }
 
 export function clipDeliveries(clipJob: ClipJob | null): ClipDelivery[] | undefined {
@@ -287,13 +290,15 @@ export function clipDeliveries(clipJob: ClipJob | null): ClipDelivery[] | undefi
   const out: ClipDelivery[] = [];
   for (const s of clipJob.shots) {
     if (s.status !== "done" || !s.delivered_fps || !s.delivered_frames) continue;
-    out.push({
+    const entry: ClipDelivery = {
       shot_id: s.shot_id,
       planned_seconds: s.seconds,
       delivered_seconds: Math.round((s.delivered_frames / s.delivered_fps) * 1000) / 1000,
       fps: s.delivered_fps,
       frames: s.delivered_frames,
-    });
+    };
+    if (typeof s.distilled === "boolean") entry.distilled = s.distilled;
+    out.push(entry);
   }
   return out.length ? out : undefined;
 }

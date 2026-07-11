@@ -423,6 +423,12 @@ export interface MotionBackendOutput {
   clip_key: string;     // R2 key of the rendered clip (mp4)
   fps: number;
   frames: number;
+  /** OPTIONAL, additive (no MODULE_API bump): tier-honesty signal from the backend -- true when the
+   *  clip was rendered with a DISTILLED variant of the model (e.g. the 12gb door's final-tier 13B
+   *  distilled), false when the full model ran. The module relays what its backend reports and OMITS
+   *  the field when the backend says nothing (#705); the core retains it per shot and surfaces it on
+   *  the film summary's clip_deliveries. Absence is honest, never a fabricated false. */
+  distilled?: boolean;
 }
 
 // score (v1, forward-declared) ------------------------------------------------------------------
