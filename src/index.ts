@@ -571,6 +571,19 @@ function describeJsonType(value: unknown): string {
   if (Array.isArray(value)) return "array";
   return typeof value;
 }
+// #696 (deep): a per-module config map is object-of-objects -- module -> { field: value }. Check the top
+// level AND every per-module entry, so a nested garbage entry (film_finish_config = { subtitle: "x" })
+// bounces at the door instead of clamping silently downstream (the same defect class as the incident).
+// The flat knob maps (keyframe_config / motion_config) use assertConfigMapShape directly: their values
+// are legitimately scalars, so only the top level is shape-checked.
+function assertModuleConfigMap(label: string, value: unknown): void {
+  assertConfigMapShape(label, value);
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const [name, cfg] of Object.entries(value as Record<string, unknown>)) {
+      assertConfigMapShape(`${label}.${name}`, cfg);
+    }
+  }
+}
 
 const hSubmitRender: Handler = async (req, env) => {
   const b = await readBody<{
@@ -590,13 +603,7 @@ const hSubmitRender: Handler = async (req, env) => {
   // at the door -- parseModuleRenderOverrides keeps only isRecord entries, so garbage would otherwise be
   // silently dropped and the render would degrade with no error. Same honest-failures gate as hStartFilm.
   assertConfigMapShape("renderOverrides", b.renderOverrides);
-  const roConfig = b.renderOverrides?.config;
-  assertConfigMapShape("renderOverrides.config", roConfig);
-  if (roConfig && typeof roConfig === "object" && !Array.isArray(roConfig)) {
-    for (const [name, cfg] of Object.entries(roConfig)) {
-      assertConfigMapShape(`renderOverrides.config.${name}`, cfg);
-    }
-  }
+  assertModuleConfigMap("renderOverrides.config", b.renderOverrides?.config);
   const tier = coerceQualityTier(b.qualityTier) ?? "final";
   const project = b.project ?? deriveProjectFromBundleKey(b.bundleKey);
 
@@ -1121,10 +1128,10 @@ const hStartFilm: Handler = async (req, env) => {
   // clamp to defaults downstream and silently degrade the film (subtitle both -> burn, film-941a4d3b).
   assertConfigMapShape("keyframe_config", a.keyframe_config);
   assertConfigMapShape("motion_config", a.motion_config);
-  assertConfigMapShape("finish_config", a.finish_config);
-  assertConfigMapShape("speech_config", a.speech_config);
-  assertConfigMapShape("film_finish_config", a.film_finish_config);
-  assertConfigMapShape("master_config", a.master_config);
+  assertModuleConfigMap("finish_config", a.finish_config);
+  assertModuleConfigMap("speech_config", a.speech_config);
+  assertModuleConfigMap("film_finish_config", a.film_finish_config);
+  assertModuleConfigMap("master_config", a.master_config);
 
   // #504: a full film must name an EXPLICIT, serving motion.backend -- the same door-check hSubmitRender
   // (#500) enforces. hStartFilm passed motion_backend straight to startFilmJob with NO install check, so

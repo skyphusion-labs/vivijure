@@ -201,3 +201,52 @@ describe("#695 post-start bookkeeping failure still returns the started-film env
     }
   });
 });
+
+describe("#696 (deep) hStartFilm rejects a nested non-object per-module config entry with 400", () => {
+  // The per-module maps are module -> { field: value }; a nested garbage entry (e.g.
+  // film_finish_config = { subtitle: "garbage" }) must bounce at the door, not clamp silently
+  // downstream. The flat knob maps (keyframe_config / motion_config) are top-level-only by design.
+  const MODULE_MAPS = ["finish_config", "speech_config", "film_finish_config", "master_config"];
+  const BAD: Array<{ label: string; value: unknown }> = [
+    { label: "string", value: "garbage" },
+    { label: "array", value: [1] },
+    { label: "number", value: 7 },
+    { label: "null", value: null },
+  ];
+  for (const map of MODULE_MAPS) {
+    for (const bad of BAD) {
+      it(`${map}.subtitle as ${bad.label} -> 400 naming the dotted path`, async () => {
+        h.started = [];
+        const body: Record<string, unknown> = {
+          bundle_key: "bundles/good.tar.gz",
+          scenes: SCENES,
+          motion_backend: "alibaba-wan",
+        };
+        body[map] = { subtitle: bad.value };
+        const res = await worker.fetch(post("/api/render/film", body), env, ctx);
+        expect(res.status, `${map}.subtitle=${bad.label}`).toBe(400);
+        const parsed = (await res.json()) as { error?: string };
+        expect(parsed.error ?? "").toContain(`${map}.subtitle`);
+        expect(h.started.length, "must bounce before startFilmJob").toBe(0);
+      });
+    }
+  }
+
+  it("control: a nested OBJECT per-module entry still passes and forwards verbatim", async () => {
+    h.started = [];
+    h.insertThrows = false;
+    const ffc = { subtitle: { mode: "both" } };
+    const res = await worker.fetch(
+      post("/api/render/film", {
+        bundle_key: "bundles/good.tar.gz",
+        scenes: SCENES,
+        motion_backend: "alibaba-wan",
+        film_finish_config: ffc,
+      }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(201);
+    expect(h.started[0].film_finish_config).toEqual(ffc);
+  });
+});
