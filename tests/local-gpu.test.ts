@@ -65,7 +65,18 @@ describe("local-gpu i2v pure logic", () => {
   it("readOutput maps the backend's i2v_clip output into MotionBackendOutput", () => {
     expect(
       readOutput("shot_02", { clip_key: "renders/f/clips/shot_02_i2v.mp4", shot_id: "shot_02", fps: 24, num_frames: 121, seconds: 5.04, distilled: true }),
-    ).toEqual({ shot_id: "shot_02", clip_key: "renders/f/clips/shot_02_i2v.mp4", fps: 24, frames: 121 });
+    ).toEqual({ shot_id: "shot_02", clip_key: "renders/f/clips/shot_02_i2v.mp4", fps: 24, frames: 121, distilled: true });
+  });
+
+  it("readOutput omits distilled when the backend did not report it", () => {
+    const out = readOutput("shot_02", {
+      clip_key: "renders/f/clips/shot_02_i2v.mp4",
+      shot_id: "shot_02",
+      fps: 24,
+      num_frames: 121,
+    });
+    expect(out).toEqual({ shot_id: "shot_02", clip_key: "renders/f/clips/shot_02_i2v.mp4", fps: 24, frames: 121 });
+    expect(out).not.toHaveProperty("distilled");
   });
 
   it("readOutput returns null when the backend reported no clip_key (treated as a failure)", () => {

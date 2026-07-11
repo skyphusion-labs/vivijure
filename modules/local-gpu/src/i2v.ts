@@ -61,12 +61,14 @@ export interface BackendI2vOutput {
 export function readOutput(shotId: string, output: unknown): MotionBackendOutput | null {
   const out = (output ?? {}) as BackendI2vOutput;
   if (!out.clip_key) return null;
-  return {
+  const mapped: MotionBackendOutput = {
     shot_id: out.shot_id || shotId,
     clip_key: out.clip_key,
     fps: typeof out.fps === "number" ? out.fps : DEFAULT_FPS,
     frames: typeof out.num_frames === "number" ? out.num_frames : 0,
   };
+  if (typeof out.distilled === "boolean") mapped.distilled = out.distilled;
+  return mapped;
 }
 
 // --- async poll token --------------------------------------------------------------------------
