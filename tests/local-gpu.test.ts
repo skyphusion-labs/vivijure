@@ -14,8 +14,9 @@ import {
   jobGone,
   classifyGoneState,
   JOB_NOTFOUND_GRACE_MS,
+  readDurationGrid,
 } from "../modules/local-gpu/src/i2v";
-import { MANIFEST } from "../modules/local-gpu/src/index";
+import { MANIFEST, doorDurationGrid, _resetGridCache } from "../modules/local-gpu/src/index";
 import { checkHookOutput } from "../src/modules/conformance";
 import { QUALITY_TIERS } from "../src/render-module-config";
 import type { ConfigField } from "../src/modules/types";
@@ -119,6 +120,67 @@ describe("local-gpu job-gone detection + grace (#141)", () => {
   });
   it("classifyGoneState: a legacy token (no submittedAt) fails immediately (a 404 now is a real loss)", () => {
     expect(classifyGoneState(undefined, 1_000_000)).toBe("gone-failed");
+  });
+});
+
+// #707: the door declares its fixed duration grid on /health; the module relays it in the manifest
+// (best-effort, cached) so core preflight can warn about duration clamping at storyboard time.
+describe("local-gpu duration-grid relay (#707)", () => {
+  const GRID = { fps: 8, tiers: { draft: { max_frames: 25 }, standard: { max_frames: 49 }, final: { max_frames: 49 } } };
+
+  it("readDurationGrid accepts a well-formed grid and drops malformed tiers", () => {
+    expect(readDurationGrid(GRID)).toEqual(GRID);
+    // a junk tier is dropped, the valid ones survive
+    expect(readDurationGrid({ fps: 8, tiers: { draft: { max_frames: 25 }, junk: { max_frames: "x" } } }))
+      .toEqual({ fps: 8, tiers: { draft: { max_frames: 25 } } });
+  });
+
+  it("readDurationGrid returns null on anything malformed (never repairs, never fabricates)", () => {
+    expect(readDurationGrid(undefined)).toBeNull();
+    expect(readDurationGrid(null)).toBeNull();
+    expect(readDurationGrid({})).toBeNull();
+    expect(readDurationGrid({ fps: 0, tiers: GRID.tiers })).toBeNull();
+    expect(readDurationGrid({ fps: 8, tiers: {} })).toBeNull();
+    expect(readDurationGrid({ fps: 8, tiers: { draft: { max_frames: -1 } } })).toBeNull();
+  });
+
+  const env = (url = "https://door.example") => ({ LOCAL_BACKEND_URL: url, LOCAL_BACKEND_TOKEN: "tok" }) as never;
+  const healthFetcher = (body: unknown, status = 200) =>
+    (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+
+  it("doorDurationGrid relays the door-declared grid from /health", async () => {
+    _resetGridCache();
+    const grid = await doorDurationGrid(env(), healthFetcher({ ok: true, engine: "cogvideox", duration_grid: GRID }));
+    expect(grid).toEqual(GRID);
+  });
+
+  it("omits on: no grid declared, non-200 door, unreachable door, unconfigured URL", async () => {
+    _resetGridCache();
+    expect(await doorDurationGrid(env(), healthFetcher({ ok: true, engine: "ltx" }))).toBeNull(); // LTX: flexible, declares none
+    _resetGridCache();
+    expect(await doorDurationGrid(env(), healthFetcher({ ok: false }, 503))).toBeNull();
+    _resetGridCache();
+    expect(await doorDurationGrid(env(), (async () => { throw new Error("down"); }) as unknown as typeof fetch)).toBeNull();
+    _resetGridCache();
+    expect(await doorDurationGrid(env(""), healthFetcher({ duration_grid: GRID }))).toBeNull(); // no URL -> no probe
+  });
+
+  it("caches positive AND negative results within the TTL (a down door is not re-probed)", async () => {
+    _resetGridCache();
+    let calls = 0;
+    const counting = (async () => { calls++; return new Response(JSON.stringify({ duration_grid: GRID }), { status: 200 }); }) as unknown as typeof fetch;
+    expect(await doorDurationGrid(env(), counting, 1_000)).toEqual(GRID);
+    expect(await doorDurationGrid(env(), counting, 2_000)).toEqual(GRID); // inside TTL -> cache
+    expect(calls).toBe(1);
+    expect(await doorDurationGrid(env(), counting, 1_000 + 5 * 60_000)).toEqual(GRID); // TTL expired -> re-probe
+    expect(calls).toBe(2);
+
+    _resetGridCache();
+    let failCalls = 0;
+    const failing = (async () => { failCalls++; throw new Error("down"); }) as unknown as typeof fetch;
+    expect(await doorDurationGrid(env(), failing, 1_000)).toBeNull();
+    expect(await doorDurationGrid(env(), failing, 2_000)).toBeNull(); // negative result cached too
+    expect(failCalls).toBe(1);
   });
 });
 

@@ -34,7 +34,8 @@ import {
   type MotionBackendInput,
   type MotionBackendOutput,
 } from "./contract";
-import { buildI2vBody, readOutput, encodePoll, decodePoll, jobGone, classifyGoneState } from "./i2v";
+import type { DurationGridDecl } from "./contract";
+import { buildI2vBody, readOutput, readDurationGrid, encodePoll, decodePoll, jobGone, classifyGoneState } from "./i2v";
 
 interface Env {
   // The base URL of the user's local backend (a Cloudflare tunnel hostname terminating at the homelab
@@ -74,6 +75,45 @@ export const MANIFEST: ModuleManifest = {
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+// --- duration-grid relay (#707) ------------------------------------------------------------------
+//
+// The door DECLARES its fixed duration grid (pinned fps + per-tier frame caps) on /health; this
+// module RELAYS it in the manifest so core preflight can warn about duration clamping at storyboard
+// time. Best-effort with a short timeout and an in-isolate cache (positive AND negative results, so
+// a down door is not re-probed on every manifest fetch and discovery never hangs on it). On any
+// failure the manifest simply omits the field: absence = no declared constraint, never fabricated.
+const GRID_CACHE_TTL_MS = 5 * 60_000;
+const GRID_FETCH_TIMEOUT_MS = 1_500;
+let gridCache: { at: number; grid: DurationGridDecl | null } | null = null;
+
+/** Test hook: drop the in-isolate grid cache. */
+export function _resetGridCache(): void {
+  gridCache = null;
+}
+
+export async function doorDurationGrid(
+  env: Env,
+  fetcher: typeof fetch = fetch,
+  nowMs: number = Date.now(),
+): Promise<DurationGridDecl | null> {
+  if (gridCache && nowMs - gridCache.at < GRID_CACHE_TTL_MS) return gridCache.grid;
+  let grid: DurationGridDecl | null = null;
+  try {
+    const { baseUrl, token } = await backendCfg(env);
+    if (baseUrl) {
+      const r = await fetcher(baseUrl + "/health", {
+        headers: authHeaders(token),
+        signal: AbortSignal.timeout(GRID_FETCH_TIMEOUT_MS),
+      });
+      if (r.ok) grid = readDurationGrid(((await r.json()) as { duration_grid?: unknown }).duration_grid);
+    }
+  } catch {
+    // down / slow / non-JSON door: omit the field this TTL window; the manifest stays honest.
+  }
+  gridCache = { at: nowMs, grid };
+  return grid;
 }
 
 /** Resolve a Secrets Store binding (production) or a plain string (tests / local dev) to its value.
@@ -188,7 +228,11 @@ async function cancel(env: Env, body: CancelRequest): Promise<CancelResponse> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/module.json") return json(MANIFEST);
+    if (request.method === "GET" && url.pathname === "/module.json") {
+      // #707: relay the door-declared duration grid when the door reports one (cached, best-effort).
+      const grid = await doorDurationGrid(env);
+      return json(grid ? { ...MANIFEST, duration_grid: grid } : MANIFEST);
+    }
 
     if (request.method === "POST" && url.pathname === "/invoke") {
       let req: InvokeRequest<MotionBackendInput>;
