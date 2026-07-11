@@ -136,7 +136,7 @@ async def _download(session, url, path, cap):
     ok, why = validate_fetch_url(url)
     if not ok:
         return False, f"blocked: {why}"
-    async with session.get(url) as r:
+    async with session.get(url, allow_redirects=False) as r:  # a redirect could sidestep the allowlist; R2 never redirects
         if r.status != 200:
             return False, f"fetch {r.status}"
         total = 0
@@ -245,7 +245,7 @@ async def finish(req):
             out_bytes = f.read()
 
         async with ClientSession(timeout=ClientTimeout(total=UPLOAD_TIMEOUT_S)) as s:
-            async with s.put(output_url, data=out_bytes,
+            async with s.put(output_url, allow_redirects=False, data=out_bytes,
                              headers={"content-type": "video/mp4"}) as r:
                 if r.status not in (200, 201, 204):
                     return web.json_response({"ok": False, "error": f"output put {r.status}"}, status=502)
@@ -816,7 +816,7 @@ async def _film_titles_work(body):
             out_bytes = f.read()
 
         async with ClientSession(timeout=ClientTimeout(total=UPLOAD_TIMEOUT_S)) as s:
-            async with s.put(output_url, data=out_bytes,
+            async with s.put(output_url, allow_redirects=False, data=out_bytes,
                              headers={"content-type": "video/mp4"}) as r:
                 if r.status not in (200, 201, 204):
                     raise _JobError(502, f"output put {r.status}")
@@ -1000,7 +1000,7 @@ async def _subtitle_work(body):
         sidecar_done = False
         if want_sidecar:
             async with ClientSession(timeout=ClientTimeout(total=UPLOAD_TIMEOUT_S)) as s:
-                async with s.put(sidecar_url, data=srt_text.encode("utf-8"),
+                async with s.put(sidecar_url, allow_redirects=False, data=srt_text.encode("utf-8"),
                                  headers={"content-type": "application/x-subrip"}) as r:
                     if r.status not in (200, 201, 204):
                         raise _JobError(502, f"sidecar put {r.status}")
@@ -1031,7 +1031,7 @@ async def _subtitle_work(body):
             with open(out_path, "rb") as f:
                 out_bytes = f.read()
             async with ClientSession(timeout=ClientTimeout(total=UPLOAD_TIMEOUT_S)) as s:
-                async with s.put(output_url, data=out_bytes,
+                async with s.put(output_url, allow_redirects=False, data=out_bytes,
                                  headers={"content-type": "video/mp4"}) as r:
                     if r.status not in (200, 201, 204):
                         raise _JobError(502, f"output put {r.status}")
