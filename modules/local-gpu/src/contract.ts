@@ -86,4 +86,6 @@ export interface MotionBackendOutput {
   clip_key: string;
   fps: number;
   frames: number;
+  /** When the local backend reports tier honesty (12gb final distilled:true, 16gb distilled:false). */
+  distilled?: boolean;
 }
