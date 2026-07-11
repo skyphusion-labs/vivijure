@@ -13,9 +13,14 @@ import {
   orderFinalClips,
   startFilmJob,
   runFilmFinish,
+  resolveClipDurationFloor,
+  mapClipDurationsToShots,
+  resolvePlannedSeconds,
+  findClipDurationShortfalls,
   type FilmJob,
   type FilmScene,
 } from "./film-orchestrator";
+import { readShotDurationsFromBundle } from "./bundle-assembler";
 import { filmJobToPollView, filterScenesByShotIds, orderScenesByShotIds, mapRenderOverridesToModuleConfigs } from "./film-render-bridge";
 import { presignR2Get, presignR2Put } from "./r2-presign";
 import { resolveStagedAudioKey } from "./audio-stage";
@@ -333,6 +338,7 @@ async function runScatterFilmFinish(env: Env, job: ScatterJob): Promise<void> {
     bundle_key: job.bundle_key,
     project: job.project,
     job_id: job.scatter_id,
+    actual_durations: job.actual_clip_durations,
   }, undefined, {
     // #600 in-flight guard: persist a dispatch BEFORE it fires so a killed tick cannot re-dispatch a
     // duplicate encode of the same step.
@@ -404,7 +410,7 @@ async function assembleScatterClips(
     job.error = `video-finish gather returned ${resp?.status ?? "?"}`;
     return;
   }
-  let body: { ok?: boolean; error?: string; durationSeconds?: number; shots?: number; clipsReceived?: number };
+  let body: { ok?: boolean; error?: string; durationSeconds?: number; shots?: number; clipsReceived?: number; clipDurations?: number[] };
   try {
     body = (await resp.json()) as typeof body;
   } catch {
@@ -416,6 +422,25 @@ async function assembleScatterClips(
     job.phase = "failed";
     job.error = `video-finish gather failed: ${body.error || "unknown"}`;
     return;
+  }
+  // #697/#698: capture the ACTUAL per-clip assembled seconds (submit order == gather clips order) and
+  // gate each shot against its plan, the same per-shot honesty gate as the single-film assemble. The
+  // film-level ratio check below still catches a gross whole-film drop; this catches ONE truncated shot
+  // the total would mask. Persisted so the gather film.finish chain times captions to the real cut (#698).
+  const actual = mapClipDurationsToShots(clips, body.clipDurations);
+  job.actual_clip_durations = Object.keys(actual).length > 0 ? actual : undefined;
+  if (Object.keys(actual).length > 0) {
+    const bundleDurations = await readShotDurationsFromBundle(env, job.bundle_key);
+    const planned = resolvePlannedSeconds(job.scenes ?? [], bundleDurations);
+    const fraction = resolveClipDurationFloor(env.FILM_CLIP_DURATION_FLOOR);
+    const shortfalls = findClipDurationShortfalls(clips, actual, planned, fraction);
+    if (shortfalls.length > 0) {
+      job.phase = "failed";
+      job.error = `duration gate: ${shortfalls.length} shot(s) delivered below ${Math.round(fraction * 100)}% of plan: ` +
+        shortfalls.map((sf) => `${sf.shot_id} ${sf.actual.toFixed(2)}s vs planned ${sf.planned.toFixed(2)}s (floor ${sf.floor.toFixed(2)}s)`).join("; ");
+      console.warn(`scatter ${job.scatter_id}: ${job.error}`);
+      return;
+    }
   }
   // Fail loud: a scatter render must NEVER silently complete a PARTIAL film. If the assembled film
   // is materially shorter than the sum of the cut shots' durations, clips were dropped in the

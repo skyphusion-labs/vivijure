@@ -105,6 +105,12 @@ export interface FilmJob {
   cast_loras?: Record<string, number>;
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   silent_film_key?: string; // silent concat output before optional audio mux
+  // #697/#698: ACTUAL per-shot assembled clip seconds, probed by the video-finish container at assemble
+  // and mapped onto shot_id (finalClips order). Drives the per-shot duration honesty gate (#697) at
+  // assemble and, persisted here, the caption-cue timeline (#698) in the later film.finish chain -- one
+  // probe, both uses. Absent when the container reported none (older build): the gate no-ops and captions
+  // fall back to the bundle plan.
+  actual_clip_durations?: Record<string, number>;
   audio_key?: string; // staged R2_RENDERS audio bed to mux after assemble (the `master` chain polishes
                       // THIS key in place: each master step rewrites it to the mastered bed before mux)
   // Film-level audio mastering (the `master` chain): polish the assembled film's audio BED -- music
@@ -719,4 +725,100 @@ export function filmProgressMarker(job: FilmJob, clipJob: ClipJob | null): strin
   else if (job.phase === "finish") done = (job.finish_shots || []).filter((fs) => fs.status === "done").length;
   else if (job.phase === "speech") done = (job.speech_shots || []).filter((ss) => ss.status === "done").length;
   return `${job.phase}:${done}`;
+}
+
+// --------------------------------------------------------------------------- duration honesty (#697/#698)
+//
+// A per-shot finish chain can deliver a TRUNCATED clip (an outlived/retried encode race adopted a
+// partial write) that the pixel gate (#558) cannot catch -- it validates pixel content, not length. The
+// video-finish container is the one component that downloads + normalizes every final clip, so it is the
+// honest place to probe each clip`s ACTUAL assembled duration and hand it back. The Worker then (a) gates
+// each clip against its PLANNED seconds, failing the render loud instead of shipping a 0.085s "4s" shot,
+// and (b) times caption cues to the ACTUAL cut instead of the bundle plan (#698). One probe, both uses.
+
+/** Default fraction of a shot`s planned seconds an assembled clip must reach before it is treated as a
+ *  truncation defect (#697) rather than a legitimate beat-trim. Clamped to [0,1]; a 0 disables the gate. */
+export const DEFAULT_CLIP_DURATION_FLOOR = 0.5;
+
+/** Pure: parse + clamp the per-shot duration-floor knob (env.FILM_CLIP_DURATION_FLOOR) into [0,1].
+ *  Unset / non-numeric falls back to the default; out-of-range clamps (never throws). */
+export function resolveClipDurationFloor(raw: string | undefined): number {
+  const n = raw === undefined || raw === "" ? NaN : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_CLIP_DURATION_FLOOR;
+  return Math.min(1, Math.max(0, n));
+}
+
+/** Pure: map the video-finish container`s per-clip `clipDurations` array (same order as the clips it was
+ *  handed) onto shot ids, using the finalClips order the Worker submitted. Non-numeric / negative / missing
+ *  entries are dropped so absence never fabricates a duration. Returns {} when the container reported none
+ *  (an older build) -- callers treat an empty map as "no evidence", never as "all zero". */
+export function mapClipDurationsToShots(
+  finalClips: { shot_id: string }[],
+  clipDurations: unknown,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!Array.isArray(clipDurations)) return out;
+  for (let i = 0; i < finalClips.length; i++) {
+    const d = clipDurations[i];
+    if (typeof d === "number" && Number.isFinite(d) && d >= 0) out[finalClips[i].shot_id] = d;
+  }
+  return out;
+}
+
+/** Pure: resolve each shot`s PLANNED seconds -- the bundle`s beat-trimmed target_seconds (preferred),
+ *  else the authored scene seconds. Only positive values are kept (a plan of 0/unknown cannot gate). This
+ *  mirrors captions.shotDuration`s resolution so the gate and the cue timeline agree on "the plan". */
+export function resolvePlannedSeconds(
+  scenes: { shot_id: string; seconds: number }[],
+  bundleDurations: Record<string, number>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of scenes ?? []) {
+    if (!s || typeof s.shot_id !== "string") continue;
+    const fromBundle = bundleDurations[s.shot_id];
+    if (typeof fromBundle === "number" && Number.isFinite(fromBundle) && fromBundle > 0) { out[s.shot_id] = fromBundle; continue; }
+    if (typeof s.seconds === "number" && Number.isFinite(s.seconds) && s.seconds > 0) out[s.shot_id] = s.seconds;
+  }
+  return out;
+}
+
+/** One shot whose assembled clip fell below the duration floor. */
+export interface ClipDurationShortfall {
+  shot_id: string;
+  actual: number;  // probed assembled seconds
+  planned: number; // resolved planned seconds
+  floor: number;   // planned * fraction (the threshold it failed)
+}
+
+/** Pure per-shot duration honesty gate (#697). Flags every clip with BOTH a known actual duration and a
+ *  positive plan whose actual < planned * fraction. A shot with no reported actual (older container) or no
+ *  positive plan is NOT flagged -- the gate fires on EVIDENCE, never on absence, so it can never fail a
+ *  film just because a duration was unavailable. A fraction of 0 flags nothing (operator off switch). */
+export function findClipDurationShortfalls(
+  finalClips: { shot_id: string }[],
+  actual: Record<string, number>,
+  planned: Record<string, number>,
+  fraction: number,
+): ClipDurationShortfall[] {
+  const out: ClipDurationShortfall[] = [];
+  for (const c of finalClips ?? []) {
+    if (!c || typeof c.shot_id !== "string") continue;
+    const a = actual[c.shot_id];
+    const p = planned[c.shot_id];
+    if (typeof a !== "number" || !Number.isFinite(a) || typeof p !== "number" || !Number.isFinite(p) || p <= 0) continue;
+    const floor = p * fraction;
+    if (a < floor) out.push({ shot_id: c.shot_id, actual: a, planned: p, floor });
+  }
+  return out;
+}
+
+/** Pure: build the caption-timeline durations map (#698) -- the ACTUAL assembled per-clip seconds win,
+ *  the bundle plan fills any shot the container did not report, and captions.shotDuration falls back to
+ *  the authored scene seconds for anything in neither. This is what times cues to the real cut instead of
+ *  the plan (which drifts on every non-final tier where actual != planned). */
+export function captionDurations(
+  bundleDurations: Record<string, number>,
+  actualDurations?: Record<string, number>,
+): Record<string, number> {
+  return { ...bundleDurations, ...(actualDurations ?? {}) };
 }

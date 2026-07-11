@@ -222,13 +222,14 @@ async def finish(req):
                     log.warning("audio fetch failed (%s); finishing silent", info)
 
         loop = asyncio.get_running_loop()
+        clip_durations = None  # per-clip assembled seconds (#697/#698); only the concat path reports them
         try:
             if remux_audio_only:
                 out_path, secs, has_audio = await loop.run_in_executor(
                     None, _remux_audio_only, work, srcs[0][0], audio_path,
                 )
             else:
-                out_path, secs, has_audio = await loop.run_in_executor(
+                out_path, secs, has_audio, clip_durations = await loop.run_in_executor(
                     None, _assemble, work, srcs, audio_path,
                     width, height, fps, crf, preset, crossfade, trim_join_frames,
                     keep_clip_audio,
@@ -261,6 +262,8 @@ async def finish(req):
             "hasAudio": has_audio,
             "width": width,
             "height": height,
+            # ACTUAL per-clip assembled seconds in submit order (#697/#698); null on the remux path.
+            "clipDurations": clip_durations,
         })
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -428,6 +431,11 @@ def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade
                    cap=cap, ensure_audio=keep_clip_audio)
         norms.append(dst)
 
+    # ACTUAL per-clip assembled seconds (#697/#698): the normalized (tail-trimmed, capped) duration each
+    # clip contributes to the film, in submit order. Probed ONCE here and reused by the drop-guard below;
+    # returned so the Worker can gate a truncated clip against its plan and time captions to the real cut.
+    norm_durations = [round(_probe_duration(n) or 0.0, 3) for n in norms]
+
     silent = os.path.join(work, "_silent.mp4")
     if effective_crossfade > 0 and len(norms) > 1:
         _concat_crossfade(norms, silent, effective_crossfade, crf=crf, preset=preset)
@@ -438,7 +446,7 @@ def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade
     # shots). If the assembled film is materially shorter than the sum of its (tail-trimmed) inputs,
     # a clip was dropped at concat -- raise so the caller fails rather than ship a partial film.
     _sil = _probe_duration(silent) or 0.0
-    _sum_in = sum((_probe_duration(n) or 0.0) for n in norms)
+    _sum_in = sum(norm_durations)
     if _sum_in > 0 and _sil < _sum_in * 0.85:
         raise RuntimeError(
             f"concat dropped clips: assembled {_sil:.2f}s < sum of {len(norms)} inputs {_sum_in:.2f}s")
@@ -490,7 +498,7 @@ def _assemble(work, srcs, audio_path, width, height, fps, crf, preset, crossfade
     # Honest: probe the actual output rather than assuming bed == audio (a talking
     # film has audio with no bed; a failed bed mux would not).
     has_audio = _probe_audio(out)[0]
-    return out, _probe_duration(out), has_audio
+    return out, _probe_duration(out), has_audio, norm_durations
 
 
 

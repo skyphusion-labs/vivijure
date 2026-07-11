@@ -43,6 +43,7 @@ import {
   degradeMasterStep, masterChainDone,
   coerceSceneIds, coerceDialogueLineIds,
   KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, POLLABLE_PHASES, phaseAgeSeconds, filmProgressMarker,
+  resolveClipDurationFloor, mapClipDurationsToShots, resolvePlannedSeconds, findClipDurationShortfalls, captionDurations,
 } from "./film-model";
 
 export * from "./film-model";
@@ -556,6 +557,8 @@ interface FinishContainerResult {
   durationSeconds?: number;
   shots?: number;
   error?: string;
+  // #697/#698: ACTUAL per-clip assembled seconds in submit order; absent on an older container build.
+  clipDurations?: number[];
 }
 
 /** Call the video-finish container's POST /finish, retrying on a transient gateway status -- 503 (a
@@ -788,6 +791,9 @@ export interface RunFilmFinishInput {
   bundle_key: string;
   project: string;
   job_id: string;
+  // #698: ACTUAL per-shot assembled seconds (video-finish probe at assemble). Times caption cues to the
+  // real cut; absent falls back to the bundle plan (readShotDurationsFromBundle).
+  actual_durations?: Record<string, number>;
 }
 export interface RunFilmFinishResult {
   ran: boolean;      // false when no film.finish module is installed (caller leaves its state untouched)
@@ -981,7 +987,11 @@ export async function runFilmFinish(
   }
   // Time-synced dialogue captions for the subtitle module (empty means it no-ops); computed once, reused
   // by every step (film-titles ignores them). See src/captions.ts.
-  const durations = await readShotDurationsFromBundle(env, input.bundle_key);
+  const bundleDurations = await readShotDurationsFromBundle(env, input.bundle_key);
+  // #698: time cues to the ACTUAL assembled cut (actual per-shot seconds win, bundle plan fills any shot
+  // the container did not report), not the bundle plan -- which drifts on every non-final tier where the
+  // delivered clip is shorter than its planned target (trailing cues otherwise point past EOF).
+  const durations = captionDurations(bundleDurations, input.actual_durations);
   const captions = buildCaptionCues(input.scenes, input.dialogue_lines ?? [], durations);
   const base = input.film_key.replace(/\.mp4$/i, "");
   let curKey = input.film_key;
@@ -1139,6 +1149,7 @@ async function applyFilmFinish(env: Env, job: FilmJob, preModules?: RegisteredMo
     bundle_key: job.bundle_key,
     project: job.project,
     job_id: job.film_id,
+    actual_durations: job.actual_clip_durations,
   }, preModules, {
     dispatched: job.film_finish_dispatched,
     persistDispatch: async (key, ts) => { job.film_finish_dispatched![key] = ts; await putFilm(env, job); },
@@ -1503,6 +1514,31 @@ async function enterAssemblePhase(
     job.phase = "failed"; job.error = "video-finish returned a non-JSON response"; return;
   }
   if (!body.ok) { job.phase = "failed"; job.error = `video-finish failed: ${body.error || "unknown error"}`; return; }
+  // #697/#698: capture the ACTUAL per-clip assembled seconds the container probed (submit order ==
+  // finalClips order). Persisted so the later film.finish chain times captions to the real cut (#698).
+  const actual = mapClipDurationsToShots(finalClips, body.clipDurations);
+  job.actual_clip_durations = Object.keys(actual).length > 0 ? actual : undefined;
+  // #697 per-shot duration honesty gate: an outlived/retried encode race can deliver a truncated clip
+  // (a 0.085s "4s" shot) that the pixel gate (#558) cannot see -- it checks pixel content, not length.
+  // Compare each clip against its PLANNED seconds and FAIL LOUD below the floor, rather than ship a film
+  // that is a subliminal flash in front of the real footage (#245/#249: a broken deliverable fails the
+  // render, never a silent green). Fires only on evidence -- an older container reporting no durations
+  // leaves the map empty and the gate no-ops (logged, not a false failure).
+  if (Object.keys(actual).length > 0) {
+    const bundleDurations = await readShotDurationsFromBundle(env, job.bundle_key);
+    const planned = resolvePlannedSeconds(job.scenes, bundleDurations);
+    const fraction = resolveClipDurationFloor(env.FILM_CLIP_DURATION_FLOOR);
+    const shortfalls = findClipDurationShortfalls(finalClips, actual, planned, fraction);
+    if (shortfalls.length > 0) {
+      job.phase = "failed";
+      job.error = `duration gate: ${shortfalls.length} shot(s) delivered below ${Math.round(fraction * 100)}% of plan: ` +
+        shortfalls.map((sf) => `${sf.shot_id} ${sf.actual.toFixed(2)}s vs planned ${sf.planned.toFixed(2)}s (floor ${sf.floor.toFixed(2)}s)`).join("; ");
+      console.warn(`film ${job.film_id}: ${job.error}`);
+      return;
+    }
+  } else {
+    console.warn(`film ${job.film_id}: video-finish reported no per-clip durations; duration gate skipped (redeploy video-finish to arm #697)`);
+  }
   await finishAssembledFilm(env, job, outputKey, preModules);
 }
 
