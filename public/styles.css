@@ -848,6 +848,11 @@ details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
 .planner-history-player-video { width: 100%; max-width: 100%; height: auto; border-radius: 8px; display: block; background: #000; }
 .planner-history-keyframe-clip { width: 100%; max-width: 100%; height: auto; border-radius: 8px; display: block; background: #000; }
 .planner-history-keyframe-cap { font-size: 11px; color: var(--muted); }
+/* #707: per-shot delivered-vs-planned duration honesty line. Muted by default;
+   the clamped variant borrows the preflight warning amber so a short-delivered
+   clip reads as a flag, not an error. */
+.planner-history-keyframe-dur { font-size: 11px; color: var(--muted); display: block; }
+.planner-history-keyframe-dur-clamped { color: #e8b84a; }
 .planner-history-empty { color: var(--muted); font-style: italic; padding: 12px 0; }
 /* image lightbox for the history keyframe stills. openShotPreview()
    (planner.js) builds these elements in JS with NO inline styles, so without

@@ -492,6 +492,27 @@ function buildHistoryRow(r, childrenByParent) {
         });
       }
     }
+    // #707: per-shot delivered-vs-planned duration, indexed by shot_id. Same wire
+    // shape as output.clips: the poll view carries output.clip_deliveries =
+    // [{ shot_id, planned_seconds, delivered_seconds, fps, frames, distilled? }],
+    // one entry per done shot whose backend reported usable fps+frames. Absent (an
+    // older row, or a backend that reported nothing) -> the map is empty and the
+    // honesty line renders NOTHING; no placeholder, no fabricated value.
+    const deliveryByShot = new Map();
+    const outDeliveries =
+      r.output && typeof r.output === "object" && Array.isArray(r.output.clip_deliveries)
+        ? r.output.clip_deliveries
+        : [];
+    for (const d of outDeliveries) {
+      if (
+        d
+        && typeof d.shot_id === "string"
+        && typeof d.planned_seconds === "number"
+        && typeof d.delivered_seconds === "number"
+      ) {
+        deliveryByShot.set(d.shot_id, d);
+      }
+    }
     // v0.147.0 (Phase 4a): per-shot model picker is offered on a keyframes-only
     // preview (the row that carries the Cloud animate button); hidden until Cloud
     // is selected. Not shown on derived-animation rows (those already ran).
@@ -549,6 +570,31 @@ function buildHistoryRow(r, childrenByParent) {
           ml.textContent = cloudModelLabel(clipRef.model);
           wrap.appendChild(ml);
         }
+      }
+
+      // #707: delivered-vs-planned honesty line. A fixed-grid motion backend (e.g.
+      // CogVideoX: 8fps pinned, per-tier frame caps) honestly clamps a shot's
+      // requested duration; surface the real delivered seconds against the planned,
+      // visibly flagged when the clip came up meaningfully short (a clamp). A
+      // "(distilled)" marker is added when the delivery reports distilled === true.
+      // Rendered only when the shot has a delivery record (absent renders nothing).
+      const delivery = deliveryByShot.get(kf.shot_id);
+      if (delivery) {
+        const planned = delivery.planned_seconds;
+        const delivered = delivery.delivered_seconds;
+        const clamped = delivered < planned - 0.05;
+        const fmt = (s) => (Math.round(s * 10) / 10) + "s";
+        const dur = document.createElement("span");
+        dur.className = "planner-history-keyframe-dur";
+        if (clamped) dur.classList.add("planner-history-keyframe-dur-clamped");
+        let text = fmt(delivered) + " delivered / " + fmt(planned) + " planned";
+        if (clamped) text += " (clamped)";
+        if (delivery.distilled === true) text += " (distilled)";
+        dur.textContent = text;
+        if (typeof delivery.frames === "number" && typeof delivery.fps === "number") {
+          dur.title = delivery.frames + " frames at " + delivery.fps + "fps";
+        }
+        wrap.appendChild(dur);
       }
 
       // v0.147.0 (Phase 4a): per-shot cloud-model override. "(default)" leaves
