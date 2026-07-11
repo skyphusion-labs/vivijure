@@ -24,15 +24,23 @@ export const STUDIO_CSP =
   "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; " +
   "frame-ancestors 'none'; form-action 'self'";
 
-/** The ONE external origin the public demo studio (#625) plays media from: the S23 showcase films.
- *  Host-pinned (no wildcard) so the demo CSP admits exactly our asset host and nothing else. */
+/** The ONE external origin the public demo studio (#625) loads from: the S23 showcase films (media) AND
+ *  the seeded cast portraits (images). Host-pinned (no wildcard) so the demo CSP admits exactly our asset
+ *  host and nothing else. */
 export const DEMO_MEDIA_ORIGIN = "https://assets.skyphusion.net";
 
-/** Demo-studio page CSP: STUDIO_CSP + a media-src admitting the showcase host. Media has no explicit
- *  directive in STUDIO_CSP (it falls back to default-src 'self'), so this ADDS media-src rather than
- *  widening anything else -- every other directive is byte-identical to prod. Applied ONLY when the
- *  deploy is demo mode; a prod/self-host deploy never serves this policy. */
-export const STUDIO_DEMO_CSP = STUDIO_CSP + "; media-src 'self' " + DEMO_MEDIA_ORIGIN;
+/** Demo-studio page CSP: STUDIO_CSP with the showcase host admitted on TWO directives, and ONLY on a demo
+ *  deploy (a prod/self-host deploy never serves this policy):
+ *    - img-src: the seeded cast portraits are absolute assets.skyphusion.net URLs (the demo binds NO R2),
+ *      so the portrait <img> would be blocked without this. img-src is the ONLY prod directive widened.
+ *    - media-src: the showcase films. Media has no explicit directive in STUDIO_CSP (it falls back to
+ *      default-src 'self'), so this ADDS media-src. It is APPENDED LAST on purpose -- the Phase-B
+ *      dynamic artifact-origin append in applyResponseSecurity extends the media-src directive by
+ *      concatenating onto the end of this string, so media-src MUST stay last. Every other directive
+ *      (script/style/font/connect/object/base/frame/form) is byte-identical to prod. */
+export const STUDIO_DEMO_CSP =
+  STUDIO_CSP.replace("img-src 'self' data: blob:", "img-src 'self' data: blob: " + DEMO_MEDIA_ORIGIN) +
+  "; media-src 'self' " + DEMO_MEDIA_ORIGIN;
 
 /** Locked CSP for every NON-page response (api/json, assets, redirects, the 429, unknown HTML). A
  *  JSON/asset/redirect response is not a document, so it should load nothing; if such a response is

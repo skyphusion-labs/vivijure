@@ -91,13 +91,14 @@ INSERT OR IGNORE INTO storyboard_projects (id, public_id, slug, name, prefs_json
   (9003, 'demo0003-0000-4000-8000-000000000003', 'rust', 'RUST', '{}',
    '{"title":"RUST","duration_seconds":9,"clip_seconds":3,"style_prefix":"weathered industrial realism, overcast light, rust and moss","use_characters":["A","B"],"scenes":[{"id":"shot_01","prompt":"A tall salvage robot pries open a collapsed bulkhead in a flooded yard","character_slots":["A"],"target_seconds":3,"dialogue":{"slot":"A","text":"I told you it would still be here."}},{"id":"shot_02","prompt":"A smaller companion robot rolls up carrying a cracked solar panel","character_slots":["B"],"target_seconds":3},{"id":"shot_03","prompt":"The two robots shake hands as sparks drift in the grey air","character_slots":["A","B"],"target_seconds":3}]}');
 
--- Cast (cast_members): named characters with a bible and a ready LoRA. No portrait image (a showcase
--- film frame is not a character portrait), so portrait_key stays NULL -- honest and no image wiring.
-INSERT OR IGNORE INTO cast_members (id, public_id, slug, name, bible, lora_status, lora_trained_at) VALUES
-  (9101, 'demo0101-0000-4000-8000-000000000101', 'kesh', 'Kesh', 'A neon-lit courier who runs data between arcologies. Calm, precise, haunted by a job that went wrong.', 'ready', '2026-07-01 00:00:00'),
-  (9102, 'demo0102-0000-4000-8000-000000000102', 'the-broker', 'The Broker', 'A masked information broker who trades in secrets on the wet side of the city.', 'ready', '2026-07-01 00:00:00'),
-  (9103, 'demo0103-0000-4000-8000-000000000103', 'salvage-robot', 'Salvage Robot', 'A tall reclamation unit built to open what the flood sealed. Patient and stubborn.', 'ready', '2026-07-01 00:00:00'),
-  (9104, 'demo0104-0000-4000-8000-000000000104', 'companion-robot', 'Companion Robot', 'A small wheeled helper robot with a cracked chassis and boundless optimism.', 'ready', '2026-07-01 00:00:00');
+-- Cast (cast_members): named characters with a bible, a ready LoRA, and a portrait. portrait_key is an
+-- ABSOLUTE assets.skyphusion.net URL (same binding-free pattern as the render output_key below), so the
+-- demo needs NO R2 binding; cast.js artifactUrl returns an absolute key verbatim. portrait_mime image/jpeg.
+INSERT OR IGNORE INTO cast_members (id, public_id, slug, name, bible, portrait_key, portrait_mime, lora_status, lora_trained_at) VALUES
+  (9101, 'demo0101-0000-4000-8000-000000000101', 'kesh', 'Kesh', 'A neon-lit courier who runs data between arcologies. Calm, precise, haunted by a job that went wrong.', 'https://assets.skyphusion.net/vivijure/showcase/cast/kesh.jpg', 'image/jpeg', 'ready', '2026-07-01 00:00:00'),
+  (9102, 'demo0102-0000-4000-8000-000000000102', 'the-broker', 'The Broker', 'A masked information broker who trades in secrets on the wet side of the city.', 'https://assets.skyphusion.net/vivijure/showcase/cast/the-broker.jpg', 'image/jpeg', 'ready', '2026-07-01 00:00:00'),
+  (9103, 'demo0103-0000-4000-8000-000000000103', 'salvage-robot', 'Salvage Robot', 'A tall reclamation unit built to open what the flood sealed. Patient and stubborn.', 'https://assets.skyphusion.net/vivijure/showcase/cast/salvage-robot.jpg', 'image/jpeg', 'ready', '2026-07-01 00:00:00'),
+  (9104, 'demo0104-0000-4000-8000-000000000104', 'companion-robot', 'Companion Robot', 'A small wheeled helper robot with a cracked chassis and boundless optimism.', 'https://assets.skyphusion.net/vivijure/showcase/cast/companion-robot.jpg', 'image/jpeg', 'ready', '2026-07-01 00:00:00');
 
 -- Renders (renders): COMPLETED films. output_key is an ABSOLUTE showcase URL; the render display
 -- (planner-history-row.js artifactUrl helper) uses it verbatim instead of prefixing /api/artifact/.
