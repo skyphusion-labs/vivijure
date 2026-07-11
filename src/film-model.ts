@@ -714,6 +714,24 @@ export function phaseAgeSeconds(job: FilmJob, now: number = Date.now()): number 
   return Math.max(0, Math.floor((now - since) / 1000));
 }
 
+/** The phases that advance one shot at a time inside a single phase (the fan-out phases). These are
+ *  the phases where a long wall-clock is healthy as long as shots keep landing -- which is why the
+ *  hard ceiling measures them from last_progress_at, not phase_started_at (#704). */
+export const PER_SHOT_PHASES: ReadonlySet<FilmJob["phase"]> = new Set(["clips", "speech", "finish"]);
+
+/** Seconds since the last REAL progress, for the hard-ceiling check (#704). A per-shot phase
+ *  (clips/speech/finish) on a slow local-gpu card lands one clip every few minutes for hours; that is
+ *  genuine progress, so the 90min ceiling measures from last_progress_at (re-stamped on every finished
+ *  shot via filmProgressMarker, #136): a phase that keeps landing shots never dies at the ceiling,
+ *  while 90min since the LAST landed shot still fails loudly. Batch phases (keyframe) keep the
+ *  phase_started_at clock: no phase-level progress for the whole window really is wedged (#129).
+ *  Falls back to phase_started_at (then created_at) on jobs with no last_progress_at stamp. */
+export function ceilingAgeSeconds(job: FilmJob, now: number = Date.now()): number {
+  if (!PER_SHOT_PHASES.has(job.phase)) return phaseAgeSeconds(job, now);
+  const since = Math.max(job.phase_started_at ?? job.created_at, job.last_progress_at ?? 0);
+  return Math.max(0, Math.floor((now - since) / 1000));
+}
+
 /** Progress fingerprint for the stall signal (#136): the current phase plus how many of its per-shot
  *  units are done. Monotonic within a phase (shots only go pending->done) and it changes on every phase
  *  transition, so ANY change is genuine forward progress -- which is what re-stamps last_progress_at.

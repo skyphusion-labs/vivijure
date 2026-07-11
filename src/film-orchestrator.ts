@@ -42,7 +42,7 @@ import {
   MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, filmSeconds, masteredBedKey, applyMasterOutput,
   degradeMasterStep, masterChainDone,
   coerceSceneIds, coerceDialogueLineIds,
-  KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, POLLABLE_PHASES, phaseAgeSeconds, filmProgressMarker,
+  KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, POLLABLE_PHASES, phaseAgeSeconds, ceilingAgeSeconds, filmProgressMarker,
   resolveClipDurationFloor, mapClipDurationsToShots, resolvePlannedSeconds, findClipDurationShortfalls, captionDurations,
 } from "./film-model";
 
@@ -1924,11 +1924,15 @@ async function recoverStalledPhase(env: Env, job: FilmJob, preModules?: Register
 
   // Absolute ceiling: a still-pollable phase this old is genuinely wedged with nothing in R2 to adopt
   // (keyframe/clips adoption above already rescued any phase whose artifacts landed; a finish phase has
-  // no adoption yet; or the GPU truly produced nothing). Fail loudly rather than hang.
-  if (age >= PHASE_HARD_DEADLINE_SECONDS) {
+  // no adoption yet; or the GPU truly produced nothing). Fail loudly rather than hang. For the per-shot
+  // phases the ceiling tracks last_progress_at (#704): a slow local-gpu card landing one clip every few
+  // minutes is healthy however long the phase runs, so only 90min with NO new shot fails; the batch
+  // keyframe phase keeps the phase_started_at clock (age above).
+  const ceilingAge = ceilingAgeSeconds(job, now);
+  if (ceilingAge >= PHASE_HARD_DEADLINE_SECONDS) {
     const stuckPhase = job.phase;
     job.phase = "failed";
-    job.error = `render stalled in phase "${stuckPhase}" for ${Math.floor(age / 60)}min with no progress; failing so it does not hang (resubmit to retry) (#129)`;
+    job.error = `render stalled in phase "${stuckPhase}" for ${Math.floor(ceilingAge / 60)}min with no progress; failing so it does not hang (resubmit to retry) (#129/#704)`;
     return true;
   }
   return false;
@@ -2110,9 +2114,10 @@ async function advanceFilmJobLocked(env: Env, filmId: string): Promise<{ job: Fi
   // Re-stamp the stall clock on REAL progress (#136). The clips/finish/speech phases advance per shot
   // over many minutes inside ONE phase, so a UI stall signal measured from phase_started_at alone cries
   // wolf on a healthy long phase. filmProgressMarker changes on any finished shot (or a phase
-  // transition), so a change is genuine progress -> refresh last_progress_at. The DRIVER's recovery
-  // (phaseAgeSeconds + the 90min ceiling) deliberately still measures from phase_started_at; this only
-  // fixes the in-flight UI signal, never the recovery semantics.
+  // transition), so a change is genuine progress -> refresh last_progress_at. Since #704 this stamp is
+  // ALSO load-bearing for recovery: the 90min ceiling measures the per-shot phases (clips/speech/finish)
+  // against last_progress_at, so a slow-but-landing local-gpu film never dies mid-progress; the
+  // same-phase recovery triggers and the batch keyframe ceiling still measure from phase_started_at.
   const marker = filmProgressMarker(job, clipJob);
   const progressed = marker !== job.progress_marker;
   if (progressed) {

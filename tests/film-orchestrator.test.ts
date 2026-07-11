@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, adoptFinishStepOutput, finishShotLedgerReconciles, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, FILM_FINISH_INFLIGHT_WINDOW_SECONDS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
+import { joinKeyframesToScenes, applyFinishOutput, applySpeechOutput, orderFinalClips, summarizeFilm, filmProgressMarker, resolveFinishConfigs, coerceSceneIds, coerceDialogueLineIds, callVideoFinish, classifyAssembleTransport, advanceFilmJob, clipKeysFromFilmJob, filmJobDocKey, clipJobDocKey, phaseAgeSeconds, ceilingAgeSeconds, listProjectKeyframes, keyframeSetCompleteInR2, listProjectClips, clipFileMatchesShot, finishShotAdoptableFromR2, reclaimFinishShotsFromR2, adoptFinishStepOutput, finishShotLedgerReconciles, classifyFinishFailure, classifyFinishRetry, FINISH_STEP_MAX_ATTEMPTS, FILM_FINISH_INFLIGHT_WINDOW_SECONDS, finishStepOutputKey, finishStepAppliedTag, KEYFRAME_STALL_SECONDS, PHASE_HARD_DEADLINE_SECONDS, applyMasterOutput, degradeMasterStep, masterChainDone, filmSeconds, masteredBedKey, MASTER_STEP_MAX_ATTEMPTS, MASTER_STALL_SECONDS, type FilmScene, type FinishShot, type SpeechShot, type FilmJob, type MasterState } from "../src/film-orchestrator";
 import type { ConfigSchema } from "../src/modules/types";
 import type { Env } from "../src/env";
 import { filmJobToPollView } from "../src/film-render-bridge";
@@ -1465,6 +1465,81 @@ describe("advanceFilmJob clips stall recovery (#139)", () => {
     expect(readClip().shots.every((s) => s.status === "done")).toBe(true);
     expect(readClip().shots.filter((s) => s.status === "done").length).toBe(3); // not a 0/partial drop
     expect(r?.job.phase).not.toBe("clips"); // advanced (clips_only -> done)
+  });
+
+  // ------------------------------------------------------------------ the ceiling tracks progress (#704)
+  // A slow local-gpu card lands one clip every few minutes: at minute 90 the phase is OLD but healthy.
+  // The hard ceiling must measure the per-shot phases from last_progress_at, not phase_started_at, so a
+  // film that keeps landing shots never hard-fails mid-progress -- while 90min since the LAST landed
+  // shot still fails loudly, and the batch keyframe phase keeps its phase-age semantics.
+
+  it("does NOT hard-fail an over-90min clips phase whose last shot landed recently (#704)", async () => {
+    const old = (PHASE_HARD_DEADLINE_SECONDS + 600) * 1000;
+    const job = stalledFilm({
+      created_at: Date.now() - old,
+      phase_started_at: Date.now() - old,
+      last_progress_at: Date.now() - 10 * 60 * 1000, // a shot landed 10min ago -- healthy
+    });
+    // The stuck shots' clips are NOT in R2, so the same-phase adoption holds (partial) and the tick
+    // reaches the ceiling check; the module poll stays pending.
+    const { env } = clipsRecoveryEnv(job, clipsJob(), ["renders/neon/clips/shot_02_i2v.mp4"]);
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    expect(r?.job.phase).toBe("clips"); // held, not failed
+    expect(r?.job.error).toBeUndefined();
+  });
+
+  it("still hard-fails a clips phase with 90min since the LAST landed shot (#704)", async () => {
+    const old = (PHASE_HARD_DEADLINE_SECONDS + 600) * 1000;
+    const job = stalledFilm({
+      created_at: Date.now() - old,
+      phase_started_at: Date.now() - old,
+      last_progress_at: Date.now() - (PHASE_HARD_DEADLINE_SECONDS + 60) * 1000, // stale progress too
+    });
+    const { env } = clipsRecoveryEnv(job, clipsJob(), ["renders/neon/clips/shot_02_i2v.mp4"]);
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    expect(r?.job.phase).toBe("failed");
+    expect(r?.job.error).toContain("stalled in phase \"clips\"");
+  });
+
+  it("a pre-#136 job with NO last_progress_at falls back to phase age at the ceiling (#704)", async () => {
+    const old = (PHASE_HARD_DEADLINE_SECONDS + 600) * 1000;
+    const job = stalledFilm({ created_at: Date.now() - old, phase_started_at: Date.now() - old });
+    delete (job as Partial<FilmJob>).last_progress_at;
+    const { env } = clipsRecoveryEnv(job, clipsJob(), ["renders/neon/clips/shot_02_i2v.mp4"]);
+    const r = await advanceFilmJob(env, "film-stall-clips");
+    expect(r?.job.phase).toBe("failed");
+  });
+});
+
+describe("ceilingAgeSeconds (#704)", () => {
+  const now = 1_800_000_000_000;
+  const base = {
+    film_id: "f", project: "p", bundle_key: "b", scenes: [], motion_backend: "m",
+    motion_config: {}, finish_config: {}, keyframe_binding: null, clip_job_id: null,
+    created_at: now - 100 * 60 * 1000, phase_started_at: now - 100 * 60 * 1000,
+  } as unknown as FilmJob;
+
+  it("per-shot phases measure from last_progress_at when it is newer", () => {
+    for (const phase of ["clips", "speech", "finish"] as const) {
+      const job = { ...base, phase, last_progress_at: now - 5 * 60 * 1000 } as FilmJob;
+      expect(ceilingAgeSeconds(job, now)).toBe(5 * 60);
+    }
+  });
+
+  it("per-shot phases fall back to phase_started_at with no progress stamp", () => {
+    const job = { ...base, phase: "clips" } as FilmJob;
+    expect(ceilingAgeSeconds(job, now)).toBe(100 * 60);
+  });
+
+  it("a stale last_progress_at OLDER than phase_started_at never rewinds the clock", () => {
+    // e.g. the stamp was written in a PREVIOUS phase and the new phase just began
+    const job = { ...base, phase: "clips", phase_started_at: now - 60 * 1000, last_progress_at: now - 100 * 60 * 1000 } as FilmJob;
+    expect(ceilingAgeSeconds(job, now)).toBe(60);
+  });
+
+  it("the batch keyframe phase ignores last_progress_at (phase-age semantics unchanged)", () => {
+    const job = { ...base, phase: "keyframe", last_progress_at: now - 60 * 1000 } as FilmJob;
+    expect(ceilingAgeSeconds(job, now)).toBe(100 * 60);
   });
 });
 
