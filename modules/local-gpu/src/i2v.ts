@@ -4,7 +4,21 @@
 // (studio #81 / backend #87) -- that sameness IS the swappability: the same wire body drives the Wan
 // datacenter engine OR the LTX consumer engine; only the box behind the endpoint differs.
 
-import type { MotionBackendInput, MotionBackendOutput } from "./contract";
+import type { DurationGridDecl, MotionBackendInput, MotionBackendOutput } from "./contract";
+
+/** Pure (#707): validate a backend-declared duration grid (from the door's /health) into the shape
+ *  the manifest relays. STRICT: anything malformed -- non-positive fps, no usable tiers -- returns
+ *  null and the manifest omits the field. The module relays only what the backend honestly declared;
+ *  it never repairs or fabricates a grid. */
+export function readDurationGrid(raw: unknown): DurationGridDecl | null {
+  const g = raw as { fps?: unknown; tiers?: unknown } | null | undefined;
+  if (!g || typeof g.fps !== "number" || !(g.fps > 0) || !g.tiers || typeof g.tiers !== "object") return null;
+  const tiers: Record<string, { max_frames: number }> = {};
+  for (const [tier, v] of Object.entries(g.tiers as Record<string, { max_frames?: unknown } | null>)) {
+    if (v && typeof v.max_frames === "number" && v.max_frames > 0) tiers[tier] = { max_frames: v.max_frames };
+  }
+  return Object.keys(tiers).length > 0 ? { fps: g.fps, tiers } : null;
+}
 
 // i2v default cadence. The backend snaps the final frame count to its model's temporal stride, so we
 // send a count derived from the shot length and let the backend do the snap (LTX wants 8k+1; Wan 4k+1).

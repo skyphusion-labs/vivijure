@@ -30,6 +30,17 @@ export interface ModuleManifest {
   ui?: ModuleUi;
   /** Advertise POST /cancel so the core can stop an in-flight job rather than orphan the GPU. */
   cancelable?: boolean;
+  /** OPTIONAL, additive: a fixed duration grid (pinned fps + per-tier frame caps) RELAYED from the
+   *  backend's /health, so core preflight can warn about duration clamping at storyboard time (#707).
+   *  Omitted when the backend declares none or is unreachable -- absence is honest, never fabricated. */
+  duration_grid?: DurationGridDecl;
+}
+
+/** A fixed duration grid (#707): pinned output fps + per-quality-tier frame ceilings; a tier's
+ *  maximum deliverable seconds = max_frames / fps. */
+export interface DurationGridDecl {
+  fps: number;
+  tiers: Record<string, { max_frames: number }>;
 }
 
 export interface InvokeContext {
