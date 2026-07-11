@@ -1601,7 +1601,7 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
     if (WELCOME_REDIRECT_PATHS.has(url.pathname) && (request.method === "GET" || request.method === "HEAD")) {
       return Response.redirect(WELCOME_REDIRECT_TARGET, 301);
     }
-    const studioPage = STUDIO_PAGE_ASSETS[url.pathname];
+    const studioPage = resolveStudioPage(env, url.pathname);
     if (studioPage && (request.method === "GET" || request.method === "HEAD")) {
       return serveStudioAsset(env, request, url, studioPage);
     }
@@ -1629,4 +1629,18 @@ async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): 
       }
     }
     return env.ASSETS.fetch(request);
+}
+
+// The demo (#631, S30) lands on the PLANNER, not the module host: the planner is the one interactive
+// surface a demo visitor has (render a free clip). In demo mode ONLY, the root (the bare root path and
+// /index.html) remaps to planner.html; every other route and every other mode is byte-identical, so the
+// module host stays in the nav and reachable at /modules. The SET of page routes is unchanged, so the
+// STUDIO_PAGE_PATHS mirror in asset-response.ts (and its studio-page CSP classification) stays correct
+// with no edit there.
+function resolveStudioPage(env: Env, pathname: string): string | undefined {
+  const asset = STUDIO_PAGE_ASSETS[pathname];
+  if (asset && isDemoMode(env) && (pathname === "/" || pathname === "/index.html")) {
+    return "/planner.html";
+  }
+  return asset;
 }
