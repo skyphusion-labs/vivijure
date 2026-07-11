@@ -3,6 +3,40 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.20.0
+
+**The S37 fix queue: the S36 e2e findings landed.** MINOR (new features: duration honesty
+surfacing + the duration-grid contract field). Everything follows the honest-failures doctrine.
+
+- The 90min hard ceiling tracks real progress on per-shot phases (#704, PR #708): clips/speech/
+  finish measure `PHASE_HARD_DEADLINE_SECONDS` against `last_progress_at` (re-stamped on every
+  finished shot, #136) instead of `phase_started_at`, so a slow local-gpu card landing one clip
+  every few minutes never hard-fails a healthy big film mid-progress, while 90min since the LAST
+  landed shot still fails loud. The batch keyframe phase keeps phase-age semantics.
+- The `distilled` tier-honesty flag flows end to end (#705, PRs #710 + #712): the local-gpu module
+  passes the backend's `distilled` through (thanks @skyphusion-albini), the canonical contract
+  carries it (`MotionBackendOutput.distilled?`, additive), `applyPoll` retains it per shot, and the
+  film summary + poll view surface it. Absence stays absent, never a fabricated false.
+- Duration honesty for fixed-grid backends (#707, PRs #709 #711 #713 #715 #714; the issue stays
+  open for the door-side /health declaration):
+  - `clip_deliveries` on the film summary AND the planner poll view: per done shot,
+    `planned_seconds` vs `delivered_seconds` (+ fps/frames/distilled), absent until a backend
+    reports numbers.
+  - Contract: `ModuleManifest.duration_grid` (additive, no MODULE_API bump) -- a fixed-grid
+    motion backend's pinned fps + per-tier frame caps; documented in docs/module-api.md.
+  - Preflight warns per shot that would be clamped (`motionBackend` + `quality` optional on the
+    /api/storyboard/preflight envelope); warning, never a submit-blocking error.
+  - The local-gpu module RELAYS a door-declared grid from the door's /health into its manifest
+    (best-effort, 1.5s timeout, 5min pos/neg cache so module discovery never hangs on a down door).
+  - Panel: per-shot "delivered / planned" honesty line with an amber clamp flag and a
+    "(distilled)" marker; preflight re-runs on backend/tier change.
+
+Files: package.json, CHANGELOG.md, src/film-model.ts, src/film-orchestrator.ts,
+src/render-orchestrator.ts, src/film-render-bridge.ts, src/preflight.ts, src/index.ts,
+src/modules/types.ts, modules/local-gpu/src/{contract,i2v,index}.ts, public/planner-preflight.js,
+public/planner-init.js, public/planner-history-row.js, public/styles.css, docs/module-api.md,
+tests/*.
+
 ## v0.19.5
 
 **The honesty batch: the four S31 GPU-proof findings fixed.** PATCH (fix class; no new features).
