@@ -60,6 +60,37 @@ satellites). Jobs live IN-PROCESS: a container restart drops them, at which poin
 the R2 artifact if the encode had finished. The synchronous routes are UNCHANGED, so an old core / an
 old module keeps working.
 
+### `/finish` response + the duration honesty gate (#697/#698)
+
+`/finish` returns the assembled film`s key/bytes plus per-assemble instrumentation, and -- on the concat
+path -- the ACTUAL per-clip assembled seconds:
+
+```json
+{
+  "ok": true,
+  "key": "renders/<film>/film.mp4",
+  "bytes": 12345678,
+  "durationSeconds": 8.02,
+  "shots": 2,
+  "clipsReceived": 2,
+  "hasAudio": true,
+  "width": 1920,
+  "height": 1080,
+  "clipDurations": [4.01, 4.01]
+}
+```
+
+- `clipDurations` -- each normalized (tail-trimmed, capped) clip`s probed seconds, in the SAME order the
+  clips were submitted, so the core maps them back onto its shot ids. `null` on the `remuxAudioOnly`
+  path (a single already-finished film, no per-shot concat). Absent on an older container build.
+
+The core uses `clipDurations` two ways (one probe, both uses): it times caption cues to the REAL cut
+(#698, otherwise trailing cues drift past EOF on non-final tiers), and it runs the **duration honesty
+gate** (#697) -- comparing each clip against its planned seconds and FAILING the render loud below
+`FILM_CLIP_DURATION_FLOOR` (default 0.5) rather than shipping a 0.085s clip for a 4s shot. The gate is
+**evidence-only**: a build that reports no `clipDurations` leaves it a logged no-op, never a false
+failure, so the gate arms exactly when this response field ships.
+
 ## DSP
 
 ffmpeg, CPU-only: per-clip normalize (scale/pad to WxH, fps, libx264), concat (hard cut or xfade

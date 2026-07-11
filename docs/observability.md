@@ -177,6 +177,27 @@ every good clip (LTX, film, LoRA, high-motion) scores <= 2.5; the threshold sits
 fallback only WARNS; the keyframe-similarity check (available in production, where every shot has its
 keyframe) is the confident signal.
 
+## The assemble duration gate (#697) -- a hard fail, not an event
+
+Layer 1 `clip.validate` deliberately does NOT gate on duration (`expected_s` is context-only, since
+backends emit a fixed frame count), so a per-shot finish chain that adopts a truncated partial write can
+deliver a 0.085s clip for a 4s shot and pass every earlier gate. At **assemble** the core compares each
+clip`s ACTUAL probed seconds (from video-finish `clipDurations`, above) against its planned seconds and,
+below `FILM_CLIP_DURATION_FLOOR` (default 0.5, `0` disables), FAILS the render loud -- honest-failure
+#245/#249, never a silent green.
+
+This is a HARD FAIL, so it emits **no dedicated structured event**. Like every #245/#249 per-shot
+failure, the reason surfaces on the failed job`s `error` string (and the poll view), e.g.:
+
+```
+duration gate: 1 shot(s) delivered below 50% of plan: shot_01 0.10s vs planned 4.00s (floor 2.00s)
+```
+
+and a matching `level:error` log line (`film <id>: duration gate: ...`). The gate is EVIDENCE-ONLY: a
+video-finish build that reports no `clipDurations` leaves it a logged no-op (`duration gate skipped
+(redeploy video-finish ...)`), so it can never fail a film for a missing measurement. Query the failures
+with `{worker="vivijure-studio"} |= "duration gate"`.
+
 ## Query recipes (Grafana -> Explore -> Loki datasource)
 
 ```logql
