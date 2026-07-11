@@ -125,6 +125,74 @@ describe("vivijure MCP tool dispatch", () => {
     expect(body.result.content[0].text).toContain("film-abc");
   });
 
+  it("submit_film forwards the four module-config maps verbatim in the body (#674)", async () => {
+    const finish_config = { upscale: { model: "realesr-animevideov3" } };
+    const speech_config = { "audio-upscale": { denoise: true } };
+    const film_finish_config = { subtitle: { mode: "both" }, "film-titles": { position: "lower" } };
+    const master_config = { "audio-upscale": { loudness: -14 } };
+    const res = await worker.fetch(
+      mcpRequest(
+        {
+          jsonrpc: "2.0",
+          id: 20,
+          method: "tools/call",
+          params: {
+            name: "submit_film",
+            arguments: {
+              bundle_key: "bundles/x.tar",
+              scenes: [{ shot_id: "s1", prompt: "a wide shot", seconds: 4 }],
+              finish_config,
+              speech_config,
+              film_finish_config,
+              master_config,
+            },
+          },
+        },
+        AUTH,
+      ),
+      ENV,
+    );
+    const body = (await res.json()) as { result: { isError: boolean } };
+    expect(body.result.isError).toBe(false);
+    const sent = JSON.parse(calls[0].init.body as string);
+    // Each map lands in the request body byte-for-byte -- the MCP layer does not reshape it, so
+    // subtitle mode=both under film_finish_config actually reaches the film.finish chain (#674).
+    expect(sent.finish_config).toEqual(finish_config);
+    expect(sent.speech_config).toEqual(speech_config);
+    expect(sent.film_finish_config).toEqual(film_finish_config);
+    expect(sent.master_config).toEqual(master_config);
+  });
+
+  it("submit_film omits an unset config map (not sent as null) (#674)", async () => {
+    const res = await worker.fetch(
+      mcpRequest(
+        {
+          jsonrpc: "2.0",
+          id: 21,
+          method: "tools/call",
+          params: {
+            name: "submit_film",
+            arguments: {
+              bundle_key: "bundles/x.tar",
+              scenes: [{ shot_id: "s1", prompt: "a wide shot", seconds: 4 }],
+              film_finish_config: { subtitle: { mode: "sidecar" } },
+            },
+          },
+        },
+        AUTH,
+      ),
+      ENV,
+    );
+    const body = (await res.json()) as { result: { isError: boolean } };
+    expect(body.result.isError).toBe(false);
+    const sent = JSON.parse(calls[0].init.body as string);
+    expect(sent.film_finish_config).toEqual({ subtitle: { mode: "sidecar" } });
+    // Absent maps are dropped by bodyWithout (undefined skipped), never forwarded as null keys.
+    expect("finish_config" in sent).toBe(false);
+    expect("speech_config" in sent).toBe(false);
+    expect("master_config" in sent).toBe(false);
+  });
+
   it("bad arguments return an isError result and never call the studio", async () => {
     const res = await worker.fetch(
       mcpRequest(

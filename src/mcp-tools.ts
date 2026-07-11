@@ -308,8 +308,13 @@ export const TOOLS: McpTool[] = [
     description:
       "POST /api/render/film. START A FILM RENDER (this SPENDS: GPU / cloud i2v). Body: { bundle_key " +
       "(req, from bundle_storyboard), scenes (req: [{ shot_id, prompt, seconds }]), project?, " +
-      "motion_backend?, keyframe_config?, motion_config?, finish_config?, audio_key?, film_titles?, " +
-      "dialogue_lines?, cast_loras? }. Returns { film_id, phase }. Then POLL poll_film until phase is " +
+      "motion_backend?, keyframe_config?, motion_config?, finish_config?, speech_config?, " +
+      "film_finish_config?, master_config?, audio_key?, film_titles?, dialogue_lines?, cast_loras? }. " +
+      "Each *_config is { [moduleName]: config }, feeding one hook stage: finish_config -> the per-shot " +
+      "finish chain, speech_config -> the speech (dialogue-audio) chain, film_finish_config -> the " +
+      "film.finish chain on the assembled film (this is where SUBTITLE mode burn/sidecar/both and the " +
+      "film-titles knobs live; putting subtitle config in finish_config silently no-ops to burn), " +
+      "master_config -> the master (audio bed) chain. Returns { film_id, phase }. Then POLL poll_film until phase is " +
       "done/failed. Set motion_backend explicitly (a name from studio_modules hooks['motion.backend']); " +
       "an omitted backend can pick a non-operational door. VOICES: pass cast_loras so dialogue speaks " +
       "with each cast member's voice; explicit dialogue_lines win over bundle-derived ones, and a " +
@@ -323,7 +328,10 @@ export const TOOLS: McpTool[] = [
         motion_backend: STR("A motion.backend module name (from studio_modules)."),
         keyframe_config: { type: "object", description: "Keyframe module config (e.g. { quality_tier })." },
         motion_config: { type: "object", description: "Motion module config." },
-        finish_config: { type: "object", description: "{ [moduleName]: config } for finish modules." },
+        finish_config: { type: "object", description: "{ [moduleName]: config } for the per-shot finish chain." },
+        speech_config: { type: "object", description: "{ [moduleName]: config } for the speech (dialogue-audio) chain." },
+        film_finish_config: { type: "object", description: "{ [moduleName]: config } for the film.finish chain on the assembled film; where subtitle mode (burn/sidecar/both) and the film-titles knobs live." },
+        master_config: { type: "object", description: "{ [moduleName]: config } for the master (audio bed) chain." },
         audio_key: STR("Staged audio bed to mux after assemble."),
         film_titles: { type: "object", description: "{ title?: { text, subtitle? }, credits?: { lines } }." },
         dialogue_lines: ARR(

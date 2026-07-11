@@ -294,11 +294,20 @@ There is no undo; treat every call like clicking a "charge my account" button.
 - `keyframe_config`: keyframe module config, e.g. `{ "quality_tier": "..." }` (tiers come from
   `studio_modules`).
 - `motion_config`: motion module config (knobs per that module's `config_schema`).
-- `finish_config`: `{ [moduleName]: config }` for finish modules (upscale, lipsync, audio).
+- `finish_config`: `{ [moduleName]: config }` for the per-shot `finish` chain (upscale, lipsync, audio).
   Upscale model guidance (#585): the default is `realesr-animevideov3`. `RealESRGAN_x4plus`
   gives a truer photoreal texture but is currently an explicit opt-in that CUDA-OOMs on
   long/high-fps clips until the upscale handler gains tiled inference; leave the default unless
   you know your clips are short.
+- `speech_config`: `{ [moduleName]: config }` for the `speech` chain (per-shot dialogue-audio
+  cleanup / enhancement, post-dialogue and pre-finish).
+- `film_finish_config`: `{ [moduleName]: config }` for the `film.finish` chain on the assembled,
+  muxed film. **This is where subtitle mode lives** (`burn` / `sidecar` / `both`) and the
+  film-titles knobs. Putting subtitle config under `finish_config` instead validates against the
+  per-shot finish chain, silently no-ops, and the subtitle module falls back to `burn` (no
+  sidecar, no error) -- so subtitle mode is reachable ONLY through `film_finish_config`.
+- `master_config`: `{ [moduleName]: config }` for the `master` chain (assembled film's audio bed
+  -> mastered audio: music upscale + loudness, pre-mux).
 - `audio_key`: a staged audio bed to mux in after assemble.
 - `film_titles`: `{ title?: { text, subtitle? }, credits?: { lines } }` title cards.
 - `dialogue_lines`: `[{ shot_id, text, voice_id? }]` spoken lines for TTS + captions. A line's
