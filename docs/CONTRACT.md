@@ -710,7 +710,7 @@ a full job: keyframe -> clips -> (dialogue/speech) -> finish -> assemble -> (mas
 | `audio_key` | string | no | -- | Staged audio bed (score/narration) to mux after assemble; absent => silent film. |
 | `film_titles` | `{ title?: { text, subtitle? }, credits?: { lines: string[] } }` | no | -- | Title / credit card text for the `film.finish` chain; absent => no cards. |
 | `dialogue_lines` | `DialogueLine[]` | no | derived from the bundle | Explicit spoken lines for TTS + captions: `{ shot_id, text, voice_id? }[]`. |
-| `cast_loras` | `{ [slot]: castId }` | no | -- | Binds storyboard character slots (A, B, ...) to cast ids. Drives the keyframe LoRAs AND per-slot voice resolution. |
+| `cast_loras` | `{ [slot]: castId }` | no | -- | Binds storyboard character slots (A, B, ...) to cast ids. Drives the keyframe LoRAs AND per-slot voice resolution. A bound cast whose LoRA is not ready is rejected `400` (the untrained-cast message), symmetric with `/api/storyboard/render` (#738) -- never a silent drop to a generic render. |
 
 **Dialogue voicing precedence (#582), one rule, both paths:**
 
@@ -729,7 +729,8 @@ Identity: none. The studio is single-operator, so the core sends no identity to 
 notify-email module holds its recipient address in its own config (the identity strip).
 Errors: `400 "bundle_key required"`, `400 "bundle_key must be a plain relative key under bundles/"`
 (path-format / traversal guard, checked before the other 400s), `400 "scenes[] required"`; `400` (the installed-backends
-message) for an omitted / non-serving `motion_backend` (#504); `400` (per-violation message) for a
+message) for an omitted / non-serving `motion_backend` (#504); `400` (the untrained-cast message) if a bound cast LoRA is not ready (#738);
+`400` (per-violation message) for a
 `motion_config` value the backend's schema rejects (#577); `400` naming the offending (dotted)
 field when any config map (`keyframe_config` / `motion_config` top-level; `finish_config` /
 `speech_config` / `film_finish_config` / `master_config` top-level AND per-module entry) is present

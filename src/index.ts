@@ -1181,6 +1181,13 @@ const hStartFilm: Handler = async (req, env) => {
   const resolvedLoras = (a.cast_loras && Object.keys(a.cast_loras).length)
     ? await resolveCastLoras(env, a.cast_loras)
     : null;
+  // #738: symmetry with hSubmitRender (the untrained-cast guard above). A bound-but-not-ready cast LoRA
+  // must FAIL HARD, never silently drop to a generic render -- the honest-failure doctrine (#245/#249:
+  // a degrade is never silent). Before #738, hStartFilm (the direct API + Slate bot path) skipped an
+  // untrained binding and shipped generic characters with no 400 and no degraded marker.
+  if (resolvedLoras && resolvedLoras.skipped.length) {
+    throw badRequest(untrainedCastMessage(resolvedLoras.skippedDetail));
+  }
   const castIds = resolvedLoras && Object.keys(resolvedLoras.castIds).length ? resolvedLoras.castIds : undefined;
 
   let dialogue_lines = a.dialogue_lines;
