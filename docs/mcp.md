@@ -288,9 +288,10 @@ There is no undo; treat every call like clicking a "charge my account" button.
 - `bundle_key` (required): the `bundleKey` from `bundle_storyboard`.
 - `scenes` (required): non-empty array of `{ shot_id, prompt, seconds }`.
 - `project`: project namespace (derived from `bundle_key` when omitted).
-- `motion_backend`: a `motion.backend` module name from `studio_modules`. **Set this explicitly.**
-  An omitted backend lets the studio pick, and it can pick a door that is not operational on your
-  install.
+- `motion_backend` (required in practice): a `motion.backend` module name from `studio_modules`.
+  A film is a full render, and a full render REQUIRES an explicit backend: an omitted or
+  non-serving value is rejected at submit with a `400` listing the installed backend names
+  (#500/#504) -- the studio never silently picks one for you.
 - `keyframe_config`: keyframe module config, e.g. `{ "quality_tier": "..." }` (tiers come from
   `studio_modules`).
 - `motion_config`: motion module config (knobs per that module's `config_schema`).

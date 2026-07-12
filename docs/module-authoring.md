@@ -47,12 +47,17 @@ surface internal: the service binding is the boundary, do not punch a hole in it
 | `finish` | post-process a clip: interpolation / lip-sync / upscale / face restore | **chain** |
 | `score` | add audio to a film: music / narration / beat-sync | **chain** |
 | `dialogue` | per-shot dialogue lines -> speech audio (TTS); feeds the lip-sync finish module | **pick one** |
+| `speech` | per-shot dialogue audio -> cleaned/enhanced audio (post-dialogue, pre-finish) | **chain** |
 | `plan.enhance` | expand a storyboard before render (LLM auto-direction) | **chain** |
 | `cast.image` | portrait + bible -> LoRA training reference images | **pick one** |
 | `notify` | render-complete notification (email / webhook) | **chain** |
-| `film.finish` | assembled + muxed film -> title / credit cards (post-mux; single-film path only) | **chain** |
+| `master` | assembled film's audio bed -> mastered audio (music upscale + loudness), pre-mux; fail-safe | **chain** |
+| `film.finish` | assembled + muxed film -> title / credit cards (post-mux; runs on the single-film path AND the scatter finalize, #602) | **chain** |
 
-`pick_one` resolves to a single module (the user picks; default is the first). `chain` folds every
+`pick_one` resolves to a single module. The user picks; for most hooks an omitted choice defaults
+to the `ui.order`-first serving module, EXCEPT `motion.backend` on a full render, where the choice
+is REQUIRED -- an omitted or non-serving backend is rejected at submit with the installed list
+(#500/#504), so a non-operational door can never be silently defaulted into. `chain` folds every
 installed module in `ui.order`, each consuming the previous one's output.
 
 ## The 4-file template
@@ -181,7 +186,8 @@ If that is green, your module will plug into the core cleanly.
 
 ## Checklist
 
-- [ ] `GET /module.json` returns a manifest with `api: "vivijure-module/2"` (or `/1`, still accepted), a `name`, a `version`,
+- [ ] `GET /module.json` returns a manifest with `api: "vivijure-module/2"` (the `/1` window is
+      CLOSED as of v0.12.0 -- a `/1` manifest is rejected at registration), a `name`, a `version`,
       and only known `hooks`.
 - [ ] `config_schema` fields each have a valid `type` and a `default` consistent with it.
 - [ ] `POST /invoke` returns HTTP 200 with a well-formed `InvokeResponse` for every input, including
