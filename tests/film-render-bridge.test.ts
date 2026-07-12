@@ -427,6 +427,15 @@ describe("filmRowFromJob (#164 -- film jobs in render history)", () => {
     expect(filmRowFromJob({ ...base, phase: "failed", cancelled: true }).status).toBe("CANCELLED");
   });
 
+  // #762: the row LABEL was hardcoded "final", so a draft film mislabeled as final in render history.
+  // filmRowFromJob now reads job.quality_tier (set from the request's top-level qualityTier), defaulting
+  // "final" only when the job carries none. Fails on pre-#762 code (draft asserted against the hardcode).
+  it("#762: records the job quality_tier on the row (draft stays draft), defaulting final when absent", () => {
+    expect(filmRowFromJob({ ...base, quality_tier: "draft" }).qualityTier).toBe("draft");
+    expect(filmRowFromJob({ ...base, quality_tier: "standard" }).qualityTier).toBe("standard");
+    expect(filmRowFromJob(base).qualityTier).toBe("final");
+  });
+
 });
 
 describe("filmJobToPollView surfaces the #619 keyframes_incomplete degrade", () => {

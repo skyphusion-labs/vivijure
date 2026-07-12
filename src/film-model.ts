@@ -103,6 +103,10 @@ export interface FilmJob {
   // banks any freshly-trained adapter back onto the cast member (markLoraReady) so a character's LoRA
   // is trained ONCE and reused across every project -- instead of retrained every render. (#xxx)
   cast_loras?: Record<string, number>;
+  // #762: the render's requested quality tier (draft/standard/final), carried so the renders-table
+  // row LABEL is honest (filmRowFromJob hardcoded "final"). Absent -> the row defaults "final". The
+  // ACTUAL render tier rides the baked keyframe_config.quality_tier + motion_config, not this field.
+  quality_tier?: "draft" | "standard" | "final";
   film_key?: string; // R2 key of the assembled film (mp4), set when phase reaches "done"
   silent_film_key?: string; // silent concat output before optional audio mux
   // #697/#698: ACTUAL per-shot assembled clip seconds, probed by the video-finish container at assemble
