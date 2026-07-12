@@ -177,6 +177,41 @@ every good clip (LTX, film, LoRA, high-motion) scores <= 2.5; the threshold sits
 fallback only WARNS; the keyframe-similarity check (available in production, where every shot has its
 keyframe) is the confident signal.
 
+## The partial-keyframe degrade event (`film.keyframes_incomplete`, #619 / #622)
+
+When the keyframe phase delivers a PARTIAL set -- the stall-recovery ceiling fired with some
+keyframes still missing (#619), or a keyframe module honestly completed with fewer keyframes than
+scenes, e.g. a per-shot content refusal (#622) -- the film does not silently rebase to the smaller
+total and report a clean `complete`. It delivers the scenes that rendered LOUDLY: the drop is
+recorded on the job's `keyframes_incomplete` field (`{ adopted, expected, dropped }`, surfaced on
+the poll view), and the orchestrator emits one structured line:
+
+```
+{"ev":"film.keyframes_incomplete","film_id":"...","project":"...","adopted":2,"expected":4,"dropped":["shot_03","shot_04"]}
+```
+
+The all-missing case still hard-fails loud; this event is the some-rendered degrade only. A film
+with this line completed, but it is NOT the full storyboard -- the poll view says so too.
+
+## The deferred-bookkeeping event (`render.bookkeeping_deferred`, #695)
+
+A started film never 500s on its own bookkeeping: after `startFilmJob` returns, the post-start
+writes (the history-row insert, the download-url presign) are best-effort. A transient D1 blip
+there logs one structured line and the `201` still ships -- instead of baiting a retry-on-5xx
+client into paying for a SECOND film:
+
+```
+{"ev":"render.bookkeeping_deferred","op":"insertRender","job_id":"...","project":"...","reason":"..."}
+```
+
+`op` names the deferred write (`insertRender` = the history-row insert; `withFilmDownloadUrl` =
+the presign enrichment, which returns the summary without a `download_url` -- the next poll
+re-issues it).
+
+The poll path insert-if-missing heals the missing row on the next poll. A line here means "the
+film started fine; a UI-list row lagged one poll", never a lost render. Polls themselves stay
+throwing (they are idempotent; a retry is safe there).
+
 ## The assemble duration gate (#697) -- a hard fail, not an event
 
 Layer 1 `clip.validate` deliberately does NOT gate on duration (`expected_s` is context-only, since
@@ -227,6 +262,12 @@ with `{worker="vivijure-studio"} |= "duration gate"`.
 
 # Layer 2 content verdicts (#523); a `corrupt` failed a noise clip before finish spend
 {worker="vivijure-studio"} | json | line_format "{{.msg}}" | json | ev="clip.content_validate"
+
+# partial-keyframe degrades (#619/#622): films that shipped fewer scenes than planned, loudly
+{worker="vivijure-studio"} |= "film.keyframes_incomplete"
+
+# deferred post-start bookkeeping (#695): the film started; a history row / presign lagged a poll
+{worker="vivijure-studio"} |= "render.bookkeeping_deferred"
 ```
 
 ```logql

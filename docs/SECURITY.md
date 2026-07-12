@@ -303,9 +303,9 @@ BEHIND the auth gate like every other `/api/*` route. Its payload is scrubbed as
 it returns only the PUBLIC view of each installed module (name, version, hooks, config schema
 markers). Internal binding VALUES never cross this projection; an `install`-scope config value
 (e.g. a notify-email recipient) lives only behind the authenticated config route and is never
-emitted here. The projection lists whatever the deploy installed -- a minimal `deploy.sh` profile
-installs 17 module workers, so it is populated from first boot. If you add a module, keep its
-secret/internal fields off the projection.
+emitted here. The projection lists whatever the deploy installed -- the standard `deploy.sh`
+profile installs the full first-party module set (26 module workers as of v0.20.x), so it is
+populated from first boot. If you add a module, keep its secret/internal fields off the projection.
 
 ## 4. Credential blast radius (least privilege per function)
 
