@@ -51,6 +51,9 @@ export interface ClipShot extends ClipShotInput {
   // #705: tier-honesty signal from the backend (true = a distilled model variant rendered this clip).
   // Retained verbatim when the module reported it; absent otherwise -- never a fabricated false.
   distilled?: boolean;
+  // #719: consecutive TRANSIENT poll-error count (see applyPoll). Reset on any successful poll;
+  // the shot fails loud at CLIP_POLL_MAX_ATTEMPTS instead of on the first blip.
+  poll_attempts?: number;
 }
 export interface ClipJob {
   job_id: string;
@@ -79,15 +82,57 @@ export function summarizeJob(job: ClipJob): JobSummary {
   return { total, done, failed, pending: total - done - failed, complete: done + failed === total };
 }
 
+/** Pure: is a poll/invoke error TRANSIENT (a transport blip worth retrying) or DETERMINISTIC (a real
+ *  module-logic reject)? Transport statuses 408/429/5xx and unreachable/timeout/network strings are
+ *  transient; anything else is a real failure. This is the SHARED classifier: the finish chain's
+ *  classifyFinishFailure delegates here, and the clip poll uses it directly (#719). Lives in this
+ *  module (not film-model) because film-model imports from here, never the reverse. */
+export function classifyTransientFailure(error: string | undefined): "transient" | "deterministic" {
+  const e = error ?? "";
+  const m = e.match(/->\s*(\d{3})\b/); // the "module /invoke -> NNN" / "/poll -> NNN" transport status
+  if (m) {
+    const s = Number(m[1]);
+    return s === 408 || s === 429 || (s >= 500 && s <= 599) ? "transient" : "deterministic";
+  }
+  if (/unreachable|timed? ?out|timeout|network|econnreset|connection (reset|lost)|fetch failed/i.test(e)) {
+    return "transient";
+  }
+  return "deterministic"; // a module-logic ok:false -> a real reject, fail loud
+}
+
+/** Consecutive transient poll errors a clip shot tolerates before failing loud (#719). Mirrors the
+ *  finish chain's FINISH_STEP_MAX_ATTEMPTS bounded-retry contract. */
+export const CLIP_POLL_MAX_ATTEMPTS = 3;
+
 /** Apply a /poll outcome to a shot (pure): failure -> failed; still pending -> unchanged; output ->
  *  done with the clip key. */
 export function applyPoll(shot: ClipShot, r: PollResponse<MotionBackendOutput>): void {
   if (!r.ok) {
+    // #719: one TRANSIENT poll failure (an unreachable module, a 5xx at the module/edge, a door
+    // /status stalled past the caller's timeout mid-sampler-step) must not STICKILY fail a healthy
+    // in-flight render -- that killed film-d9214549 at ~2min while the GPU was at 8/40 steps. Mirror
+    // the finish chain's bounded-attempts contract (#141 philosophy): tolerate up to
+    // CLIP_POLL_MAX_ATTEMPTS CONSECUTIVE transient errors (the shot stays pending; the next sweep
+    // re-polls; any successful poll resets the count), then fail loud with the real error. A
+    // DETERMINISTIC module-reported failure (a real job reject) still fails immediately.
+    if (classifyTransientFailure(r.error) === "transient") {
+      const attempts = (shot.poll_attempts ?? 0) + 1;
+      if (attempts < CLIP_POLL_MAX_ATTEMPTS) {
+        shot.poll_attempts = attempts;
+        return; // stays pending; re-polled next sweep
+      }
+      shot.status = "failed";
+      shot.error = `${r.error} (persisted through ${attempts} consecutive polls, #719)`;
+      return;
+    }
     shot.status = "failed";
     shot.error = r.error;
     return;
   }
-  if ((r as { pending?: boolean }).pending) return; // still running
+  if ((r as { pending?: boolean }).pending) {
+    if (shot.poll_attempts) shot.poll_attempts = 0; // a successful round-trip resets the blip budget
+    return; // still running
+  }
   const output = (r as { output: MotionBackendOutput }).output;
   const violation = hookOutputViolation(shot.motion_backend ?? "motion.backend", "motion.backend", output);
   if (violation) { shot.status = "failed"; shot.error = violation; return; } // envelope-ok but off-contract: fail loud, never advance garbage
