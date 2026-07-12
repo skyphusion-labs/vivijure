@@ -306,9 +306,15 @@ Sourced from `QUALITY_TIERS` / `DEFAULT_QUALITY_TIER`. `default_tier` = `"final"
 
 | value | label | blurb |
 |-------|-------|-------|
-| `draft` | draft | 33 frames, 8 steps; fastest, lowest quality |
-| `standard` | standard | 8-step keyframes + 20-step EasyCache i2v; balanced |
-| `final` | final | 97 frames, 22 steps; production quality |
+| `draft` | draft | fastest, lowest quality (reference cloud backend: 33 frames, 8 steps) |
+| `standard` | standard | balanced (reference cloud backend: 8-step keyframes + 20-step EasyCache i2v) |
+| `final` | final | production quality (reference cloud backend: 97 frames, 22 steps) |
+
+> The tier is a QUALITY LADDER, not a universal frame-count contract. The concrete numbers above are
+> the reference cloud backend's; a tier moves quality (steps) and each backend maps it its own way -- the
+> `own-gpu` motion backend renders `frames = fps x planned_seconds` (the tier moves steps, not frames), and
+> a fixed-grid backend declares a `duration_grid` (module-api.md). The DELIVERED truth per shot is always
+> `clip_deliveries` on the film summary (2.21), never inferred from the tier blurb (#746).
 
 ### 2.4 GET /api/voices
 
