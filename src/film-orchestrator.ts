@@ -1638,6 +1638,7 @@ export async function startFilmJob(
     keyframes_only?: boolean;
     clips_only?: boolean;
     pretrained_loras?: Record<string, string>;
+    quality_tier?: "draft" | "standard" | "final";
     audio_key?: string;
     dialogue_lines?: DialogueLine[];
     cast_loras?: Record<string, number>;
@@ -1673,6 +1674,9 @@ export async function startFilmJob(
     phase_started_at: Date.now(),
     dialogue_lines: dialogueLines && dialogueLines.length ? dialogueLines : undefined,
     cast_loras: args.cast_loras && Object.keys(args.cast_loras).length ? args.cast_loras : undefined,
+    // #762 Bug 2: persist the requested quality tier so filmRowFromJob records an HONEST row label
+    // (it hardcoded "final"). Absent -> undefined, and filmRowFromJob defaults "final" (unchanged).
+    quality_tier: args.quality_tier,
   };
   const fetcher = kf ? resolveFetcher(envRec, kf.binding) : null;
   if (!kf || !fetcher) {

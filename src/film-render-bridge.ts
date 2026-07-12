@@ -16,8 +16,9 @@ export function isFilmJobId(jobId: string): boolean {
 }
 
 /** Reconstruct a renders-table row from a FilmJob doc (#164). The `POST /api/render/film`
- *  endpoint, unlike `POST /api/storyboard/render`, carries no quality tier or renderOverrides,
- *  so those default ("final" tier, no overrides) -- everything else reads straight off the job.
+ *  endpoint carries no renderOverrides (those default). The quality tier is read off the job
+ *  (#762: it was hardcoded "final", so a draft film was mislabeled "final" in history); job.quality_tier
+ *  is set from the request top-level qualityTier and defaults "final" when absent.
  *  Used at film START (insert the row) and on POLL as an insert-if-missing (insertRender is
  *  ON CONFLICT(job_id) DO NOTHING) so a film already in flight before history unification
  *  self-surfaces on its next poll/sweep tick. Pure so the mapping is unit-testable. */
@@ -28,7 +29,7 @@ export function filmRowFromJob(job: FilmJob): NewRenderRow {
     jobId: job.film_id,
     project: job.project,
     bundleKey: job.bundle_key,
-    qualityTier: "final",
+    qualityTier: job.quality_tier ?? "final",
     status: filmJobToPollView(job, null).status,
     mode,
     parentId: job.parent_render_id ?? null,

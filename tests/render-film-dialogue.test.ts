@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from "vitest";
 // handler dropping it. This locks the forward by spying startFilmJob and asserting it receives the
 // body's dialogue_lines verbatim. The DB / row writes are stubbed: this is a handler-wiring lock.
 
-type CapturedArgs = { dialogue_lines?: unknown; scenes?: unknown };
+type CapturedArgs = { dialogue_lines?: unknown; scenes?: unknown; pretrained_loras?: unknown; quality_tier?: unknown };
 const h = vi.hoisted(() => ({ captured: null as CapturedArgs | null, bundleScenes: [] as Array<{ shot_id: string; prompt: string; seconds: number; dialogue?: { slot: string; text: string } }> }));
 
 vi.mock("../src/film-orchestrator", async (orig) => {
@@ -254,5 +254,93 @@ describe("#738 hStartFilm rejects a bound-but-untrained cast_loras (symmetry wit
     expect(parsed.error ?? "").toContain("Wren");
     // startFilmJob is the mock that records into h.captured; a 400 before it means h.captured stays null.
     expect(h.captured).toBeNull();
+  });
+});
+
+
+// #762: hStartFilm resolved the ready cast adapters (resolvedLoras.pretrained) but the startFilmJob call
+// forwarded ONLY dialogue_lines + cast_loras, DROPPING pretrained_loras -- so the keyframe worker got no
+// banked adapter and RETRAINED every ready cast LoRA from scratch (~20 min, no signal). film-09d40b28 sat
+// 23 min in keyframe retraining Wren + the Salvage Robot, both lora_status:ready. hSubmitRender (the render
+// route) forwards it; the film route was never patched to match. These lock the forward the way the #296
+// dialogue_lines test locks that one. quality_tier is the second forward (row-label honesty, see below).
+describe("POST /api/render/film forwards pretrained_loras + qualityTier (#762)", () => {
+  it("Bug 1: forwards the ready cast adapters as pretrained_loras (no retrain-from-scratch)", async () => {
+    h.captured = null;
+    vi.mocked(resolveCastLoras).mockResolvedValueOnce({
+      pretrained: { A: "loras/wren.safetensors", B: "loras/salvage-robot.safetensors" },
+      voices: {},
+      castIds: { A: 4, B: 7 },
+      skipped: [],
+      skippedDetail: [],
+    });
+    const res = await worker.fetch(
+      postFilm({
+        bundle_key: "bundles/cast.tar.gz",
+        scenes: [{ shot_id: "shot_01", prompt: "Wren and the salvage robot", seconds: 4 }],
+        cast_loras: { A: "pub-wren", B: "pub-robot" },
+      }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(201);
+    // Fails on pre-#762 code: the handler dropped pretrained_loras, so captured.pretrained_loras was undefined.
+    expect((h.captured as CapturedArgs | null)?.pretrained_loras).toEqual({
+      A: "loras/wren.safetensors",
+      B: "loras/salvage-robot.safetensors",
+    });
+  });
+
+  it("a film with no ready adapters forwards pretrained_loras undefined (unchanged, no empty map on the wire)", async () => {
+    h.captured = null;
+    const res = await worker.fetch(
+      postFilm({ bundle_key: "bundles/x.tar.gz", scenes: [{ shot_id: "shot_01", prompt: "an empty room", seconds: 4 }] }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(201);
+    expect((h.captured as CapturedArgs | null)?.pretrained_loras).toBeUndefined();
+  });
+
+  it("Bug 2: forwards the requested qualityTier (draft stays draft, not hardcoded final)", async () => {
+    h.captured = null;
+    const res = await worker.fetch(
+      postFilm({
+        bundle_key: "bundles/x.tar.gz",
+        scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 4 }],
+        qualityTier: "draft",
+      }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(201);
+    // Fails on pre-#762 code: hStartFilm never read qualityTier, so captured.quality_tier was undefined.
+    expect((h.captured as CapturedArgs | null)?.quality_tier).toBe("draft");
+  });
+
+  it("an absent qualityTier forwards undefined (filmRowFromJob then defaults final)", async () => {
+    h.captured = null;
+    const res = await worker.fetch(
+      postFilm({ bundle_key: "bundles/x.tar.gz", scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 4 }] }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(201);
+    expect((h.captured as CapturedArgs | null)?.quality_tier).toBeUndefined();
+  });
+
+  it("an invalid qualityTier coerces to undefined (no bad tier leaks onto the job/row)", async () => {
+    h.captured = null;
+    const res = await worker.fetch(
+      postFilm({
+        bundle_key: "bundles/x.tar.gz",
+        scenes: [{ shot_id: "shot_01", prompt: "x", seconds: 4 }],
+        qualityTier: "ultra",
+      }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(201);
+    expect((h.captured as CapturedArgs | null)?.quality_tier).toBeUndefined();
   });
 });

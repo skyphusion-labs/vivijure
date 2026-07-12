@@ -1145,7 +1145,7 @@ async function withFilmDownloadUrlBestEffort(
   }
 }
 const hStartFilm: Handler = async (req, env) => {
-  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[]; cast_loras?: Record<string, string> }>(req);
+  const a = await readBody<{ project?: string; bundle_key?: string; scenes?: FilmScene[]; motion_backend?: string; keyframe_backend?: string; keyframe_config?: Record<string, unknown>; motion_config?: Record<string, unknown>; finish_config?: Record<string, Record<string, unknown>>; speech_config?: Record<string, Record<string, unknown>>; film_finish_config?: Record<string, Record<string, unknown>>; master_config?: Record<string, Record<string, unknown>>; audio_key?: string; film_titles?: { title?: { text: string; subtitle?: string }; credits?: { lines: string[] } }; dialogue_lines?: DialogueLine[]; cast_loras?: Record<string, string>; qualityTier?: string }>(req);
   if (!a.bundle_key) throw badRequest("bundle_key required");
   // Same boundary check as hSubmitRender: canonical bundle shape before any use.
   if (!isSafeBundleKey(a.bundle_key)) throw badRequest("bundle_key must be a plain relative key under bundles/");
@@ -1233,6 +1233,18 @@ const hStartFilm: Handler = async (req, env) => {
     // which read job.dialogue_lines. cast_loras carries the speaking cast (slot -> cast id) so the
     // LoRA write-back + voice resolution have it.
     dialogue_lines, cast_loras: castIds,
+    // #762 Bug 1: forward the ALREADY-RESOLVED, ready cast adapters as pretrained_loras, exactly the
+    // way hSubmitRender does (the render route). Dropping this made the keyframe worker RETRAIN every
+    // ready cast LoRA from scratch (~20 min, no signal) on the film path -- film-09d40b28 sat 23 min in
+    // keyframe retraining Wren + the Salvage Robot, both already lora_status:ready. resolvedLoras.pretrained
+    // holds the banked adapter R2 keys; startFilmJob already threads them into the keyframe worker input.
+    pretrained_loras: resolvedLoras && Object.keys(resolvedLoras.pretrained).length ? resolvedLoras.pretrained : undefined,
+    // #762 Bug 2: carry the caller's requested quality tier so the recorded renders-row LABEL is HONEST
+    // (filmRowFromJob read a hardcoded "final", so a draft film mislabeled as final in history). The
+    // ACTUAL render tier is driven by the baked keyframe_config.quality_tier (read by the keyframe module)
+    // + motion_config, unchanged here; this only makes the row match what was asked. An absent/invalid
+    // value coerces to undefined -> filmRowFromJob defaults "final" (pre-#762 behavior preserved).
+    quality_tier: coerceQualityTier(a.qualityTier),
   }, filmModules);
   // Write a renders-table row so this film shows in the history panel (#164), the same way
   // hSubmitRender / hRenderFromKeyframes already do for the storyboard render path. hPollFilm
