@@ -23,7 +23,7 @@ cp deploy.env.example deploy.env   # then edit deploy.env with your keys
 ./deploy.sh
 ```
 
-That gives you the studio core plus cloud and own-GPU render (the minimal profile). The friendly
+That gives you the studio core plus cloud and own-GPU render (the standard profile). The friendly
 walk-through is [docs/quickstart.md](docs/quickstart.md); the full reference is
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); the extra "finish" parts you can add later are in
 [docs/opt-in-tiers.md](docs/opt-in-tiers.md).
@@ -153,6 +153,8 @@ transparent framing used across the project.
 **Render history** -- honest per-render status. The panel surfaces real failed attempts alongside completed renders (here, three failed runs and one completed), with inline error snippets; it shows what actually happened, not a curated success:
 
 ![Render history tab showing the honest-status UX: three failed neon_halflife attempts and one completed fur_and_circuits render, each with a status badge](docs/screenshots/planner-render-history.png)
+
+**Honest durations.** Some motion backends render on a fixed frame grid (a local door pinned to a set frame count), so they clamp a shot to a length they can actually deliver. When that happens the panel does not hide it: each finished shot shows its real delivered seconds against the planned seconds, flagged when a clip came up short, and preflight warns you before you submit if a chosen backend would clamp a shot.
 
 ## What you can do
 
