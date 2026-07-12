@@ -48,7 +48,7 @@ import {
   markRenderFailedByJobId,
   updateRenderFromView,
 } from "./renders-db";
-import { resolveCastLoras } from "./cast-loras";
+import { resolveCastLoras, untrainedCastMessage } from "./cast-loras";
 import { fireNotifyForScatter } from "./scatter-notify";
 import { isTransientD1Error, withD1Retry, d1ErrorCode } from "./d1-retry";
 
@@ -115,13 +115,14 @@ export async function startScatterRender(env: Env, args: StartScatterArgs): Prom
     throw new Error("no motion.backend module installed");
   }
 
-  const { pretrained, voices, castIds, skipped } = await resolveCastLoras(env, args.cast_loras);
-  if (!Object.keys(pretrained).length) {
-    throw new Error(
-      skipped.length
-        ? "no ready cast LoRAs (train characters first)"
-        : "castLoras required for scatter",
-    );
+  const { pretrained, voices, castIds, skipped, skippedDetail } = await resolveCastLoras(env, args.cast_loras);
+  // #739: castLoras is OPTIONAL on scatter. Absent/empty -> shards render generic, exactly like the
+  // film/render siblings. The old "castLoras required for scatter" was unintended coupling baked in at
+  // the v0.2.0 bulk ship (no rationale anywhere, and nothing downstream needs a non-empty cast). A
+  // PRESENT-but-not-ready binding is STILL rejected (the #738-symmetric untrained-cast message), so the
+  // relax never reopens the silent-drop class -- the hScatter door turns this into a 400 before any spend.
+  if (skipped.length) {
+    throw new Error(untrainedCastMessage(skippedDetail));
   }
 
   const parsed = await readBundleScenes(env, args.bundle_key);
