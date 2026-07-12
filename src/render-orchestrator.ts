@@ -82,6 +82,18 @@ export function summarizeJob(job: ClipJob): JobSummary {
   return { total, done, failed, pending: total - done - failed, complete: done + failed === total };
 }
 
+/** Pure: aggregate the per-shot failure reasons into one honest string, so a film that failed with
+ *  zero clips carries WHY (the door / backend's real error on each shot) instead of a bare generic
+ *  "no clips rendered to assemble". Each failed shot already holds its reason on `shot.error` (set from
+ *  the module poll / validation), but the film-level failure discarded it, so a door error (e.g. a
+ *  clip-upload Unauthorized) never reached the operator (#754). Returns "" when nothing failed with a
+ *  reason (caller keeps its bare message). */
+export function describeClipFailures(job: ClipJob): string {
+  const failed = job.shots.filter((s) => s.status === "failed");
+  if (!failed.length) return "";
+  return failed.map((s) => `${s.shot_id}: ${s.error || "unknown error"}`).join("; ");
+}
+
 /** Pure: is a poll/invoke error TRANSIENT (a transport blip worth retrying) or DETERMINISTIC (a real
  *  module-logic reject)? Transport statuses 408/429/5xx and unreachable/timeout/network strings are
  *  transient; anything else is a real failure. This is the SHARED classifier: the finish chain's
