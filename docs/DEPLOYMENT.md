@@ -591,6 +591,29 @@ config; everything else in the Studio is single-user and needs no email.
 
 ---
 
+## 8. Optional BYOK provider keys (advanced)
+
+Two optional worker secrets let you bring your own provider key for a specific feature. Most installs
+need neither: storyboard planning bills through the AI Gateway on Unified Billing (section 2d), and
+image work runs on the AI binding. Set one only if you want that specific provider path:
+
+- `OPENAI_API_KEY` -- BYOK OpenAI image generation (transparent-PNG output via gpt-image-1.5). Unset
+  by default; the studio renders keyframes/images on its normal path without it.
+- `XAI_API_KEY` -- BYOK xAI for the storyboard planner. Unset by default; the planner runs on the AI
+  Gateway path instead.
+
+Both are worker secrets (set with `wrangler secret put`, or left unset):
+
+```bash
+printf %s "<your-key>" | npx wrangler secret put OPENAI_API_KEY
+printf %s "<your-key>" | npx wrangler secret put XAI_API_KEY
+```
+
+They are the only provider keys not routed through the AI Gateway, so each bills that provider
+directly rather than your Cloudflare Unified Billing balance.
+
+---
+
 ## Quick checklist
 
 - [ ] Cloudflare API token (Workers/D1/R2/AI-Gateway/Secrets-Store/Tunnel/Connectivity scopes above) + account id
