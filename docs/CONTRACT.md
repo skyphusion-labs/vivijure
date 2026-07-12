@@ -788,7 +788,7 @@ Sharded (scatter) render submission: split shots across shards.
 | `shardCount` | number | no | 2 | Shard count. |
 | `project` | string | no | derived | Project namespace. |
 | `qualityTier` | tier | no | `"final"` | Quality. |
-| `castLoras` | `{ [slot]: cast_id }` | no | `{}` | Bound cast LoRAs. |
+| `castLoras` | `{ [slot]: cast_id }` | no | `{}` | Bound cast LoRAs. OPTIONAL (#739): absent/empty -> shards render generic, like the film/render paths. A PRESENT-but-not-ready binding is rejected `400` (the untrained-cast message), symmetric with #738 -- never a silent drop. |
 | `renderOverrides` | object | no | -- | Per-module overrides. |
 | `motion_backend` | string | yes | -- | Motion choice (top-level, or via `renderOverrides.motion_backend`). An omitted or non-serving value is rejected `400` listing the installed `motion.backend` names (#504; scatter has no keyframes-only mode). |
 | `audioKey` | string | no | -- | Audio bed. |
@@ -797,7 +797,7 @@ Sharded (scatter) render submission: split shots across shards.
 
 **Response 201:** `{ ok: true, jobId, status }`. Errors: `400 "bundleKey required"`;
 `400 "bundleKey must be a plain relative key under bundles/"` (path-format guard);
-`400 "shotIds[] required (>= 2)"`; `422 { ok: false, error }` on submit failure. Poll a `scatter-*`
+`400 "shotIds[] required (>= 2)"`; `400` (the untrained-cast message) if a bound cast LoRA is not ready (#739); `422 { ok: false, error }` on submit failure. Poll a `scatter-*`
 job id via `GET /api/storyboard/render/:jobId` (2.24).
 
 **Submit durability (runnability-first, #290).** A scatter submit spans **two stores** (D1

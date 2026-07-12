@@ -869,6 +869,11 @@ const hScatterRender: Handler = async (req, env) => {
   // across every shard before the motion phase would reject a bad config.
   const scatterCfgErr = motionConfigPreflightError(scatterModules, scatterBackend, scatterOverrides.config?.[(scatterBackend ?? "").trim()]);
   if (scatterCfgErr) throw badRequest(scatterCfgErr);
+  // #739: castLoras is OPTIONAL on scatter (empty/absent -> generic shards, like the film/render paths),
+  // but a PRESENT-but-not-ready binding fails hard at the door with the #738-symmetric untrained-cast 400
+  // -- never a silent drop to generic shards. Mirrors the hSubmitRender cast guard.
+  const scatterCast = await resolveCastLoras(env, b.castLoras ?? {});
+  if (scatterCast.skipped.length) throw badRequest(untrainedCastMessage(scatterCast.skippedDetail));
   try {
     const job = await startScatterRender(env, {
       project,
