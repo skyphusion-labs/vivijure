@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeJob, applyPoll, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2, advanceClipJob, startClipJob, cancelInFlightClips } from "../src/render-orchestrator";
+import { summarizeJob, applyPoll, classifyTransientFailure, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2, advanceClipJob, startClipJob, cancelInFlightClips } from "../src/render-orchestrator";
 import type { ClipJob, ClipShot } from "../src/render-orchestrator";
 import type { RegisteredModule } from "../src/modules/types";
 import type { Env } from "../src/env";
@@ -57,6 +57,52 @@ describe("applyPoll", () => {
     expect(s.delivered_fps).toBeUndefined();
     expect(s.delivered_frames).toBeUndefined();
   });
+  // #719: the door /status can stall ~5s mid-sampler-step (GIL hold under model offload); a poll
+  // landing in the stall propagates as a transport error and used to STICKILY fail the healthy
+  // render on the FIRST blip (film-d9214549 died at ~2min with the GPU at 8/40 steps).
+  it("tolerates transient poll errors up to the budget, then fails loud (#719)", () => {
+    const s = shot();
+    applyPoll(s, { ok: false, error: "module /poll -> 502" });
+    expect(s.status).toBe("pending"); // blip 1: held, not failed
+    expect(s.poll_attempts).toBe(1);
+    applyPoll(s, { ok: false, error: "module unreachable: connection reset" });
+    expect(s.status).toBe("pending"); // blip 2: still held
+    expect(s.poll_attempts).toBe(2);
+    applyPoll(s, { ok: false, error: "module /poll -> 504" });
+    expect(s.status).toBe("failed");  // budget exhausted -> loud, with the real error
+    expect(s.error).toContain("504");
+    expect(s.error).toContain("#719");
+  });
+
+  it("a successful poll round-trip RESETS the transient budget (#719: consecutive, not cumulative)", () => {
+    const s = shot();
+    applyPoll(s, { ok: false, error: "module /poll -> 502" });
+    applyPoll(s, { ok: false, error: "module /poll -> 502" });
+    expect(s.poll_attempts).toBe(2);
+    applyPoll(s, { ok: true, pending: true }); // healthy round-trip
+    expect(s.poll_attempts).toBe(0);
+    applyPoll(s, { ok: false, error: "module /poll -> 502" });
+    expect(s.status).toBe("pending"); // fresh budget: a later isolated blip does not fail the shot
+    expect(s.poll_attempts).toBe(1);
+  });
+
+  it("a DETERMINISTIC module-reported failure still fails immediately (#719 keeps honesty undelayed)", () => {
+    const s = shot();
+    applyPoll(s, { ok: false, error: "own-gpu job not found on RunPod (#141)" });
+    expect(s.status).toBe("failed"); // no retry budget for a real reject
+    expect(s.error).toContain("#141");
+  });
+
+  it("classifyTransientFailure: transport statuses + network strings are transient, module rejects are not", () => {
+    expect(classifyTransientFailure("module /poll -> 502")).toBe("transient");
+    expect(classifyTransientFailure("module /invoke -> 429")).toBe("transient");
+    expect(classifyTransientFailure("module unreachable: fetch failed")).toBe("transient");
+    expect(classifyTransientFailure("local-gpu /status -> 504")).toBe("transient");
+    expect(classifyTransientFailure("module /poll -> 404")).toBe("deterministic");
+    expect(classifyTransientFailure("CUDA out of memory")).toBe("deterministic");
+    expect(classifyTransientFailure(undefined)).toBe("deterministic");
+  });
+
   it("fails a shot whose output is envelope-ok but off-contract (#345), never advancing garbage", () => {
     const s = shot();
     s.motion_backend = "seedance";

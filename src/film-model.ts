@@ -6,7 +6,7 @@
 
 import type { ConfigSchema, DialogueLine, FinishOutput, MasterOutput, RegisteredModule, SpeechOutput } from "./modules/types";
 import { validateConfig } from "./modules/registry";
-import { summarizeJob, type ClipJob, type JobSummary } from "./render-orchestrator";
+import { summarizeJob, classifyTransientFailure, type ClipJob, type JobSummary } from "./render-orchestrator";
 import { coerceShotId } from "./storyboard-validate";
 
 export interface FilmScene { shot_id: string; prompt: string; seconds: number; }
@@ -421,16 +421,10 @@ export const FINISH_STEP_MAX_ATTEMPTS = 3;
  *  "module /invoke -> 503", "module /poll -> 504", "module unreachable: <timeout/network>". A module-
  *  logic ok:false (input reject, "job failed", "no clip_key") or a 4xx is deterministic -> fail. */
 export function classifyFinishFailure(error: string | undefined): "transient" | "deterministic" {
-  const e = error ?? "";
-  const m = e.match(/->\s*(\d{3})\b/); // the "module /invoke -> NNN" / "/poll -> NNN" transport status
-  if (m) {
-    const s = Number(m[1]);
-    return s === 408 || s === 429 || (s >= 500 && s <= 599) ? "transient" : "deterministic";
-  }
-  if (/unreachable|timed? ?out|timeout|network|econnreset|connection (reset|lost)|fetch failed/i.test(e)) {
-    return "transient";
-  }
-  return "deterministic"; // a module-logic ok:false -> a real reject, fail loud
+  // #719 unified the classifier: the clip poll needs the same transient-vs-deterministic judgment,
+  // and film-model imports FROM render-orchestrator (never the reverse), so the logic lives there.
+  // This export stays for its finish-chain callers and keeps the finish-specific name.
+  return classifyTransientFailure(error);
 }
 
 /** Decide whether to re-dispatch a failed finish step or fail it. Pure so the retry contract is
