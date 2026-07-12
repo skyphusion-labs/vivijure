@@ -144,7 +144,7 @@ function renderPlanResult(httpStatus, data, model, characters) {
     rawPanel.hidden = true;
     resultPanel.hidden = false;
     $("#planner-json").textContent = JSON.stringify(data.storyboard, null, 2);
-    $("#planner-yaml").textContent = data.yaml || "";
+    $("#planner-yaml").textContent = ""; // #743: clear stale preview; refreshYamlPreview() below fills it once planState.storyboard is set
     const sceneCount =
       data.storyboard && data.storyboard.scenes ? data.storyboard.scenes.length : 0;
     setStatus("planned successfully (" + sceneCount + " scenes)", "success");
