@@ -24,10 +24,11 @@ only), and a `down` teardown by recorded id.
 > (bots, satellites) are a SEPARATE class minted by `scripts/studio-consumer-token.sh`
 > (docs/SECURITY.md 1b-i), never the operator token.
 
-**Status: complete provisioning spine, NOT yet live-tested.** The CLI, the single input surface, the
-secret handling, and every provider call (Cloudflare + RunPod) are implemented and verified against the
-CF/RunPod API docs + the RunPod OpenAPI -- but the end-to-end `up` has NOT been run against a live
-account. Treat the first run accordingly, and **set the required config below first**.
+**Status: live-proven in the S29 proving pass.** The CLI, the single input surface, the secret
+handling, and every provider call (Cloudflare + RunPod) are implemented and verified against the
+CF/RunPod API docs + the RunPod OpenAPI, AND the end-to-end `up` was run against live accounts (a
+free-plan greenfield `up` + `down`, then a paid-plan `up` + `down`); the findings were fixed in
+v0.19.3 (#675-#685) and folded back in. Still **set the required config below first**.
 
 > `up` provisions REAL resources on your accounts -- it mints an R2 API token, creates an Access app,
 > RunPod endpoints, D1, R2 buckets, etc. `down` removes what it created (see State + teardown).
@@ -109,7 +110,8 @@ The pieces are mutually dependent, so the order is load-bearing:
 4. **D1 migrations** (`wrangler d1 migrations apply` -- Terraform cannot do this).
 5. **Deploy** module workers, then the core (the core binds each module as a `[[services]]`
    dependency, so modules ship first).
-6. **(Phase 2, optional)** the three CPU helper containers on your own box + their CF VPC services.
+6. **(Phase 2, optional)** the five CPU helper containers on your own box (video-finish, image-prep,
+   audio-beat-sync, audio-mix, audio-master) + their CF VPC services.
    Without them the studio still renders clips; it just cannot do the final concat / title cards.
 
 ## State + idempotency
@@ -193,8 +195,9 @@ so `down` always reaches the D1 / R2 / Secrets Store cleanup. A failed `up` is a
 ## Roadmap
 
 - **Done:** the CLI, input/secret handling, the full CF + RunPod provisioning spine, seed-before-deploy
-  ordering, idempotent reconcile, and teardown (incl. the minted R2 token).
-- **Next:** a first live-account end-to-end run to shake out anything the docs did not capture; the
-  CPU-container bring-up + VPC wiring; RunPod endpoint tuning (scaler/idle) + optional boto3 model-seed.
+  ordering, idempotent reconcile, teardown (incl. the minted R2 token), AND the first live-account
+  end-to-end run (the S29 proving pass: free + paid greenfield `up`/`down`, findings fixed in v0.19.3).
+- **Next:** the CPU-container bring-up + VPC wiring; RunPod endpoint tuning (scaler/idle) + optional
+  boto3 model-seed.
 - **Later:** an optional Cloudflare Terraform module (D1/R2/AI-Gateway/Access/Secrets-Store/routes are
   all TF-native now) sharing this same RunPod script; a Deploy-to-Cloudflare button for the CF half.
