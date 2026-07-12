@@ -482,10 +482,15 @@ resolves to no cast member is a `level:"error"` issue whose message names whethe
 
 `motionBackend` + `quality` (both OPTIONAL + additive, #707): when the client names its selected
 `motion.backend` module (and optionally the quality tier), and that module's manifest declares a
-fixed `duration_grid` (module-api.md), preflight emits a `level:"warning"` issue per shot whose
-planned seconds exceed what the grid can deliver at that tier -- a WARNING, never a submit-blocking
-error (clamping is legitimate; silence was the bug). An older client that sends neither gets the
-pre-#707 behavior unchanged.
+fixed `duration_grid` (module-api.md), preflight emits a per-shot issue for any shot whose planned
+seconds exceed what the grid can deliver at that tier. The LEVEL depends on whether the clamp is
+survivable (#751): a clamp that still lands at or above the per-shot duration floor
+(`FILM_CLIP_DURATION_FLOOR`, default `0.5` of planned) is a `level:"warning"` -- legitimate, the
+clip is just shorter, submit is unblocked. A clamp that lands BELOW the floor is a `level:"error"`
+(so `ok:false`, submit blocked), because that render is guaranteed to hard-fail the #697 duration
+gate; the message names the deliverable ceiling and the floor so the user can shorten the shot or
+pick a backend/tier with more frames. With the gate disabled (`FILM_CLIP_DURATION_FLOOR=0`) every
+clamp stays a warning. An older client that sends neither field gets the pre-#707 behavior unchanged.
 
 **Response 200** (`PreflightResult`):
 

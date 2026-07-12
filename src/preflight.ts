@@ -268,6 +268,12 @@ export function checkDurationGrid(
   grid: DurationGridLike | null | undefined,
   quality: string | null | undefined,
   backendName = "the selected motion backend",
+  // #751: the per-shot duration FLOOR fraction (FILM_CLIP_DURATION_FLOOR; default 0.5, 0 disables the
+  // gate). When the route passes it, a clamp that would land BELOW floor x planned is not a warning --
+  // that render is guaranteed to hard-fail the #697 duration gate, so we escalate the issue to `error`
+  // (which blocks the submit) instead of telling the user the clip is merely "clamped" and "unblocked".
+  // Omitted (pure-function callers / older clients) keeps the pre-#751 warning-only behavior.
+  floorFraction?: number,
 ): PreflightIssue[] {
   const issues: PreflightIssue[] = [];
   if (!grid || typeof grid.fps !== "number" || !(grid.fps > 0) || !grid.tiers) return issues;
@@ -281,6 +287,7 @@ export function checkDurationGrid(
   const maxFrames = declared ? declared[1].max_frames : Math.max(...caps.map(([, t]) => t.max_frames));
   const maxSeconds = Math.round((maxFrames / grid.fps) * 1000) / 1000;
   const tierPhrase = declared ? `at the ${declared[0]} tier` : "even at its largest tier";
+  const gateArmed = typeof floorFraction === "number" && floorFraction > 0;
 
   const scenes = Array.isArray(storyboard.scenes) ? storyboard.scenes : [];
   scenes.forEach((scene, idx) => {
@@ -290,11 +297,20 @@ export function checkDurationGrid(
       : undefined;
     if (planned === undefined || !(planned > 0)) return; // no planned duration to compare (shape checks own <=0)
     if (planned > maxSeconds + 0.001) {
-      issues.push({
-        level: "warning",
-        scope: `scene[${sid}]`,
-        message: `${sid} plans ${planned}s but ${backendName} delivers at most ${maxSeconds}s ${tierPhrase} (${maxFrames} frames at ${grid.fps}fps); the clip will be clamped`,
-      });
+      // #751: a clamp that breaches the duration floor is a guaranteed hard-fail, not a warning.
+      const floorSeconds = gateArmed ? Math.round(floorFraction! * planned * 1000) / 1000 : 0;
+      const breachesFloor = gateArmed && maxSeconds < floorSeconds - 0.001;
+      issues.push(breachesFloor
+        ? {
+            level: "error",
+            scope: `scene[${sid}]`,
+            message: `${sid} plans ${planned}s but ${backendName} delivers at most ${maxSeconds}s ${tierPhrase} (${maxFrames} frames at ${grid.fps}fps) -- below the ${Math.round(floorFraction! * 100)}% duration floor (${floorSeconds}s), so this render would fail the duration gate. Shorten the shot to <= ${maxSeconds}s or choose a backend/tier that delivers more frames.`,
+          }
+        : {
+            level: "warning",
+            scope: `scene[${sid}]`,
+            message: `${sid} plans ${planned}s but ${backendName} delivers at most ${maxSeconds}s ${tierPhrase} (${maxFrames} frames at ${grid.fps}fps); the clip will be clamped`,
+          });
     }
   });
   return issues;
