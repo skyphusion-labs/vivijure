@@ -48,6 +48,7 @@ import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -286,6 +287,36 @@ def cf_api(method: str, path: str, token: str, body: dict | None = None):
         msgs = "; ".join(str(e.get("message", e)) for e in (out.get("errors") or [])) or "success:false"
         die(f"Cloudflare {method} {path.split('?')[0]} -> {msgs}")
     return out.get("result") if isinstance(out, dict) and "result" in out else out
+
+
+def empty_r2_bucket(acct: str, tok: str, bucket: str) -> int:
+    """#686: Cloudflare refuses to DELETE a non-empty R2 bucket (HTTP 409, code 10008 "bucket is not
+    empty"), so any install that actually rendered could not be torn down by `down --delete-data` -- it
+    died loud at the bucket step and the user had to empty it by hand. List every object (paginated by
+    cursor) and DELETE it FIRST, returning the count removed. An already-empty bucket returns 0
+    (idempotent). Data deletion is already behind the explicit --delete-data flag, so emptying the
+    bucket is consistent with the user's stated intent."""
+    base = f"/accounts/{acct}/r2/buckets/{bucket}/objects"
+    removed = 0
+    cursor = None
+    while True:
+        q = "?per_page=1000" + (f"&cursor={urllib.parse.quote(cursor, safe='')}" if cursor else "")
+        env = http_json("GET", CF_API + base + q, tok)
+        if isinstance(env, dict) and env.get("success") is False:
+            msgs = "; ".join(str(e.get("message", e)) for e in (env.get("errors") or [])) or "success:false"
+            die(f"Cloudflare GET {base} -> {msgs}")
+        objs = (env.get("result") if isinstance(env, dict) else None) or []
+        for o in objs:
+            key = o.get("key") if isinstance(o, dict) else None
+            if not key:
+                continue
+            cf_api("DELETE", f"{base}/{urllib.parse.quote(key, safe='')}", tok)
+            removed += 1
+        info = (env.get("result_info") if isinstance(env, dict) else None) or {}
+        cursor = info.get("cursor") if isinstance(info, dict) else None
+        if not cursor or not objs:
+            break
+    return removed
 
 
 def create_if_absent(*, kind: str, account: str, token: str, list_path: str, create_path: str,
@@ -1291,6 +1322,9 @@ def cmd_down(repo: Path, delete_data: bool, noninteractive: bool = False, includ
             if st.is_adopted(bkey) and not include_adopted:
                 log(f"  skipping adopted R2 bucket {b}")
                 continue
+            emptied = empty_r2_bucket(acct, tok, b)  # #686: CF refuses a non-empty bucket delete
+            if emptied:
+                log(f"  emptied R2 bucket {b} ({emptied} object(s))")
             cf_api("DELETE", f"/accounts/{acct}/r2/buckets/{b}", tok)
             log(f"  deleted R2 bucket {b}")
             st.remove(bkey)
