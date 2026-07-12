@@ -3,6 +3,21 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.21.0
+
+**Cancel any in-flight render from the history list (#757).** MINOR (new planner capability, additive).
+
+- **#757:** the render-history list now shows a **cancel** button on every non-terminal row
+  (`IN_QUEUE` / `IN_PROGRESS` / `SUBMITTED` / `SCATTERING`), wired to the existing
+  `DELETE /api/storyboard/render/:jobId` route. Previously the only cancel control was the render
+  panel's own button, which appears solely for a render the panel itself launched -- so a render
+  started out-of-band (the slate bot, a direct API call, the Studio MCP) was in-flight and burning GPU
+  with no way to stop it from the UI (found live 2026-07-12: two slate renders had to be cancelled by
+  hand via curl). Now if a job is visible on the list, it can be cancelled there, whoever launched it.
+  Terminal rows never show the button; on a readonly/demo deploy the mutation fetch shim blocks the
+  `DELETE`, so no extra gate is needed. No backend change -- pure frontend over routes that already
+  existed.
+
 ## v0.20.3
 
 **The S40 tail: surface the real per-shot error on a zero-clip film.** PATCH (fix-class, no new

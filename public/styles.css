@@ -814,6 +814,10 @@ details.planner-bundle-scenes-wrap, details.planner-overrides-raw-details {
 }
 .planner-history-action:hover { border-color: var(--accent); }
 .planner-history-action-delete { color: #ff7a8a; border-color: #5b2730; }
+/* #757: cancel an in-flight render from the history list -- destructive accent. */
+.planner-history-action-cancel { color: #ffb27a; border-color: #5b3f27; }
+.planner-history-action-cancel:hover { border-color: #ffb27a; }
+.planner-history-action-cancel:disabled { opacity: 0.6; cursor: default; }
 .planner-history-item-collapsed .planner-history-sub,
 .planner-history-item-collapsed .planner-history-actions,
 .planner-history-item-collapsed .planner-history-player,
