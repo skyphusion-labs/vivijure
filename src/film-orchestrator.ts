@@ -13,7 +13,7 @@ import { retimeSrt } from "./srt";
 import { loadInstallConfig } from "./operator-config";
 import type { KeyframeInput, KeyframeOutput, FinishInput, FinishOutput, ConfigSchema, NotifyInput, NotifyOutput, DialogueLine, DialogueInput, DialogueOutput, SpeechInput, SpeechOutput, MasterInput, MasterOutput, FilmFinishInput, FilmFinishOutput, RegisteredModule } from "./modules/types";
 import {
-  startClipJob, advanceClipJob, cancelInFlightClips, summarizeJob, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2, validateDoneClips,
+  startClipJob, advanceClipJob, cancelInFlightClips, summarizeJob, describeClipFailures, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2, validateDoneClips,
   type ClipShotInput, type ClipJob, type JobSummary,
 } from "./render-orchestrator";
 import { hookOutputViolation } from "./modules/conformance";
@@ -222,7 +222,14 @@ async function enterFinishPhase(env: Env, job: FilmJob, clipJob: ClipJob, preMod
   const modules = preModules ?? await discoverModules(env as unknown as Record<string, unknown>);
   const serving = servingForHook(modules, "finish"); // ui.order; the full finish chain
   const doneClips = clipJob.shots.filter((s) => s.status === "done" && s.clip_key);
-  if (!doneClips.length) { job.phase = "failed"; job.error = "no clips rendered to assemble"; return; }
+  if (!doneClips.length) {
+    // #754: surface the per-shot failure reasons (the door/backend's real error, e.g. a clip-upload
+    // Unauthorized) instead of only the bare generic -- an honest failure names WHY.
+    job.phase = "failed";
+    const reasons = describeClipFailures(clipJob);
+    job.error = reasons ? `no clips rendered to assemble -- ${reasons}` : "no clips rendered to assemble";
+    return;
+  }
   if (!serving.length) {
     job.phase = job.clips_only ? "done" : "assemble";
     return;

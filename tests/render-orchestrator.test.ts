@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeJob, applyPoll, classifyTransientFailure, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2, advanceClipJob, startClipJob, cancelInFlightClips } from "../src/render-orchestrator";
+import { summarizeJob, describeClipFailures, applyPoll, classifyTransientFailure, clipFileMatchesShot, finishedClipFileMatchesShot, listClipsByShotId, reclaimClipsFromR2, advanceClipJob, startClipJob, cancelInFlightClips } from "../src/render-orchestrator";
 import type { ClipJob, ClipShot } from "../src/render-orchestrator";
 import type { RegisteredModule } from "../src/modules/types";
 import type { Env } from "../src/env";
@@ -15,6 +15,26 @@ describe("summarizeJob", () => {
   });
   it("is complete when every shot is terminal", () => {
     expect(summarizeJob(job(["done", "failed", "done"])).complete).toBe(true);
+  });
+});
+
+describe("describeClipFailures (#754: a zero-clip film names WHY)", () => {
+  const withErrors = (errs: (string | undefined)[]): ClipJob => ({
+    job_id: "j", project: "p", motion_backend: "local-gpu", binding: "MODULE_LOCAL_GPU", created_at: 0,
+    shots: errs.map((error, i) => ({ shot_id: "shot_0" + i, keyframe_url: "u", prompt: "x", seconds: 5, status: "failed" as const, error })),
+  });
+
+  it("aggregates each failed shot's real reason (the door/backend error), not a bare generic", () => {
+    const msg = describeClipFailures(withErrors(["clip upload failed: Unauthorized", "clip upload failed: Unauthorized"]));
+    expect(msg).toBe("shot_00: clip upload failed: Unauthorized; shot_01: clip upload failed: Unauthorized");
+  });
+
+  it("falls back to 'unknown error' for a failed shot with no reason (never fabricates)", () => {
+    expect(describeClipFailures(withErrors([undefined]))).toBe("shot_00: unknown error");
+  });
+
+  it("returns '' when nothing failed (caller keeps its own message)", () => {
+    expect(describeClipFailures(job(["done", "done"]))).toBe("");
   });
 });
 
