@@ -563,7 +563,8 @@ const hAnimateHybrid: Handler = async (req, env, _c, p) => {
 function assertConfigMapShape(label: string, value: unknown): void {
   if (value === undefined) return;
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw badRequest(label + " must be a JSON object (a { key: value } map), not a " + describeJsonType(value));
+    const actual = describeJsonType(value);
+    throw badRequest(label + " must be a JSON object (a { key: value } map), not " + (/^[aeiou]/.test(actual) ? "an " : "a ") + actual);
   }
 }
 function describeJsonType(value: unknown): string {

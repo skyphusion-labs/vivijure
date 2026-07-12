@@ -108,6 +108,9 @@ describe("#696 hStartFilm rejects a non-object config map with 400 before any GP
         expect(res.status, `${field}=${bad.label}`).toBe(400);
         const parsed = (await res.json()) as { error?: string };
         expect(parsed.error ?? "").toContain(field);
+        // B-F2 (#730): the type phrase is grammatical for every JSON type ("an array", not "a array").
+        const article = /^[aeiou]/.test(bad.label) ? "an" : "a";
+        expect(parsed.error ?? "", `${field}=${bad.label} grammar`).toContain(`not ${article} ${bad.label}`);
         expect(h.started.length, "must bounce before startFilmJob").toBe(0);
       });
     }
