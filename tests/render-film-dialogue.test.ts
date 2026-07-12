@@ -51,6 +51,7 @@ vi.mock("../src/cast-loras", async (orig) => {
 
 import worker from "../src/index";
 import { startFilmJob } from "../src/film-orchestrator";
+import { resolveCastLoras } from "../src/cast-loras";
 import { MODULE_API } from "../src/modules/types";
 import type { Env } from "../src/env";
 
@@ -222,5 +223,36 @@ describe("POST /api/render/film resolves cast voices for explicit dialogue_lines
     );
     expect(res.status).toBe(201);
     expect((h.captured as CapturedArgs | null)?.dialogue_lines).toEqual(explicit);
+  });
+});
+
+
+describe("#738 hStartFilm rejects a bound-but-untrained cast_loras (symmetry with hSubmitRender)", () => {
+  it("400s with the untrained-cast message and never starts the film (no silent generic render)", async () => {
+    h.captured = null;
+    // resolveCastLoras SKIPS an untrained cast (adds to skipped/skippedDetail) rather than throwing.
+    // Before #738 hStartFilm ignored that and shipped a generic film; now it must 400 like hSubmitRender.
+    vi.mocked(resolveCastLoras).mockResolvedValueOnce({
+      pretrained: {},
+      voices: {},
+      castIds: { A: 4 },
+      skipped: ["A"],
+      skippedDetail: [{ slot: "A", name: "Wren", reason: "no trained LoRA" }],
+    });
+    const res = await worker.fetch(
+      postFilm({
+        bundle_key: "bundles/cast.tar.gz",
+        scenes: [{ shot_id: "shot_01", prompt: "Wren stands in a field", seconds: 4 }],
+        cast_loras: { A: "public-id-wren" },
+      }),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(400);
+    const parsed = (await res.json()) as { error?: string };
+    expect(parsed.error ?? "").toContain("no trained LoRA");
+    expect(parsed.error ?? "").toContain("Wren");
+    // startFilmJob is the mock that records into h.captured; a 400 before it means h.captured stays null.
+    expect(h.captured).toBeNull();
   });
 });
