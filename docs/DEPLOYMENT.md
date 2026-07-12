@@ -614,6 +614,18 @@ directly rather than your Cloudflare Unified Billing balance.
 
 ---
 
+## 9. The Studio MCP Worker (optional): drive the studio from an AI agent
+
+The repo also ships a small, separate Worker that exposes the studio to MCP clients (Claude Code,
+Cursor, any Model Context Protocol agent). It is opt-in and off by default: a standard deploy never
+ships it, and nothing above depends on it. It has its own config (`wrangler.mcp.toml.example`), its
+own two secrets, and its own deploy command; the tag-deploy CI ships it ONLY when the `MCP_HOST` +
+`MCP_STUDIO_URL` repo variables are set (a clean no-op otherwise). The full deploy walkthrough,
+agent wiring, tool reference, and security boundary live in **[docs/mcp.md](mcp.md)** -- if you want
+an agent driving your studio, that page is the one to follow.
+
+---
+
 ## Quick checklist
 
 - [ ] Cloudflare API token (Workers/D1/R2/AI-Gateway/Secrets-Store/Tunnel/Connectivity scopes above) + account id
