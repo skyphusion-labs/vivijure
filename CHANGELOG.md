@@ -3,6 +3,22 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.20.1
+
+**Clip polls tolerate transient errors (#719, PR #720).** PATCH (fix class). The standing-door
+verify killed a healthy render at ~2min: the local door's `/status` stalls up to ~5s mid-sampler-step
+(GIL hold under model offload), one poll landed in the stall, and `applyPoll` stickily failed the
+shot on that single transport blip. The finish chain has had the right contract since #141; the clip
+poll now gets it: `classifyTransientFailure` (the shared transient-vs-deterministic classifier;
+`classifyFinishFailure` delegates to it) + a `CLIP_POLL_MAX_ATTEMPTS` (3) CONSECUTIVE-blip budget --
+a transient error holds the shot pending, a healthy round-trip resets the streak, exhaustion fails
+loud citing the real error, and a deterministic module-reported reject still fails immediately.
+Studio prong of the two-pronged #719 fix; the door-side root cause (sub-second `/status` under
+render load) ships in vivijure-local-16gb v0.3.2 / -12gb v0.4.2.
+
+Files: package.json, CHANGELOG.md, src/render-orchestrator.ts, src/film-model.ts,
+tests/render-orchestrator.test.ts.
+
 ## v0.20.0
 
 **The S37 fix queue: the S36 e2e findings landed.** MINOR (new features: duration honesty
