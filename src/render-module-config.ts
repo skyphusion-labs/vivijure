@@ -19,9 +19,9 @@ export interface QualityTierOption {
 }
 
 export const QUALITY_TIERS: readonly QualityTierOption[] = [
-  { value: "draft", label: "draft", blurb: "33 frames, 8 steps; fastest, lowest quality" },
-  { value: "standard", label: "standard", blurb: "8-step keyframes + 20-step EasyCache i2v; balanced" },
-  { value: "final", label: "final", blurb: "97 frames, 22 steps; production quality" },
+  { value: "draft", label: "draft", blurb: "fastest, lowest quality (reference cloud backend: 33 frames, 8 steps)" },
+  { value: "standard", label: "standard", blurb: "balanced (reference cloud backend: 8-step keyframes + 20-step EasyCache i2v)" },
+  { value: "final", label: "final", blurb: "production quality (reference cloud backend: 97 frames, 22 steps)" },
 ];
 
 export const DEFAULT_QUALITY_TIER: RenderTier = "final";
