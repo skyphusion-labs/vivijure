@@ -188,7 +188,8 @@ key was removed in the identity strip; see Epoch history above.)
   (e.g. `503`, `422`, `502`, `504`); those are documented per route. Any other uncaught error returns
   `500 { "error": "internal error" }`.
 - A `:id` that addresses a film job is the `film-<...>` string id; a `:jobId` may be `film-*` or
-  `scatter-*`. Render-library / cast / project ids are positive integers.
+  `scatter-*`. Render-library / cast / project ids are opaque public ids (UUID strings); cast
+  lookups additionally accept the internal numeric row id (#576).
 - No route requires a request auth field (see 1.1).
 
 ### 2.1 Full route enumeration
@@ -558,11 +559,14 @@ Runs the `plan.enhance` **chain** (LLM auto-direction) over a storyboard.
 | Route | Body | Response | Errors |
 |-------|------|----------|--------|
 | GET `/api/storyboard/models` | none | `200 { models: ModelEntry[] }` (the planning catalog) | -- |
-| POST `/api/storyboard/yaml` | `{ storyboard (req) }` | `200 { ok: true, yaml: string }` | 400 if missing |
-| POST `/api/storyboard/markers` | `{ storyboard (req), format (req), fps? }` | `200` raw file download (`content-disposition: attachment`) | 400 if `storyboard` or `format` missing |
+| POST `/api/storyboard/yaml` | `{ storyboard (req) }` | `200 { ok: true, yaml: string }` | 400 if missing; 400 `storyboard invalid: <shape errors>` if it fails validation (#731) |
+| POST `/api/storyboard/markers` | `{ storyboard (req), format (req), fps? }` | `200` raw file download (`content-disposition: attachment`) | 400 if `storyboard` or `format` missing; 400 naming the enum on an unknown `format` (#731) |
 | POST `/api/storyboard/bundle` | `AssembleBundleArgs` `{ storyboard (req), characterRefs (req), ... }` | `201 { ok: true, bundleKey }` or `400 { ok: false, error }` | 400 if `storyboard` or `characterRefs` missing |
 
 `markers.format` enum: `"premiere_csv" | "resolve_csv"`. The markers response is a CSV file, not JSON.
+The yaml route runs the same storyboard validator as preflight and serializes the normalized value,
+so a raw (schema-valid but non-normalized) client storyboard is accepted; a shape-invalid one is a
+`400` carrying the validator's messages, never a `500` (#731).
 
 ### 2.17 POST /api/audio/analyze
 
@@ -608,12 +612,15 @@ the planner's existing poll loop understands a module render identically to a ra
 
 Guards / errors: `503 { error: "no keyframe module installed (bind MODULE_KEYFRAME)" }`;
 `400 "no motion.backend module installed for full render"`; `400 "scenes[] required ..."`;
-`400` (untrained-cast message) if a bound cast LoRA is not ready; `400 "bundleKey required"`.
+`400` (untrained-cast message) if a bound cast LoRA is not ready; `400 "bundleKey required"`;
+`400 "bundleKey must be a plain relative key under bundles/"` when `bundleKey` is not a plain
+relative key under `bundles/` (path-format / traversal guard, checked before the other 400s).
 **Response 201:** the RunPod-shaped poll view (2.24.1).
 
 **POST `/api/storyboard/render-from-keyframes` body:** `{ bundleKey (req), project?, qualityTier?
 (default final), renderOverrides?, audioKey?, projectId?, motion_backend? (default "own-gpu") }`.
 Reads scenes + injected keyframes from the bundle. Errors: `400 "bundleKey required"`;
+`400 "bundleKey must be a plain relative key under bundles/"` (path-format guard);
 `503 "no motion.backend module installed"`; `400 "bundle has no storyboard scenes"`;
 `400 "bundle has no injected keyframes (clips/<id>_keyframe.png)"`; `422 { error }` if the job fails
 to start. **Response 201:** the RunPod-shaped poll view.
@@ -720,7 +727,8 @@ before #582 the explicit path skipped steps 3-4 and every voiceless line default
 
 Identity: none. The studio is single-operator, so the core sends no identity to the `notify` hook; the
 notify-email module holds its recipient address in its own config (the identity strip).
-Errors: `400 "bundle_key required"`, `400 "scenes[] required"`; `400` (the installed-backends
+Errors: `400 "bundle_key required"`, `400 "bundle_key must be a plain relative key under bundles/"`
+(path-format / traversal guard, checked before the other 400s), `400 "scenes[] required"`; `400` (the installed-backends
 message) for an omitted / non-serving `motion_backend` (#504); `400` (per-violation message) for a
 `motion_config` value the backend's schema rejects (#577); `400` naming the offending (dotted)
 field when any config map (`keyframe_config` / `motion_config` top-level; `finish_config` /
@@ -787,6 +795,7 @@ Sharded (scatter) render submission: split shots across shards.
 | `film_titles` | `{ title: {text, subtitle?}, credits: {lines[]} }` | no | -- | Title + credit cards (#273); same shape as 2.20 `hStartFilm`. |
 
 **Response 201:** `{ ok: true, jobId, status }`. Errors: `400 "bundleKey required"`;
+`400 "bundleKey must be a plain relative key under bundles/"` (path-format guard);
 `400 "shotIds[] required (>= 2)"`; `422 { ok: false, error }` on submit failure. Poll a `scatter-*`
 job id via `GET /api/storyboard/render/:jobId` (2.24).
 
@@ -840,7 +849,7 @@ label maps `clips` -> `"i2v"` (and otherwise matches the phase name).
 
 | Route | Body / query | Response | Errors |
 |-------|--------------|----------|--------|
-| GET `/api/storyboard/renders` | `?project_id`, `?limit` (default 100) | `200 { renders: RenderRow[] }` | -- |
+| GET `/api/storyboard/renders` | `?project_id`, `?limit` (default 50, `DEFAULT_RENDERS_LIMIT`) | `200 { renders: RenderRow[] }` | -- |
 | GET `/api/storyboard/renders/tags` | none | `200 { tags: string[] }` | -- |
 | PATCH `/api/storyboard/renders/:id` | `{ label?, lockedShots?, folderPath?, tags? }` | `200 <RenderRow>` | 404 if unknown |
 | DELETE `/api/storyboard/renders/:id` | none | `200 { ok: true }` | 404 if unknown |
@@ -882,12 +891,12 @@ route; not part of the module hook contract.)
 
 | Route | Body | Response |
 |-------|------|----------|
-| GET `/api/whoami` | none | `200 { user: <cf-access email or "anonymous"> }` |
+| GET `/api/whoami` | none | `200 { user: "studio" }` (the fixed studio identity; see 1.1) |
 | GET `/api/prefs` | none | `200 { ok: true, prefs: object }` |
 | PATCH `/api/prefs` | a prefs object | `200 { ok: true, prefs }`; `400` if the body is not an object |
 
-These are the only routes that read the CF Access identity header (for per-user provenance). They do
-not gate access (see 1.1).
+None of these read any identity header (the identity strip, 1.1): `whoami` answers the fixed
+`"studio"` and prefs are a global singleton. They do not gate access.
 
 ### 2.30 Film render lifecycle (sequence)
 

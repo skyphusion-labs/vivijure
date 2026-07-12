@@ -81,9 +81,11 @@ describe("F4: /api/upload mime bounding (stored-XSS)", () => {
       env, ctx,
     );
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { key: string; mime: string };
+    const body = (await res.json()) as { key: string; mime: string; size: number };
     expect(body.key.startsWith("uploads/")).toBe(true);
     expect(body.mime).toBe("image/png");
+    // `size`, unified with the sibling upload routes per CONTRACT 2.10 (S40; was `bytes`).
+    expect(body.size).toBe(3);
     expect(r2.has(body.key)).toBe(true);
   });
 
