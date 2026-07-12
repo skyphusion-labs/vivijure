@@ -13,22 +13,6 @@
 
 import type { RateLimitBinding } from "./rate-limit";
 
-// RPC surface of the skyphusion-email Worker's EmailService entrypoint (the notify-email module
-// uses it to send render-complete mail). Kept minimal + local so this repo does not depend on that package.
-export interface EmailServiceBinding {
-  send(req: {
-    to: string | string[];
-    from?: string | { email: string; name?: string };
-    replyTo?: string | { email: string; name?: string };
-    cc?: string | string[];
-    bcc?: string | string[];
-    subject: string;
-    html?: string;
-    text?: string;
-    headers?: Record<string, string>;
-  }): Promise<{ messageId?: string }>;
-}
-
 export interface Env {
   // Static frontend (the studio UI), served via Workers Assets.
   ASSETS: Fetcher;
@@ -139,9 +123,6 @@ export interface Env {
   // clip must reach before the render fails loud (a truncated clip, not a beat-trim). [vars] entry,
   // parsed + clamped to [0,1] (resolveClipDurationFloor); unset defaults to 0.5, 0 disables the gate.
   FILM_CLIP_DURATION_FLOOR?: string;
-
-  // Transactional mail (render-complete notification). Optional; guard with `if (env.EMAIL)`.
-  EMAIL?: EmailServiceBinding;
 
   // BYOK OpenAI image gen (transparent PNG for gpt-image-1.5). Optional.
   OPENAI_API_KEY?: string;

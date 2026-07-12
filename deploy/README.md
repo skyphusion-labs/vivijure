@@ -183,8 +183,13 @@ the custom-domain route (it enables `workers_dev` instead), and the Durable-Obje
 
 The studio therefore comes up in its **documented media-less mode: clips render, but there is no final
 concat / title-card step**. A degrade is never silent -- `up` prints this at completion, and it is
-stated here. To get the media stack, provision the containers + VPC services out of band (roadmap:
-the installer will grow this; likely a paid-plan dependency for the finish path).
+stated here. To get the media stack today, use the **primary `./deploy.sh` path** (top-level README /
+[docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md)): as of #519 `deploy.sh` provisions the Cloudflare tunnel +
+the five Workers VPC services for you via `scripts/setup-media-vpc.py`, and the media stack is
+**standard** there. Media-stack provisioning is therefore `deploy.sh` + `setup-media-vpc.py`'s job;
+growing that same provisioning into THIS Python installer (`bring_up_containers`) is the phase-2 roadmap
+item (#657), likely a paid-plan dependency for the finish path. Until it lands, use `deploy.sh` for a
+media-complete install.
 
 ## Teardown is non-interactive-capable and partial-safe
 
