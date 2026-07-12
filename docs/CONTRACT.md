@@ -188,7 +188,8 @@ key was removed in the identity strip; see Epoch history above.)
   (e.g. `503`, `422`, `502`, `504`); those are documented per route. Any other uncaught error returns
   `500 { "error": "internal error" }`.
 - A `:id` that addresses a film job is the `film-<...>` string id; a `:jobId` may be `film-*` or
-  `scatter-*`. Render-library / cast / project ids are positive integers.
+  `scatter-*`. Render-library / cast / project ids are opaque public ids (UUID strings); cast
+  lookups additionally accept the internal numeric row id (#576).
 - No route requires a request auth field (see 1.1).
 
 ### 2.1 Full route enumeration
@@ -848,7 +849,7 @@ label maps `clips` -> `"i2v"` (and otherwise matches the phase name).
 
 | Route | Body / query | Response | Errors |
 |-------|--------------|----------|--------|
-| GET `/api/storyboard/renders` | `?project_id`, `?limit` (default 100) | `200 { renders: RenderRow[] }` | -- |
+| GET `/api/storyboard/renders` | `?project_id`, `?limit` (default 50, `DEFAULT_RENDERS_LIMIT`) | `200 { renders: RenderRow[] }` | -- |
 | GET `/api/storyboard/renders/tags` | none | `200 { tags: string[] }` | -- |
 | PATCH `/api/storyboard/renders/:id` | `{ label?, lockedShots?, folderPath?, tags? }` | `200 <RenderRow>` | 404 if unknown |
 | DELETE `/api/storyboard/renders/:id` | none | `200 { ok: true }` | 404 if unknown |
@@ -890,12 +891,12 @@ route; not part of the module hook contract.)
 
 | Route | Body | Response |
 |-------|------|----------|
-| GET `/api/whoami` | none | `200 { user: <cf-access email or "anonymous"> }` |
+| GET `/api/whoami` | none | `200 { user: "studio" }` (the fixed studio identity; see 1.1) |
 | GET `/api/prefs` | none | `200 { ok: true, prefs: object }` |
 | PATCH `/api/prefs` | a prefs object | `200 { ok: true, prefs }`; `400` if the body is not an object |
 
-These are the only routes that read the CF Access identity header (for per-user provenance). They do
-not gate access (see 1.1).
+None of these read any identity header (the identity strip, 1.1): `whoami` answers the fixed
+`"studio"` and prefs are a global singleton. They do not gate access.
 
 ### 2.30 Film render lifecycle (sequence)
 

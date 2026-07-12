@@ -346,7 +346,8 @@ const hUpload: Handler = async (req, env) => {
   if (bytes.byteLength > MAX_UPLOAD_BYTES) throw badRequest("upload too large (max 25MB)");
   const key = `uploads/${crypto.randomUUID()}.${ext}`;
   await env.R2_RENDERS.put(key, bytes, { httpMetadata: { contentType: mime } });
-  return json({ key, mime, bytes: bytes.byteLength }, 201);
+  // `size`, matching the two sibling upload routes and CONTRACT 2.10 (was `bytes`; no consumer read it).
+  return json({ key, mime, size: bytes.byteLength }, 201);
 };
 // F4: the known artifact namespaces. The serve route is scoped to these so it can only ever return a
 // real artifact, not an arbitrary R2 object. ADD a prefix here when a feature introduces a new one
