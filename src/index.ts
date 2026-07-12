@@ -77,7 +77,7 @@ import {
   coerceQualityTier, deriveProjectFromBundleKey,
   type AudioAnalyzeRequest,
 } from "./runpod-submit";
-import { validateStoryboard, type StoryboardValidated } from "./storyboard-validate";
+import { validateStoryboard } from "./storyboard-validate";
 import { checkStoryboardShape, checkCastBindingsReady, checkDurationGrid, resolveCastBindings, summarize, type PreflightIssue } from "./preflight";
 import {
   planStoryboard, refineStoryboard, chatComplete,
@@ -1272,15 +1272,23 @@ const hEnhance: Handler = async (req, env) => {
 };
 const hModels: Handler = async (_req, env) => json({ models: catalogForDeploy(env, PLANNING_MODELS) });
 const hYaml: Handler = async (req) => {
-  const a = await readBody<{ storyboard?: StoryboardValidated }>(req);
+  const a = await readBody<{ storyboard?: unknown }>(req);
   if (!a.storyboard) throw badRequest("storyboard required");
+  // The serializer requires the validator's normalized shape (quote()/emitSlotList() throw on
+  // absent optionals), so a raw client storyboard must be validated first, not cast (#731).
+  const v = validateStoryboard(a.storyboard);
+  if (!v.ok) throw badRequest(`storyboard invalid: ${v.errors.join("; ")}`);
   // The planner fetches this and reads { ok, yaml } as JSON (yaml preview + auto-direct refresh).
   // Returning raw text/yaml made the client's resp.json() throw "unexpected keyword at line 1".
-  return json({ ok: true, yaml: serializeStoryboardYaml(a.storyboard) });
+  return json({ ok: true, yaml: serializeStoryboardYaml(v.value) });
 };
+const MARKERS_FORMATS: readonly MarkersFormat[] = ["premiere_csv", "resolve_csv"];
 const hMarkers: Handler = async (req) => {
   const a = await readBody<{ storyboard?: unknown; format?: MarkersFormat; fps?: number }>(req);
   if (!a.storyboard || !a.format) throw badRequest("storyboard and format required");
+  if (!MARKERS_FORMATS.includes(a.format)) {
+    throw badRequest(`format must be one of: ${MARKERS_FORMATS.join(", ")}`);
+  }
   const out = emitMarkers(a.storyboard as Parameters<typeof emitMarkers>[0], a.format, a.fps);
   return new Response(out.body, {
     headers: { "content-type": out.contentType, "content-disposition": "attachment; filename=\"" + out.filename + "\"" },

@@ -558,11 +558,14 @@ Runs the `plan.enhance` **chain** (LLM auto-direction) over a storyboard.
 | Route | Body | Response | Errors |
 |-------|------|----------|--------|
 | GET `/api/storyboard/models` | none | `200 { models: ModelEntry[] }` (the planning catalog) | -- |
-| POST `/api/storyboard/yaml` | `{ storyboard (req) }` | `200 { ok: true, yaml: string }` | 400 if missing |
-| POST `/api/storyboard/markers` | `{ storyboard (req), format (req), fps? }` | `200` raw file download (`content-disposition: attachment`) | 400 if `storyboard` or `format` missing |
+| POST `/api/storyboard/yaml` | `{ storyboard (req) }` | `200 { ok: true, yaml: string }` | 400 if missing; 400 `storyboard invalid: <shape errors>` if it fails validation (#731) |
+| POST `/api/storyboard/markers` | `{ storyboard (req), format (req), fps? }` | `200` raw file download (`content-disposition: attachment`) | 400 if `storyboard` or `format` missing; 400 naming the enum on an unknown `format` (#731) |
 | POST `/api/storyboard/bundle` | `AssembleBundleArgs` `{ storyboard (req), characterRefs (req), ... }` | `201 { ok: true, bundleKey }` or `400 { ok: false, error }` | 400 if `storyboard` or `characterRefs` missing |
 
 `markers.format` enum: `"premiere_csv" | "resolve_csv"`. The markers response is a CSV file, not JSON.
+The yaml route runs the same storyboard validator as preflight and serializes the normalized value,
+so a raw (schema-valid but non-normalized) client storyboard is accepted; a shape-invalid one is a
+`400` carrying the validator's messages, never a `500` (#731).
 
 ### 2.17 POST /api/audio/analyze
 
