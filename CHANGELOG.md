@@ -3,6 +3,21 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.20.3
+
+**The S40 tail: surface the real per-shot error on a zero-clip film.** PATCH (fix-class, no new
+features, contract unchanged). Ships the #755 fix that was merged after the v0.20.2 train.
+
+- **#754 (PR #755):** when every clip failed, a film died with the bare generic "no clips rendered to
+  assemble", discarding the per-shot reasons already on `clipJob.shots[].error`. A door / backend's
+  real error (e.g. the clip-upload `Unauthorized` behind `vivijure-local-12gb#99`) never reached the
+  operator, turning a config issue into a long hunt. New pure `describeClipFailures(job)` aggregates
+  each failed shot's `shot_id: <reason>` so the zero-clip failure now reads "no clips rendered to
+  assemble -- shot_01: <real error>; ...", falling back to "unknown error" for a reasonless shot and
+  to the bare generic when nothing failed with a reason. Honest-failure doctrine (#245/#249): a
+  failure must name WHY. The rarer post-finish "no clips to assemble" site (no per-shot job in scope)
+  is left as a follow-up.
+
 ## v0.20.2
 
 **The S40 total-shakedown fix batch.** PATCH (all fix-class; every documented feature, knob, error
