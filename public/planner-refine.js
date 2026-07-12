@@ -137,6 +137,8 @@ async function sendRefine() {
 
   if (data && data.ok === true && data.storyboard) {
     planState.storyboard = data.storyboard;
+    // #743: refine response carries no yaml field; fetch the preview like scene-edit.
+    refreshYamlPreview();
     $("#planner-json").textContent = JSON.stringify(data.storyboard, null, 2);
     $("#planner-yaml").textContent = data.yaml || "";
     renderSceneEditor(data.storyboard);
