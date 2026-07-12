@@ -144,7 +144,7 @@ function renderPlanResult(httpStatus, data, model, characters) {
     rawPanel.hidden = true;
     resultPanel.hidden = false;
     $("#planner-json").textContent = JSON.stringify(data.storyboard, null, 2);
-    $("#planner-yaml").textContent = data.yaml || "";
+    $("#planner-yaml").textContent = ""; // #743: clear stale preview; refreshYamlPreview() below fills it once planState.storyboard is set
     const sceneCount =
       data.storyboard && data.storyboard.scenes ? data.storyboard.scenes.length : 0;
     setStatus("planned successfully (" + sceneCount + " scenes)", "success");
@@ -152,6 +152,9 @@ function renderPlanResult(httpStatus, data, model, characters) {
     // non-null storyboard and unhide correctly. showBundleStage() will
     // also set it (same value); this just ensures the order is safe. (v0.162.2)
     planState.storyboard = data.storyboard;
+    // #743: the plan response carries no yaml field; fetch the preview the same
+    // way scene-edit and project-load do, so the YAML tab is not blank until edit.
+    refreshYamlPreview();
     // v0.49.0: snapshot the freshly-planned storyboard so a "discard
     // edits" button can roll back any subsequent scene-editor mutations.
     planState.originalStoryboard = JSON.parse(JSON.stringify(data.storyboard));
