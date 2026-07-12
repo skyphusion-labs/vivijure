@@ -128,6 +128,13 @@ function gatherProjectPrefs() {
 
 async function selectProject(id) {
   planState.activeProjectId = id || null;
+  // Keep the picker <select> in sync with the active project. newProject() renders
+  // the picker BEFORE this runs, so without this the dropdown stays on the empty
+  // "(no project - transient)" option after a create (#740).
+  {
+    const picker = $("#planner-project-picker");
+    if (picker) picker.value = planState.activeProjectId ? String(planState.activeProjectId) : "";
+  }
   // v0.55.0: re-fetch history with the new active project so the list
   // scopes to the selected project (or back to all rows when (none)).
   loadHistory();
