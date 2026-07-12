@@ -10,6 +10,7 @@ import {
   filmJobToPollView, filmRowFromJob, isFilmJobId, mapRenderOverridesToModuleConfigs,
   normalizeFilmScenes, filterScenesByShotIds,
 } from "./film-render-bridge";
+import { resolveClipDurationFloor } from "./film-model";
 import { animateFromPreview, clipAnimateProgress } from "./finalize-from-keyframes";
 import { resolveCastLoras, untrainedCastMessage } from "./cast-loras";
 import { normalizeHybridBackends } from "./storyboard-validate";
@@ -971,7 +972,10 @@ const hPreflight: Handler = async (req, env) => {
     );
     const mod = motionModules.find((m) => m.name === motionBackend);
     if (mod?.duration_grid) {
-      issues.push(...checkDurationGrid(validated.value, mod.duration_grid, quality, mod.name));
+      // #751: pass the live duration-floor fraction so a clamp that would breach the #697 gate is
+      // surfaced as an ERROR (guaranteed hard-fail), not a "clip will be clamped" warning.
+      const floorFraction = resolveClipDurationFloor(env.FILM_CLIP_DURATION_FLOOR);
+      issues.push(...checkDurationGrid(validated.value, mod.duration_grid, quality, mod.name, floorFraction));
     }
   }
   return json(summarize(issues), 200);

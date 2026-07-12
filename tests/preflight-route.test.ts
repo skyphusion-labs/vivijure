@@ -134,6 +134,37 @@ describe("checkDurationGrid pure check (#707)", () => {
     expect(checkDurationGrid(board(5), GRID, "standard", "local-gpu")).toEqual([]);
   });
 
+  // #751: with the duration-floor fraction passed, a clamp that would breach the #697 gate must
+  // escalate from a "clip will be clamped" warning to an `error` (guaranteed hard-fail), so preflight
+  // blocks a submit that cannot succeed instead of saying "unblocked".
+  it("ESCALATES to error when the clamp breaches the duration floor (7s vs draft 3.125s, floor 0.5 -> 3.5s)", () => {
+    const issues = checkDurationGrid(board(7), GRID, "draft", "local-gpu", 0.5);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ level: "error", scope: "scene[shot_01]" });
+    expect(issues[0].message).toContain("duration floor");
+    expect(issues[0].message).toContain("would fail the duration gate");
+    expect(issues[0].message).toContain("3.125s"); // the actionable target
+  });
+
+  it("stays a WARNING when the clamp is within the floor (5s vs draft 3.125s, floor 0.5 -> 2.5s: 3.125 >= 2.5)", () => {
+    const issues = checkDurationGrid(board(5), GRID, "draft", "local-gpu", 0.5);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].level).toBe("warning");
+    expect(issues[0].message).toContain("clamped");
+  });
+
+  it("floor 0 (gate disabled) never escalates -- every clamp stays a warning", () => {
+    const issues = checkDurationGrid(board(7), GRID, "draft", "local-gpu", 0);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].level).toBe("warning");
+  });
+
+  it("omitting the floor (pure-function / older callers) keeps the pre-#751 warning-only behavior", () => {
+    const issues = checkDurationGrid(board(7), GRID, "draft", "local-gpu");
+    expect(issues).toHaveLength(1);
+    expect(issues[0].level).toBe("warning");
+  });
+
   it("with NO named tier, warns only past the LOOSEST cap (no false alarms on an unknown tier)", () => {
     expect(checkDurationGrid(board(5), GRID, null, "local-gpu")).toEqual([]); // fits the 6.125s loosest cap
     const issues = checkDurationGrid(board(8), GRID, null, "local-gpu");
