@@ -334,6 +334,27 @@ function buildHistoryRow(r, childrenByParent) {
   view.addEventListener("click", () => resumeRender(r));
   actions.appendChild(view);
 
+  // #757: cancel any in-flight render straight from the history list, not just
+  // the one the panel itself launched. Any non-terminal row is cancelable via
+  // the same DELETE /api/storyboard/render/:jobId route the render panel uses,
+  // so an out-of-band render (slate bot / direct API / MCP) can be stopped here
+  // instead of by hand. Terminal rows never show it. On a readonly/demo deploy
+  // the fetch shim blocks the DELETE, so no extra gate is needed here.
+  const cancelable =
+    r.status === "IN_QUEUE"
+    || r.status === "IN_PROGRESS"
+    || r.status === "SUBMITTED"
+    || r.status === "SCATTERING";
+  if (cancelable && r.job_id) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "planner-history-action planner-history-action-cancel";
+    cancel.textContent = "cancel";
+    cancel.title = "cancel this in-flight render (stops the GPU job)";
+    cancel.addEventListener("click", () => cancelHistoryRow(r, cancel));
+    actions.appendChild(cancel);
+  }
+
   if (r.output_key) {
     const dl = document.createElement("a");
     dl.href = artifactUrl(r.output_key);
@@ -1260,6 +1281,44 @@ function cssEscape(s) {
     return CSS.escape(s);
   }
   return String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+// #757: cancel one in-flight render row via the same route the render panel
+// uses (DELETE /api/storyboard/render/:jobId, keyed on job_id -- NOT the
+// renders/:id delete route). Works for any non-terminal render regardless of
+// who launched it (panel / slate / API / MCP). The route returns the poll view
+// (with the now-CANCELLED status), not an { ok } envelope, so success is just a
+// 2xx. Refreshes the list so the row flips to CANCELLED immediately.
+async function cancelHistoryRow(row, btn) {
+  if (!row.job_id) return;
+  if (!window.confirm("cancel this in-flight render? the GPU job is stopped and cannot be resumed.")) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = "cancelling..."; }
+
+  let resp = null;
+  let data = null;
+  try {
+    resp = await fetch(
+      "/api/storyboard/render/" + encodeURIComponent(row.job_id),
+      { method: "DELETE" },
+    );
+    data = await resp.json();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = "cancel"; }
+    window.alert("cancel failed: " + err.message);
+    return;
+  }
+
+  if (!resp.ok) {
+    const errMsg = (data && data.error) || ("HTTP " + resp.status);
+    if (btn) { btn.disabled = false; btn.textContent = "cancel"; }
+    window.alert("cancel failed: " + errMsg);
+    return;
+  }
+
+  // Refresh so the row flips to CANCELLED immediately and the auto-refresh loop
+  // re-arms from the new state.
+  loadHistory();
 }
 
 // v0.35.4: prompt + delete one history row. The artifact-cleanup query
