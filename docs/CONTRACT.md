@@ -465,12 +465,20 @@ Serve an R2 object by its full (slashed) key.
 Pre-render validation. A storyboard with problems is **data**, not an HTTP error: this returns `200`
 with `ok:false` + the issues so the panel renders the reasons.
 
-**Request body (envelope):** `{ storyboard (req), castBindings?, bundleKey?, audioKey? }`.
+**Request body (envelope):** `{ storyboard (req), castBindings?, bundleKey?, audioKey?,
+motionBackend?, quality? }`.
 `castBindings` is `{ [slot]: cast_id }`. A `cast_id` may be the cast member's **public id** (the
 `id` value `GET /api/cast` returns), the internal **numeric row id**, or a numeric string of one;
 the route resolves all three to the row id before the cast-readiness check (#576). A value that
 resolves to no cast member is a `level:"error"` issue whose message names whether the id was unknown
 (looked up, not found) or the wrong kind (not a usable id at all).
+
+`motionBackend` + `quality` (both OPTIONAL + additive, #707): when the client names its selected
+`motion.backend` module (and optionally the quality tier), and that module's manifest declares a
+fixed `duration_grid` (module-api.md), preflight emits a `level:"warning"` issue per shot whose
+planned seconds exceed what the grid can deliver at that tier -- a WARNING, never a submit-blocking
+error (clamping is legitimate; silence was the bug). An older client that sends neither gets the
+pre-#707 behavior unchanged.
 
 **Response 200** (`PreflightResult`):
 
@@ -595,7 +603,7 @@ the planner's existing poll loop understands a module render identically to a ra
 | `processShotIds` | string[] | no | all | Subset of shots to render. |
 | `projectId` | number/string | no | -- | History project id (FK). |
 | `scenes` | `FilmScene[]` | yes | -- | `{ shot_id, prompt, seconds }`; `seconds` defaults 4 on normalize. |
-| `motion_backend` | string | no | resolved | Explicit motion module choice. |
+| `motion_backend` | string | yes for a full render | -- | Explicit motion module choice. A full (non-`keyframesOnly`) render with an omitted or non-serving value is rejected `400` listing the installed `motion.backend` names (#500); the old `serving[0]` default is unreachable. `keyframesOnly` renders need none (no motion leg). |
 | `castLoras` | `{ [slot]: cast_id }` | no | -- | Bound cast LoRAs. A bound-but-not-ready LoRA FAILS HARD (no silent inline retrain). |
 
 Guards / errors: `503 { error: "no keyframe module installed (bind MODULE_KEYFRAME)" }`;
@@ -641,6 +649,18 @@ Both respond `200 { ok: true, job_id, motion_backend, total, done, failed, pendi
 shots: [...] }` where each shot is `{ shot_id, status, error }` (POST) or `{ shot_id, status,
 clip_key, error }` (GET). `status` is `"pending" | "done" | "failed"`.
 
+**Transient poll tolerance (#719, v0.20.1).** A single failed round-trip to the module's `/poll`
+does NOT fail the shot. The shared classifier (`classifyTransientFailure`,
+`src/render-orchestrator.ts`; `classifyFinishFailure` delegates to it) separates TRANSPORT blips
+(HTTP 408/429/5xx transport statuses, unreachable/timeout/network-error strings) from a
+DETERMINISTIC module-reported reject.
+A transient error holds the shot `pending` and counts against a CONSECUTIVE budget of
+`CLIP_POLL_MAX_ATTEMPTS` (3, a code constant, not a knob); any healthy round-trip resets the
+streak; exhausting the budget fails the shot loud citing the real underlying error. A
+deterministic reject (the module answered `ok:false`) still fails the shot immediately -- the
+budget exists for flaky transport (e.g. a local door's `/status` blip), never to retry an honest
+failure.
+
 **Output validation at clip intake (#523).** The instant a shot reaches `done` with a `clip_key`, the core
 STRUCTURALLY validates the clip (parses the mp4 box tree from a few bounded R2 ranged reads) BEFORE the
 finish / dialogue / upscale chain spends anything downstream. It is core-side and engine-agnostic (one gate
@@ -672,10 +692,14 @@ a full job: keyframe -> clips -> (dialogue/speech) -> finish -> assemble -> (mas
 | `bundle_key` | string | yes | -- | R2 key of the render bundle. |
 | `scenes` | `FilmScene[]` | yes | -- | `{ shot_id, prompt, seconds }[]`; non-empty. |
 | `project` | string | no | derived from `bundle_key` | Project namespace. |
-| `motion_backend` | string | no | -- | Motion module choice. |
+| `motion_backend` | string | yes | -- | Motion module choice. An omitted or non-serving value is rejected `400` listing the installed `motion.backend` names (#504; this route has no keyframes-only mode, so the check is unconditional). |
+| `keyframe_backend` | string | no | `ui.order`-first keyframe module | Explicit `keyframe` module choice; a named-but-not-installed value fails the job with `keyframe module <name> not installed`. |
 | `keyframe_config` | object | no | -- | Keyframe module config. |
-| `motion_config` | object | no | -- | Motion module config. |
-| `finish_config` | `{ [moduleName]: object }` | no | -- | Per-finish-module config. |
+| `motion_config` | object | no | -- | Motion module config; judged strictly against the chosen backend's `config_schema` at submit (#577): unknown key / out-of-set enum / out-of-range number / wrong type is a `400` naming what IS allowed, before any keyframe spend. |
+| `finish_config` | `{ [moduleName]: object }` | no | -- | Per-finish-module config (the per-shot `finish` chain). |
+| `speech_config` | `{ [moduleName]: object }` | no | -- | Per-module config for the `speech` chain (per-shot dialogue-audio cleanup, post-dialogue, pre-finish). |
+| `film_finish_config` | `{ [moduleName]: object }` | no | -- | Per-module config for the `film.finish` chain on the assembled, muxed film. Subtitle mode (`burn`/`sidecar`/`both`) lives HERE, not in `finish_config`. |
+| `master_config` | `{ [moduleName]: object }` | no | -- | Per-module config for the `master` chain (audio bed mastering, pre-mux). |
 | `audio_key` | string | no | -- | Staged audio bed (score/narration) to mux after assemble; absent => silent film. |
 | `film_titles` | `{ title?: { text, subtitle? }, credits?: { lines: string[] } }` | no | -- | Title / credit card text for the `film.finish` chain; absent => no cards. |
 | `dialogue_lines` | `DialogueLine[]` | no | derived from the bundle | Explicit spoken lines for TTS + captions: `{ shot_id, text, voice_id? }[]`. |
@@ -696,7 +720,13 @@ before #582 the explicit path skipped steps 3-4 and every voiceless line default
 
 Identity: none. The studio is single-operator, so the core sends no identity to the `notify` hook; the
 notify-email module holds its recipient address in its own config (the identity strip).
-Errors: `400 "bundle_key required"`, `400 "scenes[] required"`.
+Errors: `400 "bundle_key required"`, `400 "scenes[] required"`; `400` (the installed-backends
+message) for an omitted / non-serving `motion_backend` (#504); `400` (per-violation message) for a
+`motion_config` value the backend's schema rejects (#577); `400` naming the offending (dotted)
+field when any config map (`keyframe_config` / `motion_config` top-level; `finish_config` /
+`speech_config` / `film_finish_config` / `master_config` top-level AND per-module entry) is present
+but not a plain JSON object (#696) -- a mis-encoded map can no longer clamp to defaults and
+silently degrade a film.
 
 **Response 201:** `{ ok: true, ...FilmSummary, download_url? }` (see 2.21). A renders-table row is
 inserted so the film shows in history.
@@ -717,9 +747,13 @@ Advances the job one tick and returns its summary; keeps the history row in sync
 | `phase` | FilmPhase | One of `keyframe, clips, dialogue, speech, finish, assemble, master, mux, done, failed` (section 6). |
 | `error` | string \| undefined | Set when `phase === "failed"`. |
 | `clips` | `JobSummary` \| undefined | `{ total, done, failed, pending, complete }`, when a clips job exists. |
+| `clip_deliveries` | `ClipDelivery[]` \| undefined | #707 duration honesty: one entry per DONE shot whose backend reported usable numbers -- `{ shot_id, planned_seconds, delivered_seconds, fps, frames, distilled? }`. `delivered_seconds` is `frames/fps` (ms-rounded), so a fixed-grid backend's clamp is visible instead of silent. `distilled` (#705) is `true` when a distilled model variant rendered the clip, carried only when the backend reported it. Absent until a backend reports numbers -- absence is honest, never fabricated. |
 | `finish` | `{ total, done, failed, pending, adopted }` \| undefined | Finish-chain progress, when finish shots exist. `adopted` = count of shots with >=1 finish step REUSED from a prior same-project render's R2 artifact rather than run this pass (#583). |
 | `film_key` | string \| undefined | R2 key of the assembled film, present once `phase === "done"`. |
-| `download_url` | string \| undefined | Presigned GET of the finished film (24h TTL), added only when `phase === "done"` and `film_key` is set. |
+| `film_finish` | object \| undefined | Outcome of the `film.finish` chain (title/credit cards): `degraded` marks a film that reached `done` WITHOUT cards (the container was unreachable; fail-safe by design), `sidecar_key` (#663/#669) carries the re-timed soft `.srt` subtitle sidecar's R2 key when one was produced. Absent until `film.finish` runs. |
+| `finish_unavailable` | `{ at, reason, delivered }` \| undefined | Loud degrade when the video-finish tier was UNAVAILABLE (#519): the film COMPLETED delivering `clips` (at assemble; plus the deliverable `clips[]` with presigned URLs) or `silent_film` (at mux) instead of the finished film. Absent on a normal render. |
+| `keyframes_incomplete` | `{ adopted, expected, dropped }` \| undefined | Loud degrade when the keyframe phase delivered a PARTIAL set (#619 ceiling recovery, #622 partial module completion): the film shipped only the scenes that rendered, and this records how many and which were dropped. Absent on a normal render. |
+| `download_url` | string \| undefined | Presigned GET of the finished film (6h TTL, `FILM_DOWNLOAD_TTL_SECONDS`; a later poll re-issues a fresh one), added only when `phase === "done"` and `film_key` is set. |
 
 **404** `{ "error": "film job not found" }` for an unknown id.
 
@@ -747,7 +781,7 @@ Sharded (scatter) render submission: split shots across shards.
 | `qualityTier` | tier | no | `"final"` | Quality. |
 | `castLoras` | `{ [slot]: cast_id }` | no | `{}` | Bound cast LoRAs. |
 | `renderOverrides` | object | no | -- | Per-module overrides. |
-| `motion_backend` | string | no | -- | Motion choice. |
+| `motion_backend` | string | yes | -- | Motion choice (top-level, or via `renderOverrides.motion_backend`). An omitted or non-serving value is rejected `400` listing the installed `motion.backend` names (#504; scatter has no keyframes-only mode). |
 | `audioKey` | string | no | -- | Audio bed. |
 | `projectId` | number/string | no | -- | History project id. |
 | `film_titles` | `{ title: {text, subtitle?}, credits: {lines[]} }` | no | -- | Title + credit cards (#273); same shape as 2.20 `hStartFilm`. |
@@ -980,6 +1014,12 @@ Per-shot: turns one start keyframe + motion intent into a clip (GPU or cloud i2v
 | `clip_key` | string | yes | R2 key of the rendered clip (mp4). |
 | `fps` | number | yes | Clip fps. |
 | `frames` | number | yes | Frame count. |
+| `distilled` | boolean | no | OPTIONAL + additive (#705, no `MODULE_API` bump): tier-honesty signal -- `true` when a DISTILLED variant of the model rendered this clip (e.g. the 12GB door's final-tier 13B distilled), `false` when the full model ran. The module RELAYS what its backend reports and OMITS the field when the backend says nothing; the core retains it per shot and surfaces it on the film summary's `clip_deliveries` (2.21). Absence is honest, never a fabricated `false`. |
+
+The `fps` + `frames` a backend reports are also retained per shot as the DELIVERED numbers behind
+the film summary's `clip_deliveries` duration-honesty line (#707): a fixed-grid backend (see
+`duration_grid`, module-api.md) honestly clamps a shot's planned seconds, and these two fields are
+what make the clamp visible to the API/UI instead of silent.
 
 ### 3.3 finish (chain) -- the reference hook
 
