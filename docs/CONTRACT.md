@@ -611,12 +611,15 @@ the planner's existing poll loop understands a module render identically to a ra
 
 Guards / errors: `503 { error: "no keyframe module installed (bind MODULE_KEYFRAME)" }`;
 `400 "no motion.backend module installed for full render"`; `400 "scenes[] required ..."`;
-`400` (untrained-cast message) if a bound cast LoRA is not ready; `400 "bundleKey required"`.
+`400` (untrained-cast message) if a bound cast LoRA is not ready; `400 "bundleKey required"`;
+`400 "bundleKey must be a plain relative key under bundles/"` when `bundleKey` is not a plain
+relative key under `bundles/` (path-format / traversal guard, checked before the other 400s).
 **Response 201:** the RunPod-shaped poll view (2.24.1).
 
 **POST `/api/storyboard/render-from-keyframes` body:** `{ bundleKey (req), project?, qualityTier?
 (default final), renderOverrides?, audioKey?, projectId?, motion_backend? (default "own-gpu") }`.
 Reads scenes + injected keyframes from the bundle. Errors: `400 "bundleKey required"`;
+`400 "bundleKey must be a plain relative key under bundles/"` (path-format guard);
 `503 "no motion.backend module installed"`; `400 "bundle has no storyboard scenes"`;
 `400 "bundle has no injected keyframes (clips/<id>_keyframe.png)"`; `422 { error }` if the job fails
 to start. **Response 201:** the RunPod-shaped poll view.
@@ -723,7 +726,8 @@ before #582 the explicit path skipped steps 3-4 and every voiceless line default
 
 Identity: none. The studio is single-operator, so the core sends no identity to the `notify` hook; the
 notify-email module holds its recipient address in its own config (the identity strip).
-Errors: `400 "bundle_key required"`, `400 "scenes[] required"`; `400` (the installed-backends
+Errors: `400 "bundle_key required"`, `400 "bundle_key must be a plain relative key under bundles/"`
+(path-format / traversal guard, checked before the other 400s), `400 "scenes[] required"`; `400` (the installed-backends
 message) for an omitted / non-serving `motion_backend` (#504); `400` (per-violation message) for a
 `motion_config` value the backend's schema rejects (#577); `400` naming the offending (dotted)
 field when any config map (`keyframe_config` / `motion_config` top-level; `finish_config` /
@@ -790,6 +794,7 @@ Sharded (scatter) render submission: split shots across shards.
 | `film_titles` | `{ title: {text, subtitle?}, credits: {lines[]} }` | no | -- | Title + credit cards (#273); same shape as 2.20 `hStartFilm`. |
 
 **Response 201:** `{ ok: true, jobId, status }`. Errors: `400 "bundleKey required"`;
+`400 "bundleKey must be a plain relative key under bundles/"` (path-format guard);
 `400 "shotIds[] required (>= 2)"`; `422 { ok: false, error }` on submit failure. Poll a `scatter-*`
 job id via `GET /api/storyboard/render/:jobId` (2.24).
 
