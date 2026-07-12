@@ -3,6 +3,20 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.21.1
+
+**Fix a bundle-key collision that corrupted concurrent same-title renders (#759).** PATCH.
+
+- **#759:** `assembleBundle` derived the bundle R2 key from the project title alone
+  (`bundles/<projectName>.tar.gz`), so two renders sharing a title -- trivially the default "Untitled",
+  or the same project rendered twice concurrently -- resolved to the **same key** and overwrote each
+  other's tarball mid-render, corrupting whichever render read the bundle after the other's PUT (hit
+  live 2026-07-12: two slate films, both "Untitled", both pointing at `bundles/Untitled.tar.gz`). The
+  key is now content-addressed -- `bundles/<projectName>-<sha256(tar)[:16]>.tar.gz` -- so distinct
+  bundles never collide, while a byte-identical re-render still dedupes to the same key (idempotent).
+  Same content-addressed pattern already used for the `cast-clean/<sha256>` portraits. The returned
+  key is persisted on the job, so all downstream reads are unaffected; no API/contract change.
+
 ## v0.21.0
 
 **Cancel any in-flight render from the history list (#757).** MINOR (new planner capability, additive).

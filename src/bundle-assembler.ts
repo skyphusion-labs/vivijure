@@ -24,7 +24,8 @@
 //                                              image (core.py scene.start_image
 //                                              fallback)
 //
-// Returns the R2 key at bundles/<projectName>.tar.gz on success.
+// Returns the R2 key at bundles/<projectName>-<contentHash>.tar.gz on success
+// (the content-hash suffix, #759, keeps two same-title renders from colliding).
 
 import type { Env } from "./env";
 import {
@@ -286,6 +287,17 @@ async function sha256HexBytes(bytes: Uint8Array): Promise<string> {
   return s;
 }
 
+// #759: content-addressed bundle key. Two renders that share a project title
+// (trivially the default "Untitled", or the same project rendered twice
+// concurrently) used to derive the SAME `bundles/<projectName>.tar.gz` key and
+// overwrite each other's tarball mid-render. Suffixing with a short hash of the
+// tar content means distinct bundles NEVER collide, while a byte-identical
+// re-render still dedupes to the same key (harmless idempotent overwrite).
+export async function bundleKeyFor(projectName: string, tarBytes: Uint8Array): Promise<string> {
+  const contentHash = (await sha256HexBytes(tarBytes)).slice(0, 16);
+  return `bundles/${projectName}-${contentHash}.tar.gz`;
+}
+
 // Call the image-prep container with a cold-start guard. A cheap /health ping
 // rides out the port-bind window, and we retry the heavier /portrait/prep on a
 // 503 (a fully-cold container can 503 when a heavy request races its bind, as
@@ -531,7 +543,10 @@ export async function assembleBundle(
   // Emit tar, gzip, upload.
   const tarBytes = emitTar(files);
   const gz = await gzipBytes(tarBytes);
-  const bundleKey = `bundles/${storyboard.projectName}.tar.gz`;
+  // #759: content-addressed key so two same-title renders never overwrite each
+  // other's tarball mid-render (see bundleKeyFor). The caller persists this
+  // returned key on the job, so downstream reads are unaffected.
+  const bundleKey = await bundleKeyFor(storyboard.projectName, tarBytes);
   // v0.39.1: bundles land in R2_RENDERS so the GPU worker (which reads
   // from its own R2_BUCKET) sees them. Pre-0.39.1 wrote to env.R2 and
   // the GPU could only pull bundles after a manual copy between buckets.
