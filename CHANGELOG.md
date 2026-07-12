@@ -3,6 +3,26 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.21.2
+
+**Stop the full-film route from retraining already-ready cast LoRAs, and record the honest quality tier (#762).** PATCH.
+
+- **#762 (Bug 1, the LoRA-retrain regression):** the full-film submit route (`hStartFilm`) resolved a
+  ready cast's banked adapters (`resolveCastLoras` -> `pretrained`) but then **dropped `pretrained_loras`**
+  when handing off to `startFilmJob`, forwarding only `cast_loras` (the write-back ids). The GPU worker
+  therefore got no adapter to reuse and **retrained each LoRA from scratch** -- the ~20-minute, no-signal
+  inline retrain the storyboard/scatter routes were already fixed against, but the film route never was
+  (hit live 2026-07-12: a film with two `lora_status: ready` characters sat 23 min "in keyframe"
+  retraining them). The film route now forwards `pretrained_loras` exactly like `hSubmitRender`, so the
+  worker reuses the banked adapter. A regression test now asserts every submit path forwards
+  `pretrained_loras` for a ready cast, so this class cannot silently regress again.
+- **#762 (Bug 2, tier row-label honesty):** `filmRowFromJob` hardcoded `qualityTier: "final"`, so a draft
+  film was mislabeled `final` in the renders-history row. The ACTUAL render already honored the requested
+  tier via the baked `keyframe_config.quality_tier` + `motion_config` (the hardcode never reached the
+  GPU), but the recorded row lied. `hStartFilm` now reads an optional top-level `qualityTier`, threads it
+  onto the job, and `filmRowFromJob` records `job.quality_tier` (defaulting `final` when absent).
+  Documented in `docs/CONTRACT.md` 2.20; slate wires its film submit to send the field separately.
+
 ## v0.21.1
 
 **Fix a bundle-key collision that corrupted concurrent same-title renders (#759).** PATCH.
