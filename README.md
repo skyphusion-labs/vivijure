@@ -23,7 +23,7 @@ cp deploy.env.example deploy.env   # then edit deploy.env with your keys
 ./deploy.sh
 ```
 
-That gives you the studio core plus cloud and own-GPU render (the minimal profile). The friendly
+That gives you the studio core plus cloud and own-GPU render (the standard profile). The friendly
 walk-through is [docs/quickstart.md](docs/quickstart.md); the full reference is
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); the extra "finish" parts you can add later are in
 [docs/opt-in-tiers.md](docs/opt-in-tiers.md).
