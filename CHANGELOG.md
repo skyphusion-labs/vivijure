@@ -3,6 +3,57 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## v0.20.2
+
+**The S40 total-shakedown fix batch.** PATCH (all fix-class; every documented feature, knob, error
+path, and event was exercised live against prod and the doors, and every divergence from the
+S39-truthed docs was fixed). No new features; the contract is unchanged except where a route was made
+MORE honest.
+
+Honest-failure fixes (the #245/#249 doctrine, pushed to every path):
+- **#738 (PR #742):** `POST /api/render/film` now `400`s a bound-but-untrained `cast_loras` (the
+  untrained-cast message), symmetric with `/api/storyboard/render` -- it no longer silently dropped
+  the binding and shipped generic characters. This is the direct-API + Slate bot path.
+- **#739 (PR #745):** `castLoras` is now OPTIONAL on the scatter path (absent/empty -> generic
+  shards, like the film/render siblings); the old hard "castLoras required for scatter" was unintended
+  coupling from the v0.2.0 bulk ship. A PRESENT-but-untrained binding still `400`s, so the relax never
+  reopens the silent-drop class.
+- **#751 (PR #752):** the #707 preflight clamp warning now ESCALATES to a submit-blocking `error` when
+  the clamp would land below the `FILM_CLIP_DURATION_FLOOR` gate (a guaranteed hard-fail), instead of
+  telling the user the render is "unblocked". A within-floor clamp stays a warning.
+
+Correctness / honesty-in-errors:
+- **#731 (PR #734):** `/api/storyboard/yaml` and `/api/storyboard/markers` return `400` on bad input
+  instead of `500` (yaml validated a raw storyboard before serializing; markers checks its format enum).
+- **#737:** `/api/upload` returns `size` (was `bytes`), matching its two sibling upload routes and
+  CONTRACT 2.10; plus four stale CONTRACT lines trued up (UUID ids, renders default limit 50, fixed
+  `whoami`).
+- **#740 (PR #741):** the planner project picker now syncs to the active project after a create (was
+  stuck on "(no project)").
+- **#743 (PR #744):** the YAML preview tab is no longer blank after plan/refine (fetches the preview
+  the same way scene-edit does, and the dead `data.yaml` read is gone).
+
+Docs-truth (fixes to what the contract claimed, not behavior):
+- **#730 (PR #736):** the `bundle_key` path-format guard is now documented in CONTRACT 2.18/2.20/2.23;
+  the #696 config-map array message reads "not an array".
+- **#746 (PR #748):** the `quality_tiers` blurbs are scoped to the reference cloud backend (the frame
+  counts are backend-specific; delivered truth is always `clip_deliveries`).
+
+Deploy / infra:
+- **#686 (PR #747):** `down --delete-data` now empties a non-empty R2 bucket (paginated) before
+  deleting it, so a teardown of an install that actually rendered no longer dies at the bucket step.
+- **#725 (PR #733), #726 (PR #732), #657 (PR #735):** stale `constellation.sh` profile comments fixed;
+  dead `EMAIL` binding removed; the Python installer's media-provisioning path documented.
+- **#729:** the straggler path-scoped Cloudflare Access app on `/health` (created after the v0.12.0
+  Access drop) was deleted; `/health` is public again, matching CONTRACT 2.2 and SECURITY.md.
+
+Banked for post-shakedown (filed, not in this release): #749 (deploy/ pytest not gated in CI), #750
+(demo `render.available` is a config flag, not a door healthcheck). Backend pin alignment to `0.4.9`
+(#728) shipped in `vivijure-backend` (PR #251).
+
+Release-prep files: package.json, CHANGELOG.md (the code landed in PRs #732/#733/#734/#735/#736/#737/
+#741/#742/#744/#745/#747/#748/#752, already on `main`).
+
 ## v0.20.1
 
 **Clip polls tolerate transient errors (#719, PR #720).** PATCH (fix class). The standing-door
