@@ -1184,6 +1184,45 @@ stale finish artifacts before resubmitting: remove `renders/<project>/clips/*_fi
 `_finished.mp4` and the `_ls`/`_up` suffixed outputs). Alternatively resubmit under a fresh project (which
 re-pays keyframes + motion).
 
+#### 3.3.2 Raw-clip + keyframe provenance sidecars, and cross-render adoption (#767)
+
+The RAW motion clip (`renders/<project>/clips/<shot>_<backend>.mp4`) and the SDXL keyframe
+(`renders/<project>/keyframes/<shot>.png`) are ALSO project-scoped and carry no render-job id, so every
+render of the same project shares the namespace. The R2-presence reclaim (`reclaimClipsFromR2`,
+`listProjectKeyframes`) recovers a clip / keyframe whose module poll was lost (GC'd / frozen job, #141 /
+#143 / #619). Matching by shot-id boundary with only the #661 upload-time floor as a guard let a SECOND
+render of the same project with a **different motion backend / config** adopt the FIRST render's artifact
+and ship byte-identical, wrong content (observed: a minimax scatter that came back byte-identical to a
+seedance film). This is the raw-clip analogue of the #583 finish-artifact bug, and it is closed the same
+way -- with a provenance sidecar.
+
+**Provenance sidecar (`<artifact_key>.prov`, CORE-computed AND core-written).** Unlike #583 (producer-
+stamped, because the finish config is re-coerced inside the module), the raw clip / keyframe sidecar is
+written by the CORE at the reclaim seam it already owns -- no producer or contract change:
+
+- **Clip** (`<clip_key>.prov`): a 64-char hex hash over the identity-determining inputs `{motion_backend,
+  config, keyframe_etag, prompt, seconds}` (`clipProvenanceHash`). Stamped the moment the core ACCEPTS a
+  clip (a motion.backend poll / synchronous output; the reclaim also heals a legacy / lost-poll clip).
+- **Keyframe** (`<keyframe_key>.prov`): a hash over `{keyframe_config}` only (`keyframeProvenanceHash`).
+  The motion backend is DELIBERATELY excluded -- keyframes are backend-agnostic (SDXL), so two renders that
+  differ only in motion backend legitimately SHARE keyframes; only a changed keyframe config regenerates.
+  (The project namespace is already the content-addressed bundle stem, #759, so same-project keyframes can
+  differ only by the keyframe config.)
+
+**Adoption gate.** The reclaim adopts a candidate ONLY when its sidecar PROVES identical-config:
+
+- sidecar **matches** this render fingerprint -> adopt (a same-render #141 recovery, or an identical-config
+  resubmit -- legit reuse preserved);
+- sidecar **mismatches** (a different-backend / different-config render wrote it) -> **skip; the shot
+  re-renders.** Never serve a mismatched clip;
+- sidecar **absent** (a legacy pre-#767 artifact, or a lost-poll clip the core never accepted) -> fall back
+  to the existing #661 freshness-floored behavior, and HEAL it by stamping this render fingerprint. A clip
+  reclaim lists ALL same-shot candidates (not first-match-wins) and refuses an ambiguous multi-candidate
+  unstamped set (rival lost-poll renders) -- re-render, never guess.
+
+Because the core writes the sidecar itself, the gate is safe to ship in one deploy: pre-#767 artifacts are
+simply unstamped and take the freshness fallback (no behavior change) until the first accept stamps them.
+
 ### 3.4 score (chain)
 
 Add audio (music / narration / beat-sync) to the assembled film.

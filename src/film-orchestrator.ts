@@ -28,6 +28,7 @@ import { getCastById, markLoraReady } from "./cast-db";
 import { claimFilmAdvance, releaseFilmAdvance, type FilmAdvanceClaim } from "./renders-db";
 import { withD1Retry } from "./d1-retry";
 import { deriveLoraDestKey } from "./lora-bundle";
+import { keyframeProvenanceHash, writeProv, provVerdict } from "./clip-provenance";
 
 // The pure film model (S6 split): shapes + synchronous logic live in film-model.ts; this file owns
 // the I/O. Re-exported below so every existing importer keeps its single entry point.
@@ -134,11 +135,28 @@ async function recordTrainedLorasToCast(env: Env, job: FilmJob, kfOut: KeyframeO
   }
 }
 
+/** #767: stamp the keyframe-config provenance sidecar (<keyframe_key>.prov) for each accepted keyframe. The
+ *  keyframe is written by the backend under a project-scoped key with NO config distinguisher, so a second
+ *  render with a different keyframe config overwrites / sits beside it; the sidecar lets the reclaim tell
+ *  whose config produced it. Best-effort per keyframe. */
+async function stampKeyframeProvenance(env: Env, job: FilmJob, kfOut: KeyframeOutput): Promise<void> {
+  const kfs = kfOut.keyframes || [];
+  if (!kfs.length) return;
+  const hash = await keyframeProvenanceHash({ keyframe_config: job.keyframe_config });
+  for (const k of kfs) {
+    if (k.keyframe_key) await writeProv(env, k.keyframe_key, hash);
+  }
+}
+
 /** Internal: after keyframes, either stop (preview) or hand off to the clip orchestrator. */
 async function afterKeyframeOutput(env: Env, job: FilmJob, kfOut: KeyframeOutput, preModules?: RegisteredModule[]): Promise<void> {
   // Bank trained adapters before anything else, so a character LoRA is recorded even for a
   // keyframes-only preview / regen (which is exactly where the perpetual retrain hurt most).
   await recordTrainedLorasToCast(env, job, kfOut);
+  // #767: stamp each accepted keyframe with THIS render keyframe-config provenance, so a later same-project
+  // render with a different keyframe config can prove it must regenerate rather than adopt this keyframe.
+  // Best-effort (writeProv swallows + logs); a missing sidecar simply falls back to the #661 freshness path.
+  await stampKeyframeProvenance(env, job, kfOut);
   if (job.keyframes_only) {
     completeKeyframesOnly(job, kfOut);
     return;
@@ -1675,6 +1693,7 @@ export async function startFilmJob(
     film_id: "film-" + crypto.randomUUID(),
     project: args.project, bundle_key: args.bundle_key, scenes,
     motion_backend: args.motion_backend ?? null, motion_config: args.motion_config ?? {},
+    keyframe_config: args.keyframe_config ?? {},
     finish_config: args.finish_config ?? {},
     speech_config: args.speech_config ?? {},
     film_finish_config: args.film_finish_config ?? {},
@@ -1754,9 +1773,13 @@ export async function cancelFilmJob(env: Env, filmId: string): Promise<FilmJob |
  *  tick one -- cancelling the live producer and shipping wrong content silently (#661, the #245/#249 class).
  *  This run own orphans (the #129/#619/#143 recovery) always upload AFTER created_at, so legit recovery
  *  survives; a leftover from an older render becomes invisible. */
-export async function listProjectKeyframes(env: Env, project: string, scenes: FilmScene[], createdAtMs: number): Promise<FilmKeyframeRef[]> {
+export async function listProjectKeyframes(env: Env, project: string, scenes: FilmScene[], createdAtMs: number, keyframeConfig?: Record<string, unknown>): Promise<FilmKeyframeRef[]> {
   const prefix = `renders/${project}/keyframes/`;
   const wanted = new Set(scenes.map((s) => s.shot_id));
+  // #767: when the caller passes this run keyframe config, gate adoption on the keyframe provenance sidecar
+  // (<key>.prov). A keyframe whose sidecar proves a DIFFERENT keyframe config is skipped -> regenerate,
+  // never adopt another config keyframe. Absent sidecar (legacy / lost-poll) keeps the #661 freshness path.
+  const expected = keyframeConfig !== undefined ? await keyframeProvenanceHash({ keyframe_config: keyframeConfig }) : null;
   const out: FilmKeyframeRef[] = [];
   let cursor: string | undefined;
   do {
@@ -1771,7 +1794,10 @@ export async function listProjectKeyframes(env: Env, project: string, scenes: Fi
       // before .png, and the first-seen dedupe below adopts the 16-byte hash as the keyframe (#578).
       if (!/\.(png|jpe?g|webp)$/i.test(file)) continue;
       const shot_id = file.replace(/\.[^.]+$/, ""); // drop the extension (.png)
-      if (shot_id && wanted.has(shot_id)) out.push({ shot_id, keyframe_key: o.key });
+      if (!shot_id || !wanted.has(shot_id)) continue;
+      // #767: refuse a keyframe a DIFFERENT-config render wrote (mismatched provenance). Absent/match keep.
+      if (expected !== null && (await provVerdict(env, o.key, expected)) === "mismatch") continue;
+      out.push({ shot_id, keyframe_key: o.key });
     }
     cursor = listed.truncated ? listed.cursor : undefined;
   } while (cursor);
@@ -1786,7 +1812,7 @@ export async function listProjectKeyframes(env: Env, project: string, scenes: Fi
  *  lenient on partials, treating absent shots as genuine non-renders at the ceiling.) */
 export async function keyframeSetCompleteInR2(env: Env, job: FilmJob): Promise<boolean> {
   if (!job.scenes.length) return false;
-  const present = await listProjectKeyframes(env, job.project, job.scenes, job.created_at);
+  const present = await listProjectKeyframes(env, job.project, job.scenes, job.created_at, job.keyframe_config);
   const have = new Set(present.map((k) => k.shot_id));
   return job.scenes.every((s) => have.has(s.shot_id));
 }
@@ -1837,7 +1863,7 @@ export async function cancelInFlightKeyframe(env: Env, job: FilmJob): Promise<vo
  *  has passed PHASE_HARD_DEADLINE_SECONDS. Returns true iff it advanced the phase; a partial hold (or
  *  nothing in R2) returns false and leaves the phase in "keyframe". */
 async function recoverStalledKeyframePhase(env: Env, job: FilmJob, preModules: RegisteredModule[] | undefined, atCeiling: boolean): Promise<boolean> {
-  const adopted = await listProjectKeyframes(env, job.project, job.scenes, job.created_at);
+  const adopted = await listProjectKeyframes(env, job.project, job.scenes, job.created_at, job.keyframe_config);
   if (!adopted.length) return false; // nothing in R2 to adopt -- not actually complete; let the ceiling hard-fail
   const covered = new Set(adopted.map((k) => k.shot_id));
   const dropped = job.scenes.filter((s) => !covered.has(s.shot_id)).map((s) => s.shot_id);
