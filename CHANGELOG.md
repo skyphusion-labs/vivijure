@@ -3,9 +3,34 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
-## Unreleased
+## v1.0.0 -- first stable release
 
-**Retire the `text-overlay` finish module (dead code; superseded by `subtitle` + `film-titles`).** PATCH.
+**Vivijure Studio leaves pre-1.0.** The module-host control plane, the module registry, the
+self-assembling UI, and the full render spine (planner -> keyframe -> motion -> finish -> score ->
+assemble -> master) are OUTPUT-verified end-to-end on production -- every path re-run and the ACTUAL
+artifact inspected (ffprobe stream shape plus eyeballed pixels / measured audio), not merely
+`phase=done`. Verified paths:
+
+- **Motion backends:** seedance, kling, minimax-hailuo, google-veo, vidu-q3, alibaba-wan, own-gpu
+  (same prod RunPod endpoint, Wan2.2 `i2v_clip`), and the local-gpu LTX door (propagandhi).
+- **Keyframe:** SDXL/RunPod keyframe and the GPUless cloud-keyframe (FLUX-2).
+- **Finish:** finish-rife, finish-upscale (exact 2x ESRGAN), finish-lipsync (MuseTalk).
+- **Score / audio:** dialogue-gen, narration-gen, music-gen, beat-sync, audio-master.
+- **Captions:** subtitle (burn + `.srt`), film-titles.
+- **Cast:** cast-LoRA-bound keyframe + voice; plan-enhance; scatter/gather.
+
+Two release-promise degrades found and fixed on the way in: cross-render clip-adoption contamination
+(a re-render with a different backend silently adopting a stale clip -- now fingerprinted by
+backend/config, #768) and audio-master shipping a silent film (#765). Both are prod-confirmed. The
+evidence ledger for this release lives at `docs/release/v1.0-coverage.md`.
+
+Not in v1.0 scope: the experimental CogVideoX-16gb local door (`vivijure-local-16gb`) is marked not
+ready for deployment; its kernel-stack rendering defect is tracked post-1.0. The mainstream local-gpu
+path ships via the LTX 12gb door.
+
+This release also rolls up the two distribution changes below.
+
+**Retire the `text-overlay` finish module (dead code; superseded by `subtitle` + `film-titles`).**
 
 - **`text-overlay` retired, not fixed.** The module read its content from `req.config.overlays` (an
   array), but `overlays` was never a declared `config_schema` field (schema types are only int / float /
@@ -20,7 +45,7 @@ for new features). Newest first.
   core auto-discovers modules via the `MODULE_*` service-binding scan, so dropping the binding delists it
   after the next core deploy.
 
-**Delist `alibaba-wan-lora` from the v1.0 distribution (unverified, not retired).** PATCH.
+**Delist `alibaba-wan-lora` from the v1.0 distribution (unverified, not retired).**
 
 - **`alibaba-wan-lora` delisted pending verification (#771).** Its distinguishing feature -- injecting
   custom operator LoRAs into the Wan 2.2 cloud i2v path (`high_noise_loras` / `low_noise_loras`) -- is
