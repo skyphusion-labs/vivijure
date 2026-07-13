@@ -18,13 +18,12 @@ flowchart LR
     rife["finish-rife<br/>(RIFE + GFPGAN) · 10"]
     ls["finish-lipsync<br/>(MuseTalk) · 15"]
     up["finish-upscale<br/>(Real-ESRGAN) · 20"]
-    ov["text-overlay"]
   end
   asm["assemble"]
   mux["mux"]
 
   dlg --> sp --> rife
-  rife --> ls --> up --> ov --> asm --> mux
+  rife --> ls --> up --> asm --> mux
   sp -. "cleaned audio_key" .-> ls
 
   style ls fill:#dff,stroke:#0aa,stroke-width:2px

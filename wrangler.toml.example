@@ -253,12 +253,6 @@ binding = "MODULE_UPSCALE"
 service = "vivijure-module-finish-upscale"
 # <<< SATELLITE: finish-upscale
 
-# Text overlay: a finish-chain module (titles / credits / lower-thirds / subtitles) that burns text
-# via the video-finish container's /overlay route. Folds after finish-rife in ui.order.
-[[services]]
-binding = "MODULE_TEXT_OVERLAY"
-service = "vivijure-module-text-overlay"
-
 # Film titles: a film.finish-chain module (opening title + end credit cards) that runs on the
 # assembled+muxed film via the video-finish /film-titles route. The orchestrator invokes the
 # film.finish chain (applyFilmFinish, post-mux before done) since v0.3.0, so this runs on every

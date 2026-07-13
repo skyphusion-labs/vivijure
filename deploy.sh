@@ -115,11 +115,11 @@ export CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
 
 # The module workers this profile deploys. Explicit (not a glob) so a work-in-progress module in
 # modules/ is never picked up by accident, and the list matches the profile boundary in the docs.
-# STANDARD = core render modules + the media-stack finish modules (text-overlay / film-titles /
+# STANDARD = core render modules + the media-stack finish modules (film-titles /
 # subtitle / beat-sync / audio-master), all reached over Workers VPC (provisioned in step 4, #519).
 STANDARD_MODULES="own-gpu seedance kling keyframe cloud-keyframe finish-rife plan-enhance cast-image \
 notify-email music-gen narration-gen dialogue-gen minimax-hailuo google-veo vidu-q3 alibaba-wan \
-alibaba-wan-lora text-overlay film-titles subtitle beat-sync audio-master"
+alibaba-wan-lora film-titles subtitle beat-sync audio-master"
 # SATELLITES = the 3 opt-in GPU finish modules, each on its own separate RunPod endpoint.
 SATELLITE_MODULES="finish-upscale finish-lipsync speech-upscale"
 MODULES="$STANDARD_MODULES"
@@ -358,7 +358,7 @@ done
 # Fill each media module's service_id placeholder with its real VPC service id (idempotent: matches the
 # committed REPLACE_WITH_* placeholder OR a prior id). Mirrors the store_id rewrite above.
 set_module_vpc() { sed -i -E "s|^service_id = \"[^\"]*\"|service_id = \"$2\"|" "modules/$1/wrangler.toml"; }
-for m in film-titles subtitle text-overlay; do set_module_vpc "$m" "$VPC_VIDEO_FINISH_ID"; done
+for m in film-titles subtitle; do set_module_vpc "$m" "$VPC_VIDEO_FINISH_ID"; done
 set_module_vpc beat-sync    "$VPC_AUDIO_BEAT_SYNC_ID"
 set_module_vpc audio-master "$VPC_AUDIO_MASTER_ID"
 info "media stack: tunnel + 5 VPC services ready; token -> containers/tunnel.env (0600)"

@@ -19,13 +19,12 @@ flowchart LR
     rife["finish-rife · 10"]
     ls["finish-lipsync · 15"]
     up["finish-upscale · 20"]
-    ov["text-overlay"]
   end
   asm["assemble"]
   mux["mux"]
   done["done"]
 
-  kf --> clips --> dlg --> sp --> rife --> ls --> up --> ov --> asm --> mux --> done
+  kf --> clips --> dlg --> sp --> rife --> ls --> up --> asm --> mux --> done
   dlg -. "audio_key" .-> ls
 
   style dlg fill:#dff,stroke:#0aa,stroke-width:2px

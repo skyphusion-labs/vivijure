@@ -243,7 +243,7 @@ build). This keeps every binding pointing at an already-deployed module.
    exists):
    ```
    for module in own-gpu finish-rife finish-upscale finish-lipsync keyframe seedance kling \
-     minimax-hailuo google-veo vidu-q3 alibaba-wan text-overlay film-titles dialogue-gen; do
+     minimax-hailuo google-veo vidu-q3 alibaba-wan film-titles dialogue-gen; do
    ```
    Add: `cloud-keyframe alibaba-wan-lora subtitle speech-upscale audio-master`. Order within the loop does not matter (all modules
    deploy before the core); only modules-before-core matters, which the job already guarantees.
@@ -302,8 +302,8 @@ cut; use this split only if master is not ready at go time.
    ```bash
    curl -fsS http://<video-finish-host>:<port>/health
    ```
-   Then exercise the routes through a real render: `/overlay` (text-overlay), `/film-titles`
-   (film-titles), and the NEW `/subtitle` (subtitle module). The cleanest check is a short
+   Then exercise the routes through a real render: `/film-titles`
+   (film-titles) and the NEW `/subtitle` (subtitle module). The cleanest check is a short
    talking-shot render with subtitles enabled -- assert the structured `film_finish` channel reports
    `applied` includes the subtitle step (NOT a silent degrade to raw clips).
 3. **New module workers healthy.** Confirm each is live and discovered:

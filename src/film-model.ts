@@ -524,7 +524,7 @@ export function finishShotLedgerReconciles(fs: FinishShot): boolean {
  *  `<project>/clips/<shot>_finished.mp4` (named off the shot id by its container); the append-convention
  *  modules derive `<input-base>_<suffix>.<ext>` from the input clip key (musetalk lip-sync -> `_ls`,
  *  upscale -> `_up`; see vivijure-musetalk / vivijure-upscale handler.py). Returns null for a module whose
- *  convention we do not model (e.g. text-overlay), so an unmodeled step gets NO R2 shortcut and can never
+ *  convention we do not model, so an unmodeled step gets NO R2 shortcut and can never
  *  be advanced off a sibling step's artifact -- the mid-chain phantom-adopt the silent-render bug warned of. */
 export function finishStepOutputKey(project: string, fs: FinishShot, modules?: RegisteredModule[]): string | null {
   const binding = fs.chain[fs.idx] ?? "";

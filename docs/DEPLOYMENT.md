@@ -306,7 +306,7 @@ npx wrangler d1 migrations apply vivijure-studio --remote
 # media-stack finish modules, reached over Workers VPC):
 for m in own-gpu seedance kling keyframe cloud-keyframe finish-rife plan-enhance cast-image \
          notify-email music-gen narration-gen dialogue-gen minimax-hailuo google-veo vidu-q3 \
-         alibaba-wan alibaba-wan-lora text-overlay film-titles subtitle beat-sync audio-master; do
+         alibaba-wan alibaba-wan-lora film-titles subtitle beat-sync audio-master; do
   npx wrangler deploy -c modules/$m/wrangler.toml
 done
 # The satellites profile also deploys (SATELLITE_MODULES in deploy.sh; each needs a separate RunPod

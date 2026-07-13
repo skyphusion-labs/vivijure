@@ -18,20 +18,19 @@ flowchart LR
     rife["finish-rife<br/>(RIFE + GFPGAN) · 10"]
     ls["finish-lipsync<br/>(MuseTalk) · 15"]
     up["finish-upscale<br/>(Real-ESRGAN) · 20"]
-    ov["text-overlay"]
   end
   asm["assemble"]
   mux["mux"]
   done["done"]
 
   sp --> rife
-  rife --> ls --> up --> ov --> asm --> mux --> done
+  rife --> ls --> up --> asm --> mux --> done
 
   style up fill:#dff,stroke:#0aa,stroke-width:2px
 ```
 
 The finish chain runs in ascending `ui.order`: **rife (10) -> lipsync (15) -> upscale (20)**. Upscaling
-is the final spatial polish; the enlarged clip then flows to text-overlay (if enabled) and on to
+is the final spatial polish; the enlarged clip then flows on to
 assemble.
 
 ## Configuration
