@@ -1,44 +1,40 @@
-# Vivijure Studio
+# Vivijure
 
-Write a storyboard. Render it to video on your own GPU. No subscription, no account wall, no
-lock-in. You bring the GPU and the keys; the studio brings the pipeline.
+**Write a storyboard. Render it to video on your own GPU. No subscription, no account wall, no
+lock-in.** You bring the GPU and the keys; the studio brings the pipeline. You own every artifact.
 
-Vivijure is a self-hosted AI film studio built on Cloudflare Workers. It runs free on the
-Workers free tier and connects to whatever GPU backend you attach -- RunPod, your own box, or
-a cloud motion API. You own every artifact.
+Vivijure is a self-hosted, AGPL AI film studio. It runs free on the Cloudflare Workers free tier
+(or with no Cloudflare at all), and connects to whatever GPU backend you attach -- RunPod, your own
+box, or a cloud motion API.
 
-## Who this is for
-
-Filmmakers, homelab builders, and creative technologists who want an AI film studio they own: your GPU, your keys, your films. No subscription wall.
+> **This repo is the constellation map -- the front door to every part of Vivijure.** The studio
+> itself and each render engine live in their own repos, linked below. Looking for the code you
+> deploy? That is **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)**.
 
 **Live:** https://vivijure.com · **Studio:** https://vivijure.skyphusion.org · **Skyphusion Labs:** https://skyphusion.org
 
-## Quick start
+## Start here
 
-Fill in your keys once, run one script:
+| I want to... | Go to |
+|---|---|
+| **Run the studio on Cloudflare** (the standard path) | **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)** |
+| **Run the studio without Cloudflare** (Node + SQLite + S3/MinIO) | **[vivijure-local](https://github.com/skyphusion-labs/vivijure-local)** |
+| **Write screenplays in Discord**, then hand off to the studio | **[slate](https://github.com/skyphusion-labs/slate)** |
+| **Drive the studio from an AI agent** (MCP) | **[vivijure-mcp](https://github.com/skyphusion-labs/vivijure-mcp)** |
+| **Render on a rented cloud GPU** (RunPod) | **[vivijure-backend](https://github.com/skyphusion-labs/vivijure-backend)** |
+| **Render on my own consumer card** | **[vivijure-local-12gb](https://github.com/skyphusion-labs/vivijure-local-12gb)** (LTX, 12GB) · **[vivijure-local-16gb](https://github.com/skyphusion-labs/vivijure-local-16gb)** (CogVideoX, 16GB) |
 
-```bash
-npm install
-cp deploy.env.example deploy.env   # then edit deploy.env with your keys
-./deploy.sh
-```
+## Where it fits: the constellation
 
-That gives you the studio core plus cloud and own-GPU render (the standard profile). The friendly
-walk-through is [docs/quickstart.md](docs/quickstart.md); the full reference is
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); the extra "finish" parts you can add later are in
-[docs/opt-in-tiers.md](docs/opt-in-tiers.md).
-
-## Where this fits: the constellation
-
-Vivijure is a small group of programs that work together. The **Studio** (this repo) is the control
-plane in the center. This same map appears in every repo, so you always know where you are; the full
-version with explanations is in [docs/constellation.md](docs/constellation.md).
+Vivijure is a small group of programs that work together. The **Studio** is the control plane in the
+center; every render engine and finish helper plugs into it. This same map appears in every repo, so
+you always know where you are.
 
 ```mermaid
 flowchart TD
     you[You: Discord chat or the Studio web page]
     slate[slate<br/>Discord screenwriter bot]
-    studio[vivijure Studio -- THIS REPO<br/>projects, storyboard, cast,<br/>render orchestration + module registry]
+    studio[Vivijure Studio<br/>vivijure-cf on Cloudflare<br/>or vivijure-local without it<br/>-- both on vivijure-core]
     modules[Modules: one job each, opt-in<br/>cloud video, finish, audio]
     gpu[GPU render engines<br/>vivijure-backend cloud,<br/>local-12gb / local-16gb own card]
     finish[Finish helper engines<br/>musetalk, upscale, audio-upscale]
@@ -50,6 +46,49 @@ flowchart TD
     modules --> finish
     studio --> gpu
 ```
+
+## Every repo
+
+**Run the studio**
+
+| Repo | What it is |
+|---|---|
+| **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)** | **The studio, on Cloudflare Workers** -- the control plane: projects, storyboard, cast, render orchestration, the module registry, and the self-assembling UI. Pairs with `vivijure-core`. **This is the code you deploy.** |
+| [vivijure-core](https://github.com/skyphusion-labs/vivijure-core) | The shared orchestration library (`@skyphusion-labs/vivijure-core` on npm) both hosts build on -- the host-neutral core. |
+| [vivijure-local](https://github.com/skyphusion-labs/vivijure-local) | The same studio **without Cloudflare** -- Node + SQLite + S3/MinIO + Hono. Own the whole stack. |
+
+**Render engines**
+
+| Repo | What it is |
+|---|---|
+| [vivijure-backend](https://github.com/skyphusion-labs/vivijure-backend) | Cloud GPU render engine on RunPod: SDXL keyframes, Wan image-to-video, LoRA training, ffmpeg film assembly. |
+| [vivijure-local-12gb](https://github.com/skyphusion-labs/vivijure-local-12gb) | Homelab render door: LTX-Video i2v on a 12GB card. Motion with no cloud rent. |
+| [vivijure-local-16gb](https://github.com/skyphusion-labs/vivijure-local-16gb) | Higher-fidelity homelab door: CogVideoX-5B i2v on a 16GB card. |
+
+**Finish engines (opt-in)**
+
+| Repo | What it is |
+|---|---|
+| [vivijure-musetalk](https://github.com/skyphusion-labs/vivijure-musetalk) | MuseTalk audio-driven lip-sync (talking heads), on RunPod GPU. |
+| [vivijure-upscale](https://github.com/skyphusion-labs/vivijure-upscale) | Real-ESRGAN CUDA video upscale, on RunPod serverless GPU. |
+| [vivijure-audio-upscale](https://github.com/skyphusion-labs/vivijure-audio-upscale) | resemble-enhance speech enhancement. |
+
+**Front doors**
+
+| Repo | What it is |
+|---|---|
+| [slate](https://github.com/skyphusion-labs/slate) | Collaborative AI screenwriter for Discord: develop a storyboard in chat, hand it to the studio. |
+| [vivijure-mcp](https://github.com/skyphusion-labs/vivijure-mcp) | Drive the studio from any MCP client (Claude Code, Cursor, ...): plan, cast, submit a render, poll to done. |
+| [vivijure-com](https://github.com/skyphusion-labs/vivijure-com) | The promotional site and showcase at [vivijure.com](https://vivijure.com). |
+
+## What it is
+
+Vivijure is a **module host, not a monolith.** The core owns what is always true -- project,
+storyboard, cast, bundle assembly, render orchestration, and a module registry. Every capability
+beyond that is an opt-in **module worker** plugged in through a typed hook contract
+(`vivijure-module/2`). The studio UI assembles itself from `GET /api/modules`; install none and you
+get a clean, empty studio. The full contract and the module-authoring guide live in
+[vivijure-cf/docs](https://github.com/skyphusion-labs/vivijure-cf/tree/main/docs).
 
 ## Showcase: four films -- silent, scored, narrated, and now talking
 
@@ -92,215 +131,6 @@ The narrated mode: TTS reads the script over the cut, no music bed. Generated by
 
 The talking mode: per shot, a generated line of dialogue is muxed into the clip and MuseTalk drives the character's mouth to match it. It came out silent the first time; a from-scratch re-fire then surfaced two more orchestration bugs (a backend phantom-keyframe and a finish-step wedge) before any user could hit them. The [honest writeup](https://skyphusion.net/blog/vivijure-talking-character/) tells the three-fix story.
 
-## The Vivijure ecosystem
-
-Vivijure is an AI film studio built as a thin control plane plus opt-in GPU modules. These repos
-form the constellation; this block is identical in each so the whole map is visible from any one of
-them.
-
-```
-   friends + Slate (Discord)
-            |
-            v
-        slate  -->  vivijure (studio control plane / JSON API)
-                        |
-                        v
-                  vivijure-backend (GPU render: keyframes -> i2v -> assemble)
-                        |
-            +-----------+-----------------------------+
-            |           |               |             |
-            v           v               v             v
-     vivijure-     vivijure-       vivijure-      (more finish
-     musetalk      upscale         audio-upscale   modules over time)
-   (lip-sync)    (video upscale)  (speech enhance)
-```
-
-| Repo | Role |
-|---|---|
-| [slate](https://github.com/skyphusion-labs/slate) | Collaborative AI screenwriter assistant for Discord. Friends and Slate co-author a film in-channel; Slate then submits it to the studio entirely through the vivijure JSON API. |
-| [vivijure](https://github.com/skyphusion-labs/vivijure) | The studio control plane (a Cloudflare Worker): planner, cast, and render UI plus the JSON API. A thin module host that orchestrates render jobs behind a typed hook contract. |
-| [vivijure-backend](https://github.com/skyphusion-labs/vivijure-backend) | The GPU render backend (RunPod serverless): SDXL keyframes, Wan image-to-video, and ffmpeg assembly. The half that turns a storyboard bundle into a film. |
-| [vivijure-musetalk](https://github.com/skyphusion-labs/vivijure-musetalk) | MuseTalk audio-driven lip-sync GPU module (finish-class). Syncs a character's mouth to dialogue audio. |
-| [vivijure-upscale](https://github.com/skyphusion-labs/vivijure-upscale) | Real-ESRGAN CUDA video-upscale GPU module (finish-class). Raises the assembled film's resolution. |
-| [vivijure-audio-upscale](https://github.com/skyphusion-labs/vivijure-audio-upscale) | CUDA speech-audio enhancement (resemble-enhance) GPU module. The GPU half of the cost-aware audio finish path. |
-
-## Team
-
-Vivijure is built by Conrad (`skyphusion`) and his named AI crew. The crew are treated as
-individuals, each working in their own lane with their own GitHub identity; this is the same
-transparent framing used across the project.
-
-| Member | Role | GitHub |
-|---|---|---|
-| Conrad | Creator / director | [@skyphusion](https://github.com/skyphusion) |
-| Mackaye | PM / tech lead | [@skyphusion-mackaye](https://github.com/skyphusion-mackaye) |
-| Strummer | Infrastructure | [@skyphusion-strummer](https://github.com/skyphusion-strummer) |
-| Rollins | Backend / modules | [@skyphusion-rollins](https://github.com/skyphusion-rollins) |
-| Joan | Frontend / extraction | [@skyphusion-joan](https://github.com/skyphusion-joan) |
-
-**Storyboard planner** -- write scenes, edit shot prompts, and set per-shot cast assignments before bundling:
-
-![Storyboard planner scene editor showing shot cards with prompts, act labels, and character slots](docs/screenshots/planner-storyboard.png)
-
-**Cast** -- register characters with portraits and visual bibles; Slate syncs here directly from Discord:
-
-![Cast page showing character list with portraits and the Companion Robot detail panel](docs/screenshots/cast-page.png)
-
-**Module host** -- installed modules appear here; each stage (plan, cast, keyframe, motion, finish, score) is served by a swappable module worker:
-
-![Modules page showing installed modules panel and stage configuration](docs/screenshots/modules-page.png)
-
-**Render history** -- honest per-render status. The panel surfaces real failed attempts alongside completed renders (here, three failed runs and one completed), with inline error snippets; it shows what actually happened, not a curated success:
-
-![Render history tab showing the honest-status UX: three failed neon_halflife attempts and one completed fur_and_circuits render, each with a status badge](docs/screenshots/planner-render-history.png)
-
-**Honest durations.** Some motion backends render on a fixed frame grid (a local door pinned to a set frame count), so they clamp a shot to a length they can actually deliver. When that happens the panel does not hide it: each finished shot shows its real delivered seconds against the planned seconds, flagged when a clip came up short, and preflight warns you before you submit if a chosen backend would clamp a shot.
-
-## What you can do
-
-- **Write a storyboard** -- scenes, shot descriptions, character beats -- in the planner.
-- **Generate SDXL keyframes** per shot on your GPU (preview before committing to full motion).
-- **Animate** each shot with Wan 2.2 I2V on your own GPU, or any of six cloud motion backends
-  (Kling, Seedance, MiniMax Hailuo, Google Veo, Vidu Q3, Wan 2.6) -- seven in all, mix and match
-  per shot, any aspect ratio.
-- **Cast characters** -- upload portraits, generate LoRA training sets, train a character LoRA
-  on your GPU so your cast looks consistent across shots.
-- **Score the film** -- attach a music bed, narrate it with TTS, or beat-sync cuts.
-- **Give characters a voice** -- generate per-shot dialogue, lip-sync it with MuseTalk, and
-  upscale the result with CUDA Real-ESRGAN, as opt-in finish modules over the same motion path.
-- **Download the assembled silent MP4** or mux in audio without touching the GPU at all.
-
-Everything beyond keyframes uses your own R2 bucket for artifacts; you are never renting storage
-from us.
-
-## Why not just use a SaaS?
-
-Because you run Proxmox. Because you have a V100 or an H100 and you do not want to pay $0.80 a
-second to someone else's GPU. Because you want to swap the motion model, adjust the sampler,
-and not file a support ticket to do it.
-
-Vivijure is for the creative homelabber who is priced out of subscription AI video tools and
-prefers to own the stack. The control plane is on Cloudflare's free tier (no server to run);
-the GPU work hits whatever endpoint you point it at; the artifacts land in your R2 bucket.
-
-## Deploying: the security gate and the deploy paths
-
-The one-script `./deploy.sh` in [Quick start](#quick-start) above is **the** front door. The friendly
-walk-through is [docs/quickstart.md](docs/quickstart.md) and the full reference is
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); for the whole constellation (studio + GPU backend + local
-doors), `deploy/constellation.sh` is the top orchestrator that calls each repo's own deploy. Whichever
-path you take, the security gate below is non-negotiable.
-
-> ### ⚠️ Security requirement: this is a SINGLE-OPERATOR studio
->
-> Vivijure performs **NO per-user authorization**. Every `:id` route (`/api/cast/:id`,
-> `/api/storyboard/projects/:id`, `/api/render/film/:id`, `GET /api/cast/export/:id`, ...) trusts the
-> caller; the studio runs no per-caller check, and the cast-export route returns a whole character
-> bundle (portrait + LoRA + bible) by id. Resource ids are opaque (UUID v4, 122 bits of entropy; a
-> bare integer 404s), so they are not enumerable, but the studio still authorizes no caller beyond
-> the single shared token. This is safe ONLY when exactly one operator can reach the Worker.
->
-> The deploy ships with that lock built in: `AUTH_MODE = "token"` (the `deploy.sh` default) makes
-> the Worker itself require `Authorization: Bearer <token>` on every `/api/*` request, checked
-> against the 256-bit `STUDIO_API_TOKEN` secret the script mints and prints ONCE at the end of the
-> deploy. No Zero Trust product, no extra dashboard step, and it fails closed: no token bound means
-> every `/api/*` request is denied. Keep the gate on -- never deploy multi-tenant or unauthenticated
-> (`ALLOW_UNAUTHENTICATED` is a local-dev opt-out only).
->
-> Want a stronger front door (SSO identity, device posture, audit logs, per-caller revocation)? Put
-> **Cloudflare Access** in front and run `AUTH_MODE = "access"`: the Worker then verifies the Access
-> JWT in-code (fail closed) behind your edge Access app. That is optional hardening now, not a
-> deploy prerequisite; see [docs/SECURITY.md](docs/SECURITY.md).
-
-### Alternative: guided Python installer
-
-`deploy/vivijure_deploy.py` is an **alternative** to `deploy.sh`, not a competing front door: an
-interactive guided installer that also provisions the RunPod side (template, network volume, endpoints),
-mints a scoped R2 token, and offers a `down` teardown -- things the
-shell path leaves to you. Like `deploy.sh` it defaults to `AUTH_MODE = "token"` (mints the
-`STUDIO_API_TOKEN` operator login as a worker secret; no Cloudflare Access, no Zero Trust step) and
-creates the edge Access app ONLY when you set `AUTH_MODE = "access"`. It collects exactly three infra credentials (a Cloudflare account id + API
-token and a RunPod API key, nothing else, never payment or wallet data). **Status: the full provisioning
-spine is implemented and verified against the Cloudflare/RunPod API docs, but the end-to-end `up` has NOT
-yet been run against a live account,** so `deploy.sh` stays the recommended path; reach for this when you
-want the guided prompts plus teardown.
-
-```bash
-git clone https://github.com/skyphusion-labs/vivijure
-cd vivijure
-# set the non-secret config at the top of deploy/vivijure_deploy.py first:
-#   always:            DATACENTER_ID, BACKEND_IMAGE_TAG, GPU_TYPE_IDS
-#   AUTH_MODE=token:   nothing else (the default; mints STUDIO_API_TOKEN, no CF Access)
-#   AUTH_MODE=access:  also DEPLOY_DOMAIN, OPERATOR_EMAIL, ACCESS_TEAM_DOMAIN, ACCESS_AUD
-python3 deploy/vivijure_deploy.py plan               # print the ordered plan, change nothing
-python3 deploy/vivijure_deploy.py up                 # provision + seed + deploy (idempotent)
-python3 deploy/vivijure_deploy.py up --rotate-token  # token mode: mint a FRESH login (invalidates the old)
-python3 deploy/vivijure_deploy.py down               # teardown by recorded id (keeps your R2/D1 data)
-```
-
-Full details, required config, and the secret-handling notes are in
-[deploy/README.md](deploy/README.md).
-
-### Manual (Wrangler)
-
-```bash
-git clone https://github.com/skyphusion-labs/vivijure
-cd vivijure
-npm install
-
-# Configure: edit wrangler.toml (R2 bucket, D1 database, module service bindings);
-# seed the core creds (RunPod key + endpoint id, R2 S3 key pair, AI Gateway ids) ONCE into the
-# Cloudflare Secrets Store -- they bind declaratively, not via `wrangler secret put` (#238/#473).
-# STUDIO_API_TOKEN (the built-in login) is the one secret you `wrangler secret put` directly.
-# The full list with commands is docs/DEPLOYMENT.md section 3b.
-
-npm run dev        # wrangler dev -- hot reload at localhost:8787
-npm run deploy     # wrangler deploy
-```
-
-See [CLAUDE.md](CLAUDE.md) for conventions and [docs/module-authoring.md](docs/module-authoring.md)
-for how to write your own module worker. See [docs/SECURITY.md](docs/SECURITY.md) for the
-security model (the studio auth gate -- token mode by default, Access optional -- job-id
-capabilities, credential blast radius).
-
-## Architecture
-
-Vivijure is a **module host, not a monolith**. The core worker owns what is always true --
-project, storyboard, cast, bundle assembly, render orchestration, and a module registry. Every
-capability beyond that is an opt-in **module worker** plugged into the pipeline through a typed
-hook contract.
-
-Install only the modules you want. The studio UI assembles itself from `GET /api/modules` -- the
-pipeline stages and every module's config controls are projected from the registry, and installing
-none gives you a clean, empty studio. (Honest footnote: a couple of surfaces, like the cast page's
-training-tool catalog, are still hand-wired to known module names; making the projection total is
-tracked work, not a design change.)
-
-```
-core (this worker)
-  |-- keyframe hook      --> your SDXL keyframe module (GPU)
-  |-- motion.backend     --> GPU i2v module OR cloud motion module (per shot)
-  |-- finish             --> interpolation / upscale / lip-sync (optional chain)
-  |-- score              --> music / narration / beat-sync (optional chain)
-  |-- plan.enhance       --> LLM auto-direction before render (optional)
-  |-- cast.image         --> portrait -> LoRA training set (optional)
-  '-- notify             --> render-done email / webhook (optional)
-```
-
-The module contract is `vivijure-module/2` in [`src/modules/types.ts`](src/modules/types.ts)
-(the `/1` window is closed, `/2` only; the `/1` -> `/2` bump removed `user_email` from
-the hook context, an anti-SaaS identity strip -- see [docs/CONTRACT.md](docs/CONTRACT.md)).
-A module is a Cloudflare Worker that serves `GET /module.json` (manifest) and `POST /invoke`
-(run a hook). That is the whole interface; a module in another language, on another platform,
-works fine as long as it speaks JSON over HTTP.
-
-See [docs/module-api.md](docs/module-api.md) for the full contract and
-[docs/module-authoring.md](docs/module-authoring.md) for the step-by-step guide.
-
-The GPU render backend is [`vivijure-backend`](https://github.com/skyphusion-labs/vivijure-backend)
-(RunPod serverless, SDXL + Wan I2V + ffmpeg assemble). The studio UI lives at
-`vivijure.skyphusion.org` (`/planner`, `/cast`, `/modules`).
-
 ## How a render flows
 
 The path from a storyboard to a finished `film.mp4`. The keyframe fans into both the dialogue and the
@@ -329,44 +159,23 @@ Motion is backend-agnostic: the same keyframe feeds own-GPU Wan or any cloud i2v
 finish chain runs the same way over whatever clip comes back. The dialogue track is generated per
 shot, drives the lip-sync, and rides through assembly into the final mux.
 
-## Drive it with an MCP
-
-An AI agent (Cursor, Claude Code, or any MCP client) can drive the studio through structured tools
-instead of raw HTTP: plan a storyboard, cast characters, submit a film render, and poll it to done.
-The MCP is a small, bearer-gated Worker that ships in this repo (`src/mcp.ts`, deployed separately
-via `wrangler.mcp.toml`). It proxies to your studio over its normal bearer, so you can point it at
-any Vivijure instance. It exposes curated tools (`studio_modules`, `plan_storyboard`,
-`bundle_storyboard`, `submit_film`, `poll_film`, and more) plus a generic `studio_request` escape
-hatch for the full API. It is opt-in and off by default. Setup, the tool table, and client wiring
-are in [docs/mcp.md](docs/mcp.md).
-
-## Develop
-
-```bash
-npm run typecheck     # tsc --noEmit (CI gate -- run before pushing)
-npm test              # vitest
-npm run dev           # wrangler dev
-npm run deploy        # wrangler deploy
-npm run dev:mcp       # wrangler dev for the MCP Worker (see docs/mcp.md)
-npm run deploy:mcp    # wrangler deploy for the MCP Worker
-```
-
-`account_id` comes from `CLOUDFLARE_ACCOUNT_ID` in the environment, not hardcoded. All bindings
-are in `wrangler.toml` (committed); the core + module creds bind from the Cloudflare Secrets Store
-(seeded once), and `STUDIO_API_TOKEN` goes in via `wrangler secret put`.
-
 ## Legal
 
-Vivijure Studio is the primary user-facing surface, so its public policies live one click from here in [docs/legal/](docs/legal/): the [Acceptable Use Policy](docs/legal/ACCEPTABLE-USE.md) (including the absolute CSAM bright line, 18 U.S.C. 1466A / 2252A), the [Privacy Policy](docs/legal/PRIVACY.md), and the [Terms of Service](docs/legal/TERMS.md).
+Vivijure's public policies live in the studio repo, one click away:
+[Acceptable Use Policy](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/ACCEPTABLE-USE.md)
+(including the absolute CSAM bright line, 18 U.S.C. 1466A / 2252A), the
+[Privacy Policy](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md),
+and the [Terms of Service](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/TERMS.md).
 
 ## Support
 
-Questions, bugs, or ideas? Start with this repo's [GitHub Issues](../../issues); see
-[SUPPORT.md](SUPPORT.md) for how to ask and what to include. Found a security problem? Report it
-privately per [SECURITY.md](SECURITY.md), never as a public issue.
+Questions, bugs, or ideas? This repo's [GitHub Issues](../../issues) are the general front door;
+for a bug in a specific part, open it on that repo's issues. See [SUPPORT.md](SUPPORT.md) for how to
+ask. Found a security problem? Report it privately per [SECURITY.md](SECURITY.md), never as a public
+issue.
 
 ## License
 
-**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
-
-Licensed under AGPL-3.0-only. See [LICENSE](LICENSE).
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own
+creative visions on it. Run it as a network service and the AGPL has you share your changes back, so
+it stays a commons. It is not for sale, and not to be resold as a SaaS. See [LICENSE](LICENSE).

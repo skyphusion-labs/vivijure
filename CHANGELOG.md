@@ -3,6 +3,12 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+> **This is the pre-split history of Vivijure Studio (through v1.0.0), kept for the record.** The
+> studio was split into a host + a shared core, and active development moved to
+> **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)** (the Cloudflare host, on
+> [`vivijure-core`](https://github.com/skyphusion-labs/vivijure-core)). This repo is now the
+> constellation hub -- see the README.
+
 ## v1.0.0 -- first stable release
 
 **Vivijure Studio leaves pre-1.0.** The module-host control plane, the module registry, the
