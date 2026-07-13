@@ -32,7 +32,10 @@ PORT = int(os.environ.get("PORT", "8000"))
 DOWNLOAD_TIMEOUT_S = 120
 UPLOAD_TIMEOUT_S = 120
 MAX_CLIP_BYTES = 256 * 1024 * 1024   # 256 MB per clip
-MAX_AUDIO_BYTES = 64 * 1024 * 1024   # 64 MB soundtrack
+MAX_AUDIO_BYTES = 256 * 1024 * 1024   # 256 MB: match the per-clip bound. A lossless film-length bed
+# shares a clip's size envelope, and the bed is ALWAYS trimmed to the video duration downstream
+# (_assemble / _remux_audio_only, `-t vdur`), so a long source yields a film-length track, not a bloated one.
+# A too-tight 64 MB cap silently dropped a legitimate multi-minute lossless bed -> silent film (the #77/#249 bug).
 MAX_CLIPS = 80
 MAX_KEYFRAME_BYTES = 32 * 1024 * 1024   # keyframe PNG for content-inspect (#523 Layer 2)
 
@@ -218,8 +221,13 @@ async def finish(req):
                 audio_path = os.path.join(work, "audio.bin")
                 ok, info = await _download(s, audio_url, audio_path, MAX_AUDIO_BYTES)
                 if not ok:
-                    audio_path = None
-                    log.warning("audio fetch failed (%s); finishing silent", info)
+                    # The caller ASKED for this bed; a "finished" film that lost its music without saying so is
+                    # the exact silent-degrade of #77 / #249. The bed is trimmed to the video length downstream,
+                    # so an over-cap source is a legitimately long bed, not a reason to go silent -- fail loud and
+                    # let the core surface a real per-render error rather than ship a silent green.
+                    status = 413 if info == "too large" else (400 if str(info).startswith("blocked:") else 502)
+                    log.warning("audio bed fetch failed (%s); failing loud (no silent finish)", info)
+                    return web.json_response({"ok": False, "error": f"audio bed {info}"}, status=status)
 
         loop = asyncio.get_running_loop()
         clip_durations = None  # per-clip assembled seconds (#697/#698); only the concat path reports them
