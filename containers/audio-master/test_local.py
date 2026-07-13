@@ -75,6 +75,21 @@ def main():
     else:
         failures.append(f"mp3 format produced codec {codec}")
 
+    # 4. film-length trim: `seconds` cuts the mastered bed to the film length so an over-long source bed
+    # (the music-gen 381s-vs-short-film case) does not ship a bloated audio track. The synthesized source is
+    # 4s; trimming to 2.0s must yield a ~2.0s mastered output, and the untrimmed baseline stays ~4.0s.
+    full_out, full_res = master_core.master_bed(work, lo, target, True, "wav")
+    trim_out, trim_res = master_core.master_bed(work, lo, target, True, "wav", 2.0)
+    print(f"[trim] full={full_res['durationSeconds']}s trimmed(2.0)={trim_res['durationSeconds']}s")
+    if abs(trim_res["durationSeconds"] - 2.0) <= 0.15:
+        print("[PASS] seconds=2.0 trims the mastered bed to ~2.0s")
+    else:
+        failures.append(f"seconds trim produced {trim_res['durationSeconds']}s, expected ~2.0s")
+    if full_res["durationSeconds"] > 3.5:
+        print(f"[PASS] no-seconds baseline keeps full length ({full_res['durationSeconds']}s)")
+    else:
+        failures.append(f"no-seconds baseline unexpectedly short: {full_res['durationSeconds']}s")
+
     if failures:
         print("\nFAILED:")
         for f in failures:

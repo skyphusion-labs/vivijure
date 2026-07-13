@@ -51,13 +51,18 @@ export async function muxAudioOntoVideoKey(
     };
   }
 
-  let body: { ok?: boolean; error?: string };
+  let body: { ok?: boolean; error?: string; hasAudio?: boolean };
   try {
     body = (await resp.json()) as typeof body;
   } catch {
     return { ok: false, error: "video-finish returned invalid JSON" };
   }
   if (!body.ok) return { ok: false, error: body.error || "video-finish mux failed" };
+  // The add-audio route exists to attach a track, so hasAudio:false means the container shipped a track-less
+  // file (bed over the container audio cap or undecodable): a loud failure, never a false success (F2).
+  if (body.hasAudio === false) {
+    return { ok: false, error: "video-finish could not attach the audio bed (the bed exceeded the container audio cap or was undecodable); no audio track written" };
+  }
   return { ok: true, output_key: outKey };
 }
 
