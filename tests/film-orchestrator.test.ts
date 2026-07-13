@@ -88,7 +88,7 @@ describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifa
   it("does NOT adopt a FAILED shot mid-chain (the silent-render bug: a lip-sync fail at idx 1 of 4 must not adopt the RIFE intermediate)", () => {
     const midChainFailed = finishShot({
       status: "failed", idx: 1,
-      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_FINISH_STUB"],
     });
     expect(finishShotAdoptableFromR2(midChainFailed)).toBe(false);
   });
@@ -96,7 +96,7 @@ describe("finish-phase R2 adoption (RUN #29: envelope frozen IN_PROGRESS, artifa
   it("reclaim does NOT touch a mid-chain FAILED shot even when an intermediate clip is present in R2", () => {
     const failed = finishShot({
       shot_id: "shot_02", status: "failed", idx: 1, // failed at lip-sync (idx 1), 2 more steps to go
-      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_FINISH_STUB"],
     });
     const present = new Map([["shot_02", "renders/p/clips/shot_02_finished.mp4"]]); // the RIFE intermediate
     const adopted = reclaimFinishShotsFromR2([failed], present);
@@ -148,7 +148,7 @@ describe("finish shot ledger reconciles 1:1 to its chain (#662, adopted-shot boo
   it("no-dialogue chain, RIFE(idx0) reused mid-chain: applied MISSING rife, but the ledger reconciles + discloses it reused", () => {
     const fs = finishShot({
       shot_id: "shot_03",
-      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_FINISH_STUB"],
       configs: [{ interpolation_factor: 2 }, {}, { scale: 2 }, {}],
     });
     // idx0 RIFE: its RunPod job GC'd after writing _finished.mp4 -> adopted from R2 (tag reconstructed).
@@ -170,7 +170,7 @@ describe("finish shot ledger reconciles 1:1 to its chain (#662, adopted-shot boo
   it("dialogue chain, LIPSYNC(idx0) reused mid-chain: applied MISSING lipsync, but the ledger reconciles + discloses it reused", () => {
     const fs = finishShot({
       shot_id: "shot_02",
-      chain: ["MODULE_FINISH_LIPSYNC", "MODULE_FINISH_RIFE", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      chain: ["MODULE_FINISH_LIPSYNC", "MODULE_FINISH_RIFE", "MODULE_FINISH_UPSCALE", "MODULE_FINISH_STUB"],
       configs: [{ version: "v15" }, { interpolation_factor: 2 }, { scale: 2 }, {}],
     });
     // idx0 LIPSYNC: reused from R2 (its _ls artifact + matching #583 provenance sidecar) -> mouth IS synced.
@@ -190,7 +190,7 @@ describe("finish shot ledger reconciles 1:1 to its chain (#662, adopted-shot boo
   it("FINAL step reused via reclaimFinishShotsFromR2 (idx===last): the ledger still reconciles 1:1", () => {
     const fs = finishShot({
       shot_id: "shot_01",
-      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_FINISH_STUB"],
       configs: [{ interpolation_factor: 2 }, {}, { scale: 2 }, {}],
     });
     applyFinishOutput(fs, finishOut("clips/shot_01_finished.mp4", ["interpolate:2x"]));  // idx0
@@ -204,7 +204,7 @@ describe("finish shot ledger reconciles 1:1 to its chain (#662, adopted-shot boo
     expect(fs.status).toBe("done");
     expect(finishShotLedgerReconciles(fs)).toBe(true);
     expect(fs.ledger?.length).toBe(4);
-    expect(fs.ledger?.[3]).toEqual({ binding: "MODULE_TEXT_OVERLAY", tags: ["MODULE_TEXT_OVERLAY:r2-adopted"], reused: true });
+    expect(fs.ledger?.[3]).toEqual({ binding: "MODULE_FINISH_STUB", tags: ["MODULE_FINISH_STUB:r2-adopted"], reused: true });
   });
 
   it("guard catches a REAL drop: a DONE shot whose ledger is SHORTER than its chain does NOT reconcile", () => {
@@ -369,14 +369,14 @@ describe("finish-step R2 advance (FIX C: a MID-chain step GC'd/frozen with its o
     expect(finishStepOutputKey("neon", fs({ clip_key: "renders/neon/clips/shot_01_finished.mp4", chain: ["MODULE_FINISH_LIPSYNC"] }))).toBe("renders/neon/clips/shot_01_finished_ls.mp4");
     expect(finishStepOutputKey("neon", fs({ clip_key: "renders/neon/clips/shot_01_finished_ls.mp4", chain: ["MODULE_FINISH_UPSCALE"] }))).toBe("renders/neon/clips/shot_01_finished_ls_up.mp4");
     // an unmodeled module -> null: NO R2 shortcut, so it can never advance off a sibling step's artifact.
-    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_TEXT_OVERLAY"] }))).toBeNull();
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_FINISH_STUB"] }))).toBeNull();
   });
 
   it("finishStepAppliedTag: reconstructs each module's applied marker from its validated config", () => {
     expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_LIPSYNC"], configs: [{ version: "v15" }] }))).toBe("lipsync:v15");
     expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_UPSCALE"], configs: [{ scale: 2 }] }))).toBe("upscale:2x");
     expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_RIFE"], configs: [{ interpolation_factor: 2 }] }))).toBe("interpolate:2x");
-    expect(finishStepAppliedTag(fs({ chain: ["MODULE_TEXT_OVERLAY"], configs: [{}] }))).toBe("MODULE_TEXT_OVERLAY:r2-adopted");
+    expect(finishStepAppliedTag(fs({ chain: ["MODULE_FINISH_STUB"], configs: [{}] }))).toBe("MODULE_FINISH_STUB:r2-adopted");
   });
 
   // The live wedge: a 4-step chain stuck at idx 0 (RIFE) whose poll froze IN_PROGRESS / 404s while the
@@ -388,7 +388,7 @@ describe("finish-step R2 advance (FIX C: a MID-chain step GC'd/frozen with its o
     keyframe_binding: null, phase: "finish", clips_only: true,
     finish_shots: [{
       shot_id: "shot_01", clip_key: "renders/neon/clips/shot_01_i2v.mp4",
-      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_TEXT_OVERLAY"],
+      chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_LIPSYNC", "MODULE_FINISH_UPSCALE", "MODULE_FINISH_STUB"],
       configs: [{ interpolation_factor: 2 }, { version: "v15" }, { scale: 2 }, {}],
       idx: 0, status: "pending", applied: [], poll: "frozen", error: undefined,
     }] as FinishShot[],
@@ -2569,9 +2569,9 @@ describe("advanceFilmJob re-stamps last_progress_at on a tick (#136)", () => {
 
 describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 incident)", () => {
   // The exact #209 reliability gap: a finish shot stuck PENDING at a NON-LAST chain module (RIFE at
-  // idx 0 of [RIFE, TEXT_OVERLAY]) whose RunPod envelope froze at IN_PROGRESS, but whose RIFE output
+  // idx 0 of [RIFE, FINISH_STUB]) whose RunPod envelope froze at IN_PROGRESS, but whose RIFE output
   // IS in R2. The orchestrator must adopt the intermediate from R2 (advance idx, set clip_key, clear
-  // poll) so the chain proceeds to text-overlay -- not hang to the 90min ceiling and false-fail.
+  // poll) so the chain proceeds to the finish stub -- not hang to the 90min ceiling and false-fail.
   const midChainFilm = (): FilmJob => ({
     film_id: "film-209", project: "fac", bundle_key: "b",
     scenes: [{ shot_id: "shot_03", prompt: "a", seconds: 4 }],
@@ -2579,7 +2579,7 @@ describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 inc
     keyframe_binding: null, phase: "finish", clips_only: true,
     finish_shots: [
       { shot_id: "shot_03", clip_key: "renders/fac/clips/shot_03_i2v.mp4",
-        chain: ["MODULE_FINISH_RIFE", "MODULE_TEXT_OVERLAY"], configs: [{}, {}], idx: 0,
+        chain: ["MODULE_FINISH_RIFE", "MODULE_FINISH_STUB"], configs: [{}, {}], idx: 0,
         status: "pending", applied: [], poll: "tok-frozen", error: undefined },
     ] as FinishShot[],
     created_at: Date.now(),
@@ -2612,12 +2612,12 @@ describe("advanceFinishPhase: mid-chain R2 adoption (#209 -- the FAC shot_03 inc
       { "renders/fac/clips/shot_03_finished.mp4.hash": scHash });
     await advanceFilmJob(env, "film-209");
     const fs = read().finish_shots?.find((f) => f.shot_id === "shot_03");
-    expect(fs?.idx).toBe(1); // advanced off RIFE -> text-overlay
-    expect(fs?.clip_key).toBe("renders/fac/clips/shot_03_finished.mp4"); // now feeding text-overlay
+    expect(fs?.idx).toBe(1); // advanced off RIFE -> the finish stub
+    expect(fs?.clip_key).toBe("renders/fac/clips/shot_03_finished.mp4"); // now feeding the finish stub
     expect(fs?.poll).toBeUndefined(); // frozen poll cleared
     expect(fs?.applied ?? []).not.toContain("interpolate:2x"); // #583: adopted, NOT run -> never a fake applied-run tag
     expect(fs?.adopted).toContain("interpolate:2x"); // RIFE's reconstructed tag, disclosed in the `adopted` channel
-    expect(fs?.status).toBe("pending"); // still pending: text-overlay (idx 1) has yet to run
+    expect(fs?.status).toBe("pending"); // still pending: the finish stub (idx 1) has yet to run
   });
 
   it("#583 gate: does NOT adopt the mid-chain artifact with NO sidecar -- stays pending, never advances on a legacy artifact", async () => {
@@ -2739,8 +2739,8 @@ describe("finish_artifacts: contract-carried conventions beat the legacy name-de
   });
 
   it("no declaration + unmodeled name -> null (no R2 shortcut), and the legacy names still resolve", () => {
-    const modules = [mod("MODULE_TEXT_OVERLAY", undefined)];
-    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_TEXT_OVERLAY"] }), modules)).toBeNull();
+    const modules = [mod("MODULE_FINISH_STUB", undefined)];
+    expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_FINISH_STUB"] }), modules)).toBeNull();
     expect(finishStepOutputKey("neon", fs({ chain: ["MODULE_FINISH_RIFE"] }), modules))
       .toBe("renders/neon/clips/shot_01_finished.mp4");
   });

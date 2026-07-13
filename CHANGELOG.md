@@ -3,6 +3,23 @@
 Notable changes per release. SemVer-style (pre-1.0: PATCH for fixes / backend-only tweaks, MINOR
 for new features). Newest first.
 
+## Unreleased
+
+**Retire the `text-overlay` finish module (dead code; superseded by `subtitle` + `film-titles`).** PATCH.
+
+- **`text-overlay` retired, not fixed.** The module read its content from `req.config.overlays` (an
+  array), but `overlays` was never a declared `config_schema` field (schema types are only int / float /
+  bool / enum / string; there is no array type). The core `validateConfig` (`src/modules/registry.ts`)
+  builds a module's validated config ONLY from declared schema keys, so `overlays` was always stripped
+  before the module saw it: it could never receive overlay content through any path (config or derived),
+  and always took the clean no-overlays passthrough. Captions and title / credit cards are already covered
+  by the working, output-verified `subtitle` and `film-titles` modules. Removed: the
+  `modules/text-overlay/` worker, its `MODULE_TEXT_OVERLAY` service binding in `wrangler.toml.example`,
+  the CI + deploy-doc references, and `tests/text-overlay.test.ts`. The `film-orchestrator` chain-advance
+  fixtures that used it as a generic unmodeled finish step now use a neutral `MODULE_FINISH_STUB`. The
+  core auto-discovers modules via the `MODULE_*` service-binding scan, so dropping the binding delists it
+  after the next core deploy.
+
 ## v0.21.2
 
 **Stop the full-film route from retraining already-ready cast LoRAs, and record the honest quality tier (#762).** PATCH.

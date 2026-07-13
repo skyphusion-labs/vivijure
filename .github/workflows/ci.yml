@@ -104,7 +104,7 @@ jobs:
             echo "::error::SECRETS_STORE_ID repo variable is unset -- refusing to deploy modules with an unfilled store_id placeholder"
             exit 1
           fi
-          # #520: the media modules (film-titles/subtitle/text-overlay -> video-finish, beat-sync ->
+          # #520: the media modules (film-titles/subtitle -> video-finish, beat-sync ->
           # audio-beat-sync, audio-master -> audio-master) need their VPC service_id filled. Fail
           # closed if any secret is unset -- an empty service_id ships a broken VPC binding.
           # NOTE: VPC_AUDIO_MASTER_ID is a NEW repo secret (its value = the prod audio-master VPC

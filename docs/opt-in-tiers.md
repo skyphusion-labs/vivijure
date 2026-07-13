@@ -36,7 +36,6 @@ Workers VPC. Brought up together with `docker compose -f containers/compose.yaml
 
 - **film-titles** -- opening title and end-credit cards for the whole film, added after the film is
   assembled. No GPU re-render.
-- **text-overlay** -- on-screen text (titles, credits, lower-thirds, captions) burned into a shot.
 - **subtitle** -- burns a time-synced subtitle track (an SRT file) into the film as open captions
   viewers cannot turn off.
 
