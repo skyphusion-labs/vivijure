@@ -79,6 +79,11 @@ export interface FilmJob {
   scenes: FilmScene[];
   motion_backend: string | null;
   motion_config: Record<string, unknown>;
+  // #767: the validated keyframe config, persisted so the R2-presence keyframe reclaim can fingerprint
+  // (keyframeProvenanceHash) which config produced a keyframe and refuse to adopt one a DIFFERENT-config
+  // render of the same project wrote. Backend-agnostic (SDXL), so the motion backend is NOT part of it --
+  // two renders that differ only in motion backend legitimately share keyframes. Absent on legacy job docs.
+  keyframe_config?: Record<string, unknown>;
   finish_config: Record<string, Record<string, unknown>>; // per finish module (keyed by module name), validated at enterFinishPhase
   speech_config?: Record<string, Record<string, unknown>>; // per speech module (keyed by module name), validated at enterSpeechOrFinish
   film_finish_config?: Record<string, Record<string, unknown>>; // per film.finish module (by name), validated in applyFilmFinish

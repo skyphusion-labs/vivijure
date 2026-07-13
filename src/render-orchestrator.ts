@@ -14,6 +14,7 @@ import { discoverModules, invokeModule, pollModule, cancelModule, resolveFetcher
 import type { MotionBackendInput, MotionBackendOutput, PollResponse, RegisteredModule } from "./modules/types";
 import { hookOutputViolation } from "./modules/conformance";
 import { validateClipArtifact } from "./clip-validate";
+import { clipProvenanceHash, chooseProvenanceMatch, headEtag, writeProv } from "./clip-provenance";
 
 export interface ClipShotInput {
   shot_id: string;
@@ -54,6 +55,10 @@ export interface ClipShot extends ClipShotInput {
   // #719: consecutive TRANSIENT poll-error count (see applyPoll). Reset on any successful poll;
   // the shot fails loud at CLIP_POLL_MAX_ATTEMPTS instead of on the first blip.
   poll_attempts?: number;
+  // #767: the resolved, validated motion config for this shot, retained so the R2-presence reclaim can
+  // fingerprint what produced a clip (motion_backend + config + keyframe + prompt) and refuse to adopt a
+  // clip a DIFFERENT-config render of the same project+shot wrote. Absent on legacy job docs.
+  config?: Record<string, unknown>;
 }
 export interface ClipJob {
   job_id: string;
@@ -223,6 +228,52 @@ export async function listClipsByShotId(
   return found;
 }
 
+/** #767: like listClipsByShotId but returns EVERY candidate clip key per shot (not first-match-wins), so
+ *  the provenance-gated reclaim can pick the one whose sidecar proves identical-config. A sibling render of
+ *  the same project leaves its own <shot>_<backend>.mp4 at the same shot-id path; both are candidates. The
+ *  #661 freshness floor (minUploadedMs) still excludes anything written before this run started. */
+export async function listAllClipsByShotId(
+  env: Env,
+  project: string,
+  shotIds: string[],
+  minUploadedMs = 0,
+): Promise<Map<string, string[]>> {
+  const prefix = `renders/${project}/clips/`;
+  const found = new Map<string, string[]>();
+  let cursor: string | undefined;
+  do {
+    const listed = await env.R2_RENDERS.list({ prefix, cursor, limit: 1000 });
+    for (const o of listed.objects) {
+      if (minUploadedMs && o.uploaded.getTime() < minUploadedMs) continue;
+      const file = o.key.slice(prefix.length);
+      for (const shotId of shotIds) {
+        if (clipFileMatchesShot(file, shotId)) {
+          const arr = found.get(shotId) ?? [];
+          arr.push(o.key);
+          found.set(shotId, arr);
+        }
+      }
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+  return found;
+}
+
+/** #767: stamp this render config-provenance sidecar (<clip_key>.prov) for a done shot, so the R2-presence
+ *  reclaim of a LATER same-project render can prove identical-config before adopting the clip. Best-effort:
+ *  a stamp failure never fails the render (a missing sidecar falls back to the freshness-floored path). */
+async function stampClipProvenance(env: Env, project: string, shot: ClipShot): Promise<void> {
+  if (!shot.clip_key) return;
+  const hash = await clipProvenanceHash({
+    motion_backend: shot.motion_backend,
+    config: shot.config,
+    keyframe_etag: await headEtag(env, shot.keyframe_key),
+    prompt: shot.prompt,
+    seconds: shot.seconds,
+  });
+  await writeProv(env, shot.clip_key, hash);
+}
+
 /** Start a clip job: resolve the motion.backend module per shot, submit, persist poll tokens. */
 export async function startClipJob(
   env: Env,
@@ -259,6 +310,7 @@ export async function startClipJob(
     const config = mb
       ? validateConfig(mb.config_schema, moduleConfigs[mb.name] ?? (mb.name === defaultMb?.name ? args.config : undefined) ?? args.config)
       : defaultConfig;
+    shot.config = config; // #767: retain the resolved config so a later reclaim can fingerprint this clip
     if (!mb || !fetcher) {
       shot.status = "failed";
       shot.error = mb ? `module ${mb.name} (${binding}) is not bound` : "no motion.backend module installed";
@@ -281,7 +333,7 @@ export async function startClipJob(
       const output = r.output as MotionBackendOutput;
       const violation = hookOutputViolation(mb.name, "motion.backend", output);
       if (violation) { shot.status = "failed"; shot.error = violation; }
-      else { shot.status = "done"; shot.clip_key = output.clip_key; }
+      else { shot.status = "done"; shot.clip_key = output.clip_key; await stampClipProvenance(env, args.project, shot); }
     } else {
       shot.status = "failed";
       shot.error = "module returned neither output nor a poll token";
@@ -308,6 +360,7 @@ export async function advanceClipJob(env: Env, jobId: string, preModules?: Regis
   if (!obj) return null;
   const job = JSON.parse(await obj.text()) as ClipJob;
   const envRec = env as unknown as Record<string, unknown>;
+  const polled: ClipShot[] = [];
   for (const shot of job.shots) {
     if (shot.status !== "pending" || !shot.poll) continue;
     const binding = shot.binding ?? job.binding;
@@ -319,6 +372,13 @@ export async function advanceClipJob(env: Env, jobId: string, preModules?: Regis
     }
     const p = await pollModule<MotionBackendOutput>(fetcher, { poll: shot.poll });
     applyPoll(shot, p);
+    polled.push(shot);
+  }
+  // #767: stamp this render config-provenance for any shot accepted via this pass's poll, so a later
+  // same-project render with a different backend/config can prove it must re-render rather than adopt this
+  // clip. Done after the poll loop so the shot type is not narrowed to the pre-poll "pending".
+  for (const shot of polled) {
+    if (shot.status === "done" && shot.clip_key) await stampClipProvenance(env, job.project, shot);
   }
   // R2 PRESENCE IS AUTHORITATIVE (issue #141): reclaim any FAILED shot whose clip is in R2 -- whether it
   // failed this pass or a prior one -- so a #142 fast-fail can never drop a shot whose clip actually
@@ -396,17 +456,34 @@ export async function cancelInFlightClips(env: Env, jobId: string, preModules?: 
 export async function reclaimClipsFromR2(env: Env, job: ClipJob): Promise<number> {
   const notDone = job.shots.filter((s) => s.status !== "done" && s.validated !== "fail");
   if (!notDone.length) return 0;
-  const present = await listClipsByShotId(env, job.project, notDone.map((s) => s.shot_id), clipFileMatchesShot, job.created_at);
+  // #767: list ALL candidate clips per shot, not first-match-wins. A sibling render of the SAME project
+  // leaves its OWN <shot>_<backend>.mp4 next to ours at the same shot-id path, so we must inspect every
+  // candidate and adopt ONLY the one whose provenance sidecar proves it was produced by THIS render config
+  // (motion_backend + config + keyframe + prompt). A mismatch is skipped -> the shot re-renders rather than
+  // shipping another render clip. The #661 freshness floor still excludes anything written before this job.
+  const candidates = await listAllClipsByShotId(env, job.project, notDone.map((s) => s.shot_id), job.created_at);
   let adopted = 0;
   for (const shot of notDone) {
-    if (present.has(shot.shot_id)) {
-      shot.status = "done";
-      shot.clip_key = present.get(shot.shot_id);
-      shot.poll = undefined;
-      shot.error = undefined; // clear a premature failure; the artifact is the source of truth
-      shot.validated = undefined; // #523: re-validate the freshly-adopted artifact
-      adopted += 1;
-    }
+    const keys = candidates.get(shot.shot_id);
+    if (!keys || !keys.length) continue;
+    const expected = await clipProvenanceHash({
+      motion_backend: shot.motion_backend,
+      config: shot.config,
+      keyframe_etag: await headEtag(env, shot.keyframe_key),
+      prompt: shot.prompt,
+      seconds: shot.seconds,
+    });
+    const chosen = await chooseProvenanceMatch(env, expected, keys);
+    if (!chosen) continue; // no clip PROVEN identical-config -> re-render (never adopt a mismatched clip)
+    shot.status = "done";
+    shot.clip_key = chosen.key;
+    shot.poll = undefined;
+    shot.error = undefined; // clear a premature failure; the artifact is the source of truth
+    shot.validated = undefined; // #523: re-validate the freshly-adopted artifact
+    // Heal a legacy / lost-poll (#141) clip that had no sidecar with THIS render fingerprint, so the next
+    // reclaim (and any sibling render) can rely on provenance instead of the freshness floor alone.
+    if (chosen.stampNeeded) await stampClipProvenance(env, job.project, shot);
+    adopted += 1;
   }
   return adopted;
 }
