@@ -28,7 +28,7 @@ import { getCastById, markLoraReady } from "./cast-db";
 import { claimFilmAdvance, releaseFilmAdvance, type FilmAdvanceClaim } from "./renders-db";
 import { withD1Retry } from "./d1-retry";
 import { deriveLoraDestKey } from "./lora-bundle";
-import { keyframeProvenanceHash, writeProv, provKey, provVerdict } from "./clip-provenance";
+import { keyframeProvenanceHash, writeProv, provVerdict } from "./clip-provenance";
 
 // The pure film model (S6 split): shapes + synchronous logic live in film-model.ts; this file owns
 // the I/O. Re-exported below so every existing importer keeps its single entry point.
