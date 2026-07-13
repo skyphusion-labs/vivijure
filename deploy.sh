@@ -119,7 +119,8 @@ export CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
 # subtitle / beat-sync / audio-master), all reached over Workers VPC (provisioned in step 4, #519).
 STANDARD_MODULES="own-gpu seedance kling keyframe cloud-keyframe finish-rife plan-enhance cast-image \
 notify-email music-gen narration-gen dialogue-gen minimax-hailuo google-veo vidu-q3 alibaba-wan \
-alibaba-wan-lora film-titles subtitle beat-sync audio-master"
+film-titles subtitle beat-sync audio-master"
+# alibaba-wan-lora is DELISTED for v1.0 (#771): custom-LoRA path unverified; source kept, re-add when fixed.
 # SATELLITES = the 3 opt-in GPU finish modules, each on its own separate RunPod endpoint.
 SATELLITE_MODULES="finish-upscale finish-lipsync speech-upscale"
 MODULES="$STANDARD_MODULES"

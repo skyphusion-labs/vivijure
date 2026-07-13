@@ -20,6 +20,18 @@ for new features). Newest first.
   core auto-discovers modules via the `MODULE_*` service-binding scan, so dropping the binding delists it
   after the next core deploy.
 
+**Delist `alibaba-wan-lora` from the v1.0 distribution (unverified, not retired).** PATCH.
+
+- **`alibaba-wan-lora` delisted pending verification (#771).** Its distinguishing feature -- injecting
+  custom operator LoRAs into the Wan 2.2 cloud i2v path (`high_noise_loras` / `low_noise_loras`) -- is
+  UNVERIFIED: exercising it needs a hosted Wan2.2 i2v LoRA artifact, and the cast LoRAs on hand are SDXL
+  keyframe LoRAs (wrong architecture), so a render with empty LoRA arrays only duplicates the already
+  output-verified `alibaba-wan` backend. Rather than ship an advertised-but-unverified feature in v1.0, the
+  module is DELISTED, not retired: the `MODULE_ALIBABA_WAN_LORA` core binding is commented in
+  `wrangler.toml.example`, the module DIR is added to the CI deploy-loop `EXCLUDE`, and it is dropped from
+  `deploy.sh` `STANDARD_MODULES`. The module SOURCE and its tests stay intact; re-enable the binding + drop
+  it from `EXCLUDE` once the custom-LoRA path is output-verified with a real Wan LoRA.
+
 ## v0.21.2
 
 **Stop the full-film route from retraining already-ready cast LoRAs, and record the honest quality tier (#762).** PATCH.

@@ -129,7 +129,10 @@ jobs:
           # re-seeded per pod in the Secrets Store, with the backend-auto-generated LOCAL_BACKEND_TOKEN;
           # the door fails loud when no pod is attached, and the core binds MODULE_LOCAL_GPU. (Excluding
           # it before the backend existed aborted the v0.7.6 deploy: code 10182, unsatisfiable binding.)
-          EXCLUDE=""
+          # alibaba-wan-lora DELISTED for v1.0 (#771): its custom-LoRA injection path is unverified (no
+          # Wan2.2 i2v LoRA artifact to exercise it). Source kept; drop from EXCLUDE once verified. The
+          # core binding is commented in wrangler.toml.example to match, so no dangling MODULE_* binding.
+          EXCLUDE="alibaba-wan-lora"
           deployed=0
           found=0
           for toml in modules/*/wrangler.toml; do
