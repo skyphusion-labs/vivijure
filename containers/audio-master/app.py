@@ -88,6 +88,18 @@ async def master(req):
 
     upscale = bool(body.get("upscale", True))
 
+    # Optional film-length hint: when the module forwards the film length, master_core trims the bed to it so
+    # the mastered output is film-length (tiny) instead of a raw, over-long music bed. Absent/invalid -> None
+    # -> master the full bed (back-compat; video-finish still trims to the video length downstream).
+    seconds = body.get("seconds")
+    if seconds is not None:
+        try:
+            seconds = float(seconds)
+        except (TypeError, ValueError):
+            return web.json_response({"ok": False, "error": "seconds must be numeric"}, status=400)
+        if seconds <= 0:
+            seconds = None
+
     work = tempfile.mkdtemp(prefix="amaster-")
     try:
         src = os.path.join(work, "in.bin")
@@ -100,7 +112,7 @@ async def master(req):
         loop = asyncio.get_running_loop()
         try:
             out_path, result = await loop.run_in_executor(
-                None, master_bed, work, src, target_lufs, upscale, fmt,
+                None, master_bed, work, src, target_lufs, upscale, fmt, seconds,
             )
         except subprocess.CalledProcessError as e:
             log.exception("ffmpeg failed")

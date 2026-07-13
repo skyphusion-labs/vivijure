@@ -55,9 +55,13 @@ def _measure_loudnorm(path, target_lufs):
     return _json.loads(m[-1])
 
 
-def master_bed(work, in_path, target_lufs=DEFAULT_TARGET_LUFS, upscale=True, fmt="wav"):
+def master_bed(work, in_path, target_lufs=DEFAULT_TARGET_LUFS, upscale=True, fmt="wav", seconds=None):
     """CPU "mastering" pass for a film's audio bed: an optional VHQ soxr resample to 48 kHz + gentle
     high-shelf air lift (when `upscale`), then two-pass LUFS loudnorm to `target_lufs`. ffmpeg DSP only.
+    When `seconds` is a positive film-length hint, the bed is cut to that length up front (pass 1) so the
+    mastered output is film-length rather than the raw (possibly over-long) source bed -- a music-gen bed can
+    run far longer than the film. A film-length wav is tiny and never trips the downstream video-finish
+    audio-ingest bound; loudnorm then measures the shipped portion, not a tail that gets discarded.
     Returns (out_path, {durationSeconds, lufs, applied}). The two-pass loudnorm (measure -> apply with
     the measured values) is the same discipline the mixer uses, so the bed lands at a clean, consistent
     level. `applied` lists the human-readable tags the module surfaces (the honest #77 record)."""
@@ -76,8 +80,18 @@ def master_bed(work, in_path, target_lufs=DEFAULT_TARGET_LUFS, upscale=True, fmt
         applied.append("music-upscale:soxr48k")
     else:
         chain = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+    # Optional film-length trim: cut the bed to `seconds` (the film-length hint) BEFORE mastering, so the
+    # mastered output is film-length, not the raw (possibly over-long) source bed. `-t` caps at EOF, so a
+    # hint at or beyond the source length is a harmless no-op.
+    trim = []
+    try:
+        _sec = float(seconds) if seconds is not None else 0.0
+    except (TypeError, ValueError):
+        _sec = 0.0
+    if _sec > 0:
+        trim = ["-t", f"{_sec:.3f}"]
     _run([
-        "ffmpeg", "-y", "-i", in_path, "-af", chain,
+        "ffmpeg", "-y", "-i", in_path, *trim, "-af", chain,
         "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", lifted,
     ])
 
