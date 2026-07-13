@@ -340,11 +340,13 @@ service = "vivijure-module-alibaba-wan"
 # CUSTOM operator LoRAs (the controllable, GPU-rental-free i2v lane; pairs with the cloud-keyframe
 # module). A motion.backend module, discovered by the registry exactly like any MODULE_* binding.
 #
-# UNCOMMENTED for v0.3.0: vivijure-module-alibaba-wan-lora is deployed (modules deploy before the core
-# in ci.yml), so this binding no longer dangles.
-[[services]]
-binding = "MODULE_ALIBABA_WAN_LORA"
-service = "vivijure-module-alibaba-wan-lora"
+# DELISTED for v1.0 (binding commented, module excluded from the CI deploy loop -- see ci.yml EXCLUDE
+# and issue #771): its custom-LoRA injection path is UNVERIFIED (no Wan2.2 i2v LoRA artifact on hand to
+# exercise it; our cast LoRAs are SDXL keyframe LoRAs, wrong architecture). The module SOURCE stays;
+# re-enable this binding + drop it from EXCLUDE once the custom-LoRA path is output-verified.
+# [[services]]
+# binding = "MODULE_ALIBABA_WAN_LORA"
+# service = "vivijure-module-alibaba-wan-lora"
 
 # Cloud keyframe (GPUless cost-door): FLUX-2 direct on the AI binding + nano-banana-pro via AI Gateway.
 # ADDED in v0.3.0.
