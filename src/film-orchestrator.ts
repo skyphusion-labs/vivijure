@@ -564,6 +564,10 @@ interface FinishContainerResult {
   durationSeconds?: number;
   shots?: number;
   error?: string;
+  // Whether the container actually wrote an audio track. On the remux/assemble paths it reflects the REAL
+  // outcome: a bed that could not be fetched (over the container audio cap) or decoded yields hasAudio:false
+  // even though the container returns ok. Absent (undefined) on an older container build that omits it.
+  hasAudio?: boolean;
   // #697/#698: ACTUAL per-clip assembled seconds in submit order; absent on an older container build.
   clipDurations?: number[];
 }
@@ -1332,6 +1336,15 @@ async function enterMuxPhase(env: Env, job: FilmJob, preModules?: RegisteredModu
   if (!body.ok) {
     job.phase = "failed";
     job.error = `video-finish mux failed: ${body.error || "unknown error"}`;
+    return;
+  }
+  // F2 honesty gate: we reach here only WITH a bed to mux, so the container reporting hasAudio:false means
+  // it shipped a track-less MP4 (the bed exceeded the container audio cap or was undecodable, so it finished
+  // silent yet returned ok). NEVER mark that a silent green -- surface it as an OBSERVABLE mux degrade
+  // (finish_unavailable at mux) that delivers the silent film honestly (#245/#249/#77). hasAudio is undefined
+  // on an older container that omits the field, which is unknown (not false), so the prior behavior holds.
+  if (body.hasAudio === false) {
+    await degradeMuxUnavailable(env, job, silentKey, "video-finish could not attach the audio bed (the bed exceeded the container audio cap or was undecodable); shipped silent film", preModules);
     return;
   }
   job.film_key = outKey;
