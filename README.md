@@ -3,9 +3,11 @@
 **Write a storyboard. Render it to video on your own GPU. No subscription, no account wall, no
 lock-in.** You bring the GPU and the keys; the studio brings the pipeline. You own every artifact.
 
-Vivijure is a self-hosted, AGPL AI film studio. It runs free on the Cloudflare Workers free tier
-(or with no Cloudflare at all), and connects to whatever GPU backend you attach -- RunPod, your own
-box, or a cloud motion API.
+Vivijure is a self-hosted, AGPL AI film studio. Run the control panel on the Cloudflare Workers free
+tier ([vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)), or on a home computer / any
+cloud server ([vivijure-local](https://github.com/skyphusion-labs/vivijure-local)); both share
+[vivijure-core](https://github.com/skyphusion-labs/vivijure-core). Connect whatever GPU backend you
+attach -- RunPod, your own box, or a cloud motion API.
 
 > **This repo is the constellation map -- the front door to every part of Vivijure.** The studio
 > itself and each render engine live in their own repos, linked below. Looking for the code you
