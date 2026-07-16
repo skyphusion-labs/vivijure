@@ -13,7 +13,7 @@ attach -- RunPod, your own box, or a cloud motion API.
 > itself and each render engine live in their own repos, linked below. Looking for the code you
 > deploy? That is **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)**.
 
-**Live:** https://vivijure.com · **Studio:** https://vivijure.skyphusion.org · **Skyphusion Labs:** https://skyphusion.org
+**Live:** https://vivijure.com · **Demo:** https://demo.vivijure.com · **Skyphusion Labs:** https://skyphusion.org
 
 ## Start here
 
