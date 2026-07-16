@@ -199,10 +199,21 @@ retaliation against good-faith reporters.
 
 ## 6. Relationship to the other documents
 
-- The **Terms** govern the overall agreement for using the software and the project, including that
-  violating this AUP can end your access to Conrad's instance and your standing in the project.
-- The **Privacy Policy** describes what data the software handles, and why Skyphusion Labs holds none
-  of it (you self-host), including that the CSAM reporting posture in Section 1 is the single
-  exception to the otherwise hands-off privacy stance.
-- Copyright and intellectual-property terms are in the Terms (Section 10); infringing use of others'
-  work also violates Section 2.4 here.
+This policy is canonical here at the constellation hub and binds the whole Vivijure
+constellation. The documents it hangs off are canonical in the studio repo
+([vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)); they are linked rather than
+copied, so the texts never drift.
+
+- The **[Terms](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/TERMS.md)** govern the
+  overall agreement for using the software and the project, including that violating this AUP
+  can end your access to Conrad's instance and your standing in the project.
+- The **[Privacy Policy](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md)**
+  describes what data the software handles, and why Skyphusion Labs holds none of it (you
+  self-host), including that the CSAM reporting posture in Section 1 is the single exception to
+  the otherwise hands-off privacy stance.
+- The **[security posture](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/SECURITY.md)** (the
+  trust boundary and what a leaked value can reach) is canonical in the studio repo too; this
+  repo's [SECURITY.md](../../SECURITY.md) is the reporting policy.
+- Copyright and intellectual-property terms are in the
+  [Terms](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/TERMS.md) (Section 10);
+  infringing use of others' work also violates Section 2.4 here.

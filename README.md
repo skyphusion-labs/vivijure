@@ -163,11 +163,12 @@ shot, drives the lip-sync, and rides through assembly into the final mux.
 
 ## Legal
 
-Vivijure's public policies live in the studio repo, one click away:
-[Acceptable Use Policy](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/ACCEPTABLE-USE.md)
-(including the absolute CSAM bright line, 18 U.S.C. 1466A / 2252A), the
-[Privacy Policy](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md),
-and the [Terms of Service](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/TERMS.md).
+Vivijure's public policies, one click away. The
+[Acceptable Use Policy](docs/legal/ACCEPTABLE-USE.md) is canonical here at the hub and binds the whole
+constellation (including the absolute CSAM bright line, 18 U.S.C. 1466A / 2252A); the
+[Privacy Policy](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md) and
+the [Terms of Service](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/TERMS.md)
+are canonical in the studio repo. Index: [docs/legal/](docs/legal/README.md).
 
 ## Support
 

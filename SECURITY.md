@@ -2,7 +2,7 @@
 
 This is the reporting policy for Vivijure Studio. For the technical security posture (the trust
 boundary, what a leaked value can reach, and which surfaces are intentionally public) see
-[docs/SECURITY.md](docs/SECURITY.md); that document is the authoritative model and is not repeated
+[docs/SECURITY.md in vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/SECURITY.md); that document is the authoritative model and is not repeated
 here.
 
 ## Supported versions
@@ -37,5 +37,5 @@ coordinated fix).
 
 In scope is this repository (the studio control-plane Worker) and its runtime. The trust model, the
 intentionally public surfaces, and the downstream-deployer requirements are documented in
-[docs/SECURITY.md](docs/SECURITY.md). Please do not send code, diffs, or excerpts you do not have the
+[docs/SECURITY.md in vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/SECURITY.md). Please do not send code, diffs, or excerpts you do not have the
 rights to share.
