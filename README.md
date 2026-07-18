@@ -41,8 +41,11 @@ flowchart TD
     gpu[GPU render engines<br/>vivijure-backend cloud,<br/>local-12gb / local-16gb own card]
     finish[Finish helper engines<br/>musetalk, upscale, audio-upscale]
 
+    hosted[vivijure-control-plane<br/>hosted tier: provisions a<br/>studio per tenant]
+
     you --> slate --> studio
     you --> studio
+    hosted -. creates tenant studios .-> studio
     studio --> modules
     modules --> gpu
     modules --> finish
@@ -58,6 +61,7 @@ flowchart TD
 | **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)** | **The studio, on Cloudflare Workers** -- the control plane: projects, storyboard, cast, render orchestration, the module registry, and the self-assembling UI. Pairs with `vivijure-core`. **This is the code you deploy.** |
 | [vivijure-core](https://github.com/skyphusion-labs/vivijure-core) | The shared orchestration library (`@skyphusion-labs/vivijure-core` on npm) both hosts build on -- the host-neutral core. |
 | [vivijure-local](https://github.com/skyphusion-labs/vivijure-local) | The same studio **without Cloudflare** -- Node + SQLite + S3/MinIO + Hono. Own the whole stack. |
+| [vivijure-control-plane](https://github.com/skyphusion-labs/vivijure-control-plane) | The **hosted tier's** control plane: accounts, onboarding, and a full studio provisioned per tenant from the published studio release. **You never need this to run your own studio.** Same AGPL as everything else; anyone may run a competing hosted Vivijure from exactly this source. |
 
 **Render engines**
 
