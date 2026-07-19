@@ -119,12 +119,23 @@ commitment cannot float free of the facts.
 | **Vivijure hosted tier** | **Not yet. Pre-launch.** | Nothing yet, because it has no tenants. What it WILL hold is specified in advance, in public, before launch. | [PRIVACY-DELTA.md](https://github.com/skyphusion-labs/vivijure-control-plane/blob/main/docs/legal/hosted/PRIVACY-DELTA.md) (draft, not in force) |
 | **Postern** | No | Nothing. Self-hosted; your mail lives in your own Cloudflare account. | [PRIVACY.md](https://github.com/skyphusion-labs/postern/blob/main/PRIVACY.md) |
 | **Prism** (`play.skyphusion.org`) | **Yes** | Account (username, password as a one-way hash; **no email collected**) and the content you create. Deletable by you at any time. | [INSTANCE-PRIVACY.md](https://github.com/skyphusion-labs/prism/blob/main/docs/legal/INSTANCE-PRIVACY.md) |
-| **Slate** | **Yes** (the official Discord instance) | Message content in channels it listens in, Discord identifiers, derived storyboard state. Sent to named subprocessors to function. | [PRIVACY.md](https://github.com/skyphusion-labs/slate/blob/main/PRIVACY.md) |
+| **Slate** | **No. Self-host only.** | Nothing of yours. Slate is built for other people to run themselves, so the Discord application, the bot token, the subprocessor relationships, and the message content belong to whoever operates the instance. We ship the code and hold none of it. | [PRIVACY.md](https://github.com/skyphusion-labs/slate/blob/main/PRIVACY.md) |
 
-**Prism and Slate are the two places where "we hold nothing" is not literally true**, and they are
-called out here rather than left for a reader to discover. Both hold what the product mechanically
-needs and nothing beyond it, both are documented against the code, and the self-host route for both
-is real.
+**Prism is the one place where "we hold nothing" is not literally true**, and it is called out here
+rather than left for a reader to discover. It holds what the product mechanically needs and nothing
+beyond it, it is documented against the code, and the self-host route is real.
+
+**This table answers a narrower question than it may look like.** The column asks whether Skyphusion
+Labs operates the product as a service for you, not whether the software touches data. Those are
+different questions, and conflating them is how a privacy document ends up overstating its own
+reach. Slate is the clearest case: it reads Discord message content, which makes it the most
+invasive-sounding thing we ship, and **we do not run it for you.** Someone who self-hosts Slate runs
+it, and that operator holds the data and carries the controller's duties toward their own users. The
+disclosure is genuinely owed there; it is just not ours to make.
+
+We do run instances of our own software for our own use, including Slate. That is us using what we
+build, the same as running a local build of Vivijure. It does not make the thing a service we offer
+to anyone, and it puts none of your data in our hands.
 
 ### 4.1 The operational-telemetry boundary
 
