@@ -21,8 +21,9 @@ can drift.
 | [`PRIVACY.md`](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md) | [vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf) | Privacy policy. You self-host, so Skyphusion Labs never sees a byte. Describes what the software stores on the operator's own infrastructure, grounded in the real schema, storage, logging, and processing path. |
 | [`SECURITY.md`](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/SECURITY.md) | [vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf) | The technical security posture: the trust boundary, what a leaked value can reach, which surfaces are intentionally public. This repo's [`SECURITY.md`](../../SECURITY.md) is the reporting policy. |
 | [`PARITY-COMMITMENT.md`](PARITY-COMMITMENT.md) | **here (the hub)** | The hosted/self-host parity commitment: every feature ships to both at the same time, in the same release. No community edition, no capability paywall. Canonical here because it binds the whole constellation; the studio and control-plane repos carry pointer stubs. |
+| [`PRIVACY-COMMITMENT.md`](PRIVACY-COMMITMENT.md) | **here (the hub)** | The privacy commitment, covering every product Skyphusion Labs ships (the Vivijure constellation, Postern, Prism, Slate). Privacy, autonomy, and agency ranked as the primary goal; the consequence rule (we drop the feature, never the line); public source as the audit mechanism; the operational-telemetry boundary (we monitor the machine, never the work); and the CSAM bright line as the one stated exception. Canonical here because it binds every product, not just the constellation. |
 
-The AUP and the parity commitment are canonical here because they bind every repo in the
+The AUP, the parity commitment, and the privacy commitment are canonical here because they bind every repo in the
 constellation, not just the studio. The other repos carry short pointer stubs back to these copies.
 
 ## The hosted studio, and the launch gate
