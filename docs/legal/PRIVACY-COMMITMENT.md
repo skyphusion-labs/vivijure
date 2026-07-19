@@ -119,7 +119,7 @@ commitment cannot float free of the facts.
 | **Vivijure hosted tier** | **Not yet. Pre-launch.** | Nothing yet, because it has no tenants. What it WILL hold is specified in advance, in public, before launch. | [PRIVACY-DELTA.md](https://github.com/skyphusion-labs/vivijure-control-plane/blob/main/docs/legal/hosted/PRIVACY-DELTA.md) (draft, not in force) |
 | **Postern** | No | Nothing. Self-hosted; your mail lives in your own Cloudflare account. | [PRIVACY.md](https://github.com/skyphusion-labs/postern/blob/main/PRIVACY.md) |
 | **Prism** (`play.skyphusion.org`) | **Yes** | Account (username, password as a one-way hash; **no email collected**) and the content you create. Deletable by you at any time. | [INSTANCE-PRIVACY.md](https://github.com/skyphusion-labs/prism/blob/main/docs/legal/INSTANCE-PRIVACY.md) |
-| **Slate** | **No. Self-host only.** | Nothing of yours. Slate is built for other people to run themselves, so the Discord application, the bot token, the subprocessor relationships, and the message content belong to whoever operates the instance. We ship the code and hold none of it. | [PRIVACY.md](https://github.com/skyphusion-labs/slate/blob/main/PRIVACY.md) |
+| **Slate** | **No, and we could not.** Self-host only, permanently. | Nothing of yours, and not as a matter of restraint: there is no hosted Slate, so there is no Slate user data here at all. You create your own application on the Discord Developer Portal, host it yourself, and bring your own AI spend. The Discord application, the bot token, the model provider, and the message content are all yours. | [PRIVACY.md](https://github.com/skyphusion-labs/slate/blob/main/PRIVACY.md) |
 
 **Prism is the one place where "we hold nothing" is not literally true**, and it is called out here
 rather than left for a reader to discover. It holds what the product mechanically needs and nothing
@@ -133,9 +133,28 @@ invasive-sounding thing we ship, and **we do not run it for you.** Someone who s
 it, and that operator holds the data and carries the controller's duties toward their own users. The
 disclosure is genuinely owed there; it is just not ours to make.
 
+**"We do not host Slate" is a structural fact, not a policy choice.** Hosting it would require
+something we have not built and do not want: a per-user AI metering and billing system. Slate is
+conversational and open-ended by design, so every interaction spends model tokens against no natural
+chargeable unit. The distribution model is the answer instead, and it is the whole of it: you take
+Slate, you create your own application on the Discord Developer Portal, you host it, and you bring
+your own AI spend. This is stated as a constraint rather than a decision on purpose. A choice
+invites reconsideration; a constraint does not.
+
+**That produces the strongest form of anything promised in this document.** There is no hosted
+Slate, therefore there is no Slate user data at Skyphusion Labs, therefore there is nothing for us
+to disclose about it. Not "we choose not to look at it": we are **structurally not in the path.**
+Message content flows between the operator's own Discord application and the operator's own model
+provider, and we are never a party to it.
+
+Read that way, the self-host products are the cleanest illustration of this document's whole thesis
+rather than awkward exceptions in an inventory. **The strongest privacy guarantee is not a promise
+not to look. It is not being in a position to.** Section 1.3 makes the same move about auditability,
+for the same reason: a guarantee built into the structure survives our intentions changing.
+
 We do run instances of our own software for our own use, including Slate. That is us using what we
 build, the same as running a local build of Vivijure. It does not make the thing a service we offer
-to anyone, and it puts none of your data in our hands.
+to anyone, and it puts no third party's data in our hands.
 
 ### 4.1 The operational-telemetry boundary
 
