@@ -165,6 +165,13 @@ Motion is backend-agnostic: the same keyframe feeds own-GPU Wan or any cloud i2v
 finish chain runs the same way over whatever clip comes back. The dialogue track is generated per
 shot, drives the lip-sync, and rides through assembly into the final mux.
 
+## Releasing
+
+Every constellation repo (except this hub and `vivijure-com`) deploys or publishes
+**only on a version tag**, never on a merge to `main`. The tag shape, image-tag
+shape, and protection rules are the constellation contract in
+[docs/RELEASE-TAGS.md](docs/RELEASE-TAGS.md).
+
 ## Legal
 
 Vivijure's public policies, one click away. The
