@@ -13,7 +13,8 @@
 
 **Effective date:** 2026-07-19
 
-**Scope:** the Vivijure constellation, Postern, Prism, and Slate. Everything we ship.
+**Scope:** the Vivijure constellation, Postern, Prism, Slate, and Common Thread. Everything we
+ship.
 
 ---
 
@@ -117,13 +118,25 @@ commitment cannot float free of the facts.
 | **Vivijure (self-hosted)** | No | Nothing. Your instance never talks to us. | [PRIVACY.md](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md) |
 | **Vivijure demo** (`demo.vivijure.com`) | Yes | Nothing you submit. Read-only, renders nothing, no account, no identity cookie, no analytics beacon. Standard edge request logs only. | [PRIVACY.md](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md) Section 1a |
 | **Vivijure hosted tier** | **Not yet. Pre-launch.** | Nothing yet, because it has no tenants. What it WILL hold is specified in advance, in public, before launch. | [PRIVACY-DELTA.md](https://github.com/skyphusion-labs/vivijure-control-plane/blob/main/docs/legal/hosted/PRIVACY-DELTA.md) (draft, not in force) |
-| **Postern** | No | Nothing. Self-hosted; your mail lives in your own Cloudflare account. | [PRIVACY.md](https://github.com/skyphusion-labs/postern/blob/main/PRIVACY.md) |
+| **Postern** | **No, and we never will.** Self-host only, permanently. | Nothing. You run it in your own Cloudflare account on your own domain, and your instance never talks to us. There is no Postern service for us to hold data in. | [PRIVACY.md](https://github.com/skyphusion-labs/postern/blob/main/PRIVACY.md) |
 | **Prism** (`play.skyphusion.org`) | **Yes** | Account (username, password as a one-way hash; **no email collected**) and the content you create. Deletable by you at any time. | [INSTANCE-PRIVACY.md](https://github.com/skyphusion-labs/prism/blob/main/docs/legal/INSTANCE-PRIVACY.md) |
 | **Slate** | **No, and we could not.** Self-host only, permanently. | Nothing of yours, and not as a matter of restraint: there is no hosted Slate, so there is no Slate user data here at all. You create your own application on the Discord Developer Portal, host it yourself, and bring your own AI spend. The Discord application, the bot token, the model provider, and the message content are all yours. | [PRIVACY.md](https://github.com/skyphusion-labs/slate/blob/main/PRIVACY.md) |
+| **Common Thread** (`common-thread.skyphusion.org`) | **Yes.** One of the two we host, offered as a public good. | The investigation material you upload, the features extracted from it, attribution results, and generated evidence packets. **Your Anthropic API key is not among them:** attribution is bring-your-own-key, the key is read per request and is never stored server-side or written to logs, and the public instance holds no shared key at all, so attribution fails closed without yours. | **None published yet.** Draft in [common-thread#190](https://github.com/skyphusion-labs/common-thread/pull/190), not merged. See 4.4. |
 
-**Prism is the one place where "we hold nothing" is not literally true**, and it is called out here
-rather than left for a reader to discover. It holds what the product mechanically needs and nothing
-beyond it, it is documented against the code, and the self-host route is real.
+**Prism and Common Thread are where "we hold nothing" is not literally true**, and they are called
+out here rather than left for a reader to discover. Both hold what the product mechanically needs
+and nothing beyond it, both are documented against the code, and the self-host route for both is
+real.
+
+**We host exactly two things, and that is the complete list:** the Vivijure hosted instance and
+Common Thread. Both are offered deliberately, **as a public good.** They are not the business model
+and they are not a funnel; they exist so that someone who cannot stand up their own instance is not
+thereby locked out. Everything else we make is **strictly self-host, permanently.**
+
+That default is an active preference, not a limitation we are apologising for. We would rather you
+ran these things yourself. It is a DIY ethos before it is a privacy argument, and the privacy
+argument is downstream of it: software you run is software nobody else can quietly change the terms
+on.
 
 **This table answers a narrower question than it may look like.** The column asks whether Skyphusion
 Labs operates the product as a service for you, not whether the software touches data. Those are
@@ -203,6 +216,22 @@ absence of that feature is the cost of maintaining your privacy on our platform.
 Degrading the product is the acceptable outcome. Ingesting customer content to save the feature is
 not. This is Section 1.2 with a concrete referent, and it is written down so that nobody can later
 argue that a service-level promise forces the collection.
+
+### 4.4 Common Thread is live without a published privacy policy, and that is a gap
+
+Said here rather than left for someone to notice. **`common-thread.skyphusion.org` is running and
+reachable now, and the privacy policy and acceptable-use policy for it are drafted but not merged**
+([common-thread#190](https://github.com/skyphusion-labs/common-thread/pull/190); the public-release
+readiness evaluation, common-thread#187, is also still open).
+
+The row above is therefore the only published statement of what that instance holds. It is accurate,
+it was written against the code rather than from intent, and it is not a substitute for the policy,
+which is owed.
+
+We are stating it this way for the same reason Section 4.2 states the hosted tier's missing per-field
+dispositions instead of implying they exist: **a privacy document that quietly skips the product with
+the weakest paperwork is not an honest inventory.** The gap closes when #190 merges, and this section
+comes out when it does.
 
 ---
 
