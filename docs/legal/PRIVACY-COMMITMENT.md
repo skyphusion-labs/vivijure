@@ -76,8 +76,9 @@ Across every product, and for as long as we operate them:
    no advertising or marketing trackers, no third-party analytics SDKs, no social pixels.
 3. **We do not train models on your content.**
 4. **We do not read, scan, or review what you create.** No proactive monitoring of content, no
-   automated content review. The single exception is CSAM, in Section 5, and it is stated as an
-   exception rather than buried.
+   automated content review, no classifier run over your work. The single exception is Section 5,
+   which is triggered only by a credible evidence-backed report about a specific instance, never by
+   our own scanning.
 5. **Self-hosting is always a real option, fully featured.** Where we run a service, we also ship
    the software to run it yourself, at feature parity, under the AGPL. If you want an instance we
    are not capable of seeing, that route exists, is free, and we point at it rather than bury it.
@@ -140,8 +141,14 @@ Concretely, for any service we operate:
   machine-generated and none is user-derived.**
 - **Not permitted:** anything carrying customer content. Log lines and exception messages are the
   known content carriers, because a prompt, a filename, a cast name, or a project slug can end up
-  inside one. They are excluded at the source rather than filtered downstream, and exception text
-  gets scrutiny rather than an assumption that stack traces are content-free.
+  inside one. They are configured for exclusion so that they are **never delivered to or retained by
+  us**, and exception text gets scrutiny rather than an assumption that stack traces are
+  content-free. We word it that way deliberately: what we can guarantee is what reaches us and what
+  we keep. We do not claim our platform provider never emits a field internally, because we have not
+  been able to establish that from their documentation and we will not resolve an ambiguity in our
+  own favour. That provider already processes the data in order to run the service at all, which
+  makes it a subprocessor question, addressed in each product's privacy policy, and not a collection
+  by us.
 - **Written down per field.** Every field we collect has a recorded disposition saying why it is
   collected or excluded. Policy is drafted after the collection is defined, never before.
 - **Disclosed, not buried.** Where we promise proactive monitoring as part of a service level, we
@@ -169,7 +176,7 @@ argue that a service-level promise forces the collection.
 
 ---
 
-## 5. The one exception: the CSAM bright line
+## 5. The one exception: the CSAM and NCII bright line
 
 **This is absolute, it is the single exception to everything above, and it is not up for
 discussion.** It is stated here rather than left to the Acceptable Use Policy, because an
@@ -178,24 +185,92 @@ absolutist privacy document that omitted it would be a privacy document that lie
 **It is not a weakening of the commitment. It is a bright line that sits above it.** The privacy
 stance is not, and will never be, a shield for the sexual abuse of children.
 
-- **Zero tolerance, no exceptions, including synthetic.** Any sexual or sexualised depiction of a
-  minor, or of anyone who is or appears to be a minor. **AI-generated, "fake," fictional, cartoon,
-  drawn, and virtual depictions are covered exactly as much as a photograph of a real child.**
-  There is no "it isn't real" carve-out, and no artistic, satirical, fictional, or age-play
-  exception.
-- **This is also the law, not only our policy.** United States federal law reaches
-  computer-generated and synthetic material even where no actual child was involved, including
-  **18 U.S.C. 1466A** and **18 U.S.C. 2252A**. The absence of a real child is not a defence, and it
-  is not one we recognise either.
-- **What we do:** detect, refuse, preserve what the law requires, and report to the National Center
-  for Missing and Exploited Children (NCMEC) via the CyberTipline and to law enforcement, on any
-  infrastructure the project operates. Immediate and permanent termination of access, no warning.
-- **What we do not claim.** We do not, and architecturally cannot, monitor self-hosted instances.
-  We are not watching, and we built it so that we cannot. This exception reaches what we operate
-  and what we are made aware of; it is not a surveillance programme, and it does not become one.
+### 5.1 The prohibition, which has no exceptions
 
-The full prohibition, the enforcement posture, and the reporting route are in the
-[Acceptable Use Policy](ACCEPTABLE-USE.md), Section 1, which is canonical.
+Any sexual or sexualised depiction of a minor, or of anyone who is or appears to be a minor.
+**AI-generated, "fake," fictional, cartoon, drawn, and virtual depictions are covered exactly as
+much as a photograph of a real child.** There is no "it isn't real" carve-out, and no artistic,
+satirical, fictional, or age-play exception.
+
+**This is also the law, not only our policy.** United States federal law reaches computer-generated
+and synthetic material even where no actual child was involved, including **18 U.S.C. 1466A** and
+**18 U.S.C. 2252A**. The absence of a real child is not a defence, and it is not one we recognise
+either.
+
+Non-consensual intimate imagery (NCII) and non-consensual sexual deepfakes of real people are
+prohibited absolutely on the same terms. See the
+[Acceptable Use Policy](ACCEPTABLE-USE.md), Sections 1, 2.1, and 2.2.
+
+### 5.2 What we can and cannot do, stated honestly
+
+Two different surfaces, two different mechanisms. Conflating them is how privacy documents end up
+incoherent, so we separate them.
+
+**Refusal at the generation layer is not surveillance.** A model or a pipeline declining a prompt is
+not us reading anybody's archive. Where a generation path can refuse this material, refusing is
+right and requires no monitoring of anyone.
+
+**Enforcement on instances is a different matter, and here is the honest cost.** We do not
+proactively scan hosted instances, and on self-hosted instances we architecturally cannot: your
+instance never talks to us. **This means we cannot proactively enforce this prohibition, and we
+accept that as a real cost of the privacy guarantee.** It is a cost, not a loophole, and we state it
+plainly rather than hoping nobody notices. Owning the limitation is what makes the rest of this
+document worth anything: a commitment that quietly carves out a surveillance programme is not a
+commitment.
+
+Catching novel synthetic material would require running an automated classifier over everything
+every user generates. That is precisely the surveillance this document refuses. We are not doing it.
+
+### 5.3 The only thing that breaks the vow
+
+**A credible, evidence-backed report to Skyphusion Labs naming a specific hosted instance.** Not a
+rumour. Not a hunch. Not our own suspicion, and not a fishing expedition. A report, with evidence,
+about an identified instance.
+
+**That is the only circumstance in which we will ever look, and the scope of the look is bounded to
+the instance reported.** We are saying "the only" deliberately: a commitment with one clearly
+bounded exception is stronger than one with a vague exception, because a bounded exception is
+checkable and a vague one is an invitation.
+
+When that threshold is met, we investigate, we preserve what the law requires, and we report to the
+National Center for Missing and Exploited Children (NCMEC) via the CyberTipline and to law
+enforcement. Access is terminated immediately and permanently, with no warning.
+
+**The reason, stated as a reason: we stand with victims.** If somebody brings us evidence that a
+specific instance is being used to do this to a child, the privacy promise does not get to be the
+thing that protects the person doing it. That is a fair reason to break the vow, it is the only one
+we have, and we would rather say it in these words than in careful ones.
+
+### 5.4 Why this is the shape the law contemplates, not a compromise with it
+
+This posture is not us splitting a difference between ethics and compliance. It is the structure the
+federal reporting statute actually sets out.
+
+**18 U.S.C. 2258A(a)(1)** requires a provider to report to the NCMEC CyberTipline "as soon as
+reasonably possible after obtaining **actual knowledge** of any facts or circumstances" indicating
+an apparent violation. The duty attaches to knowledge.
+
+**18 U.S.C. 2258A(f)**, whose statutory heading is **"Protection of Privacy,"** provides that
+nothing in the section shall be construed to require a provider to:
+
+> "(1) monitor any user, subscriber, or customer of that provider; (2) monitor the content of any
+> communication of any person described in paragraph (1); or (3) affirmatively search, screen, or
+> scan for facts or circumstances described in sections (a) and (b)."
+
+**So: no duty to look, a hard duty to act on what we actually know.** Those are the two halves, and
+together they are exactly this document's posture. "We choose not to look" is therefore not a policy
+preference we are asking you to tolerate; it is the posture the statute expressly protects, under a
+subsection Congress titled Protection of Privacy. What the law does not excuse, and neither do we,
+is looking away once we know.
+
+Preservation following a CyberTipline report runs **1 year** under **2258A(h)**, and that obligation
+overrides deletion requests. The full abuse-handling and reporting procedure is in
+[ABUSE-AND-NCMEC.md](https://github.com/skyphusion-labs/vivijure-control-plane/blob/main/docs/legal/hosted/ABUSE-AND-NCMEC.md).
+
+**Reports go to abuse@skyphusion.org.** Suspected CSAM should also go directly to NCMEC
+(CyberTipline, `report.cybertip.org`) and law enforcement, which you should do regardless of whether
+you tell us. When you report, include enough to locate the content without yourself downloading,
+copying, or redistributing illegal material.
 
 ---
 
@@ -220,9 +295,12 @@ The full prohibition, the enforcement posture, and the reporting route are in th
 > the AGPL. The promises above are statements about code you can go read. That is why the source is
 > public: so that our promises are auditable rather than merely sincere.
 >
-> One exception, and only one: child sexual abuse material, including AI-generated. We detect,
-> refuse, preserve, and report it to NCMEC and law enforcement. Our privacy stance is not a shield
-> for that, and it never will be.
+> One exception, and only one. We do not scan for child sexual abuse material, and we are honest
+> that this means we cannot proactively catch it; that is a real cost of the guarantee above. But if
+> someone brings us credible evidence that a specific instance is being used for it, we will look,
+> and we will preserve and report it to NCMEC and law enforcement. That is the only thing that ever
+> breaks the promise. We stand with victims, and our privacy stance is not a shield for the abuse of
+> children.
 
 **Notes for whoever writes the public surface:**
 - **Keep the third paragraph.** It is the load-bearing one. Paragraph two alone is a claim; the
@@ -245,6 +323,10 @@ the same PR.
 - **A product stops being public source, or leaves the AGPL.** Section 1.3 is the enforcement
   mechanism; without it this document is just an assertion. This is the tripwire that matters most.
 - **A service we operate starts holding something not in the Section 4 table.**
+- **Any proactive content scanning ships, on any surface.** Section 5.2 and Section 2 item 4 both go
+  false the moment a classifier runs over user work. The Section 5.3 trigger is a credible
+  evidence-backed report about a specific instance, and if anything else ever becomes a trigger,
+  that is this document breaking, not this document evolving.
 - **Telemetry collection ships without written per-field dispositions**, or a collected field turns
   out to be user-derived rather than machine-generated (Section 4.1).
 - **The Vivijure hosted tier launches.** Section 4.2 stops being true the day it opens, and the
