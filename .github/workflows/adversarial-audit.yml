@@ -5,9 +5,12 @@ name: Adversarial audit
 #   pr   -> @cf/moonshotai/kimi-k2.7-code on merge-base diff
 #   repo -> moonshotai/kimi-k3 full tree (workflow_dispatch only; needs CF_AIG_TOKEN)
 #
-# Org secrets: CF_AIG_TOKEN, CLOUDFLARE_API_TOKEN (private; enable for this repo)
+# Org secrets: ADVERSARIAL_AUDIT_CF_API_TOKEN (K2.7 /ai/run), CF_AIG_TOKEN (K3 repo mode)
 # Org vars:    CLOUDFLARE_ACCOUNT_ID, AI_GATEWAY_ID
 # Org secret:  RUNNER_GROUP_ADMIN_TOKEN (clone private fleet-chezmoi script pin)
+#
+# Use ADVERSARIAL_AUDIT_CF_API_TOKEN, not secrets.CLOUDFLARE_API_TOKEN: repos with a
+# repo-level deploy token for wrangler shadow the org name and lack Workers AI Read.
 
 on:
   pull_request:
@@ -49,14 +52,14 @@ jobs:
         with:
           repository: skyphusion-labs/fleet-chezmoi
           # Pinned merge SHA; bump via fleet-chezmoi system/ci/adversarial-audit-public.yml
-          ref: 4468d411cd5eede3875cdb4c0d6388302b16076d
+          ref: 008798c3b3b80c2307f02a5d098161af9f92b516
           path: fleet-chezmoi
           token: ${{ secrets.RUNNER_GROUP_ADMIN_TOKEN }}
 
       - name: Run adversarial audit
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ADVERSARIAL_AUDIT_CF_API_TOKEN }}
           CF_AIG_TOKEN: ${{ secrets.CF_AIG_TOKEN }}
           AI_GATEWAY_ID: ${{ vars.AI_GATEWAY_ID }}
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -69,7 +72,7 @@ jobs:
             exit 2
           fi
           if [[ "$mode" == "pr" && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-            echo "::error::CLOUDFLARE_API_TOKEN required for pr mode"
+            echo "::error::ADVERSARIAL_AUDIT_CF_API_TOKEN required for pr mode (Workers AI Read; do not reuse deploy token)"
             exit 2
           fi
           if [[ "$mode" == "repo" && -z "${CF_AIG_TOKEN:-}" ]]; then
