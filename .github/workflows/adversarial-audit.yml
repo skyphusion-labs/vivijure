@@ -7,7 +7,7 @@ name: Adversarial audit
 #
 # Org secrets: ADVERSARIAL_AUDIT_CF_API_TOKEN (K2.7 /ai/run), CF_AIG_TOKEN (K3 repo mode)
 # Org vars:    CLOUDFLARE_ACCOUNT_ID, AI_GATEWAY_ID
-# Org secret:  RUNNER_GROUP_ADMIN_TOKEN (clone private fleet-chezmoi script pin)
+# Org secret:  FLEET_CHEZMOI_READ_TOKEN (read-only deploy key on fleet-chezmoi; fc#975)
 #
 # Use ADVERSARIAL_AUDIT_CF_API_TOKEN, not secrets.CLOUDFLARE_API_TOKEN: repos with a
 # repo-level deploy token for wrangler shadow the org name and lack Workers AI Read.
@@ -37,8 +37,9 @@ concurrency:
 jobs:
   audit:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -52,9 +53,21 @@ jobs:
         with:
           repository: skyphusion-labs/fleet-chezmoi
           # Pinned merge SHA; bump via fleet-chezmoi system/ci/adversarial-audit-public.yml
-          ref: 008798c3b3b80c2307f02a5d098161af9f92b516
+          ref: 43be53981a895cd4399babab30cde27823744170
           path: fleet-chezmoi
-          token: ${{ secrets.RUNNER_GROUP_ADMIN_TOKEN }}
+          ssh-key: ${{ secrets.FLEET_CHEZMOI_READ_TOKEN }}
+
+      - name: Verify fleet-chezmoi pin
+        working-directory: fleet-chezmoi
+        run: |
+          set -euo pipefail
+          expected="43be53981a895cd4399babab30cde27823744170"
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::fleet-chezmoi pin mismatch: expected ${expected} got ${actual}"
+            exit 1
+          fi
+          echo "fleet-chezmoi pin OK (${actual:0:7})"
 
       - name: Run adversarial audit
         env:
