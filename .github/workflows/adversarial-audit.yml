@@ -1,0 +1,100 @@
+name: Adversarial audit
+
+# LLM red-team advisory layer (CodeQL stays the gate).
+# Public repo: inline fleet-chezmoi script (cannot workflow_call private fleet-chezmoi).
+#   pr   -> @cf/moonshotai/kimi-k2.7-code on merge-base diff
+#   repo -> moonshotai/kimi-k3 full tree (workflow_dispatch only; needs CF_AIG_TOKEN)
+#
+# Org secrets: ADVERSARIAL_AUDIT_CF_API_TOKEN (K2.7 /ai/run), CF_AIG_TOKEN (K3 repo mode)
+# Org vars:    CLOUDFLARE_ACCOUNT_ID, AI_GATEWAY_ID
+# Org secret:  RUNNER_GROUP_ADMIN_TOKEN (clone private fleet-chezmoi script pin)
+#
+# Use ADVERSARIAL_AUDIT_CF_API_TOKEN, not secrets.CLOUDFLARE_API_TOKEN: repos with a
+# repo-level deploy token for wrangler shadow the org name and lack Workers AI Read.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: pr (K2.7 diff) or repo (K3 full tree)
+        required: true
+        type: choice
+        options:
+          - pr
+          - repo
+        default: pr
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: adversarial-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Checkout audit script (fleet-chezmoi)
+        uses: actions/checkout@v7
+        with:
+          repository: skyphusion-labs/fleet-chezmoi
+          # Pinned merge SHA; bump via fleet-chezmoi system/ci/adversarial-audit-public.yml
+          ref: 008798c3b3b80c2307f02a5d098161af9f92b516
+          path: fleet-chezmoi
+          token: ${{ secrets.RUNNER_GROUP_ADMIN_TOKEN }}
+
+      - name: Run adversarial audit
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.ADVERSARIAL_AUDIT_CF_API_TOKEN }}
+          CF_AIG_TOKEN: ${{ secrets.CF_AIG_TOKEN }}
+          AI_GATEWAY_ID: ${{ vars.AI_GATEWAY_ID }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          AUDIT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'pr' }}
+        run: |
+          set -euo pipefail
+          mode="${AUDIT_MODE}"
+          if [[ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID unset (org variable)"
+            exit 2
+          fi
+          if [[ "$mode" == "pr" && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo "::error::ADVERSARIAL_AUDIT_CF_API_TOKEN required for pr mode (Workers AI Read; do not reuse deploy token)"
+            exit 2
+          fi
+          if [[ "$mode" == "repo" && -z "${CF_AIG_TOKEN:-}" ]]; then
+            echo "::error::CF_AIG_TOKEN required for repo mode"
+            exit 2
+          fi
+          args=(--mode "$mode" --output json --out-file audit.json --md-file audit-report.md --fail-on none)
+          node fleet-chezmoi/scripts/adversarial-audit/adversarial-audit.mjs "${args[@]}"
+
+      - name: Post PR comment (advisory)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash fleet-chezmoi/scripts/adversarial-audit/post-pr-comment.sh \
+            "${{ github.event.pull_request.number }}" \
+            audit-report.md
+
+      - name: Upload audit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: adversarial-audit
+          path: |
+            audit.json
+            audit-report.md
