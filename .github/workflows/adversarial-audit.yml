@@ -96,7 +96,7 @@ jobs:
           node fleet-chezmoi/scripts/adversarial-audit/adversarial-audit.mjs "${args[@]}"
 
       - name: Post PR comment (advisory)
-        if: github.event_name == 'pull_request'
+        if: success() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -108,6 +108,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: adversarial-audit
+          retention-days: 7
           path: |
             audit.json
             audit-report.md
