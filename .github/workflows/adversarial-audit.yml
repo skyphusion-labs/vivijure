@@ -53,7 +53,7 @@ jobs:
         with:
           repository: skyphusion-labs/fleet-chezmoi
           # Pinned merge SHA; bump via fleet-chezmoi system/ci/adversarial-audit-public.yml
-          ref: 43be53981a895cd4399babab30cde27823744170
+          ref: c1cdb60815d90ecee1da5b99401e79c32d6e2fbf
           path: fleet-chezmoi
           ssh-key: ${{ secrets.FLEET_CHEZMOI_READ_TOKEN }}
 
@@ -61,7 +61,7 @@ jobs:
         working-directory: fleet-chezmoi
         run: |
           set -euo pipefail
-          expected="43be53981a895cd4399babab30cde27823744170"
+          expected="c1cdb60815d90ecee1da5b99401e79c32d6e2fbf"
           actual="$(git rev-parse HEAD)"
           if [[ "$actual" != "$expected" ]]; then
             echo "::error::fleet-chezmoi pin mismatch: expected ${expected} got ${actual}"
@@ -89,14 +89,14 @@ jobs:
             exit 2
           fi
           if [[ "$mode" == "repo" && -z "${CF_AIG_TOKEN:-}" ]]; then
-            echo "::error::CF_AIG_TOKEN required for repo mode"
+            echo "::error::CF_AIG_TOKEN required for repo mode (Kimi K3 unified billing)"
             exit 2
           fi
           args=(--mode "$mode" --output json --out-file audit.json --md-file audit-report.md --fail-on none)
           node fleet-chezmoi/scripts/adversarial-audit/adversarial-audit.mjs "${args[@]}"
 
       - name: Post PR comment (advisory)
-        if: success() && github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -108,7 +108,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: adversarial-audit
-          retention-days: 7
           path: |
             audit.json
             audit-report.md
