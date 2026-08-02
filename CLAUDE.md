@@ -45,6 +45,12 @@ deployable app.
 - **Absolute hosted/self-host parity:** same-time releases, no community edition, no pay gates.
 - **RunPod money = GPU work only;** the GPUless cost-door (cloud keyframe + cloud i2v) is the hedge
   against our own GPU bill.
+- **Consumer RunPod access:** a consumer reaches RunPod through our product or not at all; BYOK is
+  the only exception, where the tenant brings their own account and is RunPod's customer directly.
+  Both a compliance line (the resale test is whose workload runs) and a security boundary (direct
+  reach is a credential against our account, on our budget). Forbids tenant dashboard access, any
+  RunPod key issued to a tenant on our account, and any unmediated tenant-workload surface; "just
+  scope the key" reads as a security improvement and violates this.
 
 ## Conventions
 
