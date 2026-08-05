@@ -9,6 +9,10 @@ for new features). Newest first.
 > [`vivijure-core`](https://github.com/skyphusion-labs/vivijure-core)). This repo is now the
 > constellation hub -- see the README.
 
+## Unreleased
+
+- **Docs audit 2026-08-05:** SECURITY hub wording (no runtime claim).
+
 ## v1.0.0 -- first stable release
 
 **Vivijure Studio leaves pre-1.0.** The module-host control plane, the module registry, the
