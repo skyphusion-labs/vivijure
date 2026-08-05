@@ -1,8 +1,10 @@
 # Security policy
 
-This repository is the **Vivijure constellation hub**: documentation only. It contains no code, no
-Worker, and no runtime. What lives here is the README map, the Acceptable Use Policy, and the
-pointers to everything else.
+This repository is the **Vivijure constellation hub**: constellation map, Acceptable Use Policy, and
+historical release tags. It is **not** the deployed studio. The studio Worker is
+[`vivijure-cf`](https://github.com/skyphusion-labs/vivijure-cf); self-host is
+[`vivijure-local`](https://github.com/skyphusion-labs/vivijure-local). Leftover wrangler or MCP
+stubs here are historical, not a product surface.
 
 **If you found a vulnerability in the studio itself** (the control-plane Worker, its runtime, or its
 deployment), that belongs to the studio repo:
