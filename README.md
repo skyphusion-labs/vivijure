@@ -77,6 +77,7 @@ flowchart TD
 |---|---|
 | [vivijure-musetalk](https://github.com/skyphusion-labs/vivijure-musetalk) | MuseTalk audio-driven lip-sync (talking heads), on RunPod GPU. |
 | [vivijure-upscale](https://github.com/skyphusion-labs/vivijure-upscale) | Real-ESRGAN CUDA video upscale, on RunPod serverless GPU. |
+| [vivijure-blender](https://github.com/skyphusion-labs/vivijure-blender) | Headless Blender compositor grade (finish-blender), on RunPod serverless. |
 | [vivijure-audio-upscale](https://github.com/skyphusion-labs/vivijure-audio-upscale) | resemble-enhance speech enhancement. |
 | [vivijure-wan-train](https://github.com/skyphusion-labs/vivijure-wan-train) | Wan 2.2 A14B character LoRA training satellite (RunPod; CF prod cast train). |
 
