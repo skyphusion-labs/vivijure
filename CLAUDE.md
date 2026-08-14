@@ -28,9 +28,11 @@ deployable app.
 - **`vivijure-backend`** = clean-room RunPod GPU render engine (image line `backend-v*` / GHCR tags).
 - Satellites: **`vivijure-musetalk`**, **`vivijure-upscale`**, **`vivijure-audio-upscale`**,
   **`vivijure-wan-train`** (cast-LoRA; image line `train-*`; first-class member),
+  **`vivijure-blender`** (headless Blender compositor grade, the `finish-blender` door),
   **`vivijure-local-12gb`** / **`vivijure-local-16gb`** (homelab i2v doors).
+  None of these call the studio API -- the studio dispatches TO them. That is what makes a satellite
+  a satellite, so "does not call `/api/`" describes the whole class and distinguishes none of them.
 - **`slate`** = Discord front door (not multi-tenant hostable).
-- **`vivijure-blender`** = Blender-side integration. Not a studio API caller (0 `/api/` references).
 - **`vivijure-com`** = marketing site (vivijure.com), not the app.
 
 ## TWO version lines (do not conflate)
