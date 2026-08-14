@@ -20,11 +20,17 @@ deployable app.
 - **`vivijure-control-plane`** = hosted multi-tenant provisioner (`STUDIO_RELEASE` for new tenants;
   own `v*` line). Not the studio UI.
 - **`vivijure-mcp`** = agent MCP door package/Worker (`studio-mcp.*`); tools proxy studio HTTP API.
+- **`vivijure-android`** / **`vivijure-ios`** = first-party NATIVE clients (`org.skyphusion.vivijure`),
+  mobile front ends to the Storyboard Planner. They are STUDIO API CALLERS, not satellites: each
+  drives the full operator route surface over a user-pasted Bearer (Android
+  `EncryptedSharedPreferences`, iOS Keychain). Any audit of "who calls the studio API" that omits
+  them is wrong -- and one did, because this list did.
 - **`vivijure-backend`** = clean-room RunPod GPU render engine (image line `backend-v*` / GHCR tags).
 - Satellites: **`vivijure-musetalk`**, **`vivijure-upscale`**, **`vivijure-audio-upscale`**,
   **`vivijure-wan-train`** (cast-LoRA; image line `train-*`; first-class member),
   **`vivijure-local-12gb`** / **`vivijure-local-16gb`** (homelab i2v doors).
 - **`slate`** = Discord front door (not multi-tenant hostable).
+- **`vivijure-blender`** = Blender-side integration. Not a studio API caller (0 `/api/` references).
 - **`vivijure-com`** = marketing site (vivijure.com), not the app.
 
 ## TWO version lines (do not conflate)
