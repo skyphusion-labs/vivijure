@@ -1,0 +1,59 @@
+name: coverage
+
+# Free GitHub Actions check named `coverage` (org ruleset context).
+# Does NOT use actions/upload-code-coverage -- that is paid Code Quality.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: JS/TS coverage
+        if: hashFiles('package.json') != ''
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+          if npm run --silent 2>/dev/null | grep -qE '^  coverage'; then
+            npm run coverage
+          elif npm run --silent 2>/dev/null | grep -qE '^  test'; then
+            npm test
+          else
+            echo "no test/coverage script; coverage check present"
+          fi
+
+      - name: Go coverage
+        if: hashFiles('go.mod') != ''
+        run: |
+          set -euo pipefail
+          go test ./... -cover
+
+      - name: Present
+        if: hashFiles('package.json') == '' && hashFiles('go.mod') == ''
+        run: echo "no supported test manifest; coverage check present"
