@@ -76,7 +76,7 @@ sprint boards or specific RunPod endpoint IDs in docs memory as "current forever
 
 ## Crew + commits
 
-- Crew work runs as the member's own login shell (`sudo -u <member> bash -lc`), lands under the
+- Crew work runs as the member's own login shell (`sudo -n -H -u <member> bash -lc`), lands under the
   member's `skyphusion-<member>` identity, one-reviewer-per-PR, author never self-merges. Conrad devs
   only on his laptop (`Conrad Rockenhaus <conrad@skyphusion.org>`).
 - Conventional Commits (`feat(scope):`, `fix(scope):`, `docs:`); body explains the why, references the
