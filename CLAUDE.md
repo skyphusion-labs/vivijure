@@ -14,7 +14,7 @@ deployable app.
 - **`vivijure-cf`** = THE CF studio panel (deploys the live `vivijure-studio` Worker; tag-gated).
   Depends on published `@skyphusion-labs/vivijure-core`. Version: see that repo's `package.json` /
   latest `v*` tag.
-- **`vivijure-local`** = LOCAL panel (Node/SQLite/MinIO); fleet door on propagandhi. Core is a
+- **`vivijure-local`** = LOCAL panel (Node/SQLite/MinIO). Core is a
   published dependency (extraction done). Pins may lag cf.
 - **`vivijure-core`** = shared orchestration + module contract SoT (`vivijure-module/2`).
 - **`vivijure-control-plane`** = hosted multi-tenant provisioner (`STUDIO_RELEASE` for new tenants;
