@@ -88,6 +88,8 @@ flowchart TD
 | [slate](https://github.com/skyphusion-labs/slate) | Collaborative AI screenwriter for Discord: develop a storyboard in chat, hand it to the studio. |
 | [vivijure-mcp](https://github.com/skyphusion-labs/vivijure-mcp) | Drive the studio from any MCP client (Claude Code, Cursor, ...): plan, cast, submit a render, poll to done. |
 | [vivijure-com](https://github.com/skyphusion-labs/vivijure-com) | The promotional site and showcase at [vivijure.com](https://vivijure.com). |
+| [vivijure-android](https://github.com/skyphusion-labs/vivijure-android) | First-party native Android client for the Storyboard Planner; drives the operator route surface over a user-pasted Bearer. |
+| [vivijure-ios](https://github.com/skyphusion-labs/vivijure-ios) | First-party native iOS client for the Storyboard Planner; drives the operator route surface over a user-pasted Bearer. |
 
 ## What it is
 

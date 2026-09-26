@@ -20,10 +20,18 @@ deployable app.
 - **`vivijure-control-plane`** = hosted multi-tenant provisioner (`STUDIO_RELEASE` for new tenants;
   own `v*` line). Not the studio UI.
 - **`vivijure-mcp`** = agent MCP door package/Worker (`studio-mcp.*`); tools proxy studio HTTP API.
+- **`vivijure-android`** / **`vivijure-ios`** = first-party NATIVE clients (`org.skyphusion.vivijure`),
+  mobile front ends to the Storyboard Planner. They are STUDIO API CALLERS, not satellites: each
+  drives the full operator route surface over a user-pasted Bearer (Android
+  `EncryptedSharedPreferences`, iOS Keychain). Any audit of "who calls the studio API" that omits
+  them is wrong -- and one did, because this list did.
 - **`vivijure-backend`** = clean-room RunPod GPU render engine (image line `backend-v*` / GHCR tags).
 - Satellites: **`vivijure-musetalk`**, **`vivijure-upscale`**, **`vivijure-audio-upscale`**,
   **`vivijure-wan-train`** (cast-LoRA; image line `train-*`; first-class member),
+  **`vivijure-blender`** (headless Blender compositor grade, the `finish-blender` door),
   **`vivijure-local-12gb`** / **`vivijure-local-16gb`** (homelab i2v doors).
+  None of these call the studio API -- the studio dispatches TO them. That is what makes a satellite
+  a satellite, so "does not call `/api/`" describes the whole class and distinguishes none of them.
 - **`slate`** = Discord front door (not multi-tenant hostable).
 - **`vivijure-com`** = marketing site (vivijure.com), not the app.
 
