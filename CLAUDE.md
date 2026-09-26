@@ -14,7 +14,7 @@ deployable app.
 - **`vivijure-cf`** = THE CF studio panel (deploys the live `vivijure-studio` Worker; tag-gated).
   Depends on published `@skyphusion-labs/vivijure-core`. Version: see that repo's `package.json` /
   latest `v*` tag.
-- **`vivijure-local`** = LOCAL panel (Node/SQLite/MinIO); fleet door on propagandhi. Core is a
+- **`vivijure-local`** = LOCAL panel (Node/SQLite/MinIO). Core is a
   published dependency (extraction done). Pins may lag cf.
 - **`vivijure-core`** = shared orchestration + module contract SoT (`vivijure-module/2`).
 - **`vivijure-control-plane`** = hosted multi-tenant provisioner (`STUDIO_RELEASE` for new tenants;
@@ -84,7 +84,7 @@ sprint boards or specific RunPod endpoint IDs in docs memory as "current forever
 
 ## Crew + commits
 
-- Crew work runs as the member's own login shell (`sudo -u <member> bash -lc`), lands under the
+- Crew work runs as the member's own login shell (`sudo -n -H -u <member> bash -lc`), lands under the
   member's `skyphusion-<member>` identity, one-reviewer-per-PR, author never self-merges. Conrad devs
   only on his laptop (`Conrad Rockenhaus <conrad@skyphusion.org>`).
 - Conventional Commits (`feat(scope):`, `fix(scope):`, `docs:`); body explains the why, references the
