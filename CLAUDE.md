@@ -26,10 +26,13 @@ deployable app.
   `EncryptedSharedPreferences`, iOS Keychain). Any audit of "who calls the studio API" that omits
   them is wrong -- and one did, because this list did.
 - **`vivijure-backend`** = clean-room RunPod GPU render engine (image line `backend-v*` / GHCR tags).
-- Satellites: **`vivijure-musetalk`**, **`vivijure-upscale`**, **`vivijure-audio-upscale`**,
+- Satellites: **`vivijure-upscale`**,
   **`vivijure-wan-train`** (cast-LoRA; image line `train-*`; first-class member),
   **`vivijure-blender`** (headless Blender compositor grade, the `finish-blender` door),
   **`vivijure-local-12gb`** / **`vivijure-local-16gb`** (homelab i2v doors).
+  **Archived 2026-09-26, do not treat as live:** `vivijure-musetalk` and
+  `vivijure-audio-upscale`. Their capabilities are in `docs/CAPABILITIES.md` under Retired, which
+  is the one place that tracks what the constellation currently offers.
   None of these call the studio API -- the studio dispatches TO them. That is what makes a satellite
   a satellite, so "does not call `/api/`" describes the whole class and distinguishes none of them.
 - **`slate`** = Discord front door (not multi-tenant hostable).

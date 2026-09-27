@@ -24,9 +24,9 @@ deploy, except `vivijure-com` (website) and `vivijure` (this pointer repo).**
    (`vivijure-local`) keep `:latest` as the self-host default, and it moves
    **only** when a release tag is cut (not on merge to `main`).
 5. **Pin prod by `:<version>@sha256:<digest>` when re-pinning.** The tag names
-   the release; the digest survives a force-moved tag. musetalk already does
-   this; adopt on the next deliberate (spend-gated) endpoint re-pin for the
-   other RunPod images.
+   the release; the digest survives a force-moved tag. The now-retired musetalk
+   satellite already did this, and it is the example to copy; adopt on the next
+   deliberate (spend-gated) endpoint re-pin for the other RunPod images.
 6. **A short `:sha-<short>` trace tag is fine; full-sha tags are not.**
 
 ## Tag protection

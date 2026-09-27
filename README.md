@@ -19,6 +19,8 @@ attach -- RunPod, your own box, or a cloud motion API.
 
 | I want to... | Go to |
 |---|---|
+| **Make a film** (the path from an idea to something you can watch) | **[Make your first film](docs/make-your-first-film.md)** |
+| **Know what actually works today**, before I plan one | **[What Vivijure can do today](docs/CAPABILITIES.md)** |
 | **Run the studio on Cloudflare** (the standard path) | **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)** |
 | **Run the studio without Cloudflare** (Node + SQLite + S3/MinIO) | **[vivijure-local](https://github.com/skyphusion-labs/vivijure-local)** |
 | **Write screenplays in Discord**, then hand off to the studio | **[slate](https://github.com/skyphusion-labs/slate)** |
@@ -39,7 +41,7 @@ flowchart TD
     studio[Vivijure Studio<br/>vivijure-cf on Cloudflare<br/>or vivijure-local without it<br/>-- both on vivijure-core]
     modules[Modules: one job each, opt-in<br/>cloud video, finish, audio]
     gpu[GPU render engines<br/>vivijure-backend cloud,<br/>local-12gb / local-16gb own card]
-    finish[Finish helper engines<br/>musetalk, upscale, audio-upscale]
+    finish[Finish helper engines<br/>upscale, grade]
 
     hosted[vivijure-control-plane<br/>hosted tier: provisions a<br/>studio per tenant]
 
@@ -75,11 +77,14 @@ flowchart TD
 
 | Repo | What it is |
 |---|---|
-| [vivijure-musetalk](https://github.com/skyphusion-labs/vivijure-musetalk) | MuseTalk audio-driven lip-sync (talking heads), on RunPod GPU. |
 | [vivijure-upscale](https://github.com/skyphusion-labs/vivijure-upscale) | Real-ESRGAN CUDA video upscale, on RunPod serverless GPU. |
 | [vivijure-blender](https://github.com/skyphusion-labs/vivijure-blender) | Headless Blender compositor grade (finish-blender), on RunPod serverless. |
-| [vivijure-audio-upscale](https://github.com/skyphusion-labs/vivijure-audio-upscale) | resemble-enhance speech enhancement. |
 | [vivijure-wan-train](https://github.com/skyphusion-labs/vivijure-wan-train) | Wan 2.2 A14B character LoRA training satellite (RunPod; CF prod cast train). |
+
+Two satellites were retired on 2026-09-26 and their repos are archived: `vivijure-musetalk`
+(post-process lip-sync) and `vivijure-audio-upscale` (speech cleanup). Talking characters did not
+go away with them; that promise moved to an audio-driven motion door. See
+[What Vivijure can do today](docs/CAPABILITIES.md#retired).
 
 **Front doors**
 
@@ -143,10 +148,16 @@ The talking mode: per shot, a generated line of dialogue is muxed into the clip 
 
 ## How a render flows
 
-The path from a storyboard to a finished `film.mp4`. The keyframe fans into both the dialogue and the
-motion backend; any of seven motion backends (own-GPU or cloud) renders the clip; the opt-in finish
-chain interpolates, lip-syncs, and upscales it; then the shots gather, assemble, and mux. Drawn out,
+The path from a storyboard to a finished film. The keyframe fans into both the dialogue and the
+motion backend; any of **17** motion backends (own-GPU or cloud) renders the clip, and an
+audio-driven one animates the mouth at the same time from that shot's dialogue; the opt-in finish
+chain interpolates, upscales and grades it; then the shots gather, assemble, and mux. Drawn out,
 it is a real studio pipeline, not a wrapper.
+
+> **Assemble and mux do not work today.** The tier that ran them was decommissioned on
+> 2026-09-24. A studio without it delivers your per-shot clips and says so. Which steps are
+> finished, and which are not, is tracked in
+> [What Vivijure can do today](docs/CAPABILITIES.md).
 
 ```mermaid
 flowchart LR
@@ -155,19 +166,27 @@ flowchart LR
   KF --> MB{motion.backend}
   MB -->|own-gpu| WAN[Wan i2v<br/>your GPU]
   MB -->|cloud| CLD[Kling / Wan 2.6<br/>Seedance / Hailuo<br/>Veo / Vidu]
+  MB -->|audio-driven| TALK[talking door<br/>mouth matches the line]
+  DLG --> TALK
   WAN --> RIFE
   CLD --> RIFE
+  TALK --> RIFE
   subgraph FIN [finish chain, opt-in]
-    RIFE[RIFE<br/>interpolate] --> LS[MuseTalk<br/>lip-sync] --> UP[CUDA Real-ESRGAN<br/>upscale] --> OV[text<br/>overlay]
+    RIFE[RIFE<br/>interpolate] --> UP[CUDA Real-ESRGAN<br/>upscale] --> GR[Blender<br/>grade]
   end
-  DLG --> LS
-  OV --> ASM[Gather + assemble<br/>keepClipAudio]
+  GR --> ASM[Gather + assemble<br/>keepClipAudio]
   ASM --> MUX[Mux audio] --> FILM[(film.mp4)]
+  ASM:::notyet
+  MUX:::notyet
+  FILM:::notyet
+  classDef notyet stroke-dasharray: 5 5
 ```
 
 Motion is backend-agnostic: the same keyframe feeds own-GPU Wan or any cloud i2v module, and the
 finish chain runs the same way over whatever clip comes back. The dialogue track is generated per
-shot, drives the lip-sync, and rides through assembly into the final mux.
+shot and feeds the motion door directly, which is why making a character talk is a choice you
+make when you pick the door rather than a touch-up afterwards. Dashed steps are the ones that do
+not work yet.
 
 ## Releasing
 
