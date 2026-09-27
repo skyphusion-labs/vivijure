@@ -76,6 +76,50 @@ The steps of making a film, in the order you meet them.
 | 12 | Download what you made | `WORKS` | yes | `--` |
 | 13 | Be emailed when a render is done | `WORKS` | **no** | `notify-email` |
 
+## Which motion door gets picked, and why (row 4 and row 6)
+
+Recorded here because it was real and written down nowhere. The preference below already ships, in
+`vivijure-cf/public/planner-render-config.js`; it was recovered by reading that file, which is the second
+time in one day that a live decision turned out to exist only as code (the other was a provider failure
+matrix surviving as a comment). If it is worth doing, it is worth being findable.
+
+**The picker selects by CAPABILITY FLAG, never by module name.** For a talking shot it prefers, in order:
+
+1. a door declaring `usage.voice_ref` when the bound Cast has a kept voice sample;
+2. otherwise a door declaring `driving_audio` and **not** `native_audio`, when the storyboard has a
+   spoken line (our track, our words);
+3. otherwise a door declaring `driving_audio` **and** `native_audio`, which is last on purpose because
+   such a door can dub over our track;
+4. otherwise the first talking door by `ui.order`.
+
+**The consequence that matters for adopting a provider: because the selector matches flags and not names,
+a new door becomes eligible the moment its manifest declares the right `usage` flags, with no frontend
+change at all.** Swapping or adding a provider is a module-side job; the panel does not learn provider
+names and must not start.
+
+### The evidenced preference for dialogue, as of 2026-09-27
+
+Measured on rendered clips, not declared: `infinitetalk` is the right default for a spoken shot.
+
+| | `infinitetalk` | `alibaba-wan` (Wan 2.6) |
+| --- | --- | --- |
+| uses the Cast track we supply | yes, `r = +0.9996` against the source WAV | yes, same check |
+| mouth stops when the line ends | **yes**, 10.4x and 7.7x quieter across two runs | **no**, 1.16x LOUDER in silence |
+| clip length | follows the audio; no duration parameter exists | closed grid `{5, 10, 15}` that snaps **up** |
+| cost | $0.25 flat per 480p video, 2s floor | $0.10/sec at 720p, 5s floor |
+
+The grid is the mechanism: a 1.4 second line on a 5 second floor leaves most of the clip mouthing
+silence, which is ordinary dialogue rather than an edge case. A door whose length follows the audio cannot
+have that failure.
+
+**Open, and deliberately not claimed here: picture quality.** The two clips were delivered at different
+resolutions (832x464 against 1270x726), and the equal-resolution rerun could not be produced
+([vivijure-cf#896](https://github.com/skyphusion-labs/vivijure-cf/issues/896)), so "which door looks
+better" is unanswered and this table does not rank on it.
+
+Full provider matrix, including candidates not wired today:
+[vivijure#826](https://github.com/skyphusion-labs/vivijure/issues/826).
+
 ## Beside the film path
 
 | What you can do | Status | Hosted | Modules |
