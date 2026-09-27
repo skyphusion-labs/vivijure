@@ -65,7 +65,7 @@ The steps of making a film, in the order you meet them.
 | 1 | Turn an idea into a storyboard, then sharpen the shot list | `WORKS` | yes | `plan-enhance` |
 | 2 | Cast characters who look the same in every shot | `WORKS` | **no** | `cast-image` |
 | 3 | Get a still for every shot before you spend on motion | `WORKS` | yes | `keyframe`, `cloud-keyframe`, `local-gpu` |
-| 4 | Turn each still into a moving clip | `WORKS` | yes | `alibaba-wan`, `alibaba-wan-lora`, `cf-flux-3-video`, `cf-grok-video`, `cf-hailuo`, `cf-hh1-r2v`, `cf-seedance`, `cf-veo`, `google-veo`, `kling`, `kling-o1-r2v`, `local-gpu`, `minimax-hailuo`, `own-gpu`, `seedance`, `vidu-q3` |
+| 4 | Turn each still into a moving clip | `WORKS` | yes | `alibaba-wan`, `alibaba-wan-lora`, `cf-flux-3-video`, `cf-grok-video`, `cf-hailuo`, `cf-hh1-r2v`, `cf-seedance`, `cf-veo`, `google-veo`, `kling-o1-r2v`, `local-gpu`, `minimax-hailuo`, `own-gpu`, `seedance`, `vidu-q3` |
 | 5 | Give a character a voice, per shot | `WORKS` | **no** [^voice] | `dialogue-gen`, `chatterbox` |
 | 6 | Make a character's mouth match the line they speak | `WORKS` | **no** [^talk] | `infinitetalk` |
 | 7 | Score the film: music, narration, cuts on the beat | `CAVEATS` [^bed] | partial [^score] | `music-gen`, `narration-gen`, `beat-sync` |
@@ -188,6 +188,7 @@ outlive the capability, and an operator needs to be able to attribute it.
 | --- | --- | --- |
 | Mouth replacement as a post-process (MuseTalk) | 2026-09-26 | Nothing, as a finish step. The promise moved rather than died: row 6 above does it at motion time instead, from the Cast audio. Ruled out permanently as a provider. |
 | Speech cleanup before mouth replacement (resemble-enhance) | 2026-09-26 | Nothing. It existed to feed the step above. Note the naming: the module was `speech-upscale` while the endpoint key, the image and the repo were `audio-upscale`, so a sweep for one silently misses the other. The `speech` hook now has no implementation and is an open slot. |
+| Silent cinematic image-to-video via Kling 2.1 Pro (module `kling`) | 2026-09-27 | Nothing on Kling, because the vendor no longer sells the capability here. The RunPod slug the door pinned, `kling-v2-1-i2v-pro`, returned 401 (exists) on 2026-08-05 and returns **404 endpoint not found** now, so every render dispatched to it failed at submit. Enumerating all 41 live RunPod public endpoints leaves exactly two Kling endpoints and neither is plain image-to-video: `kling-v2-6-std-motion-control` needs a reference motion VIDEO, which the `motion.backend` hook has no field for, and `kling-video-o1-r2v` is multi-reference r2v, already shipped as the separate `kling-o1-r2v` door that stays in row 4. Silent cinematic i2v is still served by the other doors in that row. RunPod's own docs still publish the dead endpoint with a working curl example and a $0.45/5s price. |
 
 Some films in the [showcase](../README.md) were made while a retired capability was live. That
 record stays as written; it describes how the film was actually made at the time. Nothing here
