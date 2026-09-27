@@ -66,7 +66,7 @@ The steps of making a film, in the order you meet them.
 | 2 | Cast characters who look the same in every shot | `WORKS` | **no** | `cast-image` |
 | 3 | Get a still for every shot before you spend on motion | `WORKS` | yes | `keyframe`, `cloud-keyframe`, `local-gpu` |
 | 4 | Turn each still into a moving clip | `WORKS` | yes | `alibaba-wan`, `alibaba-wan-lora`, `cf-flux-3-video`, `cf-grok-video`, `cf-hailuo`, `cf-hh1-r2v`, `cf-seedance`, `cf-veo`, `google-veo`, `kling`, `kling-o1-r2v`, `local-gpu`, `minimax-hailuo`, `own-gpu`, `seedance`, `vidu-q3` |
-| 5 | Give a character a voice, per shot | `WORKS` | **no** | `dialogue-gen`, `chatterbox` |
+| 5 | Give a character a voice, per shot | `WORKS` | **no** [^voice] | `dialogue-gen`, `chatterbox` |
 | 6 | Make a character's mouth match the line they speak | `WORKS` | **no** [^talk] | `infinitetalk` |
 | 7 | Score the film: music, narration, cuts on the beat | `CAVEATS` [^bed] | partial [^score] | `music-gen`, `narration-gen`, `beat-sync` |
 | 8 | Polish each clip: smoother motion, sharper picture, a colour grade | `CAVEATS` [^finish] | partial [^polish] | `finish-rife`, `finish-upscale`, `finish-blender` |
@@ -84,8 +84,28 @@ The steps of making a film, in the order you meet them.
 | Write screenplays in Discord and hand off to the studio | `WORKS` | yes | `--` |
 | Drive the studio from an AI agent | `WORKS` | yes | `--` |
 
-[^talk]: The capability is real and the module ships in the repo, but the hosted plane provisions
-no endpoint for it, and says so in its own code. Talking characters are **self-host only** today.
+[^voice]: **This is the link that is actually missing on the hosted tier, and row 6 is moot until
+it moves.** Both providers are absent from the hosted set for the same reason, and it is not a
+product decision: each needs a Cloudflare Workflows binding, and the control plane has no way to
+emit one. `WorkerBinding` in `vivijure-control-plane/src/cf-api.ts` carries ten variants and no
+workflow variant, and the published module bundle carries no bindings of its own, so the plane's
+binding builder is the only source. Same class as the `vpc_service` gap in note [^polish]. Until it
+closes, a hosted tenant is still served the full TTS voice list and can still assign a voice to a
+Cast, because that list is core-served and is filtered only for the demo deploy; nothing can then
+speak it. Measured 2026-09-27; chain and fix classes in
+[vivijure-control-plane#524](https://github.com/skyphusion-labs/vivijure-control-plane/issues/524).
+
+[^talk]: Hosted **no**, but not for the reason this note used to give. It said the hosted plane
+"provisions no endpoint for it"; that is a true sentence of the plane's own code
+(`src/runpod.ts:151`) and it is not the blocker, because this module needs no provisioned endpoint.
+It submits to a vendor public slug exactly as the eight cloud motion doors in row 4 do, and those
+are hosted. Two things are true instead. **The mouth is not the missing part:** a hosted tenant
+already has an audio-driven door, `alibaba-wan`, and what it lacks is the line audio to drive it,
+which is note [^voice] one row up. **And adding this module is wiring, not provisioning:** a tenant
+bundle in the studio release, a catalog row, and its slug on the plane's public-endpoint allowlist.
+Worth doing after row 5, because this is the only door that refuses a shot with no line rather than
+inventing the speech. "Talking characters" hosted is not zero today; talking in the **Cast's** voice
+is.
 
 [^score]: `narration-gen` is hosted. `music-gen` and `beat-sync` are not, so a hosted tenant can
 have narration but not a music bed or beat-synced cuts.
