@@ -76,6 +76,16 @@ sprint boards or specific RunPod endpoint IDs in docs memory as "current forever
   unmediated tenant-workload surface.
 - **Typecheck is the CI gate** on TS repos; `npm run typecheck` before push where applicable.
 
+## Branch protection: excluded from the org ruleset (no `ci` check)
+
+This repo cannot emit a check named `ci`. No workflow here defines a job with that name. It emits `coverage` and `CodeQL`.
+The org ruleset `aviation-grade-main-org` (18677665) requires `ci`, `coverage` and `CodeQL`.
+So this repo sits on that ruleset's exclusion list. Without it, every PR would wait forever for a check nothing produces.
+Main is still protected. The org ruleset `aviation-grade-org` (24049804) applies to every repo. It blocks force pushes and requires a pull request.
+Two repo-level rulesets add one approval, plus required checks `CodeQL` and `coverage`, with the branch up to date.
+To re-measure, run `gh api repos/skyphusion-labs/vivijure/rules/branches/main -q '.[]|[.ruleset_id,.type]|@tsv'`. It lists what gates main. Ruleset 18677665 is absent from the output.
+Tracked in vivijure#823. Measured 2026-10-08.
+
 ## Conventions
 
 - **No em-dashes (U+2014) or en-dashes (U+2013).** Use commas, semicolons, parentheses, or `--`.
