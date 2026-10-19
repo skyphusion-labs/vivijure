@@ -11,7 +11,7 @@
 > project's own commitment, not legal advice, and reading it does not create an attorney-client
 > relationship.
 
-**Effective date:** 2026-07-19
+**Effective date:** 2026-10-18
 
 **Scope:** the Vivijure constellation, Postern, Prism, Slate, and Common Thread. Everything we
 ship.
@@ -116,7 +116,7 @@ commitment cannot float free of the facts.
 | Product | Do we operate it? | What we hold | Policy |
 |---|---|---|---|
 | **Vivijure (self-hosted)** | No | Nothing. Your instance never talks to us. | [PRIVACY.md](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md) |
-| **Vivijure demo** (`demo.vivijure.com`) | Yes | Nothing you submit. Read-only, renders nothing, no account, no identity cookie, no analytics beacon. Standard edge request logs only. | [PRIVACY.md](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md) Section 1a |
+| **Vivijure demo** (`demo.vivijure.com`) | **No. Retired 2026-10-08.** The custom domain was removed on purpose. It is not a live site. Re-adding one custom domain restores it. | Not stated here. The policy records the retirement only. | [PRIVACY.md](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/PRIVACY.md) Section 1a |
 | **Vivijure hosted tier** | **Not yet. Pre-launch.** | Nothing yet, because it has no tenants. What it WILL hold is specified in advance, in public, before launch. | [PRIVACY-DELTA.md](https://github.com/skyphusion-labs/vivijure-control-plane/blob/main/docs/legal/hosted/PRIVACY-DELTA.md) (draft, not in force) |
 | **Postern** | **No, and we never will.** Self-host only, permanently. | Nothing. You run it in your own Cloudflare account on your own domain, and your instance never talks to us. There is no Postern service for us to hold data in. | [PRIVACY.md](https://github.com/skyphusion-labs/postern/blob/main/PRIVACY.md) |
 | **Prism** (`play.skyphusion.org`) | **Yes** | Account (username, password as a one-way hash; **no email collected**) and the content you create. Deletable by you at any time. | [INSTANCE-PRIVACY.md](https://github.com/skyphusion-labs/prism/blob/main/docs/legal/INSTANCE-PRIVACY.md) |
