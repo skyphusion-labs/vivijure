@@ -78,13 +78,14 @@ sprint boards or specific RunPod endpoint IDs in docs memory as "current forever
 
 ## Branch protection: excluded from the org ruleset (no `ci` check)
 
-This repo cannot emit a check named `ci`. No workflow here defines a job with that name. It emits `coverage` and `CodeQL`.
-The org ruleset `aviation-grade-main-org` (18677665) requires `ci`, `coverage` and `CodeQL`.
-So this repo sits on that ruleset's exclusion list. Without it, every PR would wait forever for a check nothing produces.
-Main is still protected. The org ruleset `aviation-grade-org` (24049804) applies to every repo. It blocks force pushes and requires a pull request.
-Two repo-level rulesets add one approval, plus required checks `CodeQL` and `coverage`, with the branch up to date.
+This repo cannot emit a check named `ci`. No workflow here defines a job with that name. It emits `coverage` and `CodeQL`. The `coverage` job echoes: there is no `package.json` or `go.mod`, so a green `coverage` check is not a test result.
+The org ruleset `aviation-grade-main-org` (18677665) requires status checks `ci` and `coverage` (strict), plus a CodeQL `code_scanning` rule. It does not require a status check named `CodeQL`.
+So this repo sits on that ruleset's exclusion list. Without the exclusion, every PR would wait forever for `ci`, which nothing here produces.
+Main is still protected by two repo rulesets. Org ruleset `aviation-grade-org` (24049804) does not: `GET /orgs/skyphusion-labs/rulesets/24049804` returns 404, and that id is absent from the branch-rules output.
+`aviation-grade-repo-approval` (20549876) requires one approval and blocks force pushes and branch deletion.
+`aviation-grade-repo-checks` (20912843) requires status checks `CodeQL` and `coverage`, with the branch up to date.
 To re-measure, run `gh api repos/skyphusion-labs/vivijure/rules/branches/main -q '.[]|[.ruleset_id,.type]|@tsv'`. It lists what gates main. Ruleset 18677665 is absent from the output.
-Tracked in vivijure#823. Measured 2026-10-08.
+Tracked in vivijure#823. Re-measured 2026-11-09.
 
 ## Conventions
 
