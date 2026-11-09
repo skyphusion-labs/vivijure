@@ -12,6 +12,7 @@
 > relationship.
 
 **Effective date:** 2026-10-18
+**Amended:** 2026-11-09 (Common Thread hosting retired; Section 4 table row and Section 4.4).
 
 **Scope:** the Vivijure constellation, Postern, Prism, Slate, and Common Thread. Everything we
 ship.
@@ -121,17 +122,18 @@ commitment cannot float free of the facts.
 | **Postern** | **No, and we never will.** Self-host only, permanently. | Nothing. You run it in your own Cloudflare account on your own domain, and your instance never talks to us. There is no Postern service for us to hold data in. | [PRIVACY.md](https://github.com/skyphusion-labs/postern/blob/main/PRIVACY.md) |
 | **Prism** (`play.skyphusion.org`) | **Yes** | Account (username, password as a one-way hash; **no email collected**) and the content you create. Deletable by you at any time. | [INSTANCE-PRIVACY.md](https://github.com/skyphusion-labs/prism/blob/main/docs/legal/INSTANCE-PRIVACY.md) |
 | **Slate** | **No, and we could not.** Self-host only, permanently. | Nothing of yours, and not as a matter of restraint: there is no hosted Slate, so there is no Slate user data here at all. You create your own application on the Discord Developer Portal, host it yourself, and bring your own AI spend. The Discord application, the bot token, the model provider, and the message content are all yours. | [PRIVACY.md](https://github.com/skyphusion-labs/slate/blob/main/PRIVACY.md) |
-| **Common Thread** (`common-thread.skyphusion.org`) | **Yes.** One of the two we host, offered as a public good. | The investigation material you upload, the features extracted from it, attribution results, and generated evidence packets. **Your Anthropic API key is not among them:** attribution is bring-your-own-key, the key is read per request and is never stored server-side or written to logs, and the public instance holds no shared key at all, so attribution fails closed without yours. | **None published yet.** Draft in [common-thread#190](https://github.com/skyphusion-labs/common-thread/pull/190), not merged. See 4.4. |
+| **Common Thread** | **No. Retired 2026-11-09.** It was hosted at `common-thread.skyphusion.org` as a public good until then. That day the Workers, the custom domains, the R2 archive bucket, D1 and the Hyperdrive connection were deleted; the database host had already gone with the Hetzner fleet, cancelled September 2026. Self-host only now, and that is the whole of it. | **Nothing.** Conrad, 2026-11-09: "there is no common thread data". A self-hosted instance holds what its operator's deployment holds; the code's data inventory is in the project's own privacy document, kept as the operator's reference. | [PRIVACY.md](https://github.com/skyphusion-labs/common-thread/blob/main/docs/PRIVACY.md) (hosted-era disclosure kept as historical record), [ACCEPTABLE-USE.md](https://github.com/skyphusion-labs/common-thread/blob/main/docs/ACCEPTABLE-USE.md). See 4.4. |
 
-**Prism and Common Thread are where "we hold nothing" is not literally true**, and they are called
-out here rather than left for a reader to discover. Both hold what the product mechanically needs
-and nothing beyond it, both are documented against the code, and the self-host route for both is
-real.
+**Prism is where "we hold nothing" is not literally true**, and it is called out here rather than
+left for a reader to discover. It holds what the product mechanically needs and nothing beyond it,
+it is documented against the code, and the self-host route is real. Common Thread was the other
+such product until 2026-11-09; its row now records the retirement only (Section 4.4).
 
-**We host exactly two things, and that is the complete list:** the Vivijure hosted instance and
-Common Thread. Both are offered deliberately, **as a public good.** They are not the business model
-and they are not a funnel; they exist so that someone who cannot stand up their own instance is not
-thereby locked out. Everything else we make is **strictly self-host, permanently.**
+**We operate exactly one thing today, Prism, and the Vivijure hosted tier is pre-launch (Section
+4.2). That is the complete list.** Each is offered deliberately, **as a public good.** They are not
+the business model and they are not a funnel; they exist so that someone who cannot stand up their
+own instance is not thereby locked out. Common Thread was on this list on the same terms until
+2026-11-09. Everything else we make is **strictly self-host, permanently.**
 
 That default is an active preference, not a limitation we are apologising for. We would rather you
 ran these things yourself. It is a DIY ethos before it is a privacy argument, and the privacy
@@ -217,21 +219,39 @@ Degrading the product is the acceptable outcome. Ingesting customer content to s
 not. This is Section 1.2 with a concrete referent, and it is written down so that nobody can later
 argue that a service-level promise forces the collection.
 
-### 4.4 Common Thread is live without a published privacy policy, and that is a gap
+### 4.4 Common Thread: the hosted instance is retired, and the gap this section recorded closed with it
 
-Said here rather than left for someone to notice. **`common-thread.skyphusion.org` is running and
-reachable now, and the privacy policy and acceptable-use policy for it are drafted but not merged**
+Kept as a record. From the effective date of this document until 2026-11-09 this section said, in
+these words: **`common-thread.skyphusion.org` is running and reachable now, and the privacy policy
+and acceptable-use policy for it are drafted but not merged**
 ([common-thread#190](https://github.com/skyphusion-labs/common-thread/pull/190); the public-release
-readiness evaluation, common-thread#187, is also still open).
+readiness evaluation, common-thread#187, is also still open). The row above was the only published
+statement of what that instance held, written against the code rather than from intent, and not a
+substitute for the policy, which was owed. The section was stated that way for the same reason
+Section 4.2 states the hosted tier's missing per-field dispositions instead of implying they exist:
+**a privacy document that quietly skips the product with the weakest paperwork is not an honest
+inventory.**
 
-The row above is therefore the only published statement of what that instance holds. It is accurate,
-it was written against the code rather than from intent, and it is not a substitute for the policy,
-which is owed.
+How it actually closed:
 
-We are stating it this way for the same reason Section 4.2 states the hosted tier's missing per-field
-dispositions instead of implying they exist: **a privacy document that quietly skips the product with
-the weakest paperwork is not an honest inventory.** The gap closes when #190 merges, and this section
-comes out when it does.
+- The acceptable-use policy landed in common-thread#190 and was the instance's active policy from
+  v0.1.2. The privacy disclosure and the terms of service were drafted
+  ([common-thread#318](https://github.com/skyphusion-labs/common-thread/issues/318), landed as
+  drafts in common-thread#319) and were never finalised or put in force while the instance ran.
+  This section should have been revised when #190 merged, and was not; that is recorded here rather
+  than erased.
+- On 2026-11-09 Conrad retired all Common Thread hosting
+  ([common-thread#349](https://github.com/skyphusion-labs/common-thread/pull/349) records the
+  teardown) and ruled, verbatim: "there is no common thread data". The project's legal documents
+  were reframed for the published code and for self-hosters, who are their own operator, with the
+  hosted-era drafts kept as historical record
+  ([common-thread#352](https://github.com/skyphusion-labs/common-thread/pull/352)).
+
+So the gap closed not by a policy being published for the instance but by the instance ceasing to
+exist. For this document that is the same outcome as Slate (Section 4): Skyphusion Labs is
+structurally not in the Common Thread data path, there is no Common Thread user data here, and
+there is nothing to disclose about it. Re-hosting it would reopen this section and the Section 4
+row in the same PR (Section 7).
 
 ---
 
