@@ -78,7 +78,7 @@ flowchart TD
 | Repo | What it is |
 |---|---|
 | [vivijure-upscale](https://github.com/skyphusion-labs/vivijure-upscale) | Real-ESRGAN CUDA video upscale, on RunPod (an operated endpoint; an operator can point it at their own). |
-| [vivijure-blender](https://github.com/skyphusion-labs/vivijure-blender) | Headless Blender compositor grade (finish-blender), deployed as a Cloudflare Container door. |
+| [vivijure-blender](https://github.com/skyphusion-labs/vivijure-blender) | Headless Blender compositor grade (finish-blender), on RunPod Serverless or as a Cloudflare Container door. |
 Two satellites were retired on 2026-09-26 and their repos are archived: `vivijure-musetalk`
 (post-process lip-sync) and `vivijure-audio-upscale` (speech cleanup). The hosted Wan 2.2
 character LoRA training satellite (`vivijure-wan-train`) is retired and archived too; Wan
