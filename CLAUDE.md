@@ -36,7 +36,7 @@ deployable app.
   None of these call the studio API -- the studio dispatches TO them. That is what makes a satellite
   a satellite, so "does not call `/api/`" describes the whole class and distinguishes none of them.
 - **`slate`** = Discord front door (not multi-tenant hostable).
-- **`vivijure-com`** = marketing site (vivijure.com), not the app.
+- **`vivijure-com`** = marketing site (vivijure.dev), not the app.
 
 ## TWO version lines (do not conflate)
 

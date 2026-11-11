@@ -13,7 +13,7 @@ attach -- RunPod, your own box, or a cloud motion API.
 > itself and each render engine live in their own repos, linked below. Looking for the code you
 > deploy? That is **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)**.
 
-**Live:** https://vivijure.com · **Demo:** https://demo.vivijure.com · **Skyphusion Labs:** https://skyphusion.org
+**Live:** https://vivijure.dev · **Demo:** https://demo.vivijure.com · **Skyphusion Labs:** https://skyphusion.org
 
 ## Start here
 
@@ -92,7 +92,7 @@ go away with them; that promise moved to an audio-driven motion door. See
 |---|---|
 | [slate](https://github.com/skyphusion-labs/slate) | Collaborative AI screenwriter for Discord: develop a storyboard in chat, hand it to the studio. |
 | [vivijure-mcp](https://github.com/skyphusion-labs/vivijure-mcp) | Drive the studio from any MCP client (Claude Code, Cursor, ...): plan, cast, submit a render, poll to done. |
-| [vivijure-com](https://github.com/skyphusion-labs/vivijure-com) | The promotional site and showcase at [vivijure.com](https://vivijure.com). |
+| [vivijure-com](https://github.com/skyphusion-labs/vivijure-com) | The promotional site and showcase at [vivijure.dev](https://vivijure.dev). |
 | [vivijure-android](https://github.com/skyphusion-labs/vivijure-android) | First-party native Android client for the Storyboard Planner; drives the operator route surface over a user-pasted Bearer. |
 | [vivijure-ios](https://github.com/skyphusion-labs/vivijure-ios) | First-party native iOS client for the Storyboard Planner; drives the operator route surface over a user-pasted Bearer. |
 
