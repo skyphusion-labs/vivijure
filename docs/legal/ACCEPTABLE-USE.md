@@ -156,6 +156,33 @@ regardless.
 - You will not use outputs in a way that breaks the law or this policy after they leave the studio.
 - It is your responsibility to comply with the laws that apply to you and the place you operate from.
 
+### 3.1 The model providers you connect have their own terms
+
+Vivijure does not come with AI models or GPUs. When you self-host, you connect providers on your
+own accounts, and their terms bind you directly. This policy does not replace those terms, and
+Skyphusion Labs is not a party to them.
+
+- **Models reached through your Cloudflare account.** Cloudflare's terms say that using a model in
+  its catalog means you agree to comply with that model provider's standard terms and
+  acceptable-use policy. That holds even if you never signed up with the model provider.
+- **Providers you connect with your own key, and GPU capacity you rent.** The contract you made
+  with that provider applies.
+- **Their rules can be stricter than this policy.** A provider may forbid content this policy
+  leaves to you (Section 2.5 is one example). Several providers' terms also carry conditions this
+  policy does not: a minimum age of 18 and a rule against offering the service to people under 18;
+  the consent of any real, identifiable person an output shows; a rule against removing watermarks
+  or provenance marks; limits on using outputs to train or build other AI models; a duty to label
+  an output as AI-generated, or to credit the model, when you publish it; and a rule against
+  military, surveillance, law-enforcement, or biometric use.
+- **If you let other people use your instance, you answer to your providers for what they do.**
+  Some providers require you to hold your users to rules at least as strict as theirs.
+
+Read the terms for each model you turn on. They change, and the provider's current text controls.
+This policy does not interpret any provider's terms; how they apply to you is between you and your
+own legal advice. The [Terms](https://github.com/skyphusion-labs/vivijure-cf/blob/main/docs/legal/TERMS.md)
+(Section 6) describe the paths. This section is a note on your responsibilities. It adds no
+prohibition, and nothing in it loosens Sections 1 and 2.
+
 ---
 
 ## 4. Enforcement posture
