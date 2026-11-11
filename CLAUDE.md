@@ -17,7 +17,7 @@ deployable app.
 - **`vivijure-local`** = LOCAL panel (Node/SQLite/MinIO). Core is a
   published dependency (extraction done). Pins may lag cf.
 - **`vivijure-core`** = shared orchestration + module contract SoT (`vivijure-module/2`).
-- **`vivijure-control-plane`** = hosted multi-tenant provisioner (`STUDIO_RELEASE` for new tenants;
+- **`vivijure-control-plane`** = a reference implementation of a multi-tenant control plane for hosting Vivijure Studio; maintained, not operated by Skyphusion (`STUDIO_RELEASE` for new tenants;
   own `v*` line). Not the studio UI.
 - **`vivijure-mcp`** = agent MCP door package/Worker (`studio-mcp.*`); tools proxy studio HTTP API.
 - **`vivijure-android`** / **`vivijure-ios`** = first-party NATIVE clients (`org.skyphusion.vivijure`),
@@ -27,11 +27,10 @@ deployable app.
   them is wrong -- and one did, because this list did.
 - **`vivijure-backend`** = clean-room RunPod GPU render engine (image line `backend-v*` / GHCR tags).
 - Satellites: **`vivijure-upscale`**,
-  **`vivijure-wan-train`** (cast-LoRA; image line `train-*`; first-class member),
   **`vivijure-blender`** (headless Blender compositor grade, the `finish-blender` door),
   **`vivijure-local-12gb`** / **`vivijure-local-16gb`** (homelab i2v doors).
-  **Archived 2026-09-26, do not treat as live:** `vivijure-musetalk` and
-  `vivijure-audio-upscale`. Their capabilities are in `docs/CAPABILITIES.md` under Retired, which
+  **Archived, do not treat as live:** `vivijure-musetalk` and `vivijure-audio-upscale`
+  (2026-09-26), and `vivijure-wan-train` (hosted Wan training retired; self-host only). The first two are in `docs/CAPABILITIES.md` under Retired, which
   is the one place that tracks what the constellation currently offers.
   None of these call the studio API -- the studio dispatches TO them. That is what makes a satellite
   a satellite, so "does not call `/api/`" describes the whole class and distinguishes none of them.
@@ -63,7 +62,7 @@ sprint boards or specific RunPod endpoint IDs in docs memory as "current forever
 - **Clean room:** `vivijure-backend` shares ZERO code with the deleted `wavevryn` fork; no named
   third-party credit anywhere.
 - **TWO panels:** CF (`vivijure-cf`) and LOCAL (`vivijure-local`). Product parity required; pins may lag.
-- **Demo:** `demo.vivijure.com` is `AUTH_MODE=demo`; `DEMO_RENDER_ENABLED=false` intentional.
+- **Demo:** the `demo.vivijure.com` demo is gone (the host does not answer); do not link it.
 - **Tag-gated deploy** on panel/plane repos: merge to main = CI only; a SemVer tag fires deploy.
   Verify the **ARTIFACT** (deployed worker `modified_on`, pullable image, rendered output), never the
   pipeline's opinion of it.

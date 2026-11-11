@@ -71,7 +71,7 @@ The steps of making a film, in the order you meet them.
 | 7 | Score the film: music, narration, cuts on the beat | `CAVEATS` [^bed] | partial [^score] | `music-gen`, `narration-gen`, `beat-sync` |
 | 8 | Polish each clip: smoother motion, sharper picture, a colour grade | `CAVEATS` [^finish] | partial [^polish] | `finish-rife`, `finish-upscale`, `finish-blender` |
 | 9 | Master the film's audio | `NOT YET` [^tier] | no | `audio-master` |
-| 10 | **Join the clips into one film** | `NOT YET` [^assemble] | no | `--` |
+| 10 | **Join the clips into one film** | `CAVEATS` [^assemble] | no | `--` |
 | 11 | Put titles, credits and subtitles on the finished film | `NOT YET` [^tier] | no | `film-titles`, `subtitle` |
 | 12 | Download what you made | `WORKS` | yes | `--` |
 | 13 | Be emailed when a render is done | `WORKS` | **no** | `notify-email` |
@@ -168,13 +168,14 @@ Treat the picture polish as unproven until that issue closes.
 [^tier]: Blocked on the same finishing tier as note [^assemble]. Without it these steps return
 the input unchanged, tagged as degraded rather than silently.
 
-[^assemble]: **This is the honest gap.** Joining clips into one film is real, working ffmpeg code
-in a container, but the tier that container ran on was decommissioned on 2026-09-24 and all four
-hostnames the code addresses now return NXDOMAIN. A studio without `VIDEO_FINISH_URL` set
-delivers your per-shot clips and says so; it does not pretend to have made a film. Chunked
-assemble is being built in
-[vivijure-cf#784](https://github.com/skyphusion-labs/vivijure-cf/issues/784); the hosting
-decision is [fleet-chezmoi#2234](https://github.com/skyphusion-labs/fleet-chezmoi/issues/2234);
+[^assemble]: **Assembly ships, with named limits.** Chunked assemble is in the `video-finish`
+container (`containers/video-finish/app.py`): clips are joined in batches bounded by bytes, so
+disk stays bounded. Open limits, all tracked in
+[vivijure-cf#784](https://github.com/skyphusion-labs/vivijure-cf/issues/784): the job state lives
+in process memory, so a restart loses an in-flight job (core re-submits, because the output key
+is deterministic); the activity renew is not in the encode loop; a film with more than 80 clips is
+rejected. A studio without `VIDEO_FINISH_URL` set delivers your per-shot clips and says so. The
+hosting decision is [fleet-chezmoi#2234](https://github.com/skyphusion-labs/fleet-chezmoi/issues/2234);
 background is [vivijure-cf#780](https://github.com/skyphusion-labs/vivijure-cf/issues/780).
 
 ---

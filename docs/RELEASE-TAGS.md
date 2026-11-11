@@ -9,8 +9,10 @@ deploy, except `vivijure-com` (website) and `vivijure` (this pointer repo).**
 
 ## Rules
 
-1. **Git tag: `vX.Y.Z` by default.** SemVer, `v`-prefixed, annotated
-   (`git tag -a vX.Y.Z -m "..."` then `git push origin vX.Y.Z`).
+1. **Git tag: `vX.Y.Z` by default.** SemVer, `v`-prefixed, annotated. A release is a PR (version
+   bump plus CHANGELOG) merged through the normal gate; then an org admin creates the tag on that
+   PR's MERGE COMMIT (`git tag -a vX.Y.Z -m "..." <merge-sha>`, then `git push origin vX.Y.Z`).
+   No direct push to `main`, release cuts included (Conrad, 2026-11-10, fleet-chezmoi#1622).
 2. **Prefix `<component>-vX.Y.Z` only when one repo publishes more than one
    artifact on independent version lines.** Today that is only
    `vivijure-backend` (`backend-v*`), which also has its own tag-protection

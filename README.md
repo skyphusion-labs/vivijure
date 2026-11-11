@@ -13,7 +13,7 @@ attach -- RunPod, your own box, or a cloud motion API.
 > itself and each render engine live in their own repos, linked below. Looking for the code you
 > deploy? That is **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)**.
 
-**Live:** https://vivijure.dev · **Demo:** https://demo.vivijure.com · **Skyphusion Labs:** https://skyphusion.org
+**Live:** https://vivijure.dev · **Skyphusion Labs:** https://skyphusion.org
 
 ## Start here
 
@@ -40,10 +40,10 @@ flowchart TD
     slate[slate<br/>Discord screenwriter bot]
     studio[Vivijure Studio<br/>vivijure-cf on Cloudflare<br/>or vivijure-local without it<br/>-- both on vivijure-core]
     modules[Modules: one job each, opt-in<br/>cloud video, finish, audio]
-    gpu[GPU render engines<br/>vivijure-backend cloud,<br/>local-12gb / local-16gb own card]
+    gpu[GPU render engines<br/>vivijure-backend: RunPod keyframes,<br/>local-12gb / local-16gb own card]
     finish[Finish helper engines<br/>upscale, grade]
 
-    hosted[vivijure-control-plane<br/>hosted tier: provisions a<br/>studio per tenant]
+    hosted[vivijure-control-plane<br/>reference control plane, not operated<br/>by Skyphusion: a studio per tenant]
 
     you --> slate --> studio
     you --> studio
@@ -63,13 +63,13 @@ flowchart TD
 | **[vivijure-cf](https://github.com/skyphusion-labs/vivijure-cf)** | **The studio, on Cloudflare Workers** -- the control plane: projects, storyboard, cast, render orchestration, the module registry, and the self-assembling UI. Pairs with `vivijure-core`. **This is the code you deploy.** |
 | [vivijure-core](https://github.com/skyphusion-labs/vivijure-core) | The shared orchestration library (`@skyphusion-labs/vivijure-core` on npm) both hosts build on -- the host-neutral core. |
 | [vivijure-local](https://github.com/skyphusion-labs/vivijure-local) | The same studio **without Cloudflare** -- Node + SQLite + S3/MinIO + Hono. Own the whole stack. |
-| [vivijure-control-plane](https://github.com/skyphusion-labs/vivijure-control-plane) | The **hosted tier's** control plane: accounts, onboarding, and a full studio provisioned per tenant from the published studio release. **You never need this to run your own studio.** Same AGPL as everything else; anyone may run a competing hosted Vivijure from exactly this source. |
+| [vivijure-control-plane](https://github.com/skyphusion-labs/vivijure-control-plane) | A **reference implementation** of a multi-tenant control plane for hosting Vivijure Studio: accounts, onboarding, and a full studio provisioned per tenant from the published studio release. Maintained, not operated by Skyphusion. **You never need it to run your own studio.** |
 
 **Render engines**
 
 | Repo | What it is |
 |---|---|
-| [vivijure-backend](https://github.com/skyphusion-labs/vivijure-backend) | Cloud GPU render engine on RunPod: SDXL keyframes, Wan image-to-video, LoRA training, ffmpeg film assembly. |
+| [vivijure-backend](https://github.com/skyphusion-labs/vivijure-backend) | Cloud GPU engine on RunPod: SDXL keyframes. (Motion comes from the cloud motion doors or your own card.) |
 | [vivijure-local-12gb](https://github.com/skyphusion-labs/vivijure-local-12gb) | Homelab render door: LTX-Video i2v on a 12GB card. Motion with no cloud rent. |
 | [vivijure-local-16gb](https://github.com/skyphusion-labs/vivijure-local-16gb) | Higher-fidelity homelab door: CogVideoX-5B i2v on a 16GB card. |
 
@@ -77,12 +77,12 @@ flowchart TD
 
 | Repo | What it is |
 |---|---|
-| [vivijure-upscale](https://github.com/skyphusion-labs/vivijure-upscale) | Real-ESRGAN CUDA video upscale, on RunPod serverless GPU. |
-| [vivijure-blender](https://github.com/skyphusion-labs/vivijure-blender) | Headless Blender compositor grade (finish-blender), on RunPod serverless. |
-| [vivijure-wan-train](https://github.com/skyphusion-labs/vivijure-wan-train) | Wan 2.2 A14B character LoRA training satellite (RunPod; CF prod cast train). |
-
+| [vivijure-upscale](https://github.com/skyphusion-labs/vivijure-upscale) | Real-ESRGAN CUDA video upscale, on RunPod (an operated endpoint; an operator can point it at their own). |
+| [vivijure-blender](https://github.com/skyphusion-labs/vivijure-blender) | Headless Blender compositor grade (finish-blender), on RunPod Serverless or as a Cloudflare Container door. |
 Two satellites were retired on 2026-09-26 and their repos are archived: `vivijure-musetalk`
-(post-process lip-sync) and `vivijure-audio-upscale` (speech cleanup). Talking characters did not
+(post-process lip-sync) and `vivijure-audio-upscale` (speech cleanup). The hosted Wan 2.2
+character LoRA training satellite (`vivijure-wan-train`) is retired and archived too; Wan
+training is self-host only. Talking characters did not
 go away with them; that promise moved to an audio-driven motion door. See
 [What Vivijure can do today](docs/CAPABILITIES.md#retired).
 
@@ -149,14 +149,15 @@ The talking mode: per shot, a generated line of dialogue is muxed into the clip 
 ## How a render flows
 
 The path from a storyboard to a finished film. The keyframe fans into both the dialogue and the
-motion backend; any of **17** motion backends (own-GPU or cloud) renders the clip, and an
+motion backend; any of **15** motion backends (own-GPU or cloud; the list is row 4 of
+[What Vivijure can do today](docs/CAPABILITIES.md)) renders the clip, and an
 audio-driven one animates the mouth at the same time from that shot's dialogue; the opt-in finish
 chain interpolates, upscales and grades it; then the shots gather, assemble, and mux. Drawn out,
 it is a real studio pipeline, not a wrapper.
 
-> **Assemble and mux do not work today.** The tier that ran them was decommissioned on
-> 2026-09-24. A studio without it delivers your per-shot clips and says so. Which steps are
-> finished, and which are not, is tracked in
+> **Film assembly ships, with known limits.** Chunked assemble is in the `video-finish` container
+> ([vivijure-cf#784](https://github.com/skyphusion-labs/vivijure-cf/issues/784)); its job state
+> still lives in process memory. Which steps are finished, and which are not, is tracked in
 > [What Vivijure can do today](docs/CAPABILITIES.md).
 
 ```mermaid
