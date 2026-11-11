@@ -149,7 +149,8 @@ The talking mode: per shot, a generated line of dialogue is muxed into the clip 
 ## How a render flows
 
 The path from a storyboard to a finished film. The keyframe fans into both the dialogue and the
-motion backend; any of **17** motion backends (own-GPU or cloud) renders the clip, and an
+motion backend; any of **15** motion backends (own-GPU or cloud; the list is row 4 of
+[What Vivijure can do today](docs/CAPABILITIES.md)) renders the clip, and an
 audio-driven one animates the mouth at the same time from that shot's dialogue; the opt-in finish
 chain interpolates, upscales and grades it; then the shots gather, assemble, and mux. Drawn out,
 it is a real studio pipeline, not a wrapper.
