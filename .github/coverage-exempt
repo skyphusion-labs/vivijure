@@ -1,0 +1,1 @@
+Hub repo: docs and org-level metadata only (no package.json, go.mod or source). The code lives in vivijure-cf, vivijure-core, vivijure-local and the other vivijure-* repos, each with its own coverage gate.

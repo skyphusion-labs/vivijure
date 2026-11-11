@@ -1,7 +1,31 @@
 name: coverage
 
-# Free GitHub Actions check named `coverage` (org ruleset context).
-# Does NOT use actions/upload-code-coverage -- that is paid Code Quality.
+# ESTATE `coverage` workflow (fc#2279). Edit THIS template, then re-point the copies.
+# Test: .github/scripts/tests/coverage-standard.test.sh (drives the run block below).
+#
+# Provides the `coverage` context the org ruleset requires. It replaces the old estate
+# coverage.yml, which could not go red:
+#   1. It chose what to run with `npm run --silent | grep -qE '^  coverage'`. On npm 10
+#      (Node 22) `npm run --silent` with no script name prints NOTHING, so both greps
+#      failed and every repo fell through to an echo and passed. Measured fc#2279.
+#   2. The no-manifest branch also echoed and passed.
+#
+# This version reads scripts from package.json directly and has NO silent-pass branch.
+# Every green run prints exactly one line starting `coverage-standard: EXECUTED` or
+# `coverage-standard: EXEMPT (declared)`; classify a run by that executed line, never by
+# the run: text (GitHub prints the whole body into the log whether or not a branch ran).
+#
+# Outcomes:
+#   package.json with a `coverage` script -> npm run coverage
+#   package.json with a `test` script     -> npm test
+#   package.json with neither             -> FAIL (add a test, or declare an exemption)
+#   go.mod                                -> go test ./... -cover
+#   no manifest at all                    -> FAIL (add a test, or declare an exemption)
+# Exemption: .github/coverage-exempt, whose content is the reason (>= 40 characters). It is
+# an explicit, reviewable file, never a silent fallthrough. It applies only when nothing
+# above is runnable; a repo that has a runnable target is measured, not exempted.
+#
+# Does NOT use actions/upload-code-coverage (paid Code Quality).
 
 on:
   pull_request:
@@ -20,40 +44,58 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Node
         if: hashFiles('package.json') != ''
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "22"
-          cache: npm
+          # setup-node errors on cache: npm without a lockfile, so only ask for it with one.
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
 
-      - name: JS/TS coverage
-        if: hashFiles('package.json') != ''
+      - name: Select and run tests
+        id: select
         run: |
           set -euo pipefail
-          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            npm ci
-          else
-            npm install --no-audit --no-fund
+          ran=0
+          if [ -f package.json ]; then
+            if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+              npm ci
+            else
+              npm install --no-audit --no-fund
+            fi
+            has() { node -e 'const s=(require("./package.json").scripts)||{}; process.exit(typeof s[process.argv[1]]==="string"&&s[process.argv[1]].trim()!==""?0:1)' "$1"; }
+            if has coverage; then
+              echo "coverage-standard: EXECUTED npm run coverage"
+              npm run coverage
+              ran=1
+            elif has test; then
+              echo "coverage-standard: EXECUTED npm test"
+              npm test
+              ran=1
+            else
+              echo "::error::package.json defines neither a coverage nor a test script. Add one, or declare an exemption in .github/coverage-exempt."
+              [ -f .github/coverage-exempt ] || exit 1
+            fi
           fi
-          if npm run --silent 2>/dev/null | grep -qE '^  coverage'; then
-            npm run coverage
-          elif npm run --silent 2>/dev/null | grep -qE '^  test'; then
-            npm test
-          else
-            echo "no test/coverage script; coverage check present"
+          if [ -f go.mod ]; then
+            echo "coverage-standard: EXECUTED go test ./... -cover"
+            go test ./... -cover
+            ran=1
           fi
-
-      - name: Go coverage
-        if: hashFiles('go.mod') != ''
-        run: |
-          set -euo pipefail
-          go test ./... -cover
-
-      - name: Present
-        if: hashFiles('package.json') == '' && hashFiles('go.mod') == ''
-        run: echo "no supported test manifest; coverage check present"
+          if [ "$ran" -eq 0 ]; then
+            if [ -f .github/coverage-exempt ]; then
+              reason="$(tr -s '[:space:]' ' ' < .github/coverage-exempt)"
+              if [ "${#reason}" -lt 40 ]; then
+                echo "::error::.github/coverage-exempt reason is ${#reason} characters, minimum 40. A label is not a reason."
+                exit 1
+              fi
+              echo "coverage-standard: EXEMPT (declared): ${reason}"
+            else
+              echo "::error::nothing to run (no runnable package.json, no go.mod) and no .github/coverage-exempt. An unanswered coverage question is not a pass."
+              exit 1
+            fi
+          fi
