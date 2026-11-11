@@ -17,7 +17,7 @@ deployable app.
 - **`vivijure-local`** = LOCAL panel (Node/SQLite/MinIO). Core is a
   published dependency (extraction done). Pins may lag cf.
 - **`vivijure-core`** = shared orchestration + module contract SoT (`vivijure-module/2`).
-- **`vivijure-control-plane`** = hosted multi-tenant provisioner (`STUDIO_RELEASE` for new tenants;
+- **`vivijure-control-plane`** = a reference implementation of a multi-tenant control plane for hosting Vivijure Studio; maintained, not operated by Skyphusion (`STUDIO_RELEASE` for new tenants;
   own `v*` line). Not the studio UI.
 - **`vivijure-mcp`** = agent MCP door package/Worker (`studio-mcp.*`); tools proxy studio HTTP API.
 - **`vivijure-android`** / **`vivijure-ios`** = first-party NATIVE clients (`org.skyphusion.vivijure`),
